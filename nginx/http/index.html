@@ -240,12 +240,61 @@ ngx_http_index_handler(ngx_http_request_t *r)
 
 
 <hr>
-<h2 id="nginx-http-2024-update">HTTP 模块更新</h2>
-<p>Nginx 1.25+ 新增 HTTP/3 和 Early Hints 支持。核心 HTTP 模块改进：</p>
+<h2 id="nginx-http-2024-update">HTTP 与 HTTP/3 模块更新（2026）：v3 模块成熟与 1.31 安全线</h2>
+<p>进入 2026 年，nginx 的 HTTP/3（QUIC）已走出实验期：官方模块定名为 <code>ngx_http_v3_module</code>，自 1.25.0 起就随 Linux 官方二进制包一起分发，不再要求自编译。本节基于 2026 年现状做一次纠错与更新。</p>
+<p>先纠正一个流传很广的误解：官方配置中<b>不存在 <code>http3 on|off</code> 指令</b>。启用 HTTP/3 靠的是 <code>listen</code> 指令的 <code>quic</code> 参数，而不是任何开关指令——旧小节里的写法应按本节替换。</p>
+<h3 id="nginx-http-v3-module">模块定名与可用范围</h3>
+<p>官方文档以 <code>ngx_http_v3_module</code> 作为 HTTP/3 模块名，并单列《Support for QUIC and HTTP/3》章节。2026 年现状要点：</p>
 <ul>
-<li><code>http3 on|off</code> 指令（1.27+）</li>
-<li><code>quic_retry</code>、<code>quic_gso</code>、<code>ssl_early_data</code> 指令</li>
-<li><code>add_before_body</code> 支持 103 Early Hints（1.29+）</li>
+<li>自 1.25.0 起支持 QUIC/HTTP/3，已包含在官方 Linux 二进制包中</li>
+<li>启用语法为 <code>listen 443 quic reuseport;</code>，不存在 http3 指令</li>
+<li>QUIC 强制要求 TLSv1.3（<code>ssl_protocols</code> 默认已启用）</li>
+<li>源码构建推荐 OpenSSL 3.5.1+；低于此版本会退化为 OpenSSL 兼容层，不支持 early data（0-RTT）；也可换用 BoringSSL / QuicTLS / LibreSSL</li>
+</ul>
+
+<h3 id="nginx-http-quic-setup">HTTP/2 + HTTP/3 双监听配置</h3>
+<pre><code class="language-nginx">server {
+    listen 443 ssl;                # TCP：HTTP/1.1 + HTTP/2
+    listen 443 quic reuseport;     # UDP：HTTP/3（quic 参数启用，无需 http3 on）
+
+    server_name example.com;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_early_data on;             # 0-RTT，需 OpenSSL 3.5.1+ 或 BoringSSL/QuicTLS
+
+    quic_retry on;                 # 连接地址验证，防伪造源地址放大攻击
+    # quic_gso on;                 # Linux GSO 优化，网卡支持时开启
+    # quic_host_key /etc/nginx/quic.key;  # 多 worker 共享 token 密钥
+
+    add_header Alt-Svc 'h3=":443"; ma=86400';  # 必须返回该头，浏览器才会上探 h3
+}
+</code></pre>
+<p>关键点：浏览器只有在响应头 <code>Alt-Svc</code> 中看到 h3 声明后才会尝试 HTTP/3，该头格式需严格匹配；<code>reuseport</code> 让多 worker 各自监听 UDP 443。</p>
+<h3 id="nginx-http-quic-vars">QUIC 相关变量</h3>
+<p>日志与监控用的核心变量：</p>
+<ul>
+<li><code>$http3</code> — QUIC 连接输出 h3，否则为空（用于 access log 分流统计）</li>
+<li><code>$ssl_early_data</code> — 本次会话是否走 0-RTT，可用于 Early-Data 头透传</li>
+<li><code>$ssl_sigalgs</code> — 1.31.2 新增，TLS 1.3 签名算法</li>
+</ul>
+
+<h3 id="nginx-http-131-security">1.31 安全线：1.31.2 集中修复三处漏洞</h3>
+<p>mainline <b>1.31.2</b>（2026-06-17 发布）是一次以安全为核心的更新，其中两处直接命中 HTTP/3 与代理路径，是生产升级的主因：</p>
+<table>
+<thead><tr><th>CVE</th><th>受影响模块</th><th>漏洞类型</th></tr></thead>
+<tbody>
+<tr><td>CVE-2026-42530</td><td>ngx_http_v3_module</td><td>use-after-free（插入缓冲与连接池分配）</td></tr>
+<tr><td>CVE-2026-42055</td><td>ngx_http_proxy_v2_module、ngx_http_grpc_module</td><td>缓冲区溢出（限制 HTTP/2 与 gRPC 上游头部长度）</td></tr>
+<tr><td>CVE-2026-48142</td><td>ngx_http_charset_module</td><td>缓冲区过读（recode_from_utf8 罕见路径）</td></tr>
+</tbody>
+</table>
+<p>同期还有一批外围增强：<code>$request_id</code> 改用 SipHash-2-4 生成提速、新增 <code>$ssl_sigalgs</code> 变量、Secure Link 哈希改常量时间比较、Split Clients 范围边界计算修正、access log 的 request_length 格式修复。生产环境至少应跟进到 1.31.2。</p>
+<h3 id="nginx-http-arch-note">架构边界与验证方法</h3>
+<p>注意一个长期存在的边界：即使配置了 <code>proxy_pass</code>，nginx 向上游发起的仍是 HTTP/1.1 或 HTTP/2——nginx <b>只支持终止客户端侧的 HTTP/3</b>，不支持以 HTTP/3 客户端身份访问上游。需要全链路 HTTP/3 时，应在 nginx 前置 <b>Caddy 2.7+</b> 或 <b>Envoy 1.26+</b> 终结 QUIC，nginx 专注静态资源、负载均衡与缓存。</p>
+<p>验证是否真的走通 H3：</p>
+<ul>
+<li>access log 加 <code>$http3</code> 变量，QUIC 请求输出 h3</li>
+<li>Chrome 打开 <code>chrome://net-internals/#quic</code> 搜索域名，状态 Active 即生效</li>
+<li><code>curl -I --http3 https://example.com</code>（需 curl 编译时启用 HTTP/3）</li>
 </ul>
                 <div class="page-nav">
 <a class="nav-prev" href="../../nginx/use/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">常用技巧</span></a>
