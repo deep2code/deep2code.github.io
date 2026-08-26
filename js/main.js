@@ -19,13 +19,16 @@
                 var next = current === 'dark' ? 'light' : 'dark';
                 document.documentElement.setAttribute('data-theme', next);
                 localStorage.setItem('blog-theme', next);
-                // Re-init mermaid with new theme
+                // Re-init mermaid with new theme, then re-attach the
+                // copy/fold tools (mermaid.run() replaces div content)
                 if (window.mermaid) {
                     window.mermaid.initialize({
                         startOnLoad: false,
                         theme: next === 'dark' ? 'dark' : 'default'
                     });
-                    window.mermaid.run();
+                    window.mermaid.run().then(function () {
+                        document.dispatchEvent(new CustomEvent('mermaid:rendered'));
+                    });
                 }
             });
         }
@@ -42,51 +45,94 @@
         });
     }
 
-    // === Code Copy Buttons ===
+    // === Code Copy & Fold Buttons ===
+    var copyText = '复制';
+    var foldText = '折叠';
+    var unfoldText = '展开';
+
+    function setCopied(btn) {
+        btn.textContent = '已复制';
+        btn.classList.add('copied');
+        setTimeout(function () {
+            btn.textContent = copyText;
+            btn.classList.remove('copied');
+        }, 2000);
+    }
+
+    function copyString(text, btn) {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(text).then(function () {
+                setCopied(btn);
+            });
+        } else {
+            // Fallback
+            var textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                setCopied(btn);
+            } catch (e) {}
+            document.body.removeChild(textarea);
+        }
+    }
+
+    function makeFoldBtn(container) {
+        var btn = document.createElement('button');
+        btn.className = 'code-copy-btn code-fold-btn';
+        btn.textContent = foldText;
+        btn.addEventListener('click', function () {
+            var collapsed = container.classList.toggle('collapsed');
+            btn.textContent = collapsed ? unfoldText : foldText;
+        });
+        return btn;
+    }
+
+    // Mermaid blocks: copy the raw source and fold the diagram. The page
+    // module script renders them before main.js runs (and re-renders on
+    // theme switch), wiping div content, so the tools are attached here AND
+    // re-attached on the 'mermaid:rendered' event (idempotent).
+    function initMermaidTools() {
+        var blocks = document.querySelectorAll('#body-content div.mermaid');
+        blocks.forEach(function (div) {
+            if (div.querySelector('.code-copy-btn')) return;
+
+            var btn = document.createElement('button');
+            btn.className = 'code-copy-btn mermaid-btn';
+            btn.textContent = copyText;
+            btn.addEventListener('click', function () {
+                var src = div.getAttribute('data-src') || div.textContent;
+                copyString(src, btn);
+            });
+            div.appendChild(btn);
+
+            div.appendChild(makeFoldBtn(div));
+        });
+    }
+
     function initCodeCopy() {
         var pres = document.querySelectorAll('#body-content pre');
         pres.forEach(function (pre) {
-            // Skip if already has a copy button
+            // Skip if already handled
             if (pre.querySelector('.code-copy-btn')) return;
 
             var btn = document.createElement('button');
             btn.className = 'code-copy-btn';
-            btn.textContent = '复制';
+            btn.textContent = copyText;
             btn.addEventListener('click', function () {
                 var code = pre.querySelector('code');
                 if (!code) return;
-                var text = code.textContent;
-                
-                // Use clipboard API
-                if (navigator.clipboard) {
-                    navigator.clipboard.writeText(text).then(function () {
-                        btn.textContent = '已复制';
-                        btn.classList.add('copied');
-                        setTimeout(function () {
-                            btn.textContent = '复制';
-                            btn.classList.remove('copied');
-                        }, 2000);
-                    });
-                } else {
-                    // Fallback
-                    var textarea = document.createElement('textarea');
-                    textarea.value = text;
-                    document.body.appendChild(textarea);
-                    textarea.select();
-                    try {
-                        document.execCommand('copy');
-                        btn.textContent = '已复制';
-                        btn.classList.add('copied');
-                        setTimeout(function () {
-                            btn.textContent = '复制';
-                            btn.classList.remove('copied');
-                        }, 2000);
-                    } catch (e) {}
-                    document.body.removeChild(textarea);
-                }
+                copyString(code.textContent, btn);
             });
             pre.appendChild(btn);
+
+            pre.appendChild(makeFoldBtn(pre));
         });
+
+        // First paint: if the module script already rendered, tools land on
+        // the svg; otherwise the 'mermaid:rendered' event re-attaches them.
+        initMermaidTools();
     }
 
     // === Code Highlighting ===
@@ -238,6 +284,7 @@
         initHighlight();
         initSearch();
         initBackToTop();
+        document.addEventListener('mermaid:rendered', initMermaidTools);
     }
 
     if (document.readyState === 'loading') {

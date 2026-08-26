@@ -231,6 +231,25 @@ def _strip_relearn_residue(content):
     return content
 
 
+def annotate_mermaid_src(content):
+    """Store raw mermaid source into data-src for copy/collapse tools.
+
+    Mermaid divs are rendered by the per-page module script (which runs
+    before DOMContentLoaded), so by the time main.js executes the raw
+    source text is gone. Keeping an escaped copy in data-src preserves
+    the copy-button and the 'show source' fallback of the fold feature.
+    """
+    def _annotate(m):
+        tag = m.group(1)
+        body = m.group(2)
+        if 'data-src' in tag:
+            return m.group(0)
+        return '<div class="mermaid"%s data-src="%s">%s</div>' % (
+            tag, escape(body.strip()), body)
+    return re.sub(r'<div class="mermaid"([^>]*)>([\s\S]*?)</div>',
+                  _annotate, content)
+
+
 def clean_content(content):
     """Remove old script tags, HTML residue, and detection elements."""
     # Strip Hugo Relearn theme chrome first so div balancing below works
@@ -698,6 +717,7 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
     """
     title = clean_title(page_data.get('title', ''), current_path)
     content = clean_content(page_data.get('content', ''))
+    content = annotate_mermaid_src(content)
     prefix = rel_prefix(current_path)
 
     # Page title for <title> tag
@@ -746,7 +766,9 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
     import mermaid from "https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.esm.min.mjs";
     window.mermaid = mermaid;
     mermaid.initialize({ startOnLoad: false, theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default', securityLevel: 'loose' });
-    mermaid.run({ querySelector: '.mermaid' });
+    mermaid.run({ querySelector: '.mermaid' }).then(function () {
+        document.dispatchEvent(new CustomEvent('mermaid:rendered'));
+    });
     </script>
 '''
 

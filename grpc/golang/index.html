@@ -45,7 +45,9 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <h1>Go 示例</h1>
-                <h3 id="server">server</h3>
+                <p>一个完整的 gRPC-Go 入门示例：server + client + proto 定义 + nginx 反向代理。代码演示一元 RPC（unary RPC）与拦截器（interceptor）的用法。</p>
+
+<h3 id="server">server</h3>
 <hr>
 <pre><code class="language-golang">package main
 
@@ -69,7 +71,7 @@ var (
  port        = flag.Int("port", 8411, "默认端口")
 )
 
-// 定义服务端中间件
+// 定义服务端中间件（一元拦截器）
 func middleware(ctx context.Context, req interface{},
  info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
  log.Printf("middleware ctx:%v", ctx)
@@ -86,8 +88,8 @@ type MathServer struct {
  com.UnimplementedMathServer
 }
 
-// 各种信息都通过ctx中valueCtx传递进来
-// 由不同包获取转换
+// 各种上下文信息都通过 ctx 中的 valueCtx 传递进来
+// 由不同包获取转换：peer / metadata / ServerTransportStream
 func (ms *MathServer) Add(ctx context.Context, req *com.AddReq) (*com.AddRsp, error) {
  log.Printf("ctx:%v, req:%v", ctx, req)
  if client, ok := peer.FromContext(ctx); ok {
@@ -125,15 +127,14 @@ func main() {
  //  log.Fatalf("tls file;%v", err)
  // }
 
- // tcp表示优先使用ipv6,其次ipv4,两者都能用
+ // tcp 表示优先使用 ipv6，其次 ipv4，两者都能用
  l, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
  if err != nil {
   log.Fatalf("fail listen tcp %d", *port)
  }
 
- // 安装中间件
+ // 安装中间件（默认不启用 TLS）
  s := grpc.NewServer(
-  // 默认没有采用安全传输ssl,tls
   // 增加证书认证
   //grpc.Creds(ct),
   grpc.UnaryInterceptor(middleware),
@@ -150,7 +151,13 @@ func main() {
  if err != nil {
   log.Fatalf("fail server:%v", err)
  }
-}</code></pre><h3 id="client">client</h3>
+}</code></pre>
+
+<blockquote>
+<p><strong>2026 提示</strong>：一元拦截器是服务端扩展点（鉴权、限流、日志）。更细粒度可用 <code>grpc.UnaryChainInterceptor</code> 链式组合，或借助 OpenTelemetry 的 gRPC 插桩完成链路追踪，替代手写日志中间件。</p>
+</blockquote>
+
+<h3 id="client">client</h3>
 <hr>
 <pre><code class="language-golang">package main
 
@@ -173,7 +180,7 @@ var (
  addr = flag.String("addr", "127.0.0.1:8411", "默认服务端端口")
 )
 
-// 定义客户端中间件
+// 定义客户端中间件（一元拦截器）
 func middleware(ctx context.Context, method string,
  req, reply interface{}, c *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 
@@ -203,15 +210,15 @@ func main() {
  //  log.Fatalf("err:%v", err)
  // }
 
- conn, err := grpc.Dial(
+ // 新版 gRPC-Go 推荐 grpc.NewClient；grpc.Dial 自 v1.63 起标记废弃
+ conn, err := grpc.NewClient(
   *addr,
-  // 采用禁用安全传输,即没有ssl/tls
+  // 禁用安全传输（无 TLS）
   grpc.WithTransportCredentials(insecure.NewCredentials()),
-  // 采用证书,注意跨平台，linux amd64/apple m1芯片之间可能不能通讯
+  // 采用证书认证（注意跨平台证书兼容性）
   // grpc.WithTransportCredentials(ct),
-  // 安装中间件
+  // 安装客户端中间件
   grpc.WithUnaryInterceptor(middleware),
-  grpc.WithTimeout(time.Minute),
  )
  if err != nil {
   log.Fatalf("dial:%v, %v", *addr, err)
@@ -231,10 +238,16 @@ func main() {
  }
 
  log.Printf("resp:%v", resp.Result)
-}</code></pre><h3 id="proto">proto</h3>
+}</code></pre>
+
+<blockquote>
+<p><strong>为什么改用 grpc.NewClient</strong>：<code>grpc.Dial</code>（<code>grpc.WithTimeout</code> 等旧选项）自 gRPC-Go v1.63（2024 年）起标记废弃，官方推荐 <code>grpc.NewClient</code>——它在创建时不再立即阻塞建连，超时与连接管理交给 <code>ConnectParams</code>/拨号选项与 context 处理，语义更清晰，2026 年的 v1.8x 仍保持向后兼容。</p>
+</blockquote>
+
+<h3 id="proto">proto</h3>
 <hr>
 <ul>
-<li>proto内容</li>
+<li>proto 内容</li>
 </ul>
 <pre><code class="language-protobuf">syntax = "proto3";
 
@@ -251,43 +264,55 @@ message AddReq {
 
 message AddRsp {
     int64 result = 1;
-}</code></pre><ul>
+}</code></pre>
+<ul>
 <li>生成脚本</li>
 </ul>
 <pre><code class="language-sh">#!/bin/bash
 
-#--go-grpc_out表示启动protoc-gen-go-grpc插件
-# --openapiv2_out 表示产生swagger.json
-protoc --go_out=. --go-grpc_out=. *.proto</code></pre><h3 id="nginx">nginx</h3>
+# --go-grpc_out 表示启用 protoc-gen-go-grpc 插件
+# --openapiv2_out 表示生成 swagger.json（grpc-gateway 插件）
+protoc --go_out=. --go-grpc_out=. *.proto
+
+# 现代做法：使用 buf 统一管理（见 /grpc/ 主页）
+# buf generate</code></pre>
+<h3 id="nginx">nginx 反向代理</h3>
 <hr>
-<pre><code class="language-nginx">...
-server_names_hash_bucket_size 64;
+<p>gRPC 走 HTTP/2，nginx 1.13.10+ 原生支持 <code>grpc_pass</code> 反代；TLS 场景使用 <code>grpcs://</code> 前缀：</p>
+<pre><code class="language-nginx">server_names_hash_bucket_size 64;
 server {
-        listen 443 ssl http2;
-        server_name grpc.xxx.site;
+    listen 443 ssl http2;
+    server_name grpc.xxx.site;
 
-        ssl_protocols TLSv1 TLSv1.1 TLSv1.2 TLSv1.3;
-        ssl_certificate grpc.xxx.site.pem;
-        ssl_certificate_key grpc.xxx.site.key;
+    ssl_protocols TLSv1 TLSv1.1 TLSv1.2 TLSv1.3;
+    ssl_certificate grpc.xxx.site.pem;
+    ssl_certificate_key grpc.xxx.site.key;
 
-        ssl_session_cache shared:SSL:1m;
-        ssl_session_timeout 5m;
+    ssl_session_cache shared:SSL:1m;
+    ssl_session_timeout 5m;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
 
-        ssl_ciphers HIGH:!aNULL:!MD5;
-        ssl_prefer_server_ciphers on;
-
-        location / {
-            # grpc_pass localhost:9000; 等价于 grpc://127.0.0.1:8411 等价于 [::]:8411;
-            # To use gRPC over SSL,就要带上grpcs:
-            grpc_pass grpcs://[xxx]:8411;
-            client_max_body_size 200M;
-        }
+    location / {
+        # grpc_pass localhost:9000; 等价于 grpc://127.0.0.1:8411 等价于 [::]:8411
+        # 使用 gRPC over TLS 时带上 grpcs:
+        grpc_pass grpcs://[xxx]:8411;
+        client_max_body_size 200M;
     }
-...
-</code></pre>
+}</code></pre>
 <hr>
-<h2 id="grpc-go-2024-update">gRPC Go 示例更新</h2>
-<p>现代 gRPC Go 推荐使用 buf 管理proto文件，详见 <a href="../../grpc/index.html">gRPC 主页</a>。Connect-RPC 是更简单的替代方案，兼容 HTTP/JSON。</p>
+<h2 id="grpc-go-2026-update">2026 更新</h2>
+<p>现代 gRPC Go 项目建议用 <strong>buf</strong> 管理 proto 文件（lint + breaking + 生成），详见 <a href="../../grpc/index.html">gRPC 主页</a>。Connect-RPC 是更简单的 gRPC 兼容替代方案，可直接暴露 HTTP/JSON 端点；gRPC-Go 1.8x 的完整版本与安全注意事项同样见主页「gRPC 2026 生态更新」。</p>
+
+<h2 id="go-1-26-update">Go 1.26 语言与运行时更新</h2>
+<p>gRPC-Go v1.81 起要求 Go 1.25+，而 <strong>Go 1.26.0 已于 2026 年 2 月 10 日发布</strong>（当前稳定版 1.26.x，例如 go1.26.6），升级 Go 后请注意以下与本示例直接相关的变化：</p>
+<ul>
+<li><strong>new(expr)</strong>：内置 <code>new</code> 支持表达式参数（如 <code>p := new(42)</code>），生成指向表达式值的指针，简化 JSON/Protobuf 可选字段的指针初始化。</li>
+<li><strong>errors.AsType</strong>：泛型化错误类型断言 <code>errors.AsType[*AppError](err)</code>，编译期类型安全、无反射开销，替代 <code>errors.As</code>。</li>
+<li><strong>Green Tea GC 默认启用</strong>：以 8KiB span 为单元批量标记、并行扫描，小对象场景 GC 开销平均下降 10%~40%，可用 <code>GOEXPERIMENT=nogreenteagc</code> 回退（将在 1.27 移除）。</li>
+<li><strong>后量子加密默认化</strong>：新增 <code>crypto/hpke</code>（RFC 9180）与 <code>crypto/mlkem</code> 包，TLS 默认启用 X25519MLKEM768 等后量子混合密钥交换。</li>
+<li><strong>可观测性增强</strong>：<code>runtime/metrics</code> 新增 goroutine/线程调度器指标，配合 <code>goroutineleak</code> 性能分析可在线排查 goroutine 泄漏。</li>
+</ul>
                 <div class="page-nav">
 <a class="nav-prev" href="../../grpc/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">gRPC</span></a>
 <a class="nav-next" href="../../other/rpc/index.html"><span class="nav-label">下一篇 →</span><span class="nav-title">RPC</span></a>
