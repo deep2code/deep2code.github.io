@@ -45,16 +45,18 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <h1>Gin</h1>
-                <h3 id="context中断原理">context中断原理</h3>
+                <p>本页讲两件事：<strong>Gin 中间件执行链</strong>（<code>Abort</code>/<code>Next</code> 的 index 机制）和一个完整的 <strong>Memcached 页面缓存中间件</strong>实现与用法；文末「Gin 1.12」是 2025-2026 的版本线与路由树性能更新，生产选型先看那里。</p>
+<h3 id="context中断原理">context中断原理</h3>
 <hr>
-<pre><code class="language-golang">const abortIndex int8 = math.MaxInt8 / 2
+<pre><code class="language-golang">// 摘录自 gin 源码(需 import "math")
+const abortIndex int8 = math.MaxInt8 / 2
 
 // Abort prevents pending handlers from being called. Note that this will not stop the current handler.
 // Let's say you have an authorization middleware that validates that the current request is authorized.
 // If the authorization fails (ex: the password does not match), call Abort to ensure the remaining handlers
 // for this request are not called.
 func (c *Context) Abort() {
-    // c.index赋值很大值,从导致下次Next都不执行,达到阻断执行链目的
+    // 把 c.index 赋成很大的值,从而让后续 Next 不再执行,达到阻断执行链的目的
  c.index = abortIndex
 }
 
@@ -81,21 +83,23 @@ func (c *Context) Next() {
 var memcacheClientMux sync.Mutex
 var memcacheClient *memcache.Client
 
-// TODO,要不要带上http头部,例如:数据类型html/json/js,Date,Cache-control等等
+// 注意:这里只缓存响应体,不含响应头——命中缓存后 Content-Type 等头
+// 由读取侧(nginx memcached 模块/网关)自行约定,参考本站 echo 页的 nginx 配置
 type middleResp struct {
- // 匿名包括,变相继承
+ // 匿名嵌入,变相继承 gin.ResponseWriter 的全部方法
  gin.ResponseWriter
  isOK       bool
  key        string
  expiration int32
- // 如果匿名包括,变相继承会和ResponseWriter冲突,导致接口重复写
+ // b 用命名成员而非匿名嵌入,避免与 ResponseWriter 的 Write 等方法重名冲突
  b bytes.Buffer
 }
 
 var StoreErrHandler func(error)
 
+// 本页只演示「写入」侧:读取由 nginx memcached 模块完成(命中直接回,未命中回源到 Gin)
 func (mr *middleResp) writeStore() {
- if mr.b.Len() &gt; 0 {
+ if mr.isOK &amp;&amp; mr.b.Len() &gt; 0 { // 再查一次 isOK,防 handler 中途改状态码导致误缓存
   err := memcacheClient.Set(&amp;memcache.Item{
    Key:        mr.key,
    Flags:      0,
@@ -146,6 +150,8 @@ func MemcacheWrap(server string, expireSecond int32, handler gin.HandlerFunc) gi
    ResponseWriter: c.Writer,
    key:            c.Request.RequestURI,
    expiration:     expireSecond,
+   // isOK 不在这里初始化:gin 的渲染流程会先写状态码(c.Status/Render),
+   // 显式 200 时先触发 WriteHeader(200) 置位 isOK,再写 body;与 echo(隐式 200)不同
   }
 
   c.Writer = mr

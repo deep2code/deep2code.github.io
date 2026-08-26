@@ -47,6 +47,9 @@
                 <h1>Iris</h1>
                 <h3 id="context中断原理">context中断原理</h3>
 <hr>
+<blockquote>
+<p>iris 中间件链用 currentHandlerIndex 游标驱动:DefaultNext 每次把游标 +1 再执行下一个 handler;StopExecution 把游标压到 -1,后续所有 Next 直接失效——这就是 ctx.StopExecution() 中断整条链的原理,自定义中间件里提前短路就靠它。</p>
+</blockquote>
 <pre><code class="language-golang">// I don't set to a max value because we want to be able to reuse the handlers even if stopped with .Skip
 const stopExecutionIndex = -1
 
@@ -97,7 +100,7 @@ var memcacheClient *memcache.Client
 type middleResp struct {
  // 匿名包括,变相继承
  http.ResponseWriter
- isOK       bool
+ ok         bool // 默认 true:200 隐式响应不回调 WriteHeader,不能用零值 false
  key        string
  expiration int32
  // 如果匿名包括,变相继承会和ResponseWriter冲突,导致接口重复写
@@ -122,7 +125,7 @@ func (mr *middleResp) writeStore() {
 }
 
 func (mr *middleResp) Write(body []byte) (int, error) {
- if mr.isOK &amp;&amp; memcacheClient != nil {
+ if mr.ok &amp;&amp; memcacheClient != nil {
   _, err := mr.b.Write(body)
   if StoreErrHandler != nil {
    StoreErrHandler(err)
@@ -132,7 +135,8 @@ func (mr *middleResp) Write(body []byte) (int, error) {
 }
 
 func (mr *middleResp) WriteHeader(statusCode int) {
- mr.isOK = statusCode == http.StatusOK
+ // 显式 2xx 保持可缓存,3xx/4xx/5xx 关闭缓存
+ mr.ok = statusCode &gt;= 200 &amp;&amp; statusCode &lt; 300
  mr.ResponseWriter.WriteHeader(statusCode)
 }
 
@@ -153,6 +157,7 @@ func MemcacheWrap(server string, expireSecond int32, handler context.Handler) co
    ResponseWriter: c.ResponseWriter().Naive(),
    key:            c.Request().RequestURI,
    expiration:     expireSecond,
+   ok:             true,
   }
 
   c.ResponseWriter().BeginResponse(mr)
@@ -161,7 +166,9 @@ func MemcacheWrap(server string, expireSecond int32, handler context.Handler) co
 
   mr.writeStore()
  }
-}</code></pre><h3 id="main使用">main使用</h3>
+}</code></pre><blockquote>
+<p>注意边界:这是「写端」缓存——每请求都执行 handler 再落缓存,没有「命中直接返回」的读路径。生产正确姿势是 cache-aside:读侧先查 memcache,命中直接写出并 return,未命中才进 handler,再由本中间件落缓存。</p>
+</blockquote><h3 id="main使用">main使用</h3>
 <hr>
 <pre><code class="language-golang">import (
  &#34;math/rand&#34;
