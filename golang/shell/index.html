@@ -80,6 +80,23 @@ output, err := cmd.CombinedOutput()
 if err != nil {
     log.Printf("命令执行失败: %v, 输出: %s", err, output)
 }</code></pre>
+<h3 id="goshell-waitdelay">WaitDelay：避免 Wait 卡死</h3>
+<p>只传 context 还不够：子进程派生的孙进程可能仍持有 stdout/stderr 管道，导致 <code>cmd.Wait()</code> 一直不返回。Go 1.20 引入的 <code>Cmd.WaitDelay</code> 专治这种情况——上下文取消后，<code>Wait</code> 超过 <code>WaitDelay</code> 时间仍未结束就先杀子进程再返回错误。</p>
+<pre><code class="language-go">cmd := exec.CommandContext(ctx, "git", "status")
+cmd.WaitDelay = 2 * time.Second // 兜底超时，防子进程残留管道
+out, err := cmd.CombinedOutput()</code></pre>
+<p>2024 年后再写「调用 Shell」场景，<code>exec.CommandContext + WaitDelay</code> 是标准组合，别再只用 context 超时。</p>
+<h3 id="goshell-process-tree">进程树清理与防止注入</h3>
+<p>Unix 上 <code>CommandContext</code> 取消时默认只杀直接子进程，孙进程会成为孤儿继续跑。要让整个进程组一起终止，需自行设置 <code>Setpgid</code>：</p>
+<pre><code class="language-go">cmd := exec.CommandContext(ctx, "./worker.sh")
+if cmd.SysProcAttr == nil {
+    cmd.SysProcAttr = &syscall.SysProcAttr{}
+}
+cmd.SysProcAttr.Setpgid = true // 让子进程自成进程组
+
+// 在 ctx 取消触达的 goroutine 里
+_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // 负 PID = 整个进程组</code></pre>
+<p>安全上坚持两点：一，参数用切片传入 <code>exec.Command</code>，绝不拼接 <code>sh -c</code> 字符串（防命令注入）；二，外部传入的用户输入原样拼进参数同样危险，尽量只把参数传给信任的命令。Windows 上注意 <code>cmd.exe /C</code> 的引号转义差异，跨平台脚本应选用 Go 原生实现或交叉编译二进制，避免依赖系统 shell 行为。</p>
                 <div class="page-nav">
 <a class="nav-prev" href="../../golang/iris/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">Iris</span></a>
 <a class="nav-next" href="../../golang/io/index.html"><span class="nav-label">下一篇 →</span><span class="nav-title">IO</span></a>
