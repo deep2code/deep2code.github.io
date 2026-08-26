@@ -43,7 +43,8 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <h1>MySQL</h1>
-                <h3 id="sql">SQL</h3>
+                <p>这篇是 MySQL 速查手册，按「SQL 基础 → 数据类型 → 分区表 → DML → 特有功能 → EXPLAIN 优化 → 碎片维护 → 版本现状」排列，适合当文档查；文末 8.0 EOL 与 9.7 LTS 是 2026 年的现役事实，升级决策先看那里。</p>
+<h3 id="sql">SQL</h3>
 <ul>
 <li>
 <p>mysql没有完全实现<a href="https://datacadamia.com/data/type/relation/sql/ansi">sql标准</a></p>
@@ -64,7 +65,7 @@
 <p>注释</p>
 <ul>
 <li>单行: 以#开头,到行结束</li>
-<li>单行: 以&ndash; 开头,到行结束</li>
+<li>单行: 以两个连字符 <code>--</code> 开头（后须跟空格），到行结束</li>
 <li>多行: /<em>开头，</em>/结束,c风格</li>
 </ul>
 </li>
@@ -75,7 +76,7 @@
 <li>变量character_set_server记录服务器默认值,mysql8.0默认是utf8mb4(可储各种表情符号,最长4字节)</li>
 <li>每个库/表/字段可单独指定,库不指定则用服务器,表不指定则用库,字段不指定则用表</li>
 <li>character_set_client服务器认为客户端发送过来的sql语句的编码</li>
-<li>character_set_conneciton执行sql内部编码,所以服务器把客户端发送的sql从character_set_client转为character_set_conneciton</li>
+<li>character_set_connection 执行 SQL 的内部编码：服务器把客户端发来的 SQL 从 character_set_client 转为 character_set_connection</li>
 <li>character_set_results 返回结果集</li>
 <li>客户端用连接参数一次性指定这三个值character_set_client, character_set_results, character_set_connection</li>
 </ul>
@@ -187,7 +188,7 @@ while outer_row
         outer_row = outer_iter.next
 end</code></pre></li>
 <li>
-<p>FULL OUTER JOIN暂不支持</p>
+<p>FULL OUTER JOIN 暂不支持：需要时可 <code>LEFT JOIN ... UNION ALL RIGHT JOIN ... WHERE 左表主键 IS NULL</code> 模拟</p>
 </li>
 <li>
 <p>NATURAL表示join_specification采用USING(join_column_list),不用手动写出来,join_column_list选取两个表都有的列名</p>
@@ -322,6 +323,9 @@ HELP 'select'</code></pre><h3 id="数据类型">数据类型</h3>
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>两个常踩的坑</strong>：① <code>TIMESTAMP</code> 只有 4 字节、2038-01-19 后溢出，涉及 2038 年之后日期（证件有效期等）请用 <code>DATETIME</code>；② 表中的 <code>0000-00-00</code> 零值日期只在非严格模式（未开启 <code>NO_ZERO_DATE</code>）下允许，strict 模式写入会直接报错。</p>
+</blockquote>
 <ul>
 <li>TIME,DATETIME,TIMESTAMP默认精确到秒,增加参数指定精确小数,最多到6位</li>
 </ul>
@@ -479,7 +483,7 @@ PARTITION BY RANGE (store_id) (
   job_code INT,
   store_id INT
 ) PARTITION BY [LINEAR] HASH(store_id) PARTITIONS 4;
--- LINEAR 带上则指定hash算法</code></pre><ul>
+-- LINEAR HASH：线性哈希，增删分区影响小，但数据分布不如普通 HASH 均匀</code></pre><ul>
 <li>KEY,隐式hash,服务器采用hash(key)实现,可任意类型</li>
 </ul>
 <pre><code class="language-sql">CREATE TABLE tm1 (s1 CHAR(32) PRIMARY KEY) PARTITION BY KEY(s1) PARTITIONS 10;</code></pre></li>
@@ -506,6 +510,7 @@ partition_column IN (constant1, constant2, ..., constantN)
  [STRAIGHT_JOIN]
  [SQL_SMALL_RESULT] [SQL_BIG_RESULT] [SQL_BUFFER_RESULT]
  [SQL_NO_CACHE] [SQL_CALC_FOUND_ROWS]
+-- 8.0 起查询缓存已移除：SQL_NO_CACHE 关键字失效；SQL_CALC_FOUND_ROWS 自 8.0.17 弃用，取总数请用 COUNT(*) OVER()
 select_expr [, select_expr] ...
  [into_option]
  [FROM table_references
@@ -711,19 +716,19 @@ IF(expr1,expr2,expr3)
 #concat把int转varchar类型
 update user set nickname = concat(id,'号') where id &gt; 0;
 
-# 字符串替换
+# 字符串替换（REPLACE 第 2、3 参按字符串匹配；int 列会隐式转字符串，建议用字符串列演示）
 update user set nickname = REPLACE(id,'old', 'now') where id &gt; 0
 
 # 查询数据库占用空间及索引空间
 # Binlog,阿里云的rds默认把它也计算在内,要手动设置控制大小.大量数据删除时,会突然增加Binlog文件
 select TABLE_NAME, concat(truncate(data_length/1024/1024,2),' MB') as data_size,
 concat(truncate(index_length/1024/1024,2),' MB') as index_size
-from information_schema.tables where TABLE_SCHEMA = 'databaseName'</code></pre><pre><code class="language-bash"># 修改root密码
+from information_schema.tables where TABLE_SCHEMA = 'databaseName'</code></pre><pre><code class="language-bash"># 修改root密码（8.0 起 PASSWORD() 函数已移除，必须用 ALTER USER）
 killall mysqld
 mysqld_safe --skip-grant-tables &amp;
-update mysql.user set password=PASSWORD('newpassword') where user='root';
-flush privileges;
-mysqld_safe &amp;
+ALTER USER 'root'@'localhost' IDENTIFIED BY 'newpassword';
+FLUSH PRIVILEGES;
+# 用 mysqladmin shutdown 关掉跳过授权表的实例，再正常启动 mysqld
 
 # 设置默认字符集
 mysql -u user -D db --default-character-set=utf8 -p</code></pre><h3 id="explain优化sql">explain优化sql</h3>
@@ -747,7 +752,7 @@ system &gt; const &gt; eq_ref &gt; ref &gt; fulltext &gt; ref_or_null &gt; index
 <li>表的存储会出现碎片化，每当删除了一行内容，该段空间就会变为空白、被留空，而在一段时间内的大量删除操作，会使这种留空的空间变得比存储列表内容所使用的空间更大；</li>
 <li>当执行插入操作时，MySQL会尝试使用空白空间，但如果某个空白空间一直没有被大小合适的数据占用，仍然无法将其彻底占用，就形成了碎片；</li>
 <li>当MySQL对数据进行扫描时，它扫描的对象实际是列表的容量需求上限，也就是数据被写入的区域中处于峰值位置的部分；</li>
-<li>清除不要数据,记得要optimize table xx;不然空间仍旧占用.</li>
+<li>清除不要数据,记得要optimize table xx;不然空间仍旧占用（OPTIMIZE TABLE 会短暂锁表，8.0 建议在维护窗口执行，或用 pt-online-schema-change / gh-ost 类工具在线整理）</li>
 </ul>
 <blockquote>
 <p>例如：

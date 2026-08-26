@@ -45,7 +45,8 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <h1>Echo</h1>
-                <h3 id="memcached中间件">memcached中间件</h3>
+                <p>本页演示用 Echo 中间件做 <strong>页面级缓存</strong>：把 GET 响应写入 Memcached，配合下方 nginx 的 <code>memcached_pass</code> 直接命中缓存、未命中再回落到 Echo 服务；文末是 2026 年 Echo v5 主线与选型全景。</p>
+<h3 id="memcached中间件">memcached中间件</h3>
 <hr>
 <pre><code class="language-golang">import (
  "bytes"
@@ -113,6 +114,9 @@ func MemcacheStore(server string, expireSecond int32) func(echo.HandlerFunc) ech
    resp := c.Response()
    mr := &amp;middleResp{
     ResponseWriter: resp.Writer,
+    // 关键：Echo 对 200 响应通常不显式调用 WriteHeader（首次 Write 时由
+    // net/http 自动补 200），所以 isOK 默认必须为 true，否则缓存永不写入
+    isOK:          true,
     key:            c.Request().RequestURI,
     expiration:     expireSecond,
    }
@@ -163,27 +167,21 @@ func main() {
  e.Logger.Fatal(e.Start(":1323"))
 }
 
-// Handler
+// Handler：纯文本响应（Content-Type: text/plain），给接口/API 场景演示
 func stringHandler(c echo.Context) error {
- err := c.String(http.StatusOK, fmt.Sprintf("&lt;H1&gt;path:%s&lt;/H1&gt;", c.Path()))
- if err != nil {
-  return err
- }
  return c.String(http.StatusOK, fmt.Sprintf(
-  "&lt;H2&gt;query:%s,rand:%d&lt;/H2&gt;",
+  "path:%s, query:%s, rand:%d",
+  c.Path(),
   c.QueryString(),
   rand.Int(),
  ))
 }
 
-// Handler
+// Handler：HTML 渲染响应（Content-Type: text/html），浏览器直接看效果
 func htmlHandler(c echo.Context) error {
- err := c.HTML(http.StatusOK, fmt.Sprintf("&lt;H1&gt;uri:%s&lt;/H1&gt;", c.Request().RequestURI))
- if err != nil {
-  return err
- }
  return c.HTML(http.StatusOK, fmt.Sprintf(
-  "&lt;H2&gt;query:%s,rand:%d&lt;/H2&gt;",
+  "&lt;H1&gt;uri:%s&lt;/H1&gt;&lt;H2&gt;query:%s,rand:%d&lt;/H2&gt;",
+  c.Request().RequestURI,
   c.QueryString(),
   rand.Int(),
  ))

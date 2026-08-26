@@ -47,6 +47,7 @@
                 <h1>Docker</h1>
                 <p><a href="https://www.docker.com">官网</a>
 <img src="life.webp" alt="life"></p>
+<p>这篇是 Docker 实操笔记：安装、常用命令、容器/镜像/卷管理、私有 Registry 与 Jenkins/Rancher/GitLab 周边集成、多阶段构建与 minikube。命令快照偏 2021-2022 年（以注释标注），版本选型与安全台账请看<strong>文末「Docker 29 与 AI 平台演进（2024-2026 更新）」</strong>。</p>
 <ul>
 <li>
 <p>The easiest and recommended way to get Docker Compose is to install Docker Desktop. Docker Desktop includes Docker Compose along with Docker Engine and Docker CLI which are Compose prerequisites.</p>
@@ -68,7 +69,12 @@ yum install docker
 service docker start
 # repos地址
 vim /etc/docker/daemon.json
-{ "registry-mirrors": "https://registry.docker-cn.com", "live-restore": true }
+{
+  "registry-mirrors": ["https://docker.m.daocloud.io"],
+  "live-restore": true
+}
+# 注意:registry-mirrors 必须是数组（不是字符串）
+# Docker 中国官方镜像站 docker-cn.com 已于 2024 年停止服务,上例为社区常用镜像源,可用性请自行确认
 
 docker run -d -p 8090:80 docker/getting-started
 
@@ -76,28 +82,28 @@ docker run -d -p 8090:80 docker/getting-started
 /var/lib/docker/containers/ID/ID-json.log
 
 # 设置共享内存
-docker --shm-size 256m
+docker run --shm-size 256m   # 共享内存是 docker run 的参数,没有全局 --shm-size
 
-# 安装 elasticsearch
+# 安装 elasticsearch（命令为 2019 年前后的 7.5.2 版本示例;现值机生产环境用 8.x,语法差异见本站 elastic 页）
 docker pull docker.elastic.co/elasticsearch/elasticsearch:7.5.2
 # 启动 openjdk 内存空间有要求
 docker run -p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" docker.elastic.co/elasticsearch/elasticsearch:7.5.2
 
 # 在linux至少8G,容易跑起来
 # 需要继续 docker kibana rancher
-# brancher 集群-多个项目,项目-多个命令空间
+# rancher 集群-多个项目,项目-多个命名空间
 # rancher 主界面-&gt;右下角有个English，点击选择中文
 
 # 单节点安装，重置密码
-docker exec -ti &lt;container_id&gt; reset-password
+docker exec -ti &lt;container_id&gt; rancher reset-password
 
 # 必须带上-v $HOME/rancher:/var/lib/rancher/,否则跑不起来
 # 导致https://192.168.8.108:8091,https://127.0.0.1:8091(不能访问)
 # rancher启动慢,需要等待片刻就能浏览器访问
 # docker logs -f rancher查看容器启动日志
 docker run -d --restart=unless-stopped -p 8090:80 -p 8091:443 --privileged -v $HOME/rancher:/var/lib/rancher/ rancher/rancher:latest
-rEWlGtFhS52EsKIa
-https://127.0.0.1:8091</code></pre><h3 id="常用命令">常用命令</h3>
+# 首次访问 https://127.0.0.1:8091,初始管理员密码在容器启动日志里,用下面命令查找:
+# docker logs -f rancher | grep "Bootstrap Password"</code></pre><h3 id="常用命令">常用命令</h3>
 <hr>
 <blockquote>
 <p>所有images都压缩在Docker.qcow2里</p>
@@ -109,11 +115,12 @@ docker pull gerritcodereview/gerrit
 docker run -ti -p 8080:8080 -p 29418:29418 gerritcodereview/gerrit
 
 #docker 安装(周编译,较新但可能bug)
-docker pull jenkinsci/jenkins
+docker pull jenkins/jenkins   # 官方镜像 2022 年已迁至 jenkins/jenkins,jenkinsci/jenkins 已废弃
 chown -R 1000:1000 /root/jenkins_home
 docker run -d -p 8080:8080 --restart=always -v /root/jenkins_home:/var/jenkins_home --name jenkins jenkins/jenkins
 # 帮助文档
 https://www.w3cschool.cn/jenkins/jenkins-e7bo28ol.html
+# 官方文档 https://www.jenkins.io/doc/
 
 Blue Ocean值得安装
 nohup mdbook serve &gt;~/mdbook.nohup 2&gt;&amp;1 &amp;
@@ -157,7 +164,9 @@ docker stop $(docker ps -q)
 
 #已经停止的，正在运行的不能删除
 docker rm $(docker ps -a -q)</code></pre><h3 id="image管理">image管理</h3>
-<pre><code class="language-sh"># 注意images
+<pre><code class="language-sh"># 注意:以下 help 输出是 2022 年前后版本的快照,具体子命令以 docker &lt;cmd&gt; --help 为准
+
+# 注意images
 docker images --help
 
 Usage:  docker images [OPTIONS] [REPOSITORY[:TAG]]
@@ -267,7 +276,7 @@ docker push localhost:5000/nginx
 brew services restart jenkins-lts</code></pre><ul>
 <li>SSH remote hosts配置中Pty一定不能勾选,否则nohup需要sleep才有效</li>
 <li>证书是统一管理各种,包括ssh,gitlab等等.</li>
-<li>Multijob插件用来批量构建工程,过时了，改用&rsquo;parallel&rsquo; step along with &lsquo;BlueOcean&rsquo; can basical</li>
+<li>Multijob 插件已过时,批量构建改用 Pipeline 的 parallel step（配合 Blue Ocean 使用）即可</li>
 <li>Multiple SCMs用来处理多个git/svn仓库构建一个项目</li>
 </ul>
 <h3 id="遇到问题">遇到问题</h3>
@@ -281,7 +290,7 @@ brew services restart jenkins-lts</code></pre><ul>
 <pre><code class="language-dockerfile"># syntax=docker/dockerfile:1
 
 ## Build
-FROM golang:1.16-buster AS build
+FROM golang:1.16-buster AS build  # 官方教程示例期的版本,现值机用 golang:1.26+
 
 WORKDIR /app
 
@@ -307,7 +316,7 @@ USER nonroot:nonroot
 ENTRYPOINT ["/docker-gs-ping"]</code></pre><pre><code class="language-bash">docker build -t docker-gs-ping:multistage -f Dockerfile.multistage .</code></pre><h3 id="python示例httpsdocsdockercomlanguagepython"><a href="https://docs.docker.com/language/python/">python示例</a></h3>
 <pre><code class="language-dockerfile"># syntax=docker/dockerfile:1
 
-FROM python:3.8-slim-buster
+FROM python:3.8-slim-buster  # Python 3.8 已于 2024-10 EOL,现值机用 python:3.13-slim
 
 WORKDIR /app
 
