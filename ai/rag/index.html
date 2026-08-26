@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="资深码农 技术博客 - RAG">
+    <meta name="author" content="资深码农">
+    <meta name="generator" content="deep2code generator">
+    <link rel="icon" href="../../images/favicon.jpeg" type="image/jpeg">
+    <title>RAG :: 资深码农</title>
+    <link rel="stylesheet" href="../../css/style.css">
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <nav class="header-nav" aria-label="分组导航">
+                <a href="../../index.html#arch-golang" data-group="golang">Go</a><a href="../../index.html#arch-database" data-group="database">DB</a><a href="../../index.html#arch-ai" data-group="ai">AI</a><a href="../../index.html#arch-middleware" data-group="middleware">中间件</a><a href="../../index.html#arch-cloud" data-group="cloud">云·DevOps</a><a href="../../index.html#arch-lang" data-group="lang">语言</a><a href="../../index.html#arch-tools" data-group="tools">工具</a><a href="../../index.html#arch-system" data-group="system">系统</a><a href="../../index.html#arch-game" data-group="game">游戏</a><a href="../../index.html#arch-misc" data-group="misc">更多</a>
+            </nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索 67 篇笔记...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon">🌙</span>
+                <span class="icon-sun">☀️</span>
+            </button>
+        </div>
+    </header>
+
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../index.html">主页</a>
+<span class="separator">/</span>
+<a href="../../ai/index.html">AI</a>
+<span class="separator">/</span>
+<span>rag</span>
+</div>
+
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <h1>RAG</h1>
+                <h3 id="rag-overview">检索增强生成（RAG）</h3>
+
+<p>RAG（Retrieval-Augmented Generation）将信息检索与大语言模型结合，通过从外部知识库检索相关文档来增强 LLM 的回答，解决幻觉问题并提供可溯源的知识。</p>
+
+<h4 id="rag-architecture">RAG 架构</h4>
+<div class="mermaid">
+flowchart TD
+    A[用户提问] --> B[Query Embedding]
+    B --> C[向量检索 Vector Search]
+    C --> D[Top-K 相关文档]
+    D --> E[构建 Prompt: 问题 + 检索到的上下文]
+    E --> F[LLM 生成回答]
+    F --> G[输出: 答案 + 来源引用]
+
+    subgraph 离线建库
+        H[文档库] --> I[分块 Chunking]
+        I --> J[Embedding 向量化]
+        J --> K[向量数据库]
+    end
+    C -.-> K
+</div>
+
+<h4 id="rag-components">核心组件</h4>
+
+<h5>1. 文档处理</h5>
+<pre><code class="language-python">from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders import DirectoryLoader
+
+# 加载文档
+loader = DirectoryLoader("./docs", glob="**/*.md")
+docs = loader.load()
+
+# 文档分块
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,        # 每块最大 500 字符
+    chunk_overlap=50,      # 块之间重叠 50 字符
+    separators=["\n\n", "\n", "。", "！", "？", " "],
+)
+chunks = splitter.split_documents(docs)
+print(f"共 {len(chunks)} 个文档块")</code></pre>
+
+<h5>2. 向量化与存储</h5>
+<pre><code class="language-python">from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import Chroma
+
+# 使用中文 embedding 模型
+embeddings = HuggingFaceEmbeddings(
+    model_name="BAAI/bge-small-zh-v1.5",
+    encode_kwargs={"normalize_embeddings": True},
+)
+
+# 存入向量数据库
+vectorstore = Chroma.from_documents(
+    documents=chunks,
+    embedding=embeddings,
+    persist_directory="./chroma_db",
+)
+vectorstore.persist()</code></pre>
+
+<h5>3. 检索与生成</h5>
+<pre><code class="language-python">from langchain.chains import RetrievalQA
+from langchain.llms import Ollama
+
+# 初始化 LLM
+llm = Ollama(model="llama3", temperature=0.3)
+
+# 构建 RAG 链
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    chain_type="stuff",
+    retriever=vectorstore.as_retriever(search_kwargs={"k": 5}),
+    return_source_documents=True,
+)
+
+# 提问
+result = qa_chain({"query": "Go 语言中 context 的作用是什么？"})
+print(result["result"])
+for doc in result["source_documents"]:
+    print(f"来源: {doc.metadata['source']}")</code></pre>
+
+<h4 id="rag-vector-db">向量数据库选型</h4>
+<table>
+<thead><tr><th>数据库</th><th>类型</th><th>特点</th><th>适用场景</th></tr></thead>
+<tbody>
+<tr><td>Milvus</td><td>专用向量库</td><td>分布式、高性能</td><td>大规模生产环境</td></tr>
+<tr><td>Chroma</td><td>轻量向量库</td><td>嵌入式、易用</td><td>原型开发、小规模</td></tr>
+<tr><td>Qdrant</td><td>专用向量库</td><td>Rust 实现、过滤强</td><td>需要复杂过滤</td></tr>
+<tr><td>Pgvector</td><td>PostgreSQL 扩展</td><td>SQL 生态</td><td>已有 PG 基础设施</td></tr>
+<tr><td>Elasticsearch</td><td>搜索引擎</td><td>全文+向量混合检索</td><td>已有 ES 基础设施</td></tr>
+</tbody>
+</table>
+
+<h4 id="rag-advanced">进阶技巧</h4>
+<ul>
+<li><strong>混合检索</strong>：结合 BM25 全文检索 + 向量检索，取两者并集再重排。</li>
+<li><strong>Query 重写</strong>：用 LLM 将用户查询重写为更利于检索的表达。</li>
+<li><strong>重排序（Reranking）</strong>：用 Cross-Encoder 对检索结果二次排序，提高精度。</li>
+<li><strong>多路召回</strong>：同时从多个知识源检索，合并结果。</li>
+<li><strong>动态 chunk</strong>：根据文档结构（段落、标题）动态分块，而非固定长度。</li>
+</ul>
+                <div class="page-nav">
+<a class="nav-prev" href="../../ai/llm/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">LLM</span></a>
+<a class="nav-next" href="../../ai/finetuning/index.html"><span class="nav-label">下一篇 →</span><span class="nav-title">Fine-tuning 微调</span></a>
+</div>
+            </main>
+            <aside class="side-rail">
+            <aside class="related-card"><h2 class="related-title">同组 · AI 与机器学习</h2><ul class="related-list"><li><a class="side-post" href="../../ai/index.html">AI</a></li><li><a class="side-post" href="../../ai/llm/index.html">LLM</a></li><li><a class="side-post" href="../../ai/finetuning/index.html">Fine-tuning 微调</a></li><li><a class="side-post" href="../../other/machinelearn/index.html">机器学习</a></li></ul></aside>
+        </aside>
+        </div>
+    </div>
+
+    <button class="back-to-top" title="回到顶部">↑</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+        <script type="module">
+    import mermaid from "https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.esm.min.mjs";
+    window.mermaid = mermaid;
+    mermaid.initialize({ startOnLoad: false, theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default', securityLevel: 'loose' });
+    mermaid.run({ querySelector: '.mermaid' });
+    </script>
+
+    <script>window.SITE_BASE = "../../";window.SITE_GROUP = "ai";</script>
+    <script src="../../js/main.js"></script>
+</body>
+</html>
