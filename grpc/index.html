@@ -50,6 +50,7 @@
 
 <h3 id="相关网站">相关网站</h3>
 <hr>
+<p>入门建议先读官方 <a href="https://grpc.io/docs/languages/go/basics/">Basics tutorial</a> 走通「编写 .proto → 生成代码 → 发起调用」的完整流程，再对照本页图示理解工具链各环节；生产选型时重点看文末「buf 工具链」与「Connect-RPC」两节，2026 年已不建议裸拼 <code>protoc</code> 与插件。</p>
 <ul>
 <li><a href="https://grpc.io/">gRPC 官方文档</a></li>
 <li><a href="https://github.com/grpc/grpc-go">gRPC-Go 源码</a></li>
@@ -290,10 +291,13 @@ message Order {
 <p><img src="protobuf_type1.webp" alt="标量类型表">
 <img src="protobuf_type2.webp" alt="更多类型表">
 <img src="protobuf_default.webp" alt="默认值表"></p>
+<p>选型要点：<strong>整数 id 别用 int64 硬扛</strong>——在 JavaScript/Swift 等 52 位安全整数环境会丢精度，跨端字段用 string 承载；<code>bytes</code> 适合二进制与带长度前缀的数据；enum 第一个值必须是语义默认值（0），新增枚举值优先 <code>reserved</code> 占位；protobuf 的向后兼容只保证「旧客户端读新数据不崩」，不保证语义正确，字段语义变更要当作破坏性变更对待。</p>
 <h3 id="更多">更多</h3>
 <hr>
 <ul>
-<li>gRPC + Opentracing + Zipkin 分布式链路追踪系统</li>
+<li>gRPC + Opentracing + Zipkin 分布式链路追踪系统——历史方案，2026 年统一迁移到 OpenTelemetry，Go 侧用 <code>go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc</code> 自动插桩即可，无需手写拦截器。</li>
+<li><strong>gRPC vs HTTP/REST 怎么选</strong>：服务间内部调用、强类型契约、高频长连接、需要双向流 → gRPC；对外公开 API、浏览器/弱类型下游直连、调试便利性优先 → REST 或 Connect。gRPC 的代价是调试与抓包成本高（需要 grpcurl 或专用代理），不要在公网直接暴露未加防护的 gRPC 端口。</li>
+<li><strong>性能常识</strong>：protobuf 比 JSON 更小、编解码更快，但收益强弱取决于消息规模与调用频率——大消息场景收益显著，小消息高频场景 HTTP/2 连接复用才是大头，选型前先按真实负载压测，不要只信框架宣传。</li>
 </ul>
 
 <h2 id="grpc-2026-update">gRPC 2026 生态更新</h2>
@@ -339,17 +343,14 @@ buf breaking --against .git#branch=main</code></pre>
 
 <h3 id="grpc-connect">Connect-RPC（gRPC 兼容优雅替代）</h3>
 <p>Connect-RPC 兼容 gRPC 协议，同时支持 HTTP/JSON 客户端，无需 gRPC 代理：</p>
-<pre><code class="language-go">// Go 服务端
-import "connectrpc.com/connect"
+<pre><code class="language-go">// Go 服务端（connect-go 生成式 API）
+import "pingv1connect"
 
 func main() {
     mux := http.NewServeMux()
-    handler := connect.NewHandler(
-        pingv1connect.NewPingServiceHandler(&amp;PingServer{}),
-    )
-    mux.Handle(pingv1connect.NewPingServiceHandler(
-        &amp;PingServer{},
-    ))
+    // connect 生成的 NewXxxServiceHandler 返回 (路由路径, http.Handler)
+    path, handler := pingv1connect.NewPingServiceHandler(&amp;PingServer{})
+    mux.Handle(path, handler)
     http.ListenAndServe(":8080", mux)
 }
 

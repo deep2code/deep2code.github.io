@@ -43,7 +43,9 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <h1>Redis</h1>
-                <h3 id="安装运行">安装运行</h3>
+                <p>Redis（Remote Dictionary Server）是内存键值存储兼数据结构服务器，长于缓存、消息队列、实时计数、会话存储等场景。本文是长期维护的实操笔记：正文记录基础安装、各版本演进与常用命令，<a href="#redis-2024-update">文末更新节</a>汇总 2025-2026 年 Redis 8 系列现状。</p>
+
+<h3 id="安装运行">安装运行</h3>
 <hr>
 <pre><code class="language-sh">brew install redis
 brew services start redis</code></pre><hr>
@@ -69,7 +71,9 @@ make install</code></pre><h3 id="自带客户端">自带客户端</h3>
 #  redis-cli --scan --pattern '*:12345*'
 #When no command is given, redis-cli starts in interactive mode
 #redis-cli的命令提示非常有帮助,比其他终端好用的多
-redis-cli</code></pre><h3 id="redisinsight是redis官方出品的可视化管理工具可用于设计开发优化你的redis应用">RedisInsight是Redis官方出品的可视化管理工具，可用于设计、开发、优化你的Redis应用</h3>
+redis-cli</code></pre>
+<p>常用姿势：<code>-x</code> 管道吃 stdin、<code>-r</code> 重复执行（配 <code>-i</code> 间隔）、<code>--scan</code> 做不阻塞的全量遍历；<code>tab</code> 补全比多数终端客户端好用。</p><h3 id="redisinsight是redis官方出品的可视化管理工具可用于设计开发优化你的redis应用">RedisInsight：官方可视化工具</h3>
+<p>v3.x 提供 Browser、Workbench、Profiler、Slow Log 与 Memory Analysis，排查线上问题比裸 redis-cli 高效得多。</p>
 <h3 id="redis4引入自动内存碎片整理">redis4引入自动内存碎片整理</h3>
 <hr>
 <pre><code class="language-sh"># 开启自动内存碎片整理(总开关),默认no
@@ -83,13 +87,14 @@ active-defrag-threshold-upper 100
 # 内存自动整理占用资源最小百分比
 active-defrag-cycle-min 1
 # 内存自动整理占用资源最大百分比
-active-defrag-cycle-max 25</code></pre><blockquote>
+active-defrag-cycle-max 25</code></pre>
+<p>4.0 引入、8.x 沿用。是否开启先看 <code>INFO memory</code> 的 <code>mem_fragmentation_ratio</code>：持续高于 1.4 且内存紧张再开；大 Key 删除优先用 <code>UNLINK</code> 异步释放。</p><blockquote>
 <p><strong>Notice:开启后,可能特定时间影响redis响应速度</strong></p>
 </blockquote>
 <h3 id="redis5带来了stream">redis5带来了Stream</h3>
 <hr>
 <blockquote>
-<p>Redis对消息队列（MQ，Message Queue）的完善实现
+<p>Redis对消息队列（MQ，Message Queue）的完善实现。注意：Pub/Sub 广播即焚、消息不落地；Stream 消息持久化保存，消费组内竞争、组间广播，配合 <code>XACK</code> 可做到"至少一次"可靠消费。需要消息不丢用 Stream，纯事件通知用 Pub/Sub。
 <img src="redis_stream.webp" alt="redis_stream"></p>
 </blockquote>
 <h3 id="redis6增加了多线程">redis6增加了多线程</h3>
@@ -98,7 +103,7 @@ active-defrag-cycle-max 25</code></pre><blockquote>
 # Setting io-threads to 1 will just use the main thread as usual.
 # io-threads-do-reads no
 # Note that Gopher is not currently supported when 'io-threads-do-reads'</code></pre><blockquote>
-<p>Redis实例占用相当大的CPU耗时的时候才建议采用,否则使用多线程没有意义。基本上我们都是<strong>观众</strong>!!!</p>
+<p><strong>何时值得开：网络 I/O 成为瓶颈时</strong>——6.0 的多线程只覆盖网络 I/O（读请求解析 + 写响应），命令执行仍在主线程单线程完成。大 value（100KB+）或高频 pipeline 场景收益明显，普通小命令场景意义不大。</p>
 </blockquote>
 <h3 id="常用功能">常用功能</h3>
 <hr>
@@ -153,13 +158,13 @@ active-defrag-cycle-max 25</code></pre><blockquote>
 </tr>
 <tr>
 <td>Pipelining</td>
-<td>优点:减少RTT(往返时间),多次网络IO,系统调用的消耗</td>
-<td>缺点:独占链接,占用redis内存缓存命令结果</td>
+<td>pipeline（一次连接批量发命令）</td>
+<td>一次 RTT 发多条命令，减少往返与系统调用；独占连接，结果需客户端排队</td>
 </tr>
 <tr>
 <td>Auth</td>
 <td>auth password</td>
-<td>验证密码</td>
+<td>验证密码；6.0+ 更推荐 ACL 按用户授权</td>
 </tr>
 <tr>
 <td>HyperLogLog</td>
@@ -177,7 +182,7 @@ active-defrag-cycle-max 25</code></pre><blockquote>
 <img src="redis_key.webp" alt="key">
 <img src="redis_hl.webp" alt="hl"></p>
 <ul>
-<li>xreadgroup和xack配合使用</li>
+<li>xreadgroup和xack配合使用：读消息（<code>XREADGROUP</code>）处理完必须 <code>XACK</code>，否则计数不清、重启后重复投递——"至少一次"语义的来源。</li>
 </ul>
 <pre><code class="language-c">WHILE true
     entries = XREADGROUP $GroupName $ConsumerName BLOCK 2000 COUNT 10 STREAMS mystream &gt;
@@ -194,24 +199,35 @@ active-defrag-cycle-max 25</code></pre><blockquote>
             XACK mystream $GroupName message.id
         END
     END
-END</code></pre><h3 id="常见问题">常见问题</h3>
+END</code></pre><h3 id="常见问题">常见问题：雪崩 / 击穿 / 穿透</h3>
 <hr>
 <ol>
-<li>
-<p><strong>缓存雪崩:短时间内大量键超时失效</strong></p>
-</li>
-<li>
-<p><strong>缓存击穿:缓存中没有键值</strong></p>
+<li><strong>缓存雪崩</strong>：大量 key 在同一时间点同时过期，瞬时请求全部压到 DB。
 <ol>
-<li>确实不存在:用布隆过滤器优化</li>
-<li>键超时:设置永不超时,受最大内存限制</li>
+<li>对策：过期时间加随机抖动；热点数据"逻辑过期"（永不过期 + 后台异步刷新）；多级缓存。</li>
+</ol>
+</li>
+<li><strong>缓存击穿</strong>：单个热点 key 失效的瞬间，高并发同时穿透到 DB。
+<ol>
+<li>对策：重建加互斥锁（SET NX 抢锁）；热点 key 永不过期 + 异步更新。</li>
+</ol>
+</li>
+<li><strong>缓存穿透</strong>：查询的 key 在 DB 里根本不存在，缓存永远命中不了。
+<ol>
+<li>对策：布隆过滤器挡在缓存前；空结果也缓存（短 TTL）；入口参数校验。</li>
 </ol>
 </li>
 </ol>
+<blockquote>
+<p>三者命名容易混：<strong>雪崩</strong>=大面积同时失效；<strong>击穿</strong>=单个热点失效瞬间；<strong>穿透</strong>=查的东西根本不存在。</p>
+</blockquote>
 <h3 id="批量删除">批量删除</h3>
 <hr>
 <pre><code class="language-lua">--批量删除msg开始的键值
-EVAL "return redis.call('del', unpack(redis.call('keys', ARGV[1])))" 0 'msg*'</code></pre><h3 id="redis通讯协议-resp">redis通讯协议-RESP</h3>
+EVAL "return redis.call('del', unpack(redis.call('keys', ARGV[1])))" 0 'msg*'</code></pre>
+<blockquote>
+<p><strong>生产慎用 KEYS + EVAL</strong>：<code>KEYS</code> 是 O(N) 全库扫描，会阻塞主线程。量级大时改用 <code>SCAN</code> + <code>DEL</code> 分批删（或 <code>UNLINK</code> 异步删）。上例适合开发机与明确少量 Key 的场景。</p>
+</blockquote><h3 id="redis通讯协议-resp">redis通讯协议-RESP</h3>
 <hr>
 <ul>
 <li>请求协议
@@ -226,6 +242,7 @@ EVAL "return redis.call('del', unpack(redis.call('keys', ARGV[1])))" 0 'msg*'</c
 <p><strong>pipeline实现就是连接发送命令,不用每个都等</strong></p>
 </blockquote>
 
+<p><code>RESP2</code> 是经典文本协议，上面就是它的报文格式；Redis 6.0 起支持 <code>RESP3</code>（客户端 <code>HELLO 3</code> 协商），新增服务端主动推送能力——<strong>客户端缓存（Client-side Caching）与 Pub/Sub push 都依赖 RESP3</strong>。主流客户端 2026 年已默认或自动协商 RESP3。</p>
 <h2 id="redis-2024-update">Redis 8 系列时代（2025-2026）</h2>
 
 <h3 id="redis-license-2025">许可回归：Redis 再次开源</h3>
