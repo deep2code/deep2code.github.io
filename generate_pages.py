@@ -926,7 +926,299 @@ def assert_code_blocks_preserved(original, rewritten):
     return len(blocks(original)), len(blocks(rewritten))
 
 
-def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, current_path, article_count):
+SITE_DOMAIN = 'https://www.yijunjun.asia'
+SITE_NAME = '\u8d44\u6df1\u7801\u519c'
+SITE_TAGLINE = '\u6280\u672f\u535a\u5ba2\u2014\u2014Go\u3001\u4e91\u539f\u751f\u3001AI\u3001\u6570\u636e\u5e93\u3001\u5f00\u53d1\u5de5\u5177\u7684\u8e29\u5751\u4e0e\u5b9e\u8df5'
+SITE_DESCRIPTION = '\u8d44\u6df1\u7801\u519c\u6280\u672f\u535a\u5ba2\uff1a\u4e00\u540d\u4e8c\u5341\u5e74\u4e00\u7ebf\u7a0b\u5e8f\u5458\u7684\u6280\u672f\u7b14\u8bb0\uff0c\u6db5\u76d6 Go \u8bed\u8a00\u3001\u4e91\u539f\u751f\u67b6\u6784\u3001AI \u4e0e\u5927\u6a21\u578b\u3001\u6570\u636e\u5e93\u4e0e\u7f13\u5b58\u3001\u5f00\u53d1\u5de5\u5177\u4e0e\u6548\u7387\u7b49\u9886\u57df\uff0c\u591a\u6570\u6587\u7ae0\u914d\u6709\u4ee3\u7801\u4e0e\u67b6\u6784\u56fe\u8868\u3002'
+
+# AI crawlers that should be explicitly allowed
+AI_CRAWLERS = [
+    'GPTBot',        # OpenAI
+    'Claude-Web',    # Anthropic
+    'PerplexityBot', # Perplexity
+    'CCBot',         # Common Crawl
+    'Google-Extended',# Google AI training
+    'Bytespider',    # ByteDance
+    'Cotoyogi',      # LLM indexer
+    'Diffbot',       # Diffbot
+    'FacebookBot',   # Meta
+    'anthropic-ai',  # Anthropic alt
+    'cohere-ai',     # Cohere
+]
+
+
+def build_meta_tags(page_data, current_path, title, prefix):
+    """Build SEO + social + AI-crawler meta tags for a page."""
+    is_home = current_path == '/'
+    url = f'{SITE_DOMAIN}{current_path}'
+
+    # Determine page description: prefer ai_pitch, then ai_summary takeaway,
+    # then title-based fallback
+    ai_pitch = page_data.get('ai_pitch', '')
+    if ai_pitch and isinstance(ai_pitch, str):
+        desc = ai_pitch
+    else:
+        ai_summary = page_data.get('ai_summary', {})
+        if isinstance(ai_summary, dict):
+            takeaway = ai_summary.get('takeaway', '')
+            desc = takeaway if takeaway else (title or SITE_NAME)
+        else:
+            desc = title or SITE_NAME
+
+    if is_home:
+        desc = SITE_DESCRIPTION
+
+    desc = re.sub(r'<[^>]+>', '', str(desc)).strip()
+    if len(desc) > 160:
+        desc = desc[:157] + '...'
+
+    og_title = title if title and not is_home else f'{SITE_NAME} - {SITE_TAGLINE}'
+    page_type = 'website' if is_home else 'article'
+
+    # Article-specific tags
+    article_tags = ''
+    if not is_home and title:
+        group = CONTENT_GROUP_BY_URL.get(current_path, {})
+        section = group.get('title', '')
+        article_tags = f'''
+    <meta property="article:author" content="{SITE_NAME}">
+    <meta property="article:section" content="{escape(section)}">
+    <meta property="article:tag" content="{escape(section)}">'''
+
+    return f'''    <meta name="description" content="{escape(desc)}">
+    <meta name="keywords" content="Go,Golang,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,\u6280\u672f\u535a\u5ba2,\u7a0b\u5e8f\u5458,\u8e29\u5751,\u5b9e\u8df5">
+    <meta name="author" content="{SITE_NAME}">
+    <meta name="generator" content="deep2code generator">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="{url}">
+    <!-- Open Graph -->
+    <meta property="og:title" content="{escape(og_title)}">
+    <meta property="og:description" content="{escape(desc)}">
+    <meta property="og:type" content="{page_type}">
+    <meta property="og:url" content="{url}">
+    <meta property="og:site_name" content="{SITE_NAME}">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="og:image" content="{SITE_DOMAIN}/images/favicon.jpeg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{escape(og_title)}">
+    <meta name="twitter:description" content="{escape(desc)}">
+    <meta name="twitter:image" content="{SITE_DOMAIN}/images/favicon.jpeg">{article_tags}'''
+
+
+def build_json_ld(page_data, current_path, title, breadcrumbs_html):
+    """Build JSON-LD structured data blocks for SEO and AI understanding."""
+    blocks = []
+
+    is_home = current_path == '/'
+
+    # 1. WebSite schema (homepage only)
+    if is_home:
+        blocks.append({
+            "@context": "https://schema.org",
+            "@type": "WebSite",
+            "name": SITE_NAME,
+            "url": SITE_DOMAIN,
+            "description": SITE_DESCRIPTION,
+            "inLanguage": "zh-CN",
+            "potentialAction": {
+                "@type": "SearchAction",
+                "target": f"{SITE_DOMAIN}/?q={{search_term_string}}",
+                "query-input": "required name=search_term_string"
+            }
+        })
+
+    # 2. BlogPosting schema (article pages)
+    if not is_home and title:
+        ai_pitch = page_data.get('ai_pitch', '')
+        desc = ai_pitch if ai_pitch and isinstance(ai_pitch, str) else title
+        group = CONTENT_GROUP_BY_URL.get(current_path, {})
+        section = group.get('title', '')
+
+        article_data = {
+            "@context": "https://schema.org",
+            "@type": "BlogPosting",
+            "headline": title,
+            "description": desc[:200],
+            "url": f"{SITE_DOMAIN}{current_path}",
+            "inLanguage": "zh-CN",
+            "author": {
+                "@type": "Person",
+                "name": SITE_NAME,
+                "url": SITE_DOMAIN
+            },
+            "publisher": {
+                "@type": "Person",
+                "name": SITE_NAME,
+                "url": SITE_DOMAIN
+            },
+            "mainEntityOfPage": {
+                "@type": "WebPage",
+                "@id": f"{SITE_DOMAIN}{current_path}"
+            },
+            "articleSection": section
+        }
+        blocks.append(article_data)
+
+    # 3. BreadcrumbList schema (if breadcrumbs exist)
+    if breadcrumbs_html:
+        # Extract breadcrumb items from HTML
+        crumb_items = re.findall(r'<a[^>]*href="([^"]*)"[^>]*>([^<]+)</a>', breadcrumbs_html)
+        if crumb_items:
+            items = []
+            for i, (href, text) in enumerate(crumb_items, 1):
+                # Resolve relative URLs to absolute
+                if href.startswith('../'):
+                    href = SITE_DOMAIN + '/' + href.lstrip('../').lstrip('/')
+                elif href.startswith('./'):
+                    href = SITE_DOMAIN + current_path + href.lstrip('./')
+                elif not href.startswith('http'):
+                    href = SITE_DOMAIN + '/' + href.lstrip('/')
+                items.append({
+                    "@type": "ListItem",
+                    "position": i,
+                    "name": text.strip(),
+                    "item": href
+                })
+            # Add current page as last item
+            if title:
+                items.append({
+                    "@type": "ListItem",
+                    "position": len(items) + 1,
+                    "name": title,
+                    "item": f"{SITE_DOMAIN}{current_path}"
+                })
+            if items:
+                blocks.append({
+                    "@context": "https://schema.org",
+                    "@type": "BreadcrumbList",
+                    "itemListElement": items
+                })
+
+    if not blocks:
+        return ''
+
+    json_blocks = '\n'.join(
+        f'    <script type="application/ld+json">{json.dumps(b, ensure_ascii=False)}</script>'
+        for b in blocks
+    )
+    return json_blocks
+
+
+def generate_robots_txt():
+    """Generate robots.txt that welcomes search engines and AI crawlers."""
+    lines = [
+        '# robots.txt for www.yijunjun.asia',
+        '# Search engine crawlers - all welcome',
+        'User-agent: *',
+        'Allow: /',
+        '',
+        '# AI model crawlers - explicitly welcomed',
+        'User-agent: GPTBot',
+        'Allow: /',
+        '',
+        'User-agent: Claude-Web',
+        'Allow: /',
+        '',
+        'User-agent: PerplexityBot',
+        'Allow: /',
+        '',
+        'User-agent: CCBot',
+        'Allow: /',
+        '',
+        'User-agent: Google-Extended',
+        'Allow: /',
+        '',
+        'User-agent: Bytespider',
+        'Allow: /',
+        '',
+        'User-agent: Diffbot',
+        'Allow: /',
+        '',
+        'User-agent: cohere-ai',
+        'Allow: /',
+        '',
+        '# Block resource files from indexing (save crawl budget)',
+        'Disallow: /css/',
+        'Disallow: /js/',
+        '',
+        '# Sitemaps',
+        f'Sitemap: {SITE_DOMAIN}/sitemap.xml',
+    ]
+    return '\n'.join(lines) + '\n'
+
+
+def generate_llms_txt(pages):
+    """Generate llms.txt - LLM-friendly site description (per llmstxt.org)."""
+    # Group pages by content group for structured listing
+    lines = [
+        f'# {SITE_NAME}',
+        '',
+        f'> {SITE_DESCRIPTION}',
+        '',
+        f'',
+        f'{SITE_NAME} is a technical blog by a senior developer with 20+ years of experience.',
+        f'Content covers Go programming, cloud-native architecture, AI/LLM, databases,',
+        f'development tools, and software engineering best practices.',
+        f'All articles are in Chinese (Simplified) and include code examples and architecture diagrams.',
+        '',
+        '## Content Groups',
+        '',
+    ]
+
+    for g in CONTENT_GROUPS:
+        icon = g.get('icon', '')
+        title = g['title']
+        blurb = g.get('blurb', '')
+        lines.append(f'### {icon} {title}')
+        lines.append(f'{blurb}')
+        lines.append('')
+        for url in g['pages']:
+            page = pages.get(url, {})
+            ptitle = page.get('title', '')
+            ai_pitch = page.get('ai_pitch', '')
+            if isinstance(ai_pitch, str) and ai_pitch:
+                desc = ai_pitch[:120]
+            else:
+                desc = ptitle
+            if ptitle:
+                lines.append(f'- [{ptitle}]({SITE_DOMAIN}{url}): {desc}')
+        lines.append('')
+
+    lines.extend([
+        '## AI Era Evolution',
+        '',
+        '- [ChatGPT] launched 2022.11, started the LLM era',
+        '- [Function Calling / Tool Use] 2023.06, LLMs can call external tools',
+        '- [RAG - Retrieval Augmented Generation] 2023.08, grounding LLMs with external knowledge',
+        '- [MCP - Model Context Protocol] 2024.11, standardized tool/data protocol for LLMs',
+        '- [Skill] 2025.03, reusable AI capabilities as packaged skills',
+        '- [Agent] 2025.06+, autonomous AI agents that plan and execute multi-step tasks',
+        '',
+        '## About',
+        '',
+        f'- Site URL: {SITE_DOMAIN}',
+        '- Language: Chinese (Simplified, zh-CN)',
+        '- Author: 资深码农 (Senior Developer)',
+        '- ICP: 粤ICP备2026122855号',
+        f'- Articles: {sum(1 for u in pages if u not in ("/", "/categories/", "/tags/"))} technical articles',
+        f'- Sitemap: {SITE_DOMAIN}/sitemap.xml',
+    ])
+
+    return '\n'.join(lines) + '\n'
+
+
+def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html,
+                  current_path, article_count):
     """Generate a complete content-first HTML page (no side navigation).
 
     Layout: sticky top header (brand + group quick-nav + search + theme
@@ -956,8 +1248,9 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
     else:
         page_title = '\u8d44\u6df1\u7801\u519c :: \u6280\u672f\u535a\u5ba2'
 
-    # Meta description: only append the article title on article pages
-    desc_title = f' - {escape(title)}' if title and current_path != '/' else ''
+    # SEO meta tags and JSON-LD structured data
+    meta_tags = build_meta_tags(page_data, current_path, title, prefix)
+    json_ld = build_json_ld(page_data, current_path, title, breadcrumbs_html)
 
     # For homepage, don't show h1 if content has its own structure
     show_h1 = title and current_path != '/'
@@ -1019,12 +1312,11 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
-    <meta name="description" content="\u8d44\u6df1\u7801\u519c \u6280\u672f\u535a\u5ba2{desc_title}">
-    <meta name="author" content="\u8d44\u6df1\u7801\u519c">
-    <meta name="generator" content="deep2code generator">
     <link rel="icon" href="/images/favicon.jpeg" type="image/jpeg">
     <title>{page_title}</title>
     <link rel="stylesheet" href="/css/style.css">
+    {meta_tags}
+    {json_ld}
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -1149,16 +1441,30 @@ def main():
         json.dump(search_index, f, ensure_ascii=False, indent=2)
     print(f"  Saved search index: {len(search_index)} entries")
 
-    # Generate sitemap.xml
+    # Generate sitemap.xml with lastmod
     print("Generating sitemap...")
-    domain = 'https://www.yijunjun.asia'
+    import datetime
+    today = datetime.date.today().isoformat()
     with open(BASE_DIR / 'sitemap.xml', 'w', encoding='utf-8') as f:
         f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
         f.write('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n')
         for url in sorted(pages.keys()):
-            f.write(f'  <url><loc>{domain}{url}</loc></url>\n')
+            priority = '1.0' if url == '/' else '0.8'
+            f.write(f'  <url><loc>{SITE_DOMAIN}{url}</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>{priority}</priority></url>\n')
         f.write('</urlset>\n')
-    print(f"  Saved sitemap: {len(pages)} urls")
+    print(f"  Saved sitemap: {len(pages)} urls (with lastmod, changefreq, priority)")
+
+    # Generate robots.txt
+    print("Generating robots.txt...")
+    with open(BASE_DIR / 'robots.txt', 'w', encoding='utf-8') as f:
+        f.write(generate_robots_txt())
+    print("  Saved robots.txt (AI crawlers welcomed)")
+
+    # Generate llms.txt
+    print("Generating llms.txt...")
+    with open(BASE_DIR / 'llms.txt', 'w', encoding='utf-8') as f:
+        f.write(generate_llms_txt(pages))
+    print("  Saved llms.txt (LLM-friendly site description)")
 
     # Generate all pages
     print("\nGenerating HTML pages...")
