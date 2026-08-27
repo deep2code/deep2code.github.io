@@ -50,9 +50,7 @@
 <div class="ai-meta"><span class="ai-meta-item"><b>适合谁读</b>刚接触并发、或想治好协程泄漏的 Go 开发者</span>
 <span class="ai-meta-item"><b>读完可获得</b>context 接口全貌与“谁派生谁负责”的可落地检查清单</span></div></div></details>
                 <h3 id="golang-context">Go context.Context 详解</h3>
-
-<p><code>context.Context</code> 是 Go 用于控制 goroutine 生命周期、传递请求元数据和实现超时/取消机制的核心接口，自 Go 1.7 引入。一句话记住它的定位：<strong>谁派生谁负责</strong>——上层通过它向下游 goroutine 广播"我要收工了"，下游通过 <code>Done()</code> 响应并主动退出。写 HTTP 服务、调用外部依赖、启动后台任务时，它是必备的第一参数。</p>
-
+<p><code>context.Context</code> 是 Go 并发编程的地基：管理 goroutine 的生死、捎带请求级元数据、支撑超时与取消三件套，自 Go 1.7 起就是标准库常客。先一句话记住它的定位：<strong>谁派生，谁负责</strong>——调用方通过它向下游 goroutine 打信号："活儿干完了，收工"，下游盯着 <code>Done()</code> 一旦关闭就主动收尾退场。日常写 HTTP 接口、接外部依赖、起后台任务，谁都绕不开这个第一参数。</p>
 <h4 id="context-interface">Context 接口定义</h4>
 <pre><code class="language-go">type Context interface {
     // Deadline 返回 context 的截止时间和是否设置了截止时间
@@ -67,19 +65,17 @@
     // Value 返回 context 中关联的键值
     Value(key any) any
 }</code></pre>
-<p>接口只有四个方法，本质是两条信号通道加一个只读挂载点：<code>Deadline()/Done()/Err()</code> 管生命周期，<code>Value()</code> 管请求元数据。注意 <code>Done()</code> 是<strong>只读视角</strong>——取消动作永远由父级触发，子级只能感知，不能反取消父级。</p>
-
+<p>Context 接口拢共四个方法，实质是两条信号通道再加一个只读挂载位：<code>Deadline()/Done()/Err()</code> 扛的是生命周期管理，<code>Value()</code> 负责捎带请求元数据。不过 <code>Done()</code> 只是<strong>被动视角</strong>——取消这件事永远由父级发起，子级只能接收，没有反向取消父级的能力。</p>
 <h4 id="context-creation">创建 Context</h4>
-<p>Go 提供了两种创建根 context 的方式：</p>
+<p>想建一棵新的 context 树，root 只有两种现成选项：</p>
 <pre><code class="language-go">// 1. context.Background() - 通常用于 main 函数、初始化和测试
 ctx := context.Background()
 
 // 2. context.TODO() - 占位：结构上必须有 ctx 但还没决定来源
 ctx := context.TODO()</code></pre>
-<p><code>Background()</code> 是没有超时、不可取消的空 context，是所有派生链的根；<code>TODO()</code> 不是"更好的 Background"，它只是"暂时不确定"的过渡态，上线前应替换成真实来源。</p>
-
+<p><code>Background()</code> 是空 context：没有超时、不可取消，一切派生链的起点；<code>TODO()</code> 别误会成"高级版 Background"，它只是"还没想好"的占位态，上线之前务必换成真实来源。</p>
 <h4 id="context-derive">派生 Context</h4>
-<p>从根 context 可以派生出子 context，形成树状结构——取消沿树向下传播，子节点不会影响父节点：</p>
+<p>从根上可以不断派生子 context，长成一棵树——取消信号顺着树往下传，但子节点捅不破父节点：</p>
 <pre><code class="language-go">// 带超时的 context
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
@@ -95,10 +91,8 @@ defer cancel()
 
 // 带键值对的 context
 ctx := context.WithValue(context.Background(), "userID", 12345) // 仅为演示；生产代码 key 必须用自定义类型，见下方最佳实践</code></pre>
-<p>四个派生函数里 <code>WithTimeout</code> 最常用；<code>WithDeadline</code> 适合"必须在某个时刻前完成"的外部约束（如对齐上游的绝对截止时间）；<code>WithValue</code> 只应携带请求级元数据，见下方最佳实践。</p>
-
+<p>四个派生器里 <code>WithTimeout</code> 是出场率最高的；<code>WithDeadline</code> 适合"某时某刻之前必须交付"的硬约束（比如要对齐上游的绝对 deadline）；<code>WithValue</code> 只该装请求级元数据，具体取舍看下面的最佳实践。</p>
 <h4 id="context-usage">典型使用场景</h4>
-
 <h5>1. HTTP 请求超时控制</h5>
 <pre><code class="language-go">func handler(w http.ResponseWriter, r *http.Request) {
     ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -115,8 +109,7 @@ ctx := context.WithValue(context.Background(), "userID", 12345) // 仅为演示�
     }
     json.NewEncoder(w).Encode(result)
 }</code></pre>
-<p>以 <code>r.Context()</code> 为父派生，客户端断开或处理器超时时，下游 DB 查询同步取消——判断时先查 <code>ctx.Err()</code> 区分"超时"还是"业务失败"，再决定返回 504 还是 500。</p>
-
+<p>拿 <code>r.Context()</code> 当父链，客户端断连或者处理器超时，下游的 DB 查询跟着一起取消；收到报错先看 <code>ctx.Err()</code> 来判断是"超时了"还是"真的失败"，再定 504 还是 500。</p>
 <h5>2. Goroutine 取消传播</h5>
 <pre><code class="language-go">func worker(ctx context.Context, id int) {
     for {
@@ -144,8 +137,7 @@ func main() {
     cancel()
     time.Sleep(500 * time.Millisecond) // 等待 worker 退出
 }</code></pre>
-<p>这是<strong>协作式取消</strong>：<code>cancel()</code> 只负责关闭 channel，真正的退出由 worker 自己看到 <code>Done()</code> 关闭后执行。如果 worker 在阻塞调用（DB、RPC）上没把 ctx 传下去，取消信号会被一直卡住——这是 goroutine 泄漏的高发点。</p>
-
+<p>这套机制叫<strong>协作式取消</strong>：<code>cancel()</code> 只做一件事：把 channel 关上；真正退出与否，看 worker 自己有没有读到 <code>Done()</code> 关闭的信号。一旦 worker 在 DB、RPC 这类阻塞调用上漏传 ctx，取消信号就卡在半路——goroutine 泄漏十有八九出在这里。</p>
 <h5>3. 请求链路追踪</h5>
 <pre><code class="language-go">type contextKey string
 
@@ -168,7 +160,7 @@ func getFromContext(ctx context.Context, key contextKey) string {
     }
     return ""
 }</code></pre>
-<p>链路追踪信息（requestID、userID、traceID）随 ctx 传递，日志中间件统一取出打印——比全局变量或显式传参更不易漏传。</p>
+<p>把 requestID、userID、traceID 这类链路信息塞进 ctx 一路传下去，日志中间件取出来统一打点——既不用全局变量，也不用手动逐层传参，漏传概率低得多。</p>
 
 <div class="mermaid" data-src="graph TD
     A[Background] --&gt; B[WithTimeout 5s]
@@ -192,15 +184,14 @@ graph TD
 
 <h4 id="context-rules">最佳实践</h4>
 <ol>
-<li><strong>总是调用 cancel()</strong>：即使 context 会超时，也要调用 cancel 函数来释放资源。使用 <code>defer cancel()</code>。<code>cancel</code> 幂等且并发安全，重复调用无害。</li>
-<li><strong>不要将 context 存储在 struct 中</strong>：context 应该作为函数的第一个参数传递：<code>func DoSomething(ctx context.Context, ...)</code>。</li>
-<li><strong>不要传递 nil context</strong>：如果不确定用什么，使用 <code>context.TODO()</code>。</li>
-<li><strong>使用自定义类型作为 key</strong>：避免键冲突，使用 <code>type contextKey string</code>，不要直接用 string 字面量。</li>
-<li><strong>context.Value 只用于请求范围的数据</strong>：不要用它传递函数参数，它只适合传递 trace ID、认证信息等，且值应尽量是不可变的小对象。</li>
+<li><strong>cancel() 永远别省</strong>：超时会自动触发，但资源还是要手动释放，记得 <code>defer cancel()</code> 就好。<code>cancel</code> 幂等、并发安全，多调几次也不碍事。</li>
+<li><strong>别把 context 塞进 struct</strong>：context 的归宿是函数参数列表的第一个位置：<code>func DoSomething(ctx context.Context, ...)</code>。</li>
+<li><strong>nil context 是禁区</strong>：拿不准传什么就先用 <code>context.TODO()</code>。</li>
+<li><strong>key 一定要自定义类型</strong>：为了不撞 key，定义 <code>type contextKey string</code> ，别拿 string 裸字面量硬上。</li>
+<li><strong>Value 只装请求范围内的数据</strong>：函数参数不该走它，它只放 trace ID、认证信息这类东西，而且值要尽量是不可变的小对象。</li>
 </ol>
-
 <h4 id="context-go121">Go 1.21+ 更新：取消传播的补全</h4>
-<p>Go 1.21 引入了 <code>context.WithoutCancel</code> 和 <code>context.AfterFunc</code>：</p>
+<p>Go 1.21 给标准库补了 <code>context.WithoutCancel</code> 和 <code>context.AfterFunc</code> 两员大将：</p>
 <pre><code class="language-go">// WithoutCancel 返回一个不会因父 context 取消而取消的 context
 // 适用于需要在请求取消后继续执行清理逻辑的场景
 ctx := context.WithoutCancel(parentCtx)
@@ -212,11 +203,10 @@ stop := context.AfterFunc(ctx, func() {
 })
 // 如果需要停止监听，调用 stop()
 // stop()</code></pre>
-<p>Go 1.22 改进了 context 的性能，减少了内存分配；在 HTTP 请求中，<code>r.Context()</code> 现在会在客户端断开连接时自动取消。</p>
-<p>Go 1.23 之后（含 1.23-1.27）context 包进入稳定期：1.23 主要做了源码级重构（<code>AfterFunc</code> 注册收尾机制内部化），此后没有新增 API、也没有破坏性变化——写兼容 1.21+ 的代码，就兼容到 1.27。排查泄漏时，配合 Go 1.26 新增的 goroutine leak profile（<code>go tool pprof</code>），能直接看到"卡在 <code>ctx.Done()</code>上没退出"的 goroutine 栈。</p>
-
+<p>Go 1.22 顺手优化了 context 的内存分配；在 HTTP 请求里，<code>r.Context()</code> 如今在客户端断开那一刻就自动取消。</p>
+<p>Go 1.23 到 1.27，context 一路都是稳定期：1.23 那版主要是源码重构（<code>AfterFunc</code> 把收尾注册机制改了内部实现），之后再没加过 API，也没动过兼容性——代码只要兼容 1.21+，天然就兼容到 1.27。真要揪泄漏，配合 Go 1.26 的 goroutine leak profile（<code>go tool pprof</code> ），一眼就能看出哪些 goroutine 卡在 <code>ctx.Done()</code> 上不肯退出。</p>
 <h4 id="context-errgroup">进阶：errgroup 与 context 组合</h4>
-<p>并发扇出多个任务、又要"任一失败即整体取消"时，手写 select + 变量同步容易出错，直接用 <code>golang.org/x/sync/errgroup</code>：</p>
+<p>想要扇出一堆任务、又讲究"一个挂全员撤"，手写 select 加状态变量太容易翻车，直接上 <code>golang.org/x/sync/errgroup</code> 就对了：</p>
 <pre><code class="language-go">g, ctx := errgroup.WithContext(r.Context()) // ctx 会被 Wait 的第一个错误自动取消
 
 g.Go(func() error { return fetchA(ctx) })
@@ -228,7 +218,7 @@ if err := g.Wait(); err != nil {
     http.Error(w, err.Error(), http.StatusInternalServerError)
     return
 }</code></pre>
-<p>要点：进 <code>g.Go</code> 的任务必须响应 <code>ctx.Done()</code>，否则"整体取消"只是空谈；<code>errgroup.WithContext</code> 返回的 ctx 一旦有任务出错就自动取消，下游全部收手。</p>
+<p>核心提醒：丢进 <code>g.Go</code> 的每个任务都得听 <code>ctx.Done()</code> 的话，否则"全量取消"就是句口号；<code>errgroup.WithContext</code> 产出的 ctx 只要察觉某个任务出错就自动取消，所有下游同步鸣金收兵。</p>
                 <div class="page-nav">
 <a class="nav-prev" href="../../golang/echo/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">Echo</span></a>
 <a class="nav-next" href="../../golang/regexp/index.html"><span class="nav-label">下一篇 →</span><span class="nav-title">regexp 包</span></a>
