@@ -50,7 +50,7 @@
 <div class="ai-meta"><span class="ai-meta-item"><b>适合谁读</b>做 Go 二进制发布、需要瘦身与版本注入的工程同学</span>
 <span class="ai-meta-item"><b>读完可获得</b>一套现成的编译发布 Makefile/Shell 模板与防卡死、防注入要点</span></div></div></details>
                 <h3 id="编译常用示例">编译常用示例</h3>
-<p>编译发布的老套路，核心是 <code>-ldflags "-w -s -X"</code>:<code>-w</code> 去掉 DWARF 调试信息、<code>-s</code> 去掉符号表，二进制通常能瘦 30%-50% 且不影响运行；<code>-X main.GitHash=...</code> 在链接期把构建信息注入变量，配合 <code>git describe</code> 拿到的版本号，线上定位问题时能直接看出跑的是哪个 commit。要产出一个能扔到任何 Linux 机器上直接跑的纯静态二进制，加 <code>CGO_ENABLED=0</code> 再 <code>go build</code>;但如果依赖了需要 cgo 的库(如 sqlite 驱动)就别加。</p>
+<p>编译发布的老套路，精髓全在 <code>-ldflags "-w -s -X"</code>：<code>-w</code> 负责剥掉 DWARF 调试信息，<code>-s</code> 负责清掉符号表——瘦身幅度常在 30%–50%，运行完全不受影响；<code>-X main.GitHash=...</code> 则在链接期把构建信息灌进变量，配合 <code>git describe</code> 给出的版本号，线上排查时一眼就能看出手里跑的是哪次提交。想产出一颗扔到任何 Linux 都能直接跑的纯静态二进制？加上 <code>CGO_ENABLED=0</code> 再去 <code>go build</code>。反过来，只要牵扯到需要 cgo 的库（比如 sqlite 驱动），这条就别碰。</p>
 <pre><code class="language-shell">#! /bin/bash
 
 target=local
@@ -73,9 +73,9 @@ go build -o ${target} -ldflags &#34;-w -s -X main.GitHash=${GITVERSION}-${GITBRA
 
 ./${target}
 </code></pre>
-<hr>
+<hr/>
 <h2 id="goshell-2024-update">Go 调用 Shell 更新</h2>
-<p>Go 1.21+ 改进的命令执行方式：</p>
+<p>Go 1.21 之后执行命令的正确姿势：</p>
 <pre><code class="language-go">// 使用 context 控制超时
 ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 defer cancel()
@@ -86,13 +86,13 @@ if err != nil {
     log.Printf("命令执行失败: %v, 输出: %s", err, output)
 }</code></pre>
 <h3 id="goshell-waitdelay">WaitDelay：避免 Wait 卡死</h3>
-<p>只传 context 还不够：子进程派生的孙进程可能仍持有 stdout/stderr 管道，导致 <code>cmd.Wait()</code> 一直不返回。Go 1.20 引入的 <code>Cmd.WaitDelay</code> 专治这种情况——上下文取消后，<code>Wait</code> 超过 <code>WaitDelay</code> 时间仍未结束就先杀子进程再返回错误。</p>
+<p>光传 context 并不保险：子进程再派生的孙进程很可能还攥着 stdout/stderr 管道，把 <code>cmd.Wait()</code> 卡到死不返回。Go 1.20 新加的 <code>Cmd.WaitDelay</code> 专治这种僵局——上下文取消后，<code>Wait</code> 迟迟超过 <code>WaitDelay</code> 还没收尾，就先把子进程杀掉再报错返回。</p>
 <pre><code class="language-go">cmd := exec.CommandContext(ctx, "git", "status")
 cmd.WaitDelay = 2 * time.Second // 兜底超时，防子进程残留管道
 out, err := cmd.CombinedOutput()</code></pre>
-<p>2024 年后再写「调用 Shell」场景，<code>exec.CommandContext + WaitDelay</code> 是标准组合，别再只用 context 超时。</p>
+<p>2024 年之后再碰「调 Shell」这档子事，<code>exec.CommandContext + WaitDelay</code> 才是标准组合，别只拿 context 超时硬撑。</p>
 <h3 id="goshell-process-tree">进程树清理与防止注入</h3>
-<p>Unix 上 <code>CommandContext</code> 取消时默认只杀直接子进程，孙进程会成为孤儿继续跑。要让整个进程组一起终止，需自行设置 <code>Setpgid</code>：</p>
+<p>在 Unix 上，<code>CommandContext</code> 一取消，默认只杀直接子进程，孙进程变孤儿照样跑。想端掉整个进程组，得自己配 <code>Setpgid</code>：</p>
 <pre><code class="language-go">cmd := exec.CommandContext(ctx, "./worker.sh")
 if cmd.SysProcAttr == nil {
     cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -101,7 +101,7 @@ cmd.SysProcAttr.Setpgid = true // 让子进程自成进程组
 
 // 在 ctx 取消触达的 goroutine 里
 _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // 负 PID = 整个进程组</code></pre>
-<p>安全上坚持两点：一，参数用切片传入 <code>exec.Command</code>，绝不拼接 <code>sh -c</code> 字符串（防命令注入）；二，外部传入的用户输入原样拼进参数同样危险，尽量只把参数传给信任的命令。Windows 上注意 <code>cmd.exe /C</code> 的引号转义差异，跨平台脚本应选用 Go 原生实现或交叉编译二进制，避免依赖系统 shell 行为。</p>
+<p>安全上有两条铁律：其一，参数必须切片化传给 <code>exec.Command</code>，禁止拼 <code>sh -c</code> 字符串（这是命令注入的命门）；其二，用户输入原样塞进参数同样是大坑，尽量只把参数交给信得过的命令。Windows 平台还得留心 <code>cmd.exe /C</code> 的引号转义差异——跨平台脚本建议直接用 Go 原生实现或交叉编译产物，彻底绕开系统 shell 的行为差异。</p>
                 <div class="page-nav">
 <a class="nav-prev" href="../../golang/iris/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">Iris</span></a>
 <a class="nav-next" href="../../golang/io/index.html"><span class="nav-label">下一篇 →</span><span class="nav-title">IO</span></a>
