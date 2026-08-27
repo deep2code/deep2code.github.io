@@ -576,18 +576,65 @@ def build_homepage_content(pages):
 
     groups = []
     for idx, g in enumerate(CONTENT_GROUPS, start=1):
-        articles = ''.join(
-            f'<li class="arch-item">'
-            f'<a class="arch-link" href="{page_href(u)}">'
-            f'<span class="arch-title">{escape(title_of(u))}</span>'
-            f'<span class="arch-arrow">\u2192</span></a>'
-            + (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
-            + '</li>'
-            for u in g['pages'] if u in pages)
-        if not articles:
-            continue
+        page_list = [u for u in g['pages'] if u in pages]
+        count = len(page_list)
+
+        # Bento size class based on article count
+        if count >= 14:
+            bento_class = 'bento-large'
+        elif count >= 10:
+            bento_class = 'bento-wide'
+        elif count >= 5:
+            bento_class = 'bento-medium'
+        else:
+            bento_class = 'bento-compact'
+
+        # For large/wide cards: show top 6 articles with pitch, then "view all" link
+        # For compact cards: show all articles
+        show_count = 6 if count >= 10 else (4 if count >= 5 else count)
+        visible = page_list[:show_count]
+        hidden_count = count - len(visible)
+
+        if count >= 10:
+            # Two-column article grid inside card
+            items_html = ''.join(
+                f'<li class="arch-item">'
+                f'<a class="arch-link" href="{page_href(u)}">'
+                f'<span class="arch-title">{escape(title_of(u))}</span>'
+                f'<span class="arch-arrow">\u2192</span></a>'
+                + (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
+                + '</li>'
+                for u in visible)
+            if hidden_count > 0:
+                items_html += (
+                    f'<li class="arch-item arch-more">'
+                    f'<a class="arch-more-link" href="#arch-{g["id"]}">'
+                    f'<span>\u67e5\u770b\u5168\u90e8 {count} \u7bc7</span>'
+                    f'<span class="arch-arrow">\u2193</span></a></li>')
+            articles_html = f'<ul class="arch-list arch-grid-2col">{items_html}</ul>'
+            # Collapsible hidden articles
+            if hidden_count > 0:
+                rest_items = ''.join(
+                    f'<li class="arch-item arch-hidden">'
+                    f'<a class="arch-link" href="{page_href(u)}">'
+                    f'<span class="arch-title">{escape(title_of(u))}</span>'
+                    f'<span class="arch-arrow">\u2192</span></a></li>'
+                    for u in page_list[show_count:])
+                articles_html += f'<ul class="arch-list arch-hidden-list" hidden>{rest_items}</ul>'
+        else:
+            # Compact vertical list
+            items_html = ''.join(
+                f'<li class="arch-item">'
+                f'<a class="arch-link" href="{page_href(u)}">'
+                f'<span class="arch-title">{escape(title_of(u))}</span>'
+                f'<span class="arch-arrow">\u2192</span></a>'
+                + (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
+                + '</li>'
+                for u in page_list)
+            articles_html = f'<ul class="arch-list">{items_html}</ul>'
+
         groups.append(
-            f'<section class="arch-card" id="arch-{g["id"]}" style="--grp-accent:{g["accent"]}">'
+            f'<section class="arch-card {bento_class}" id="arch-{g["id"]}" style="--grp-accent:{g["accent"]}">'
             f'<header class="arch-card-head">'
             f'<span class="group-icon">{g["icon"]}</span>'
             f'<span class="group-idx">{idx:02d}</span>'
@@ -595,9 +642,9 @@ def build_homepage_content(pages):
             f'<h2 class="group-name">{escape(g["title"])}</h2>'
             f'<p class="group-blurb">{escape(g["blurb"])}</p>'
             f'</div>'
-            f'<span class="group-meta">{len(g["pages"])} \u7bc7</span>'
+            f'<span class="group-meta">{count} \u7bc7</span>'
             f'</header>'
-            f'<ul class="arch-list">{articles}</ul>'
+            f'{articles_html}'
             f'</section>')
     grid = '\n'.join(groups)
 
@@ -705,7 +752,7 @@ def build_homepage_content(pages):
         f'</div>'
         f'{stats_html}'
         f'{timeline_html}'
-        f'<div class="group-grid">{grid}</div>'
+        f'<div class="bento-grid">{grid}</div>'
     )
 
 

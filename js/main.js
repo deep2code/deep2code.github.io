@@ -529,6 +529,37 @@
         });
     }
 
+    // === Bento card expand/collapse (homepage) ===
+    function initBentoExpand() {
+        var moreLinks = document.querySelectorAll('.arch-more-link');
+        if (!moreLinks.length) return;
+        moreLinks.forEach(function (link) {
+            link.addEventListener('click', function (e) {
+                e.preventDefault();
+                var card = link.closest('.arch-card');
+                if (!card) return;
+                var hiddenList = card.querySelector('.arch-hidden-list');
+                if (!hiddenList) return;
+                var isHidden = hiddenList.hasAttribute('hidden');
+                if (isHidden) {
+                    hiddenList.removeAttribute('hidden');
+                    link.classList.add('expanded');
+                    var span = link.querySelector('span:first-child');
+                    if (span) span.textContent = '收起列表';
+                } else {
+                    hiddenList.setAttribute('hidden', '');
+                    link.classList.remove('expanded');
+                    var span = link.querySelector('span:first-child');
+                    if (span) {
+                        var card2 = link.closest('.arch-card');
+                        var total = card2 ? card2.querySelectorAll('.arch-item').length : 0;
+                        span.textContent = '查看全部 ' + total + ' 篇';
+                    }
+                }
+            });
+        });
+    }
+
     // === Init all ===
     function init() {
         initTheme();
@@ -544,6 +575,7 @@
         initHeadingAnchors();
         initSectionNumbers();
         initStatCounters();
+        initBentoExpand();
         document.addEventListener('mermaid:rendered', initMermaidTools);
     }
 
