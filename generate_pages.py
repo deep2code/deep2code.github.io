@@ -950,6 +950,12 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
         </div>
     </div>
 
+    <footer class="site-footer">
+        <p class="footer-icp">
+            <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">粤ICP备2026122855号</a>
+        </p>
+    </footer>
+
     <button class="back-to-top" title="\u56de\u5230\u9876\u90e8">\u2191</button>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
