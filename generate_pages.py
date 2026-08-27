@@ -647,41 +647,46 @@ def build_homepage_content(pages):
             f'</section>')
     grid = '\n'.join(groups)
 
-    # Programming-journey timeline: 2004 self-taught entry -> 2026
-    # still building in the field. Middle nodes describe phases (not
-    # concrete years) so every fact stays anchored to what the author
-    # actually stated.
+    # Cartoon-style coding-journey timeline with emoji stations
     timeline_items = [
-        ('2004', '自学起步',
-         '理工科出身，跨专业转行，从零开始自学计算机——语言、数据结构、算法，一本本啃下来。'),
-        ('转行', '敲开行业大门',
-         '凭自学积累的代码能力，正式进入软件开发行业，开始以写代码为业。'),
-        ('深耕', '一线长期主义',
-         '长期在业务一线写代码：从单体到分布式、从应用到系统，踩过的坑都沉淀成经验。'),
-        ('进化', '拥抱技术演进',
-         '技术栈随时代刷新——Go、Python、云原生、AI，学习从未停步。'),
-        ('沉淀', '写作与分享',
-         '把踩坑与实战写成博客，一篇篇都是真实的一线笔记。'),
-        ('2026', '依然热爱',
-         '二十余年一线开发，保持好奇，保持热爱，继续写代码。'),
+        ('📚', '2004', '自学起步',
+         '理工科出身，跨专业转行，从零开始自学计算机——语言、数据结构、算法，一本本啃下来。',
+         '#4A90D9'),
+        ('🚪', '转行', '敲开行业大门',
+         '凭自学积累的代码能力，正式进入软件开发行业，开始以写代码为业。',
+         '#E67E22'),
+        ('🔧', '深耕', '一线长期主义',
+         '长期在业务一线写代码：从单体到分布式、从应用到系统，踩过的坑都沉淀成经验。',
+         '#27AE60'),
+        ('🚀', '进化', '拥抱技术演进',
+         '技术栈随时代刷新——Go、Python、云原生、AI，学习从未停步。',
+         '#8E44AD'),
+        ('✍️', '沉淀', '写作与分享',
+         '把踩坑与实战写成博客，一篇篇都是真实的一线笔记。',
+         '#E74C3C'),
+        ('❤️', '2026', '依然热爱',
+         '二十余年一线开发，保持好奇，保持热爱，继续写代码。',
+         '#F39C12'),
     ]
     tl_items = ''.join(
-        f'<li class="tl-item{" is-start" if i == 0 else ""}{" is-end" if i == len(timeline_items) - 1 else ""}">'
-        f'<div class="tl-marker" aria-hidden="true"><span class="tl-dot"></span></div>'
-        f'<div class="tl-card" tabindex="0">'
-        f'<span class="tl-phase">{escape(phase)}</span>'
-        f'<h3 class="tl-card-title">{escape(title)}</h3>'
-        f'<p class="tl-card-desc">{escape(desc)}</p>'
+        f'<li class="journey-stn journey-stn-{"l" if i % 2 == 0 else "r"}"'
+        f' style="--stc:{color}">'
+        f'<div class="journey-emoji" aria-hidden="true">{emoji}</div>'
+        f'<div class="journey-bubble" tabindex="0">'
+        f'<span class="journey-tag">{escape(phase)}</span>'
+        f'<h3 class="journey-name">{escape(title)}</h3>'
+        f'<p class="journey-text">{escape(desc)}</p>'
         f'</div></li>'
-        for i, (phase, title, desc) in enumerate(timeline_items))
+        for i, (emoji, phase, title, desc, color) in enumerate(timeline_items))
     timeline_html = (
-        f'<section class="timeline-section" aria-label="从 2004 到 2026 的编程成长之路">'
-        f'<div class="timeline-head">'
-        f'<span class="timeline-kicker">MY JOURNEY</span>'
-        f'<h2 class="timeline-title">从 2004 到 2026，一个理工男的编程之路</h2>'
-        f'<p class="timeline-sub">跨专业自学 · 一线开发二十余年 · 不断学习，保持热爱</p>'
+        f'<section class="journey-section" aria-label="从 2004 到 2026 的编程成长之路">'
+        f'<div class="journey-head">'
+        f'<span class="journey-kicker">MY JOURNEY</span>'
+        f'<h2 class="journey-title">从 2004 到 2026，一个理工男的编程之路</h2>'
+        f'<p class="journey-sub">跨专业自学 · 一线开发二十余年 · 不断学习，保持热爱</p>'
         f'</div>'
-        f'<ol class="timeline">{tl_items}</ol>'
+        f'<div class="journey-coder" aria-hidden="true">👨\u200d💻</div>'
+        f'<ol class="journey-trail">{tl_items}</ol>'
         f'</section>'
     )
 

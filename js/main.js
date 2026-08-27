@@ -277,7 +277,7 @@
 
     // === Homepage journey timeline: scroll-in reveal ===
     function initTimeline() {
-        var section = document.querySelector('.timeline-section');
+        var section = document.querySelector('.journey-section');
         if (!section) return;
 
         // Gate the hidden state behind JS so no-JS visitors see content
