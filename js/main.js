@@ -490,6 +490,45 @@
         });
     }
 
+    // === Animated stat counters (homepage) ===
+    function initStatCounters() {
+        var stats = document.querySelectorAll('.stat-item[data-count]');
+        if (!stats.length) return;
+        var animated = {};
+        function animateOne(el) {
+            var target = parseInt(el.getAttribute('data-count'), 10);
+            var suffix = el.getAttribute('data-suffix') || '';
+            var numEl = el.querySelector('.stat-num');
+            if (!numEl || animated[el]) return;
+            animated[el] = true;
+            var duration = 1200;
+            var startTime = performance.now();
+            function tick(now) {
+                var progress = Math.min((now - startTime) / duration, 1);
+                var eased = 1 - Math.pow(1 - progress, 3);
+                var current = Math.round(target * eased);
+                numEl.textContent = current + suffix;
+                if (progress < 1) requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+        }
+        // If stats are already in viewport (above the fold), animate immediately
+        var io = new IntersectionObserver(function (entries) {
+            entries.forEach(function (e) {
+                if (e.isIntersecting) animateOne(e.target);
+            });
+        }, { threshold: 0.3 });
+        stats.forEach(function (s) {
+            // Check if already visible
+            var rect = s.getBoundingClientRect();
+            if (rect.top < window.innerHeight && rect.bottom > 0) {
+                setTimeout(function() { animateOne(s); }, 300);
+            } else {
+                io.observe(s);
+            }
+        });
+    }
+
     // === Init all ===
     function init() {
         initTheme();
@@ -504,6 +543,7 @@
         initAutoTOC();
         initHeadingAnchors();
         initSectionNumbers();
+        initStatCounters();
         document.addEventListener('mermaid:rendered', initMermaidTools);
     }
 

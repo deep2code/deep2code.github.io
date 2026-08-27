@@ -56,6 +56,8 @@ CONTENT_GROUPS = [
         'title': 'Go 语言',
         'nav_text': 'Go',
         'blurb': '主力语言：标准库、Web 框架、并发与工具链',
+        'icon': '\U0001f439',
+        'accent': '#00add8',
         'pages': [
             '/golang/',
             '/golang/stringer/',
@@ -82,6 +84,8 @@ CONTENT_GROUPS = [
         'title': '数据库与缓存',
         'nav_text': '数据库',
         'blurb': 'MySQL · Redis · Memcached · Elasticsearch',
+        'icon': '\U0001f4be',
+        'accent': '#dc382d',
         'pages': ['/mysql/', '/redis/', '/memcached/', '/elastic/'],
     },
     {
@@ -89,6 +93,8 @@ CONTENT_GROUPS = [
         'title': 'AI 与机器学习',
         'nav_text': 'AI',
         'blurb': 'LLM · RAG · 微调 · 机器学习',
+        'icon': '\U0001f916',
+        'accent': '#9c27b0',
         'pages': ['/ai/', '/ai/llm/', '/ai/rag/', '/ai/finetuning/', '/other/machinelearn/'],
     },
     {
@@ -96,6 +102,8 @@ CONTENT_GROUPS = [
         'title': '服务端与云',
         'nav_text': '服务端·云',
         'blurb': 'Nginx · gRPC · RPC · Docker · Harbor · 云平台',
+        'icon': '\u2601\ufe0f',
+        'accent': '#2563eb',
         'pages': [
             '/nginx/', '/nginx/install/', '/nginx/use/', '/nginx/http/', '/nginx/rtmp/',
             '/grpc/', '/grpc/golang/', '/other/rpc/',
@@ -108,6 +116,8 @@ CONTENT_GROUPS = [
         'title': '开发工具与效率',
         'nav_text': '工具',
         'blurb': 'Git · Vim · Hugo · Mermaid · Markdown · 搜索与效率',
+        'icon': '\U0001f527',
+        'accent': '#f59e0b',
         'pages': [
             '/git/', '/other/github/', '/other/gitlab/', '/other/svn/', '/other/opensource/',
             '/other/vim/', '/other/hugo/', '/other/mermaid/', '/other/markdown/',
@@ -119,6 +129,8 @@ CONTENT_GROUPS = [
         'title': '语言·系统·图形及其他',
         'nav_text': '更多',
         'blurb': 'Python · Rust · Shell · macOS · Unity · 零散主题',
+        'icon': '\U0001f4da',
+        'accent': '#10b981',
         'pages': [
             '/python/', '/other/rust/', '/other/shell/', '/other/wasm/', '/flutter/',
             '/mac/', '/other/windows/', '/other/wireshark/', '/other/web/', '/other/firefox/',
@@ -575,8 +587,9 @@ def build_homepage_content(pages):
         if not articles:
             continue
         groups.append(
-            f'<section class="arch-card" id="arch-{g["id"]}">'
+            f'<section class="arch-card" id="arch-{g["id"]}" style="--grp-accent:{g["accent"]}">'
             f'<header class="arch-card-head">'
+            f'<span class="group-icon">{g["icon"]}</span>'
             f'<span class="group-idx">{idx:02d}</span>'
             f'<div class="arch-card-titles">'
             f'<h2 class="group-name">{escape(g["title"])}</h2>'
@@ -626,8 +639,36 @@ def build_homepage_content(pages):
         f'</section>'
     )
 
+    # Count mermaid diagrams across all pages for the stats strip
+    diagram_count = sum(
+        pages[u].get('ai_body', pages[u].get('content', '')).count('class="mermaid"')
+        for u in pages if u not in ('/', '/categories/', '/tags/')
+    )
+    group_count = len(CONTENT_GROUPS)
+
+    stats_html = (
+        f'<div class="stats-strip">'
+        f'<div class="stat-item" data-count="{article_count}" data-suffix="">'
+        f'<span class="stat-num">0</span>'
+        f'<span class="stat-label">\u7bc7\u6280\u672f\u7b14\u8bb0</span></div>'
+        f'<div class="stat-divider"></div>'
+        f'<div class="stat-item" data-count="{group_count}" data-suffix="">'
+        f'<span class="stat-num">0</span>'
+        f'<span class="stat-label">\u5927\u5185\u5bb9\u5206\u7ec4</span></div>'
+        f'<div class="stat-divider"></div>'
+        f'<div class="stat-item" data-count="{diagram_count}" data-suffix="">'
+        f'<span class="stat-num">0</span>'
+        f'<span class="stat-label">\u5f20\u67b6\u6784\u56fe\u8868</span></div>'
+        f'<div class="stat-divider"></div>'
+        f'<div class="stat-item" data-count="22" data-suffix="">'
+        f'<span class="stat-num">0</span>'
+        f'<span class="stat-label">\u5e74\u4e00\u7ebf\u7ecf\u9a8c</span></div>'
+        f'</div>'
+    )
+
     return (
         f'<div class="hero-section">'
+        f'<div class="hero-glow"></div>'
         f'<div class="hero-inner">'
         f'<div class="hero-copy">'
         f'<h1 class="hero-title">\u6280\u672f\u535a\u5ba2\uff0c'
@@ -637,13 +678,20 @@ def build_homepage_content(pages):
         f'\u5168\u90e8\u7b14\u8bb0\u6309\u8bed\u4e49\u5206\u7ec4\uff0c'
         f'\u591a\u6570\u7bc7\u7ae0\u9644\u4ee3\u7801\u4e0e\u56fe\u8868\uff0c'
         f'\u53ef\u4ee5\u4f7f\u7528\u9876\u90e8\u641c\u7d22\u76f4\u8fbe\u5185\u5bb9\u3002</p>'
+        f'<div class="hero-tags">'
+        f'<span class="hero-tag">Go</span>'
+        f'<span class="hero-tag">Python</span>'
+        f'<span class="hero-tag">Cloud Native</span>'
+        f'<span class="hero-tag">AI / LLM</span>'
+        f'<span class="hero-tag">Database</span>'
+        f'</div>'
         f'</div>'
         f'<div class="terminal-card" role="img" aria-label="\u7ec8\u7aef\u98ce\u683c\u7684\u535a\u5ba2\u4ecb\u7ecd">'
         f'<div class="terminal-bar">'
         f'<span class="term-dot dot-red"></span><span class="term-dot dot-yellow"></span>'
         f'<span class="term-dot dot-green"></span><span class="term-title">zsh \u2014 \u8d44\u6df1\u7801\u519c</span>'
         f'</div>'
-f'<div class="terminal-body">'
+        f'<div class="terminal-body" id="terminal-body">'
         f'<div class="term-line"><span class="term-prompt">~$</span> echo "hello, world"</div>'
         f'<div class="term-line term-out">\u8d44\u6df1\u7801\u519c \u2014 \u6280\u672f\u535a\u5ba2 dev notes</div>'
         f'<div class="term-line"><span class="term-prompt">~$</span> ls topics</div>'
@@ -655,6 +703,7 @@ f'<div class="terminal-body">'
         f'</div>'
         f'</div>'
         f'</div>'
+        f'{stats_html}'
         f'{timeline_html}'
         f'<div class="group-grid">{grid}</div>'
     )
