@@ -80,7 +80,7 @@ CONTENT_GROUPS = [
     {
         'id': 'database',
         'title': '数据库与缓存',
-        'nav_text': 'DB',
+        'nav_text': '数据库',
         'blurb': 'MySQL · Redis · Memcached · Elasticsearch',
         'pages': ['/mysql/', '/redis/', '/memcached/', '/elastic/'],
     },
@@ -92,57 +92,38 @@ CONTENT_GROUPS = [
         'pages': ['/ai/', '/ai/llm/', '/ai/rag/', '/ai/finetuning/', '/other/machinelearn/'],
     },
     {
-        'id': 'middleware',
-        'title': '中间件与服务端',
-        'nav_text': '中间件',
-        'blurb': 'Nginx · gRPC · RPC',
-        'pages': ['/nginx/', '/nginx/install/', '/nginx/use/', '/nginx/http/', '/nginx/rtmp/',
-                  '/grpc/', '/grpc/golang/', '/other/rpc/'],
-    },
-    {
-        'id': 'cloud',
-        'title': '云与 DevOps',
-        'nav_text': '云·DevOps',
-        'blurb': 'Docker · Harbor · 阿里云 · 腾讯云 · 开源运维',
-        'pages': ['/other/docker/', '/other/harbor/', '/other/aliyun/', '/other/tencent/',
-                  '/other/self-hosted/', '/other/brew/'],
-    },
-    {
-        'id': 'lang',
-        'title': '编程语言',
-        'nav_text': '语言',
-        'blurb': 'Python · Rust · Shell · WebAssembly · Flutter',
-        'pages': ['/python/', '/other/rust/', '/other/shell/', '/other/wasm/', '/flutter/'],
+        'id': 'server',
+        'title': '服务端与云',
+        'nav_text': '服务端·云',
+        'blurb': 'Nginx · gRPC · RPC · Docker · Harbor · 云平台',
+        'pages': [
+            '/nginx/', '/nginx/install/', '/nginx/use/', '/nginx/http/', '/nginx/rtmp/',
+            '/grpc/', '/grpc/golang/', '/other/rpc/',
+            '/other/docker/', '/other/harbor/', '/other/aliyun/', '/other/tencent/',
+            '/other/self-hosted/', '/other/brew/',
+        ],
     },
     {
         'id': 'tools',
         'title': '开发工具与效率',
         'nav_text': '工具',
-        'blurb': 'Git · GitHub · Vim · Hugo · Mermaid · Markdown 等',
-        'pages': ['/git/', '/other/github/', '/other/gitlab/', '/other/svn/', '/other/opensource/',
-                  '/other/vim/', '/other/hugo/', '/other/mermaid/', '/other/markdown/',
-                  '/other/makefile/', '/other/search/', '/other/geocode/', '/other/tesseract/'],
-    },
-    {
-        'id': 'system',
-        'title': '系统与网络',
-        'nav_text': '系统',
-        'blurb': 'macOS · Windows · Wireshark · Web · Firefox',
-        'pages': ['/mac/', '/other/windows/', '/other/wireshark/', '/other/web/', '/other/firefox/'],
-    },
-    {
-        'id': 'game',
-        'title': '图形与游戏',
-        'nav_text': '游戏',
-        'blurb': 'Unity · ET 框架',
-        'pages': ['/other/unity/', '/other/unity/et/'],
+        'blurb': 'Git · Vim · Hugo · Mermaid · Markdown · 搜索与效率',
+        'pages': [
+            '/git/', '/other/github/', '/other/gitlab/', '/other/svn/', '/other/opensource/',
+            '/other/vim/', '/other/hugo/', '/other/mermaid/', '/other/markdown/',
+            '/other/makefile/', '/other/search/', '/other/geocode/', '/other/tesseract/',
+        ],
     },
     {
         'id': 'misc',
-        'title': '其他',
+        'title': '语言·系统·图形及其他',
         'nav_text': '更多',
-        'blurb': '零散主题合集',
-        'pages': ['/other/'],
+        'blurb': 'Python · Rust · Shell · macOS · Unity · 零散主题',
+        'pages': [
+            '/python/', '/other/rust/', '/other/shell/', '/other/wasm/', '/flutter/',
+            '/mac/', '/other/windows/', '/other/wireshark/', '/other/web/', '/other/firefox/',
+            '/other/unity/', '/other/unity/et/', '/other/',
+        ],
     },
 ]
 
@@ -572,6 +553,11 @@ def build_homepage_content(pages):
             return clean_title(pages[u].get('title', ''), u)
         return u.strip('/')
 
+    def pitch_of(u):
+        p = pages.get(u, {})
+        pitch = p.get('ai_pitch', '') or ''
+        return ' '.join(pitch.split())
+
     # Index-only pages are not articles; count real posts for honest stats.
     article_count = sum(1 for u in pages if u not in ('/', '/categories/', '/tags/'))
     topic_names = ' '.join(g['nav_text'] for g in CONTENT_GROUPS)
@@ -582,7 +568,9 @@ def build_homepage_content(pages):
             f'<li class="arch-item">'
             f'<a class="arch-link" href="{page_href(u)}">'
             f'<span class="arch-title">{escape(title_of(u))}</span>'
-            f'<span class="arch-arrow">\u2192</span></a></li>'
+            f'<span class="arch-arrow">\u2192</span></a>'
+            + (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
+            + '</li>'
             for u in g['pages'] if u in pages)
         if not articles:
             continue
@@ -599,6 +587,44 @@ def build_homepage_content(pages):
             f'<ul class="arch-list">{articles}</ul>'
             f'</section>')
     grid = '\n'.join(groups)
+
+    # Programming-journey timeline: 2004 self-taught entry -> 2026
+    # still building in the field. Middle nodes describe phases (not
+    # concrete years) so every fact stays anchored to what the author
+    # actually stated.
+    timeline_items = [
+        ('2004', '自学起步',
+         '理工科出身，跨专业转行，从零开始自学计算机——语言、数据结构、算法，一本本啃下来。'),
+        ('转行', '敲开行业大门',
+         '凭自学积累的代码能力，正式进入软件开发行业，开始以写代码为业。'),
+        ('深耕', '一线长期主义',
+         '长期在业务一线写代码：从单体到分布式、从应用到系统，踩过的坑都沉淀成经验。'),
+        ('进化', '拥抱技术演进',
+         '技术栈随时代刷新——Go、Python、云原生、AI，学习从未停步。'),
+        ('沉淀', '写作与分享',
+         '把踩坑与实战写成博客，一篇篇都是真实的一线笔记。'),
+        ('2026', '依然热爱',
+         '二十余年一线开发，保持好奇，保持热爱，继续写代码。'),
+    ]
+    tl_items = ''.join(
+        f'<li class="tl-item{" is-start" if i == 0 else ""}{" is-end" if i == len(timeline_items) - 1 else ""}">'
+        f'<div class="tl-marker" aria-hidden="true"><span class="tl-dot"></span></div>'
+        f'<div class="tl-card" tabindex="0">'
+        f'<span class="tl-phase">{escape(phase)}</span>'
+        f'<h3 class="tl-card-title">{escape(title)}</h3>'
+        f'<p class="tl-card-desc">{escape(desc)}</p>'
+        f'</div></li>'
+        for i, (phase, title, desc) in enumerate(timeline_items))
+    timeline_html = (
+        f'<section class="timeline-section" aria-label="从 2004 到 2026 的编程成长之路">'
+        f'<div class="timeline-head">'
+        f'<span class="timeline-kicker">MY JOURNEY</span>'
+        f'<h2 class="timeline-title">从 2004 到 2026，一个理工男的编程之路</h2>'
+        f'<p class="timeline-sub">跨专业自学 · 一线开发二十余年 · 不断学习，保持热爱</p>'
+        f'</div>'
+        f'<ol class="timeline">{tl_items}</ol>'
+        f'</section>'
+    )
 
     return (
         f'<div class="hero-section">'
@@ -629,6 +655,7 @@ f'<div class="terminal-body">'
         f'</div>'
         f'</div>'
         f'</div>'
+        f'{timeline_html}'
         f'<div class="group-grid">{grid}</div>'
     )
 
@@ -682,7 +709,7 @@ def generate_page_nav(url_path, pages):
 
 
 def generate_related_html(url_path, pages):
-    """List other posts of the same semantic group in a sticky side card."""
+    """List other posts of the same semantic group as a bottom strip."""
     group = CONTENT_GROUP_BY_URL.get(url_path)
     if not group:
         return ''
@@ -700,13 +727,89 @@ def generate_related_html(url_path, pages):
         for u in others)
     return (
         f'<aside class="related-card">'
-        f'<h2 class="related-title">\u540c\u7ec4 \xb7 {escape(group["title"])}</h2>'
+        f'<h2 class="related-title">\u540c\u7ec4\u9605\u8bfb \xb7 {escape(group["title"])}</h2>'
         f'<ul class="related-list">{items}</ul>'
         f'</aside>'
     )
 
 
 # === HTML Template ===
+
+
+def render_ai_card(page_data):
+    """Render a collapsible AI reading-guide card above the article.
+
+    The card summarises the article in four blocks (core points, key
+    conclusions, who it is for, what you gain). It is static: content is
+    pre-generated from the article itself, no runtime API involved.
+    """
+    summary = page_data.get('ai_summary')
+    if not summary:
+        return ''
+    points = summary.get('core_points') or []
+    conclusions = summary.get('conclusions') or []
+    audience = (summary.get('audience') or '').strip()
+    takeaway = (summary.get('takeaway') or '').strip()
+
+    def _ul(items):
+        if not items:
+            return ''
+        lis = ''.join(f'<li>{escape(str(i))}</li>' for i in items)
+        return f'<ul class="ai-grid-list">{lis}</ul>'
+
+    blocks = []
+    if points:
+        blocks.append(
+            f'<section class="ai-block"><h4 class="ai-block-title">\u6838\u5fc3\u89c2\u70b9</h4>{_ul(points)}</section>')
+    if conclusions:
+        blocks.append(
+            f'<section class="ai-block"><h4 class="ai-block-title">\u5173\u952e\u7ed3\u8bba\u4e0e\u53d6\u820d</h4>{_ul(conclusions)}</section>')
+    grid = f'<div class="ai-grid">{chr(10).join(blocks)}</div>' if blocks else ''
+
+    meta = []
+    if audience:
+        meta.append(
+            f'<span class="ai-meta-item"><b>\u9002\u5408\u8c01\u8bfb</b>{escape(audience)}</span>')
+    if takeaway:
+        meta.append(
+            f'<span class="ai-meta-item"><b>\u8bfb\u5b8c\u53ef\u83b7\u5f97</b>{escape(takeaway)}</span>')
+    meta_html = f'<div class="ai-meta">{chr(10).join(meta)}</div>' if meta else ''
+
+    body = (grid + ((chr(10) + meta_html) if meta_html else '')).strip()
+
+    return (
+        f'<details class="ai-card" open>'
+        f'<summary class="ai-card-head" tabindex="0">'
+        f'<span class="ai-card-badge">AI \u5bfc\u8bfb</span>'
+        f'<span class="ai-card-hint">\u4e00\u5206\u949f\u5bfc\u8bfb\uff0c\u5148\u638c\u63e1\u5168\u6587\u4e3b\u5e72\u3002</span>'
+        f'<span class="ai-card-toggle" aria-hidden="true">\u25bc</span>'
+        f'</summary>'
+        f'<div class="ai-card-body">{body}</div>'
+        f'</details>'
+    )
+
+
+def assert_anchor_ids(original, rewritten):
+    """Return the set of heading ids present in the original but missing
+    from the rewritten body. Rewritten AI bodies must keep every heading id
+    (including anchors like `-*_2024-update`) so external links don't break.
+    """
+    orig_ids = set(re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', original))
+    new_ids = set(re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', rewritten))
+    if not orig_ids:
+        return set()
+    return orig_ids - new_ids
+
+
+def assert_code_blocks_preserved(original, rewritten):
+    """Code blocks must survive the rewrite untouched (language, content).
+
+    Returns the number of <pre> blocks in each version so callers can
+    verify parity; missing code is a hard failure of the rewrite.
+    """
+    def blocks(html):
+        return re.findall(r'<pre[^>]*>.*?</pre>', html, flags=re.DOTALL)
+    return len(blocks(original)), len(blocks(rewritten))
 
 
 def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, current_path, article_count):
@@ -716,7 +819,20 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
     toggle) then the article as the main content area.
     """
     title = clean_title(page_data.get('title', ''), current_path)
-    content = clean_content(page_data.get('content', ''))
+    # AI-rewritten body wins when present and passes the anchor check;
+    # otherwise fall back to the original extracted content.
+    raw_content = page_data.get('ai_body') or page_data.get('content', '')
+    if page_data.get('ai_body'):
+        missing = assert_anchor_ids(page_data.get('content', ''), raw_content)
+        if missing:
+            raise ValueError(
+                f'ai_body \u4e22\u5931\u6807\u9898\u951a\u70b9 id: {sorted(missing)[:8]}')
+        o_cnt, n_cnt = assert_code_blocks_preserved(
+            page_data.get('content', ''), raw_content)
+        if n_cnt < o_cnt:
+            raise ValueError(
+                f'ai_body \u4ee3\u7801\u5757\u6570\u91cf\u53d8\u5316: {o_cnt} -> {n_cnt}')
+    content = clean_content(raw_content)
     content = annotate_mermaid_src(content)
     prefix = rel_prefix(current_path)
 
@@ -734,17 +850,11 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
 
     h1_html = f'<h1>{escape(title)}</h1>' if show_h1 else ''
 
-    # Article pages use a two-column layout: the article plus a sticky side
-    # rail (same-group posts). The homepage is a single flowing column of
-    # hero + card grid.
+    # Article pages use a single centered column: the article is the subject.
+    # Related same-group posts render as a bottom strip (not a sticky rail).
     is_home = current_path == '/'
+    ai_card_html = render_ai_card(page_data) if not is_home else ''
     wrapper_class = 'home-layout' if is_home else 'article-layout'
-
-    side_rail = ''
-    if not is_home:
-        side_rail = f'''<aside class="side-rail">
-            {related_html}
-        </aside>'''
 
     # Top header quick navigation (desktop): links to each group on the
     # homepage; on article pages points to the homepage anchor.
@@ -765,10 +875,27 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
         mermaid_html = '''    <script type="module">
     import mermaid from "https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.esm.min.mjs";
     window.mermaid = mermaid;
+    window.__renderMermaid = function () {
+        var blocks = document.querySelectorAll('#body-content div.mermaid');
+        var jobs = Array.prototype.map.call(blocks, function (div, i) {
+            var src = div.getAttribute('data-src') || div.textContent || '';
+            if (!src.trim()) return Promise.resolve();
+            var id = 'mmd-' + i + '-' + Math.random().toString(36).slice(2, 8);
+            return mermaid.render(id, src).then(function (res) {
+                div.innerHTML = res.svg;
+                if (res.bindFunctions) { res.bindFunctions(div); }
+                div.setAttribute('data-rendered', '1');
+            }).catch(function (err) {
+                div.innerHTML = '<pre class="mermaid-error">图表渲染失败：' + String(err && err.message || err) + '</pre>';
+                div.setAttribute('data-rendered', '0');
+            });
+        });
+        return Promise.all(jobs).then(function () {
+            document.dispatchEvent(new CustomEvent('mermaid:rendered'));
+        });
+    };
     mermaid.initialize({ startOnLoad: false, theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default', securityLevel: 'loose' });
-    mermaid.run({ querySelector: '.mermaid' }).then(function () {
-        document.dispatchEvent(new CustomEvent('mermaid:rendered'));
-    });
+    window.__renderMermaid();
     </script>
 '''
 
@@ -813,10 +940,11 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
         <div id="content-wrapper" class="{wrapper_class}">
             <main id="body-content">
                 {h1_html}
+                {ai_card_html}
                 {content}
                 {page_nav_html}
+                {related_html}
             </main>
-            {side_rail}
         </div>
     </div>
 
@@ -842,8 +970,9 @@ def generate_search_index(pages, nav_items):
         if not title or url in ['/categories/', '/tags/']:
             continue
 
-        # Get full text content (strip HTML tags and entities)
-        content = page.get('content', '')
+        # Get full text content (strip HTML tags and entities).
+        # Prefer the AI-rewritten body so search matches the quality copy.
+        content = page.get('ai_body') or page.get('content', '')
         text = re.sub(r'<[^>]+>', ' ', content)
         text = re.sub(r'&#\d+;', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()

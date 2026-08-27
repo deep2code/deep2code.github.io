@@ -19,16 +19,15 @@
                 var next = current === 'dark' ? 'light' : 'dark';
                 document.documentElement.setAttribute('data-theme', next);
                 localStorage.setItem('blog-theme', next);
-                // Re-init mermaid with new theme, then re-attach the
-                // copy/fold tools (mermaid.run() replaces div content)
-                if (window.mermaid) {
+                // Re-init mermaid with new theme, then re-render every
+                // diagram from data-src (mermaid.render replaces div
+                // content; reading textContent would hit stale SVG).
+                if (window.mermaid && window.__renderMermaid) {
                     window.mermaid.initialize({
                         startOnLoad: false,
                         theme: next === 'dark' ? 'dark' : 'default'
                     });
-                    window.mermaid.run().then(function () {
-                        document.dispatchEvent(new CustomEvent('mermaid:rendered'));
-                    });
+                    window.__renderMermaid();
                 }
             });
         }
@@ -276,6 +275,35 @@
         });
     }
 
+    // === Homepage journey timeline: scroll-in reveal ===
+    function initTimeline() {
+        var section = document.querySelector('.timeline-section');
+        if (!section) return;
+
+        // Gate the hidden state behind JS so no-JS visitors see content
+        section.classList.add('js-anim');
+
+        var reveal = function () {
+            section.classList.add('in-view');
+        };
+
+        if (!('IntersectionObserver' in window)) {
+            reveal();
+            return;
+        }
+
+        var observer = new IntersectionObserver(function (entries) {
+            entries.forEach(function (entry) {
+                // Start the reveal once a meaningful chunk is visible
+                if (entry.isIntersecting && entry.intersectionRatio >= 0.08) {
+                    reveal();
+                    observer.disconnect();
+                }
+            });
+        }, { threshold: [0.08, 0.3, 0.6], rootMargin: '0px 0px -60px 0px' });
+        observer.observe(section);
+    }
+
     // === Init all ===
     function init() {
         initTheme();
@@ -284,6 +312,7 @@
         initHighlight();
         initSearch();
         initBackToTop();
+        initTimeline();
         document.addEventListener('mermaid:rendered', initMermaidTools);
     }
 
