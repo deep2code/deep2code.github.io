@@ -609,7 +609,7 @@ def build_homepage_content(pages):
                 items_html += (
                     f'<li class="arch-item arch-more">'
                     f'<a class="arch-more-link" href="#arch-{g["id"]}">'
-                    f'<span>\u67e5\u770b\u5168\u90e8 {count} \u7bc7</span>'
+                    f'<span>\u67e5\u770b\u5168\u90e8</span>'
                     f'<span class="arch-arrow">\u2193</span></a></li>')
             articles_html = f'<ul class="arch-list arch-grid-2col">{items_html}</ul>'
             # Collapsible hidden articles
@@ -642,7 +642,6 @@ def build_homepage_content(pages):
             f'<h2 class="group-name">{escape(g["title"])}</h2>'
             f'<p class="group-blurb">{escape(g["blurb"])}</p>'
             f'</div>'
-            f'<span class="group-meta">{count} \u7bc7</span>'
             f'</header>'
             f'{articles_html}'
             f'</section>')
@@ -686,33 +685,6 @@ def build_homepage_content(pages):
         f'</section>'
     )
 
-    # Count mermaid diagrams across all pages for the stats strip
-    diagram_count = sum(
-        pages[u].get('ai_body', pages[u].get('content', '')).count('class="mermaid"')
-        for u in pages if u not in ('/', '/categories/', '/tags/')
-    )
-    group_count = len(CONTENT_GROUPS)
-
-    stats_html = (
-        f'<div class="stats-strip">'
-        f'<div class="stat-item" data-count="{article_count}" data-suffix="">'
-        f'<span class="stat-num">0</span>'
-        f'<span class="stat-label">\u7bc7\u6280\u672f\u7b14\u8bb0</span></div>'
-        f'<div class="stat-divider"></div>'
-        f'<div class="stat-item" data-count="{group_count}" data-suffix="">'
-        f'<span class="stat-num">0</span>'
-        f'<span class="stat-label">\u5927\u5185\u5bb9\u5206\u7ec4</span></div>'
-        f'<div class="stat-divider"></div>'
-        f'<div class="stat-item" data-count="{diagram_count}" data-suffix="">'
-        f'<span class="stat-num">0</span>'
-        f'<span class="stat-label">\u5f20\u67b6\u6784\u56fe\u8868</span></div>'
-        f'<div class="stat-divider"></div>'
-        f'<div class="stat-item" data-count="22" data-suffix="">'
-        f'<span class="stat-num">0</span>'
-        f'<span class="stat-label">\u5e74\u4e00\u7ebf\u7ecf\u9a8c</span></div>'
-        f'</div>'
-    )
-
     return (
         f'<div class="hero-section">'
         f'<div class="hero-glow"></div>'
@@ -750,7 +722,6 @@ def build_homepage_content(pages):
         f'</div>'
         f'</div>'
         f'</div>'
-        f'{stats_html}'
         f'{timeline_html}'
         f'<div class="bento-grid">{grid}</div>'
     )
