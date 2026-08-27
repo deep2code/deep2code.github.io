@@ -913,6 +913,8 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html, curr
     <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
+    <div class="reading-progress"></div>
+
     <header class="site-header">
         <div class="header-inner">
             <a href="{home_ref}" class="header-brand">

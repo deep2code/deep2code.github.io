@@ -12,6 +12,8 @@
     <link rel="stylesheet" href="../css/style.css">
 </head>
 <body>
+    <div class="reading-progress"></div>
+
     <header class="site-header">
         <div class="header-inner">
             <a href="../index.html" class="header-brand">
@@ -107,6 +109,38 @@ active-defrag-cycle-max 25</code></pre>
 <p><strong>何时值得开：网络 I/O 撞墙的时候</strong>——6.0 的多线程只管网络 I/O（读请求解析 + 写响应），命令执行还是主线程单线程跑。大 value（100KB+）或高频 pipeline 场景收益明显，普通小命令场景意义不大。</p>
 </blockquote>
 <h3 id="常用功能">常用功能</h3>
+<div class="mermaid" data-src="graph TB
+    subgraph Redis Server
+    AE[事件循环&lt;br/&gt;aeEventLoop]
+    AE --&gt; IO[I/O多路复用&lt;br/&gt;epoll/kqueue]
+    AE --&gt; CMD[命令处理&lt;br/&gt;单线程]
+    AE --&gt; TIME[定时事件&lt;br/&gt;serverCron]
+    end
+    IO --&gt; S1[客户端 1]
+    IO --&gt; S2[客户端 2]
+    IO --&gt; S3[客户端 N]
+    CMD --&gt; DB[内存数据库&lt;br/&gt;dict]
+    DB --&gt; AOF[AOF持久化]
+    DB --&gt; RDB[RDB快照]
+    style AE fill:#dc382d,stroke:#fff,color:#fff
+    style CMD fill:#dc382d,stroke:#fff,color:#fff">
+graph TB
+    subgraph Redis Server
+    AE[事件循环<br/>aeEventLoop]
+    AE --> IO[I/O多路复用<br/>epoll/kqueue]
+    AE --> CMD[命令处理<br/>单线程]
+    AE --> TIME[定时事件<br/>serverCron]
+    end
+    IO --> S1[客户端 1]
+    IO --> S2[客户端 2]
+    IO --> S3[客户端 N]
+    CMD --> DB[内存数据库<br/>dict]
+    DB --> AOF[AOF持久化]
+    DB --> RDB[RDB快照]
+    style AE fill:#dc382d,stroke:#fff,color:#fff
+    style CMD fill:#dc382d,stroke:#fff,color:#fff
+</div>
+
 <hr/>
 <table>
 <thead>
@@ -201,6 +235,40 @@ active-defrag-cycle-max 25</code></pre>
         END
     END
 END</code></pre><h3 id="常见问题">常见问题：雪崩 / 击穿 / 穿透</h3>
+<div class="mermaid" data-src="graph TB
+    subgraph 缓存雪崩
+    A1[大量key同时过期] --&gt; A2[请求全部打到DB]
+    A2 --&gt; A3[DB崩溃]
+    end
+    subgraph 缓存击穿
+    B1[热点key过期] --&gt; B2[大量并发请求]
+    B2 --&gt; B3[DB压力骤增]
+    end
+    subgraph 缓存穿透
+    C1[查询不存在的key] --&gt; C2[DB也无数据]
+    C2 --&gt; C3[每次都查DB]
+    end
+    style A3 fill:#ef4444,stroke:#fff,color:#fff
+    style B3 fill:#f59e0b,stroke:#fff,color:#fff
+    style C3 fill:#8b5cf6,stroke:#fff,color:#fff">
+graph TB
+    subgraph 缓存雪崩
+    A1[大量key同时过期] --> A2[请求全部打到DB]
+    A2 --> A3[DB崩溃]
+    end
+    subgraph 缓存击穿
+    B1[热点key过期] --> B2[大量并发请求]
+    B2 --> B3[DB压力骤增]
+    end
+    subgraph 缓存穿透
+    C1[查询不存在的key] --> C2[DB也无数据]
+    C2 --> C3[每次都查DB]
+    end
+    style A3 fill:#ef4444,stroke:#fff,color:#fff
+    style B3 fill:#f59e0b,stroke:#fff,color:#fff
+    style C3 fill:#8b5cf6,stroke:#fff,color:#fff
+</div>
+
 <hr/>
 <ol>
 <li><strong>缓存雪崩</strong>：一大堆 key 在同一时刻集体过期，瞬时请求全砸到 DB。<ol>
@@ -272,6 +340,32 @@ EVAL "return redis.call('del', unpack(redis.call('keys', ARGV[1])))" 0 'msg*'</c
 <p>升级建议：新项目直接上 8.x 最新稳定版（8.10）；从 7.2 / 7.4 升级时配置项基本兼容，但模块类命令已内置、行为有变，先跑 redis-benchmark 做回归。</p>
 </blockquote>
 <h3 id="redis-vector">向量搜索与 Vector Sets</h3>
+<div class="mermaid" data-src="graph TB
+    subgraph Cluster 16384 slots
+    N1[Node A&lt;br/&gt;0-5460] --&gt; S1[Shard 1]
+    N2[Node B&lt;br/&gt;5461-10922] --&gt; S2[Shard 2]
+    N3[Node C&lt;br/&gt;10923-16383] --&gt; S3[Shard 3]
+    end
+    N1 -.-&gt;|主从| N1S[Node A Slave]
+    N2 -.-&gt;|主从| N2S[Node B Slave]
+    N3 -.-&gt;|主从| N3S[Node C Slave]
+    style N1 fill:#dc382d,stroke:#fff,color:#fff
+    style N2 fill:#dc382d,stroke:#fff,color:#fff
+    style N3 fill:#dc382d,stroke:#fff,color:#fff">
+graph TB
+    subgraph Cluster 16384 slots
+    N1[Node A<br/>0-5460] --> S1[Shard 1]
+    N2[Node B<br/>5461-10922] --> S2[Shard 2]
+    N3[Node C<br/>10923-16383] --> S3[Shard 3]
+    end
+    N1 -.->|主从| N1S[Node A Slave]
+    N2 -.->|主从| N2S[Node B Slave]
+    N3 -.->|主从| N3S[Node C Slave]
+    style N1 fill:#dc382d,stroke:#fff,color:#fff
+    style N2 fill:#dc382d,stroke:#fff,color:#fff
+    style N3 fill:#dc382d,stroke:#fff,color:#fff
+</div>
+
 <p>7.2 引入可扩展的向量相似性索引；8.x 起 <strong>Vector Sets</strong> 升格为独立数据类型，专为向量存储 + 相似检索设计，内存更省、索引管理更简单。</p>
 <pre><code class="language-bash"># Redis 8.x 原生命令（无需加载模块）
 VADD myset item1 0.51 0.96 0.23 ...     # 向向量集添加元素
@@ -330,7 +424,32 @@ r.ft("doc_index").create_index(schema, definition=IndexDefinition(prefix=["doc:"
     <button class="back-to-top" title="回到顶部">↑</button>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    
+        <script type="module">
+    import mermaid from "https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.esm.min.mjs";
+    window.mermaid = mermaid;
+    window.__renderMermaid = function () {
+        var blocks = document.querySelectorAll('#body-content div.mermaid');
+        var jobs = Array.prototype.map.call(blocks, function (div, i) {
+            var src = div.getAttribute('data-src') || div.textContent || '';
+            if (!src.trim()) return Promise.resolve();
+            var id = 'mmd-' + i + '-' + Math.random().toString(36).slice(2, 8);
+            return mermaid.render(id, src).then(function (res) {
+                div.innerHTML = res.svg;
+                if (res.bindFunctions) { res.bindFunctions(div); }
+                div.setAttribute('data-rendered', '1');
+            }).catch(function (err) {
+                div.innerHTML = '<pre class="mermaid-error">图表渲染失败：' + String(err && err.message || err) + '</pre>';
+                div.setAttribute('data-rendered', '0');
+            });
+        });
+        return Promise.all(jobs).then(function () {
+            document.dispatchEvent(new CustomEvent('mermaid:rendered'));
+        });
+    };
+    mermaid.initialize({ startOnLoad: false, theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default', securityLevel: 'loose' });
+    window.__renderMermaid();
+    </script>
+
     <script>window.SITE_BASE = "../";window.SITE_GROUP = "database";</script>
     <script src="../js/main.js"></script>
 </body>

@@ -304,6 +304,192 @@
         observer.observe(section);
     }
 
+    // === Reading Progress Bar ===
+    function initReadingProgress() {
+        var bar = document.querySelector('.reading-progress');
+        if (!bar) return;
+        var ticking = false;
+        function update() {
+            var h = document.documentElement;
+            var scrollPercent = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+            bar.style.width = Math.min(100, Math.max(0, scrollPercent)) + '%';
+            ticking = false;
+        }
+        window.addEventListener('scroll', function () {
+            if (!ticking) {
+                window.requestAnimationFrame(update);
+                ticking = true;
+            }
+        }, { passive: true });
+        update();
+    }
+
+    // === Scroll Reveal: fade-in elements as they enter viewport ===
+    function initScrollReveal() {
+        if (!('IntersectionObserver' in window)) return;
+        var body = document.getElementById('body-content');
+        if (!body) return;
+
+        // Select elements to animate
+        var selectors = [
+            '#body-content > h2',
+            '#body-content > h3',
+            '#body-content > p',
+            '#body-content > ul',
+            '#body-content > ol',
+            '#body-content > pre',
+            '#body-content > blockquote',
+            '#body-content > table',
+            '#body-content > .mermaid',
+            '#body-content > img',
+            '#body-content > hr',
+            '#body-content > .callout',
+            '#body-content > .gradient-divider'
+        ];
+        var els = document.querySelectorAll(selectors.join(', '));
+
+        // Skip first h1 and first few elements (above the fold)
+        var observer = new IntersectionObserver(function (entries) {
+            entries.forEach(function (entry) {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                    observer.unobserve(entry.target);
+                }
+            });
+        }, {
+            threshold: 0.08,
+            rootMargin: '0px 0px -40px 0px'
+        });
+
+        els.forEach(function (el, idx) {
+            // Don't animate elements that are already in viewport on load
+            var rect = el.getBoundingClientRect();
+            if (rect.top < window.innerHeight && rect.bottom > 0) {
+                return;
+            }
+            el.classList.add('reveal');
+            observer.observe(el);
+        });
+    }
+
+    // === Auto Table of Contents ===
+    function initAutoTOC() {
+        var body = document.getElementById('body-content');
+        if (!body) return;
+        // Only generate TOC for article pages with enough headings
+        var headings = body.querySelectorAll('h2, h3, h4');
+        if (headings.length < 4) return;
+
+        // Skip if a TOC already exists
+        if (body.querySelector('.auto-toc')) return;
+
+        var toc = document.createElement('nav');
+        toc.className = 'auto-toc';
+        toc.innerHTML = '<div class="auto-toc-title">\u76ee\u5f55</div>';
+
+        var list = document.createElement('ul');
+        var currentLevel = 0;
+        var currentList = list;
+        var stack = [list];
+
+        headings.forEach(function (h) {
+            var level = parseInt(h.tagName[1]);
+            var id = h.getAttribute('id');
+            if (!id) return;
+
+            while (stack.length > 1 && level <= parseInt(stack[stack.length - 1].dataset.level || '2')) {
+                stack.pop();
+            }
+
+            var li = document.createElement('li');
+            li.className = 'toc-h' + level;
+            var a = document.createElement('a');
+            a.href = '#' + id;
+            a.textContent = h.textContent.replace(/^\d+\.\s*/, '');
+            a.addEventListener('click', function (e) {
+                e.preventDefault();
+                var target = document.getElementById(this.getAttribute('href').slice(1));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+            li.appendChild(a);
+
+            if (level > currentLevel && stack[stack.length - 1].children.length > 0) {
+                var newList = document.createElement('ul');
+                newList.dataset.level = level;
+                stack[stack.length - 1].lastElementChild.appendChild(newList);
+                stack.push(newList);
+                newList.appendChild(li);
+            } else {
+                stack[stack.length - 1].appendChild(li);
+            }
+            currentLevel = level;
+        });
+
+        toc.appendChild(list);
+
+        // Insert after the h1 or AI card, whichever comes first
+        var h1 = body.querySelector('h1');
+        var aiCard = body.querySelector('.ai-card');
+        var insertBefore = null;
+        if (h1 && h1.nextElementSibling) {
+            insertBefore = h1.nextElementSibling;
+        } else if (aiCard && aiCard.nextElementSibling) {
+            insertBefore = aiCard.nextElementSibling;
+        }
+        if (insertBefore) {
+            body.insertBefore(toc, insertBefore);
+        } else {
+            body.insertBefore(toc, body.firstChild);
+        }
+    }
+
+    // === Heading anchor copy on click ===
+    function initHeadingAnchors() {
+        var headings = document.querySelectorAll('#body-content h2[id], #body-content h3[id]');
+        headings.forEach(function (h) {
+            if (h.querySelector('.anchor-link')) return;
+            h.style.cursor = 'pointer';
+            h.title = '点击复制锚点链接';
+            var anchor = document.createElement('span');
+            anchor.className = 'anchor-link';
+            anchor.textContent = '#';
+            anchor.style.cssText = 'opacity:0;transition:opacity 0.3s;margin-left:0.4em;color:var(--accent);font-weight:400;';
+            h.appendChild(anchor);
+            h.addEventListener('mouseenter', function () { anchor.style.opacity = '1'; });
+            h.addEventListener('mouseleave', function () { anchor.style.opacity = '0'; });
+            h.addEventListener('click', function () {
+                var id = h.getAttribute('id');
+                if (!id) return;
+                var url = location.origin + location.pathname + '#' + id;
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(url).then(function () {
+                        h.style.transition = 'color 0.3s ease';
+                        var origColor = h.style.color;
+                        h.style.color = 'var(--accent)';
+                        setTimeout(function () { h.style.color = origColor; }, 600);
+                    });
+                }
+            });
+        });
+    }
+
+    // === Section numbering for h2 ===
+    function initSectionNumbers() {
+        var h2s = document.querySelectorAll('#body-content h2[id]');
+        if (h2s.length < 1) return;
+        var idx = 0;
+        h2s.forEach(function (h) {
+            if (h.textContent.indexOf('同组阅读') !== -1) return;
+            var badge = document.createElement('span');
+            badge.className = 'section-badge';
+            badge.textContent = (idx + 1).toString().padStart(2, '0');
+            h.insertBefore(badge, h.firstChild);
+            idx++;
+        });
+    }
+
     // === Init all ===
     function init() {
         initTheme();
@@ -313,6 +499,11 @@
         initSearch();
         initBackToTop();
         initTimeline();
+        initReadingProgress();
+        initScrollReveal();
+        initAutoTOC();
+        initHeadingAnchors();
+        initSectionNumbers();
         document.addEventListener('mermaid:rendered', initMermaidTools);
     }
 
