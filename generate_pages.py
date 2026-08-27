@@ -243,6 +243,31 @@ def annotate_mermaid_src(content):
                   _annotate, content)
 
 
+def annotate_echart_containers(content):
+    """Convert <div class="echart" data-option="..."> blocks into render-ready containers.
+
+    ECharts chart definitions are embedded in article content as:
+        <div class="echart" data-option='{"type":"radar","title":"...","data":...}'></div>
+    This function wraps them in a styled container with a unique id for
+    the runtime renderer to pick up.
+    """
+    counter = [0]
+    def _annotate(m):
+        attrs = m.group(1)
+        inner = m.group(2).strip()
+        counter[0] += 1
+        cid = f'echart-{counter[0]}'
+        # If data-option is already in attrs, use it; otherwise treat inner as option JSON
+        if 'data-option' in attrs:
+            return f'<div class="echart-container" id="{cid}"{attrs}>{inner}</div>'
+        elif inner:
+            return f'<div class="echart-container" id="{cid}" data-option="{escape(inner)}"></div>'
+        return m.group(0)
+    return re.sub(
+        r'<div class="echart"([^>]*)>([\s\S]*?)</div>',
+        _annotate, content)
+
+
 def clean_content(content):
     """Remove old script tags, HTML residue, and detection elements."""
     # Strip Hugo Relearn theme chrome first so div balancing below works
@@ -1240,6 +1265,7 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html,
                 f'ai_body \u4ee3\u7801\u5757\u6570\u91cf\u53d8\u5316: {o_cnt} -> {n_cnt}')
     content = clean_content(raw_content)
     content = annotate_mermaid_src(content)
+    content = annotate_echart_containers(content)
     prefix = rel_prefix(current_path)
 
     # Page title for <title> tag
@@ -1293,7 +1319,7 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html,
                 if (res.bindFunctions) { res.bindFunctions(div); }
                 div.setAttribute('data-rendered', '1');
             }).catch(function (err) {
-                div.innerHTML = '<pre class="mermaid-error">图表渲染失败：' + String(err && err.message || err) + '</pre>';
+                div.innerHTML = '<pre class="mermaid-error">\u56fe\u8868\u6e32\u67d3\u5931\u8d25\uff1a' + String(err && err.message || err) + '</pre>';
                 div.setAttribute('data-rendered', '0');
             });
         });
@@ -1303,6 +1329,130 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html,
     };
     mermaid.initialize({ startOnLoad: false, theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default', securityLevel: 'loose' });
     window.__renderMermaid();
+    </script>
+'''
+
+    # Only load ECharts when the page actually contains chart containers
+    echart_html = ''
+    if 'class="echart-container"' in content or 'class="echart"' in content:
+        echart_html = '''    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
+    <script>
+    (function () {
+        var containers = document.querySelectorAll('#body-content .echart-container, #body-content .echart');
+        if (!containers.length) return;
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        containers.forEach(function (el) {
+            var optAttr = el.getAttribute('data-option') || el.textContent || '';
+            if (!optAttr.trim()) return;
+            try {
+                var opt = JSON.parse(optAttr);
+                var chart = echarts.init(el, isDark ? 'dark' : null, { renderer: 'canvas' });
+                var baseOpt = buildEchartOption(opt, isDark);
+                chart.setOption(baseOpt);
+                window.addEventListener('resize', function () { chart.resize(); });
+                el.setAttribute('data-rendered', '1');
+            } catch (e) {
+                el.innerHTML = '<pre class="echart-error">\u56fe\u8868\u6e32\u67d3\u5931\u8d25\uff1a' + String(e && e.message || e) + '</pre>';
+                el.setAttribute('data-rendered', '0');
+            }
+        });
+
+        function buildEchartOption(opt, isDark) {
+            var textColor = isDark ? '#c9d1d9' : '#333';
+            var axisColor = isDark ? '#555' : '#888';
+            var splitColor = isDark ? '#30363d' : '#e8e8e8';
+            var common = {
+                color: ['#00add8', '#dc382d', '#9c27b0', '#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6'],
+                title: { textStyle: { color: textColor, fontSize: 15, fontWeight: 600 }, subtextStyle: { color: axisColor } },
+                legend: { textStyle: { color: textColor }, top: 30 },
+                tooltip: { trigger: 'item' },
+                grid: { left: '8%', right: '5%', bottom: '8%', top: '18%', containLabel: true }
+            };
+
+            if (opt.type === 'radar') {
+                return Object.assign(common, {
+                    tooltip: { trigger: 'item' },
+                    radar: {
+                        indicator: opt.indicators || [],
+                        shape: 'polygon',
+                        splitNumber: 5,
+                        axisName: { color: textColor, fontSize: 12 },
+                        splitLine: { lineStyle: { color: splitColor } },
+                        splitArea: { areaStyle: { color: isDark ? ['rgba(255,255,255,0.02)', 'rgba(255,255,255,0.05)'] : ['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.04)'] } },
+                        axisLine: { lineStyle: { color: splitColor } }
+                    },
+                    series: [{
+                        type: 'radar',
+                        data: (opt.series || []).map(function (s) {
+                            return { name: s.name, value: s.value, areaStyle: { opacity: 0.15 } };
+                        })
+                    }]
+                });
+            }
+
+            if (opt.type === 'bar') {
+                var categories = opt.categories || [];
+                var series = (opt.series || []).map(function (s) {
+                    return {
+                        name: s.name,
+                        type: 'bar',
+                        data: s.value,
+                        itemStyle: { borderRadius: [4, 4, 0, 0] }
+                    };
+                });
+                return Object.assign(common, {
+                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                    xAxis: { type: 'category', data: categories, axisLabel: { color: textColor, fontSize: 11 }, axisLine: { lineStyle: { color: splitColor } } },
+                    yAxis: { type: 'value', axisLabel: { color: textColor }, splitLine: { lineStyle: { color: splitColor } } },
+                    series: series
+                });
+            }
+
+            if (opt.type === 'pie') {
+                return Object.assign(common, {
+                    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                    series: [{
+                        type: 'pie',
+                        radius: ['35%', '65%'],
+                        center: ['50%', '55%'],
+                        data: (opt.series || []).map(function (s) {
+                            return { name: s.name, value: s.value };
+                        }),
+                        label: { color: textColor, fontSize: 12 },
+                        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } }
+                    }]
+                });
+            }
+
+            if (opt.type === 'gauge') {
+                return Object.assign(common, {
+                    tooltip: { show: false },
+                    series: [{
+                        type: 'gauge',
+                        data: opt.series || [],
+                        axisLine: { lineStyle: { width: 12 } },
+                        detail: { formatter: '{value}%', color: textColor, fontSize: 16 }
+                    }]
+                });
+            }
+
+            if (opt.type === 'line') {
+                var cats = opt.categories || [];
+                var lseries = (opt.series || []).map(function (s) {
+                    return { name: s.name, type: 'line', data: s.value, smooth: true, symbolSize: 6 };
+                });
+                return Object.assign(common, {
+                    tooltip: { trigger: 'axis' },
+                    xAxis: { type: 'category', data: cats, axisLabel: { color: textColor, fontSize: 11 }, axisLine: { lineStyle: { color: splitColor } } },
+                    yAxis: { type: 'value', axisLabel: { color: textColor }, splitLine: { lineStyle: { color: splitColor } } },
+                    series: lseries
+                });
+            }
+
+            // Fallback: pass option through directly
+            return Object.assign(common, opt.option || {});
+        }
+    })();
     </script>
 '''
 
@@ -1366,6 +1516,7 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html,
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     {mermaid_html}
+    {echart_html}
     <script>window.SITE_BASE = "{prefix}";window.SITE_GROUP = "{site_group}";</script>
     <script src="/js/main.js"></script>
 </body>
