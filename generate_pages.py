@@ -578,74 +578,102 @@ def build_homepage_content(pages):
     for idx, g in enumerate(CONTENT_GROUPS, start=1):
         page_list = [u for u in g['pages'] if u in pages]
         count = len(page_list)
-
-        # Bento size class based on article count
-        if count >= 14:
-            bento_class = 'bento-large'
-        elif count >= 10:
-            bento_class = 'bento-wide'
-        elif count >= 5:
-            bento_class = 'bento-medium'
-        else:
-            bento_class = 'bento-compact'
-
-        # For large/wide cards: show top 6 articles with pitch, then "view all" link
-        # For compact cards: show all articles
-        show_count = 6 if count >= 10 else (4 if count >= 5 else count)
+        show_count = 6 if count > 6 else count
         visible = page_list[:show_count]
         hidden_count = count - len(visible)
 
-        if count >= 10:
-            # Two-column article grid inside card
-            items_html = ''.join(
-                f'<li class="arch-item">'
+        items_html = ''.join(
+            f'<li class="arch-item">'
+            f'<a class="arch-link" href="{page_href(u)}">'
+            f'<span class="arch-title">{escape(title_of(u))}</span>'
+            f'<span class="arch-arrow">\u2192</span></a>'
+            + (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
+            + '</li>'
+            for u in visible)
+        if hidden_count > 0:
+            items_html += (
+                f'<li class="arch-item arch-more">'
+                f'<a class="arch-more-link" href="#arch-{g["id"]}">'
+                f'<span>\u67e5\u770b\u5168\u90e8</span>'
+                f'<span class="arch-arrow">\u2193</span></a></li>')
+            rest_items = ''.join(
+                f'<li class="arch-item arch-hidden">'
                 f'<a class="arch-link" href="{page_href(u)}">'
                 f'<span class="arch-title">{escape(title_of(u))}</span>'
-                f'<span class="arch-arrow">\u2192</span></a>'
-                + (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
-                + '</li>'
-                for u in visible)
-            if hidden_count > 0:
-                items_html += (
-                    f'<li class="arch-item arch-more">'
-                    f'<a class="arch-more-link" href="#arch-{g["id"]}">'
-                    f'<span>\u67e5\u770b\u5168\u90e8</span>'
-                    f'<span class="arch-arrow">\u2193</span></a></li>')
-            articles_html = f'<ul class="arch-list arch-grid-2col">{items_html}</ul>'
-            # Collapsible hidden articles
-            if hidden_count > 0:
-                rest_items = ''.join(
-                    f'<li class="arch-item arch-hidden">'
-                    f'<a class="arch-link" href="{page_href(u)}">'
-                    f'<span class="arch-title">{escape(title_of(u))}</span>'
-                    f'<span class="arch-arrow">\u2192</span></a></li>'
-                    for u in page_list[show_count:])
-                articles_html += f'<ul class="arch-list arch-hidden-list" hidden>{rest_items}</ul>'
+                f'<span class="arch-arrow">\u2192</span></a></li>'
+                for u in page_list[show_count:])
+            articles_html = f'<ul class="arch-list">{items_html}</ul><ul class="arch-list arch-hidden-list" hidden>{rest_items}</ul>'
         else:
-            # Compact vertical list
-            items_html = ''.join(
-                f'<li class="arch-item">'
-                f'<a class="arch-link" href="{page_href(u)}">'
-                f'<span class="arch-title">{escape(title_of(u))}</span>'
-                f'<span class="arch-arrow">\u2192</span></a>'
-                + (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
-                + '</li>'
-                for u in page_list)
             articles_html = f'<ul class="arch-list">{items_html}</ul>'
 
         groups.append(
-            f'<section class="arch-card {bento_class}" id="arch-{g["id"]}" style="--grp-accent:{g["accent"]}">'
-            f'<header class="arch-card-head">'
-            f'<span class="group-icon">{g["icon"]}</span>'
-            f'<span class="group-idx">{idx:02d}</span>'
-            f'<div class="arch-card-titles">'
-            f'<h2 class="group-name">{escape(g["title"])}</h2>'
-            f'<p class="group-blurb">{escape(g["blurb"])}</p>'
+            f'<section class="group-section" id="arch-{g["id"]}" style="--grp-accent:{g["accent"]}">'
+            f'<header class="group-section-head">'
+            f'<span class="group-section-icon" aria-hidden="true">{g["icon"]}</span>'
+            f'<span class="group-section-idx">{idx:02d}</span>'
+            f'<div class="group-section-titles">'
+            f'<h2 class="group-section-name">{escape(g["title"])}</h2>'
+            f'<p class="group-section-blurb">{escape(g["blurb"])}</p>'
             f'</div>'
             f'</header>'
             f'{articles_html}'
             f'</section>')
     grid = '\n'.join(groups)
+
+    # AI era timeline: ChatGPT → Tool → RAG → MCP → Skill → Agent
+    ai_era_items = [
+        ('💬', '2022·11', 'ChatGPT',
+         'OpenAI 发布 ChatGPT，大语言模型从实验室走向大众。自然语言成为新的人机交互界面，AI 从"能力"变成"产品"。',
+         '#10b981'),
+        ('🛠️', '2023·06', 'Function Calling / Tool',
+         'OpenAI 推出 Function Calling，LLM 不再只是聊天，而是可以调用外部工具——搜索、计算、数据库查询。AI 有了"手"。',
+         '#3b82f6'),
+        ('📚', '2023·08', 'RAG 检索增强生成',
+         '检索增强生成（Retrieval-Augmented Generation）成为主流架构。LLM 接入企业知识库，从"通才"变"专家"，幻觉问题大幅缓解。',
+         '#8b5cf6'),
+        ('🔌', '2024·11', 'MCP 协议',
+         'Anthropic 发布 Model Context Protocol，为 AI 与外部数据源/工具的连接建立统一标准。如同 USB-C 之于硬件，MCP 让 AI 接入标准化。',
+         '#f59e0b'),
+        ('⚡', '2025·03', 'Skill 技能化',
+         '大模型从"调用工具"进化到"拥有技能"。Skill 封装了完整的领域工作流，AI 不再是单次调用，而是自主编排多步骤任务。',
+         '#ef4444'),
+        ('🤖', '2025·06+', 'Agent 自主智能体',
+         '从单轮对话到多轮自主决策。Agent 能理解目标、规划步骤、调用工具链、执行并验证——软件开发从"人写代码"走向"人审代码"。',
+         '#ec4899'),
+    ]
+    ai_era_html = ''.join(
+        f'<div class="ai-era-item" style="--aec:{color}">'
+        f'<div class="ai-era-icon" aria-hidden="true">{emoji}</div>'
+        f'<div class="ai-era-body">'
+        f'<span class="ai-era-date">{escape(date)}</span>'
+        f'<h3 class="ai-era-name">{escape(name)}</h3>'
+        f'<p class="ai-era-desc">{escape(desc)}</p>'
+        f'</div>'
+        f'</div>'
+        for emoji, date, name, desc, color in ai_era_items)
+
+    # AI era impact on software development
+    ai_impact_items = [
+        (' architect', '🧩', '架构变革',
+         '从单体→微服务→AI-native：系统设计不再只考虑人读 API，更要为 Agent 设计可发现、可调用的接口。MCP 成为新的"API 网关"。'),
+        ('coding', '⌨️', '编码方式',
+         '从手写每一行代码到自然语言描述意图→AI 生成→人工审查。Copilot/Codeium 已是标配，Claude Code/Cursor 让"对话式编程"成为日常。'),
+        ('testing', '🧪', '测试与质量',
+         'AI 自动生成测试用例、发现边界条件、审计代码安全。从"写完再测"到"边写边测边修复"，CI/CD 管线深度嵌入 AI。'),
+        ('ops', '🚀', '运维与部署',
+         'Agent 自主排查线上故障、生成修复方案、执行回滚。从人盯监控大盘到 AI 预警→自动止损→人工确认。'),
+        ('team', '👥', '团队与协作',
+         '一人+多 Agent 成为新型"全栈团队"。PRD 由 AI 起草、代码由 AI 生成、文档由 AI 编写——人的角色从"执行者"变为"决策者"。'),
+        ('future', '🔮', '未来趋势',
+         '模型即基础设施，Skill 即应用，Agent 即用户。软件开发的终局不是"写代码"，而是"定义意图、约束边界、验证结果"。'),
+    ]
+    ai_impact_html = ''.join(
+        f'<div class="ai-impact-card" style="--aic:{["#3b82f6","#8b5cf6","#10b981","#f59e0b","#ef4444","#ec4899"][i]}">'
+        f'<div class="ai-impact-icon" aria-hidden="true">{emoji}</div>'
+        f'<h3 class="ai-impact-title">{escape(title)}</h3>'
+        f'<p class="ai-impact-desc">{escape(desc)}</p>'
+        f'</div>'
+        for i, (_, emoji, title, desc) in enumerate(ai_impact_items))
 
     # Cartoon-style coding-journey timeline with emoji stations
     timeline_items = [
@@ -727,7 +755,22 @@ def build_homepage_content(pages):
         f'</div>'
         f'</div>'
         f'{timeline_html}'
-        f'<div class="bento-grid">{grid}</div>'
+        f'<section class="ai-era-section" aria-label="AI 时代大事记">'
+        f'<div class="ai-era-head">'
+        f'<span class="ai-era-kicker">AI ERA</span>'
+        f'<h2 class="ai-era-title">AI 时代关键演进</h2>'
+        f'<p class="ai-era-sub">ChatGPT → Tool → RAG → MCP → Skill → Agent</p>'
+        f'</div>'
+        f'<div class="ai-era-track">{ai_era_html}</div>'
+        f'</section>'
+        f'<section class="ai-impact-section" aria-label="AI 时代对软件开发的改变">'
+        f'<div class="ai-impact-head">'
+        f'<span class="ai-impact-kicker">SHIFT</span>'
+        f'<h2 class="ai-impact-title">AI 正在如何改变软件开发</h2>'
+        f'</div>'
+        f'<div class="ai-impact-grid">{ai_impact_html}</div>'
+        f'</section>'
+        f'<div class="group-list">{grid}</div>'
     )
 
 
