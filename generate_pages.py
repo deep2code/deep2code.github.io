@@ -669,8 +669,7 @@ def build_homepage_content(pages):
          '#F39C12'),
     ]
     tl_items = ''.join(
-        f'<li class="journey-stn journey-stn-{"l" if i % 2 == 0 else "r"}"'
-        f' style="--stc:{color}">'
+        f'<li class="journey-stn" style="--stc:{color}">'
         f'<div class="journey-emoji" aria-hidden="true">{emoji}</div>'
         f'<div class="journey-bubble" tabindex="0">'
         f'<span class="journey-tag">{escape(phase)}</span>'
