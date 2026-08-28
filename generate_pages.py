@@ -148,6 +148,95 @@ for _g in CONTENT_GROUPS:
 GROUP_ARTICLE_ORDER = [u for g in CONTENT_GROUPS for u in g['pages']]
 
 
+def clean_pitch(text):
+    """Strip version-year labels like （2026 版）and 2026 版 (not 2026 版本)."""
+    if not text:
+        return text
+    text = re.sub(r'[（(]\s*2026\s*版\s*[）)]', '', text)
+    text = re.sub(r'\s+2026\s*版(?![本])', '', text)
+    return ' '.join(text.split())
+
+
+# ============================================================
+# Per-technology icon + representative command for homepage cards
+# ============================================================
+TECH_META = {
+    # Go
+    '/golang/':              ('🐹', 'go build -o app && go test ./...'),
+    '/golang/stringer/':     ('🔤', 'go generate ./...'),
+    '/golang/echo/':         ('🌐', 'e.Start(":8080")'),
+    '/golang/context/':       ('⏱️', 'ctx, cancel := context.WithTimeout()'),
+    '/golang/regexp/':       ('🔍', 'regexp.MustCompile(`pat`).FindAll()'),
+    '/golang/sort/':         ('📊', 'slices.Sort(s)'),
+    '/golang/freetype/':     ('🖋️', 'freetype.ParseFont(b)'),
+    '/golang/iris/':         ('🌈', 'app.Listen(":8080")'),
+    '/golang/shell/':        ('💻', 'exec.Command("sh", "-c", cmd)'),
+    '/golang/io/':           ('📥', 'io.Copy(dst, src)'),
+    '/golang/code/':         ('📝', 'go vet ./... && go fmt'),
+    '/golang/groupby/':      ('🗂️', 'slices.GroupBy(s, keyFn)'),
+    '/golang/log/':          ('📋', 'slog.Info("msg", "k", v)'),
+    '/golang/generic/':      ('🔧', 'func F[T any](x T) T'),
+    '/golang/gin/':          ('🍸', 'r := gin.Default()'),
+    '/golang/package/':      ('📦', 'go get -u module@version'),
+    '/golang/go-git/':       ('🌿', 'git.Clone(ctx, &opts)'),
+    '/golang/generics-update/': ('⬆️', 'func F[T ~int | ~float64](x T)'),
+    # Database
+    '/mysql/':               ('🐬', 'mysql -u root -p < schema.sql'),
+    '/redis/':               ('🔴', 'redis-cli SET k v && GET k'),
+    '/memcached/':           ('⚡', 'echo "set k 0 0 5" | nc :11211'),
+    '/elastic/':             ('🔎', 'curl :9200/_search?q=hello'),
+    # AI
+    '/ai/':                  ('🧠', 'AutoModel.from_pretrained()'),
+    '/ai/llm/':              ('💬', 'model.generate(tokenizer(p))'),
+    '/ai/rag/':              ('📚', 'llm.gen(retriever.search(q))'),
+    '/ai/finetuning/':       ('🔧', 'Trainer(model).train(data)'),
+    '/other/machinelearn/':  ('📈', 'model.fit(X_train, y_train)'),
+    # Server & Cloud
+    '/nginx/':               ('🟢', 'nginx -t && nginx -s reload'),
+    '/nginx/install/':       ('🔨', './configure --with-http_v3 && make'),
+    '/nginx/use/':           ('⚙️', 'location / { proxy_pass backend; }'),
+    '/nginx/http/':          ('🔒', 'add_header Strict-Transport-Security'),
+    '/nginx/rtmp/':          ('📡', 'rtmp { server { live on; } }'),
+    '/grpc/':                ('🔗', 'grpc.Serve(lis, srv)'),
+    '/grpc/golang/':         ('📋', 'protoc --go_out=. hello.proto'),
+    '/other/rpc/':           ('📡', 'rpc.Call("Svc.Method", args)'),
+    '/other/docker/':        ('🐳', 'docker build -t app . && docker run -p 80:80 app'),
+    '/other/harbor/':        ('⚓', 'docker push harbor.io/app:tag'),
+    '/other/aliyun/':        ('☁️', 'aliyun configure && aliyun cli'),
+    '/other/tencent/':       ('☁️', 'tcloud configure && tcloud cli'),
+    '/other/self-hosted/':   ('🏠', 'git init --bare repo.git'),
+    '/other/brew/':          ('🍺', 'brew install package'),
+    # Tools
+    '/git/':                 ('🌳', 'git add . && git commit -m "msg"'),
+    '/other/github/':        ('🐙', 'gh pr create --title "feat"'),
+    '/other/gitlab/':        ('🦊', 'gitlab-ctl reconfigure'),
+    '/other/svn/':           ('📋', 'svn checkout URL && svn commit -m'),
+    '/other/opensource/':    ('🌍', 'fork → clone → branch → PR'),
+    '/other/vim/':           ('✏️', 'vim file.py → :wq'),
+    '/other/hugo/':          ('🏗️', 'hugo new site blog && hugo server'),
+    '/other/mermaid/':       ('📐', 'mermaid render diagram.mmd'),
+    '/other/markdown/':      ('📝', 'markdown file.md -o out.html'),
+    '/other/makefile/':      ('🔨', 'make build && make test'),
+    '/other/search/':        ('🔍', 'grep -rn "pattern" .'),
+    '/other/geocode/':       ('📍', 'geocode("address") → lat,lng'),
+    '/other/tesseract/':     ('👁️', 'tesseract image.png output.txt'),
+    # Misc
+    '/python/':              ('🐍', 'python -m venv venv && pip install'),
+    '/other/rust/':          ('🦀', 'cargo build --release'),
+    '/other/shell/':         ('🐚', 'bash script.sh && echo $?'),
+    '/other/wasm/':          ('🟨', 'wasm-pack build --target web'),
+    '/flutter/':             ('💙', 'flutter create app && flutter run'),
+    '/mac/':                 ('🍎', 'brew install --cask app'),
+    '/other/windows/':       ('🪟', 'winget install Package'),
+    '/other/wireshark/':     ('🦈', 'tshark -i eth0 -f "port 80"'),
+    '/other/web/':           ('🌐', 'curl -sL https://api.io | jq .'),
+    '/other/firefox/':       ('🦎', 'firefox --headless --screenshot'),
+    '/other/unity/':         ('🎮', 'unity build --platform android'),
+    '/other/unity/et/':      ('🎲', 'C# ET 框架: C/S 游戏架构'),
+    '/other/':               ('📦', 'ls ~/tools && which tool'),
+}
+
+
 def _normalize_paths(data):
     """Rewrite moved URLs in page keys, filepaths, contents and nav."""
     pages = data['pages']
@@ -592,7 +681,7 @@ def build_homepage_content(pages):
 
     def pitch_of(u):
         p = pages.get(u, {})
-        pitch = p.get('ai_pitch', '') or ''
+        pitch = clean_pitch(p.get('ai_pitch', '') or '')
         return ' '.join(pitch.split())
 
     # Index-only pages are not articles; count real posts for honest stats.
@@ -610,9 +699,14 @@ def build_homepage_content(pages):
         items_html = ''.join(
             f'<li class="arch-item">'
             f'<a class="arch-link" href="{page_href(u)}">'
+            f'<span class="arch-icon" aria-hidden="true">{TECH_META.get(u, ("\U0001f4c4",""))[0]}</span>'
             f'<span class="arch-title">{escape(title_of(u))}</span>'
             f'<span class="arch-arrow">\u2192</span></a>'
-            + (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
+            + (
+                f'<div class="arch-cmd"><span class="arch-cmd-prompt">$</span><code class="arch-cmd-text">{escape(TECH_META[u][1])}</code></div>'
+                if u in TECH_META and TECH_META[u][1]
+                else (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
+            )
             + '</li>'
             for u in visible)
         if hidden_count > 0:
@@ -624,6 +718,7 @@ def build_homepage_content(pages):
             rest_items = ''.join(
                 f'<li class="arch-item arch-hidden">'
                 f'<a class="arch-link" href="{page_href(u)}">'
+                f'<span class="arch-icon" aria-hidden="true">{TECH_META.get(u, ("📄",""))[0]}</span>'
                 f'<span class="arch-title">{escape(title_of(u))}</span>'
                 f'<span class="arch-arrow">\u2192</span></a></li>'
                 for u in page_list[show_count:])
@@ -666,16 +761,13 @@ def build_homepage_content(pages):
          '从单轮对话到多轮自主决策。Agent 能理解目标、规划步骤、调用工具链、执行并验证——软件开发从"人写代码"走向"人审代码"。',
          '#ec4899'),
     ]
-    ai_era_html = ''.join(
-        f'<div class="ai-era-item" style="--aec:{color}">'
-        f'<div class="ai-era-icon" aria-hidden="true">{emoji}</div>'
-        f'<div class="ai-era-body">'
-        f'<span class="ai-era-date">{escape(date)}</span>'
-        f'<h3 class="ai-era-name">{escape(name)}</h3>'
-        f'<p class="ai-era-desc">{escape(desc)}</p>'
+    ai_era_nodes = ''.join(
+        f'<div class="ae-node" style="--c:{color};--n:{i}">'
+        f'<div class="ae-ring" aria-hidden="true">{emoji}</div>'
+        f'<span class="ae-date">{escape(date)}</span>'
+        f'<span class="ae-name">{escape(name)}</span>'
         f'</div>'
-        f'</div>'
-        for emoji, date, name, desc, color in ai_era_items)
+        for i, (emoji, date, name, desc, color) in enumerate(ai_era_items))
 
     # AI era impact on software development
     ai_impact_items = [
@@ -692,53 +784,126 @@ def build_homepage_content(pages):
         ('future', '🔮', '未来趋势',
          '模型即基础设施，Skill 即应用，Agent 即用户。软件开发的终局不是"写代码"，而是"定义意图、约束边界、验证结果"。'),
     ]
-    ai_impact_html = ''.join(
-        f'<div class="ai-impact-card" style="--aic:{["#3b82f6","#8b5cf6","#10b981","#f59e0b","#ef4444","#ec4899"][i]}">'
+    _aic_colors = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]
+    ai_impact_slides = ''.join(
+        f'<div class="ai-impact-slide" data-i="{i}" style="--aic:{_aic_colors[i]}">'
+        f'<div class="ai-impact-card">'
         f'<div class="ai-impact-icon" aria-hidden="true">{emoji}</div>'
         f'<h3 class="ai-impact-title">{escape(title)}</h3>'
         f'<p class="ai-impact-desc">{escape(desc)}</p>'
         f'</div>'
-        for i, (_, emoji, title, desc) in enumerate(ai_impact_items))
-
-    # Cartoon-style coding-journey timeline with emoji stations
-    timeline_items = [
-        ('📚', '2004', '自学起步',
-         '理工科出身，跨专业转行，从零开始自学计算机——语言、数据结构、算法，一本本啃下来。',
-         '#4A90D9'),
-        ('🚪', '转行', '敲开行业大门',
-         '凭自学积累的代码能力，正式进入软件开发行业，开始以写代码为业。',
-         '#E67E22'),
-        ('🔧', '深耕', '一线长期主义',
-         '长期在业务一线写代码：从单体到分布式、从应用到系统，踩过的坑都沉淀成经验。',
-         '#27AE60'),
-        ('🚀', '进化', '拥抱技术演进',
-         '技术栈随时代刷新——Go、Python、云原生、AI，学习从未停步。',
-         '#8E44AD'),
-        ('✍️', '沉淀', '写作与分享',
-         '把踩坑与实战写成博客，一篇篇都是真实的一线笔记。',
-         '#E74C3C'),
-        ('❤️', '2026', '依然热爱',
-         '二十余年一线开发，保持好奇，保持热爱，继续写代码。',
-         '#F39C12'),
-    ]
-    tl_items = ''.join(
-        f'<li class="journey-stn" style="--stc:{color}">'
-        f'<div class="journey-emoji" aria-hidden="true">{emoji}</div>'
-        f'<div class="journey-bubble" tabindex="0">'
-        f'<span class="journey-tag">{escape(phase)}</span>'
-        f'<h3 class="journey-name">{escape(title)}</h3>'
-        f'<p class="journey-text">{escape(desc)}</p>'
-        f'</div></li>'
-        for i, (emoji, phase, title, desc, color) in enumerate(timeline_items))
-    timeline_html = (
-        f'<section class="journey-section" aria-label="从 2004 到 2026 的编程成长之路">'
-        f'<div class="journey-head">'
-        f'<span class="journey-kicker">MY JOURNEY</span>'
-        f'<h2 class="journey-title">从 2004 到 2026，一个理工男的编程之路</h2>'
-        f'<p class="journey-sub">跨专业自学 · 一线开发二十余年 · 不断学习，保持热爱</p>'
         f'</div>'
-        f'<div class="journey-coder" aria-hidden="true">👨\u200d💻</div>'
-        f'<ol class="journey-trail">{tl_items}</ol>'
+        for i, (_, emoji, title, desc) in enumerate(ai_impact_items))
+    ai_impact_dots = ''.join(
+        f'<span class="ai-impact-dot" data-i="{i}"></span>'
+        for i in range(len(ai_impact_items)))
+
+    # === 码农进化史宣传片 — 循环动画 ===
+    _DEV_SVG_INNER = (
+        '<ellipse cx="100" cy="248" rx="50" ry="6" fill="rgba(0,0,0,0.18)"/>'
+        '<path d="M45 145 Q100 128 155 145 L160 232 Q100 248 40 232 Z" fill="#4A7CB8" stroke="#2E5A8A" stroke-width="2"/>'
+        '<path d="M60 142 Q100 120 140 142 Q140 130 100 112 Q60 130 60 142 Z" fill="#2E5A8A"/>'
+        '<path d="M70 175 Q100 168 130 175 L125 195 Q100 200 75 195 Z" fill="#3A6BA8" opacity="0.5"/>'
+        '<line x1="92" y1="142" x2="90" y2="165" stroke="#2E5A8A" stroke-width="2.5" stroke-linecap="round"/>'
+        '<line x1="108" y1="142" x2="110" y2="165" stroke="#2E5A8A" stroke-width="2.5" stroke-linecap="round"/>'
+        '<circle cx="90" cy="167" r="2.5" fill="#2E5A8A"/>'
+        '<circle cx="110" cy="167" r="2.5" fill="#2E5A8A"/>'
+        '<g class="dev-arm-l">'
+        '<path d="M45 148 Q28 170 22 195" stroke="#4A7CB8" stroke-width="14" fill="none" stroke-linecap="round"/>'
+        '<circle cx="22" cy="197" r="9.5" fill="#F0C8A0" stroke="#D4A070" stroke-width="1"/>'
+        '</g>'
+        '<g class="dev-arm-r">'
+        '<path d="M155 148 Q172 170 178 195" stroke="#4A7CB8" stroke-width="14" fill="none" stroke-linecap="round"/>'
+        '<circle cx="178" cy="197" r="9.5" fill="#F0C8A0" stroke="#D4A070" stroke-width="1"/>'
+        '</g>'
+        '<path d="M86 128 L86 145 Q100 150 114 145 L114 128 Z" fill="#F0C8A0"/>'
+        '<circle cx="100" cy="88" r="42" fill="#F0C8A0" stroke="#D4A070" stroke-width="1.5"/>'
+        '<circle cx="58" cy="90" r="6" fill="#F0C8A0" stroke="#D4A070" stroke-width="1"/>'
+        '<circle cx="142" cy="90" r="6" fill="#F0C8A0" stroke="#D4A070" stroke-width="1"/>'
+        '<path d="M58 85 Q60 45 100 42 Q140 45 142 85 Q138 58 118 55 Q112 48 100 48 Q88 48 82 55 Q62 58 58 85 Z" fill="#2D1B0E"/>'
+        '<path d="M58 85 Q55 95 59 103 L63 88 Z" fill="#2D1B0E"/>'
+        '<path d="M142 85 Q145 95 141 103 L137 88 Z" fill="#2D1B0E"/>'
+        '<path d="M68 74 Q78 71 88 74" stroke="#2D1B0E" stroke-width="3" fill="none" stroke-linecap="round"/>'
+        '<path d="M112 74 Q122 71 132 74" stroke="#2D1B0E" stroke-width="3" fill="none" stroke-linecap="round"/>'
+        '<circle cx="78" cy="88" r="16" fill="rgba(180,210,255,0.12)" stroke="#1a1a2e" stroke-width="2.5"/>'
+        '<circle cx="122" cy="88" r="16" fill="rgba(180,210,255,0.12)" stroke="#1a1a2e" stroke-width="2.5"/>'
+        '<path d="M94 88 L106 88" stroke="#1a1a2e" stroke-width="2.5" stroke-linecap="round"/>'
+        '<path d="M62 85 L55 80" stroke="#1a1a2e" stroke-width="2" stroke-linecap="round"/>'
+        '<path d="M138 85 L145 80" stroke="#1a1a2e" stroke-width="2" stroke-linecap="round"/>'
+        '<circle cx="78" cy="89" r="3.5" fill="#1a1a2e"/>'
+        '<circle cx="122" cy="89" r="3.5" fill="#1a1a2e"/>'
+        '<circle cx="80" cy="87" r="1.2" fill="#fff"/>'
+        '<circle cx="124" cy="87" r="1.2" fill="#fff"/>'
+        '<path d="M100 98 L98 105 Q100 107 102 105 Z" fill="#D4A070" opacity="0.5"/>'
+        '<path d="M82 110 Q100 120 118 110" stroke="#1a1a2e" stroke-width="2.5" fill="none" stroke-linecap="round"/>'
+        '<circle cx="65" cy="102" r="6" fill="#FFB088" opacity="0.4"/>'
+        '<circle cx="135" cy="102" r="6" fill="#FFB088" opacity="0.4"/>'
+    )
+    _dev_sprite = (
+        '<svg style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true">'
+        '<symbol id="cine-dev" viewBox="0 0 200 260">' + _DEV_SVG_INNER + '</symbol>'
+        '</svg>'
+    )
+    journey_scenes = [
+        ('2004\u20142008', '\u81ea\u5b66\u8d77\u6b65',
+         '\u7406\u5de5\u79d1\u51fa\u8eab\uff0c\u8de8\u4e13\u4e1a\u8f6c\u884c\uff0c\u4ece\u96f6\u5f00\u59cb\u81ea\u5b66\u8ba1\u7b97\u673a\u2014\u2014\u8bed\u8a00\u3001\u6570\u636e\u7ed3\u6784\u3001\u7b97\u6cd5\uff0c\u4e00\u672c\u672c\u556e\u4e0b\u6765\u3002',
+         '#E94560', ['\U0001F4DA', '\u270F\uFE0F', '\U0001F4A1', '\U0001F4D6', '\U0001F4D0'], '\U0001F4D5'),
+        ('2008\u20142012', '\u6572\u5f00\u884c\u4e1a\u5927\u95e8',
+         '\u51ed\u81ea\u5b66\u79ef\u7d2f\u7684\u4ee3\u7801\u80fd\u529b\uff0c\u6b63\u5f0f\u8fdb\u5165\u8f6f\u4ef6\u5f00\u53d1\u884c\u4e1a\uff0c\u5f00\u59cb\u4ee5\u5199\u4ee3\u7801\u4e3a\u4e1a\u3002',
+         '#00D2D3', ['\U0001F4BC', '\U0001F3E2', '\U0001F5A5\uFE0F', '\U0001F454', '\U0001F511'], '\U0001F6AA'),
+        ('2012\u20142016', '\u4e00\u7ebf\u957f\u671f\u4e3b\u4e49',
+         '\u957f\u671f\u5728\u4e1a\u52a1\u4e00\u7ebf\u5199\u4ee3\u7801\uff1a\u4ece\u5355\u4f53\u5230\u5206\u5e03\u5f0f\u3001\u4ece\u5e94\u7528\u5230\u7cfb\u7edf\uff0c\u8e29\u8fc7\u7684\u5751\u90fd\u6c89\u6dc0\u6210\u7ecf\u9a8c\u3002',
+         '#1B9C85', ['\U0001F41B', '\U0001F527', '\u26A1', '\U0001F4DD', '\U0001F3AF'], '\U0001F4BB'),
+        ('2016\u20142020', '\u62e5\u62b1\u6280\u672f\u6f14\u8fdb',
+         '\u6280\u672f\u6808\u968f\u65f6\u4ee3\u5237\u65b0\u2014\u2014Go\u3001Python\u3001\u4e91\u539f\u751f\u3001AI\uff0c\u5b66\u4e60\u4ece\u672a\u505c\u6b65\u3002',
+         '#C77DFF', ['\U0001F431', '\U0001F40D', '\u2601\uFE0F', '\U0001F916', '\u26A1'], '\U0001F680'),
+        ('2020\u20142024', '\u5199\u4f5c\u4e0e\u5206\u4eab',
+         '\u628a\u8e29\u5751\u4e0e\u5b9e\u6218\u5199\u6210\u535a\u5ba2\uff0c\u4e00\u7bc7\u7bc7\u90fd\u662f\u771f\u5b9e\u7684\u4e00\u7ebf\u7b14\u8bb0\u3002',
+         '#FF6B6B', ['\U0001F4DD', '\U0001F4C4', '\U0001F4A1', '\U0001F4CA', '\U0001F517'], '\u270D\uFE0F'),
+        ('2024\u20142026', '\u4f9d\u7136\u70ed\u7231',
+         '\u4e8c\u5341\u4f59\u5e74\u4e00\u7ebf\u5f00\u53d1\uff0c\u4fdd\u6301\u597d\u5947\uff0c\u4fdd\u6301\u70ed\u7231\uff0c\u7ee7\u7eed\u5199\u4ee3\u7801\u3002',
+         '#FFB703', ['\u2764\uFE0F', '\u2728', '\U0001F4BB', '\U0001F525', '\u2B50'], '\u2764\uFE0F'),
+    ]
+    _fslots = [(8, 15, 0.0, 4.0), (24, 72, 0.5, 3.5), (50, 20, 1.0, 4.5),
+               (76, 68, 1.5, 3.8), (92, 28, 2.0, 4.2)]
+    _scene_parts = []
+    for _si, (_yr, _ph, _desc, _ac, _floats, _prop) in enumerate(journey_scenes):
+        _fl = ''.join(
+            f'<span class="cine-fl" style="--fx:{_fx}%;--fy:{_fy}%;--fd:{_fd}s;--fu:{_fu}s">{_fe}</span>'
+            for _fe, (_fx, _fy, _fd, _fu) in zip(_floats, _fslots))
+        _scene_parts.append(
+            f'<div class="cine-scene" data-i="{_si}" style="--ac:{_ac}">'
+            f'<div class="cine-bg cine-bg{_si}"></div>'
+            f'<div class="cine-floats" aria-hidden="true">{_fl}</div>'
+            f'<div class="cine-char" aria-hidden="true"><svg class="cine-dev" viewBox="0 0 200 260" aria-hidden="true"><use href="#cine-dev"/></svg></div>'
+            f'<div class="cine-prop" aria-hidden="true">{_prop}</div>'
+            f'<div class="cine-text">'
+            f'<span class="cine-year">{escape(_yr)}</span>'
+            f'<h3 class="cine-phase">{escape(_ph)}</h3>'
+            f'<p class="cine-desc">{escape(_desc)}</p>'
+            f'</div></div>')
+    _dots = ''.join(
+        f'<span class="cinema-dot" data-i="{_i}"></span>'
+        for _i in range(len(journey_scenes)))
+    timeline_html = (
+        f'{_dev_sprite}'
+        f'<section class="journey-cinema" aria-label="\u7801\u519c\u8fdb\u5316\u53f2\u5ba3\u4f20\u7247">'
+        f'<div class="cinema-head">'
+        f'<span class="cinema-kicker">MY JOURNEY</span>'
+        f'<h2 class="cinema-title">\u4ece 2004 \u5230 2026\uff0c\u4e00\u4e2a\u7406\u5de5\u7537\u7684\u7f16\u7a0b\u4e4b\u8def</h2>'
+        f'<p class="cinema-sub">\u8de8\u4e13\u4e1a\u81ea\u5b66 \u00b7 \u4e00\u7ebf\u5f00\u53d1\u4e8c\u5341\u4f59\u5e74 \u00b7 \u4e0d\u65ad\u5b66\u4e60\uff0c\u4fdd\u6301\u70ed\u7231</p>'
+        f'</div>'
+        f'<div class="cinema-screen" id="cinema-screen">'
+        f'<div class="cinema-bar cinema-bar-top"></div>'
+        f'<div class="cinema-bar cinema-bar-bottom"></div>'
+        f'<div class="cinema-stage">{"".join(_scene_parts)}</div>'
+        f'<div class="cinema-vignette" aria-hidden="true"></div>'
+        f'<div class="cinema-hud">'
+        f'<div class="cinema-progress"><div class="cinema-progress-bar" id="cinema-bar"></div></div>'
+        f'<div class="cinema-dots">{_dots}</div>'
+        f'<span class="cinema-counter" id="cinema-counter">1 / {len(journey_scenes)}</span>'
+        f'</div>'
+        f'</div>'
         f'</section>'
     )
 
@@ -786,14 +951,24 @@ def build_homepage_content(pages):
         f'<h2 class="ai-era-title">AI 时代关键演进</h2>'
         f'<p class="ai-era-sub">ChatGPT → Tool → RAG → MCP → Skill → Agent</p>'
         f'</div>'
-        f'<div class="ai-era-track">{ai_era_html}</div>'
+        f'<div class="ae-anim">'
+        f'<div class="ae-line"></div>'
+        f'<div class="ae-nodes">{ai_era_nodes}</div>'
+        f'</div>'
         f'</section>'
         f'<section class="ai-impact-section" aria-label="AI 时代对软件开发的改变">'
         f'<div class="ai-impact-head">'
         f'<span class="ai-impact-kicker">SHIFT</span>'
         f'<h2 class="ai-impact-title">AI 正在如何改变软件开发</h2>'
         f'</div>'
-        f'<div class="ai-impact-grid">{ai_impact_html}</div>'
+        f'<div class="ai-impact-slider" id="ai-impact-slider">'
+        f'<div class="ai-impact-track">{ai_impact_slides}</div>'
+        f'<button class="ai-impact-nav ai-impact-prev" aria-label="上一张">\u2039</button>'
+        f'<button class="ai-impact-nav ai-impact-next" aria-label="下一张">\u203a</button>'
+        f'<div class="ai-impact-dots">{ai_impact_dots}</div>'
+        f'<div class="ai-impact-progress"><div class="ai-impact-progress-bar" id="ai-impact-bar"></div></div>'
+        f'<span class="ai-impact-counter" id="ai-impact-counter">1 / {len(ai_impact_items)}</span>'
+        f'</div>'
         f'</section>'
         f'<div class="group-list">{grid}</div>'
     )
@@ -979,7 +1154,7 @@ def build_meta_tags(page_data, current_path, title, prefix):
 
     # Determine page description: prefer ai_pitch, then ai_summary takeaway,
     # then title-based fallback
-    ai_pitch = page_data.get('ai_pitch', '')
+    ai_pitch = clean_pitch(page_data.get('ai_pitch', ''))
     if ai_pitch and isinstance(ai_pitch, str):
         desc = ai_pitch
     else:
@@ -997,7 +1172,7 @@ def build_meta_tags(page_data, current_path, title, prefix):
     if len(desc) > 160:
         desc = desc[:157] + '...'
 
-    og_title = title if title and not is_home else f'{SITE_NAME} - {SITE_TAGLINE}'
+    og_title = SITE_NAME
     page_type = 'website' if is_home else 'article'
 
     # Article-specific tags
@@ -1064,7 +1239,7 @@ def build_json_ld(page_data, current_path, title, breadcrumbs_html):
 
     # 2. BlogPosting schema (article pages)
     if not is_home and title:
-        ai_pitch = page_data.get('ai_pitch', '')
+        ai_pitch = clean_pitch(page_data.get('ai_pitch', ''))
         desc = ai_pitch if ai_pitch and isinstance(ai_pitch, str) else title
         group = CONTENT_GROUP_BY_URL.get(current_path, {})
         section = group.get('title', '')
@@ -1210,7 +1385,7 @@ def generate_llms_txt(pages):
         for url in g['pages']:
             page = pages.get(url, {})
             ptitle = page.get('title', '')
-            ai_pitch = page.get('ai_pitch', '')
+            ai_pitch = clean_pitch(page.get('ai_pitch', ''))
             if isinstance(ai_pitch, str) and ai_pitch:
                 desc = ai_pitch[:120]
             else:
@@ -1269,10 +1444,7 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html,
     prefix = rel_prefix(current_path)
 
     # Page title for <title> tag
-    if title and current_path != '/':
-        page_title = f'{title} :: \u8d44\u6df1\u7801\u519c'
-    else:
-        page_title = '\u8d44\u6df1\u7801\u519c :: \u6280\u672f\u535a\u5ba2'
+    page_title = '\u8d44\u6df1\u7801\u519c'
 
     # SEO meta tags and JSON-LD structured data
     meta_tags = build_meta_tags(page_data, current_path, title, prefix)
@@ -1456,6 +1628,11 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html,
     </script>
 '''
 
+    # Only load highlight.js when the page actually contains code blocks
+    highlight_html = ''
+    if '<pre><code' in content:
+        highlight_html = '    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>'
+
     html = f'''<!DOCTYPE html>
 <html lang="zh" data-theme="light">
 <head>
@@ -1464,6 +1641,7 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html,
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="/images/favicon.jpeg" type="image/jpeg">
     <title>{page_title}</title>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
     <link rel="stylesheet" href="/css/style.css">
     {meta_tags}
     {json_ld}
@@ -1514,11 +1692,11 @@ def generate_html(page_data, related_html, breadcrumbs_html, page_nav_html,
 
     <button class="back-to-top" title="\u56de\u5230\u9876\u90e8">\u2191</button>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    {highlight_html}
     {mermaid_html}
     {echart_html}
     <script>window.SITE_BASE = "{prefix}";window.SITE_GROUP = "{site_group}";</script>
-    <script src="/js/main.js"></script>
+    <script src="/js/main.js" defer></script>
 </body>
 </html>'''
 

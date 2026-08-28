@@ -263,45 +263,204 @@
     function initBackToTop() {
         var btn = document.querySelector('.back-to-top');
         if (!btn) return;
-        window.addEventListener('scroll', function () {
+        var ticking = false;
+        function update() {
             if (window.scrollY > 400) {
                 btn.style.display = 'flex';
             } else {
                 btn.style.display = 'none';
             }
-        });
+            ticking = false;
+        }
+        window.addEventListener('scroll', function () {
+            if (!ticking) {
+                window.requestAnimationFrame(update);
+                ticking = true;
+            }
+        }, { passive: true });
         btn.addEventListener('click', function () {
             window.scrollTo({ top: 0, behavior: 'smooth' });
         });
+        update();
     }
 
-    // === Homepage journey timeline: scroll-in reveal ===
+    // === Homepage cinema: 码农进化史循环动画 ===
     function initTimeline() {
-        var section = document.querySelector('.journey-section');
-        if (!section) return;
+        var screen = document.getElementById('cinema-screen');
+        if (!screen) return;
+        var scenes = screen.querySelectorAll('.cine-scene');
+        var bar = document.getElementById('cinema-bar');
+        var counter = document.getElementById('cinema-counter');
+        var dots = screen.querySelectorAll('.cinema-dot');
+        if (!scenes.length) return;
 
-        // Gate the hidden state behind JS so no-JS visitors see content
-        section.classList.add('js-anim');
+        var total = scenes.length;
+        var SCENE_MS = 5000;   // each scene duration
+        var current = 0;
+        var started = false;
+        var sceneTimer = null;
 
-        var reveal = function () {
-            section.classList.add('in-view');
-        };
-
-        if (!('IntersectionObserver' in window)) {
-            reveal();
-            return;
+        function setScene(idx) {
+            scenes.forEach(function (s, i) {
+                s.classList.toggle('active', i === idx);
+            });
+            dots.forEach(function (d, i) {
+                d.classList.toggle('active', i === idx);
+            });
+            if (counter) counter.textContent = (idx + 1) + ' / ' + total;
+            current = idx;
         }
 
+        function runProgress() {
+            if (!bar) return;
+            // CSS transition handles the animation — no JS timer needed
+            bar.style.transition = 'none';
+            bar.style.width = '0%';
+            void bar.offsetWidth;  // force reflow to apply reset
+            bar.style.transition = '';  // restore CSS-defined 5s linear
+            bar.style.width = '100%';
+        }
+
+        function advance() {
+            var next = (current + 1) % total;
+            setScene(next);
+            runProgress();
+        }
+
+        function scheduleNext() {
+            if (sceneTimer) clearTimeout(sceneTimer);
+            sceneTimer = setTimeout(function () {
+                advance();
+                scheduleNext();
+            }, SCENE_MS);
+        }
+
+        function start() {
+            if (started) return;
+            started = true;
+            setScene(0);
+            runProgress();
+            scheduleNext();
+        }
+
+        // Allow dot click to jump scenes
+        dots.forEach(function (dot) {
+            dot.addEventListener('click', function () {
+                var idx = parseInt(dot.getAttribute('data-i'), 10);
+                if (isNaN(idx)) return;
+                setScene(idx);
+                runProgress();
+                scheduleNext();
+            });
+        });
+
+        // Start when scrolled into view, pause when scrolled out
+        if (!('IntersectionObserver' in window)) {
+            start();
+            return;
+        }
         var observer = new IntersectionObserver(function (entries) {
             entries.forEach(function (entry) {
-                // Start the reveal once a meaningful chunk is visible
-                if (entry.isIntersecting && entry.intersectionRatio >= 0.08) {
-                    reveal();
-                    observer.disconnect();
+                if (entry.isIntersecting && entry.intersectionRatio >= 0.15) {
+                    if (!started) {
+                        start();
+                    } else {
+                        // Resume: re-activate current scene and restart timers
+                        setScene(current);
+                        runProgress();
+                        scheduleNext();
+                    }
+                } else if (!entry.isIntersecting && started) {
+                    // Pause: clear timer and deactivate scenes to stop CSS animations
+                    if (sceneTimer) { clearTimeout(sceneTimer); sceneTimer = null; }
+                    if (bar) { bar.style.transition = 'none'; bar.style.width = '0%'; }
+                    scenes.forEach(function (s) { s.classList.remove('active'); });
                 }
             });
-        }, { threshold: [0.08, 0.3, 0.6], rootMargin: '0px 0px -60px 0px' });
-        observer.observe(section);
+        }, { threshold: [0, 0.15, 0.3], rootMargin: '0px 0px -40px 0px' });
+        observer.observe(screen);
+    }
+
+    // === AI ERA 循环动画 ===
+    function initAiEra() {
+        var anim = document.querySelector('.ae-anim');
+        if (!anim) return;
+        var nodes = anim.querySelectorAll('.ae-node');
+        var line = anim.querySelector('.ae-line');
+        if (!nodes.length || !line) return;
+
+        var n = nodes.length;
+        var stepMs = 1500;     // 每个节点间隔
+        var startMs = 400;     // 首节点延迟
+        var holdMs = 2000;     // 最后节点后停留
+        var fadeMs = 600;      // 淡出时长
+        var pauseMs = 1500;    // 淡出后空白暂停
+        var cycleMs = startMs + (n - 1) * stepMs + holdMs + fadeMs + pauseMs;
+
+        var started = false;
+        var timers = [];
+
+        function clearTimers() {
+            timers.forEach(function (t) { clearTimeout(t); });
+            timers = [];
+        }
+
+        function cycle() {
+            clearTimers();
+
+            // 重置
+            nodes.forEach(function (el) {
+                el.classList.remove('ae-on', 'ae-off');
+            });
+            line.classList.remove('ae-on', 'ae-off');
+
+            // 画线
+            timers.push(setTimeout(function () {
+                line.classList.add('ae-on');
+            }, 100));
+
+            // 逐个弹出节点
+            nodes.forEach(function (node, i) {
+                timers.push(setTimeout(function () {
+                    node.classList.add('ae-on');
+                }, startMs + i * stepMs));
+            });
+
+            // 全部淡出
+            var fadeStart = startMs + (n - 1) * stepMs + holdMs;
+            timers.push(setTimeout(function () {
+                line.classList.add('ae-off');
+                nodes.forEach(function (el) {
+                    el.classList.remove('ae-on');
+                    el.classList.add('ae-off');
+                });
+            }, fadeStart));
+        }
+
+        // 进入视口后启动，离开视口时暂停
+        var cycleTimer = null;
+        function scheduleCycle() {
+            cycleTimer = setTimeout(function () {
+                cycle();
+                scheduleCycle();
+            }, cycleMs);
+        }
+        var observer = new IntersectionObserver(function (entries) {
+            entries.forEach(function (entry) {
+                if (entry.isIntersecting) {
+                    if (!started) {
+                        started = true;
+                    }
+                    if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; }
+                    cycle();
+                    scheduleCycle();
+                } else if (started) {
+                    if (cycleTimer) { clearTimeout(cycleTimer); cycleTimer = null; }
+                    clearTimers();
+                }
+            });
+        }, { threshold: 0.2 });
+        observer.observe(anim);
     }
 
     // === Reading Progress Bar ===
@@ -521,6 +680,119 @@
         });
     }
 
+    // === AI Impact Slider (PPT-style carousel) ===
+    function initAiImpact() {
+        var slider = document.getElementById('ai-impact-slider');
+        if (!slider) return;
+        var track = slider.querySelector('.ai-impact-track');
+        var slides = slider.querySelectorAll('.ai-impact-slide');
+        var dots = slider.querySelectorAll('.ai-impact-dot');
+        var prevBtn = slider.querySelector('.ai-impact-prev');
+        var nextBtn = slider.querySelector('.ai-impact-next');
+        var bar = document.getElementById('ai-impact-bar');
+        var counter = document.getElementById('ai-impact-counter');
+        if (!slides.length || !track) return;
+
+        var total = slides.length;
+        var SLIDE_MS = 5000;
+        var current = 0;
+        var started = false;
+        var slideTimer = null;
+
+        function go(idx) {
+            current = (idx + total) % total;
+            track.style.transform = 'translateX(-' + (current * 100) + '%)';
+            dots.forEach(function (d, i) { d.classList.toggle('active', i === current); });
+            if (counter) counter.textContent = (current + 1) + ' / ' + total;
+            // Reset + restart progress bar via CSS transition
+            if (bar) {
+                bar.style.transition = 'none';
+                bar.style.width = '0%';
+                void bar.offsetWidth;
+                bar.style.transition = '';
+                bar.style.width = '100%';
+            }
+        }
+
+        function next() { go(current + 1); }
+        function prev() { go(current - 1); }
+
+        function scheduleAuto() {
+            if (slideTimer) clearTimeout(slideTimer);
+            slideTimer = setTimeout(function () {
+                next();
+                scheduleAuto();
+            }, SLIDE_MS);
+        }
+
+        function start() {
+            if (started) return;
+            started = true;
+            go(0);
+            scheduleAuto();
+        }
+
+        function pause() {
+            if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
+            if (bar) { bar.style.transition = 'none'; bar.style.width = '0%'; }
+        }
+
+        nextBtn.addEventListener('click', function () { next(); scheduleAuto(); });
+        prevBtn.addEventListener('click', function () { prev(); scheduleAuto(); });
+        dots.forEach(function (dot) {
+            dot.addEventListener('click', function () {
+                go(parseInt(dot.getAttribute('data-i'), 10) || 0);
+                scheduleAuto();
+            });
+        });
+
+        // Start when scrolled into view, pause when scrolled out
+        if (!('IntersectionObserver' in window)) {
+            start();
+            return;
+        }
+        var observer = new IntersectionObserver(function (entries) {
+            entries.forEach(function (entry) {
+                if (entry.isIntersecting && entry.intersectionRatio >= 0.2) {
+                    if (!started) {
+                        start();
+                    } else {
+                        go(current);
+                        scheduleAuto();
+                    }
+                } else if (!entry.isIntersecting && started) {
+                    pause();
+                }
+            });
+        }, { threshold: [0, 0.2, 0.4], rootMargin: '0px 0px -40px 0px' });
+        observer.observe(slider);
+
+        // Hover pause/resume
+        slider.addEventListener('mouseenter', function () {
+            if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
+            if (bar) { bar.style.transition = 'none'; }
+        });
+        slider.addEventListener('mouseleave', function () {
+            if (started) { go(current); scheduleAuto(); }
+        });
+
+        // Touch swipe support
+        var touchStartX = 0;
+        var touchStartY = 0;
+        slider.addEventListener('touchstart', function (e) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+        }, { passive: true });
+        slider.addEventListener('touchend', function (e) {
+            var dx = e.changedTouches[0].clientX - touchStartX;
+            var dy = e.changedTouches[0].clientY - touchStartY;
+            if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+                if (dx > 0) prev(); else next();
+                scheduleAuto();
+            }
+        }, { passive: true });
+    }
+
     // === Init all ===
     function init() {
         initTheme();
@@ -530,12 +802,14 @@
         initSearch();
         initBackToTop();
         initTimeline();
+        initAiEra();
         initReadingProgress();
         initScrollReveal();
         initAutoTOC();
         initHeadingAnchors();
         initSectionNumbers();
         initBentoExpand();
+        initAiImpact();
         document.addEventListener('mermaid:rendered', initMermaidTools);
     }
 
