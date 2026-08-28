@@ -315,10 +315,10 @@
             if (!bar) return;
             // CSS transition handles the animation — no JS timer needed
             bar.style.transition = 'none';
-            bar.style.width = '0%';
+            bar.style.transform = 'scaleX(0)';
             void bar.offsetWidth;  // force reflow to apply reset
             bar.style.transition = '';  // restore CSS-defined 5s linear
-            bar.style.width = '100%';
+            bar.style.transform = 'scaleX(1)';
         }
 
         function advance() {
@@ -373,7 +373,7 @@
                 } else if (!entry.isIntersecting && started) {
                     // Pause: clear timer and deactivate scenes to stop CSS animations
                     if (sceneTimer) { clearTimeout(sceneTimer); sceneTimer = null; }
-                    if (bar) { bar.style.transition = 'none'; bar.style.width = '0%'; }
+                    if (bar) { bar.style.transition = 'none'; bar.style.transform = 'scaleX(0)'; }
                     scenes.forEach(function (s) { s.classList.remove('active'); });
                 }
             });
@@ -471,7 +471,7 @@
         function update() {
             var h = document.documentElement;
             var scrollPercent = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
-            bar.style.width = Math.min(100, Math.max(0, scrollPercent)) + '%';
+            bar.style.transform = 'scaleX(' + (Math.min(100, Math.max(0, scrollPercent)) / 100) + ')';
             ticking = false;
         }
         window.addEventListener('scroll', function () {
@@ -680,6 +680,144 @@
         });
     }
 
+    // === Terminal Command Typing Animation ===
+    function initArchCmd() {
+        var cmds = document.querySelectorAll('.arch-cmd');
+        if (!cmds.length) return;
+
+        var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        var TYPE_SPEED = 32;
+        var HOLD_MS = 2200;
+        var FADE_MS = 250;
+
+        cmds.forEach(function (cmd) {
+            var codeEl = cmd.querySelector('.arch-cmd-text');
+            var cursor = cmd.querySelector('.arch-cmd-cursor');
+            var copyBtn = cmd.querySelector('.arch-cmd-copy');
+            var countEl = cmd.querySelector('.arch-cmd-count');
+            if (!codeEl) return;
+
+            var raw = cmd.getAttribute('data-cmds');
+            var commands = [];
+            try { commands = JSON.parse(raw); } catch (e) {}
+            if (!commands || !commands.length) return;
+            var total = commands.length;
+            var idx = 0;
+            var started = false;
+            var timer = null;
+
+            function setCursorState(state) {
+                if (!cursor) return;
+                cursor.classList.remove('running', 'typing', 'done', 'holding');
+                if (state) cursor.classList.add(state);
+            }
+
+            function updateCount() {
+                if (countEl) countEl.textContent = (idx + 1) + '/' + total;
+            }
+
+            function showAll() {
+                codeEl.textContent = commands[idx];
+                setCursorState('done');
+                if (copyBtn) copyBtn.classList.add('show');
+                updateCount();
+            }
+
+            function typeCommand() {
+                var text = commands[idx];
+                updateCount();
+                if (reduced) {
+                    codeEl.textContent = text;
+                    setCursorState('holding');
+                    if (copyBtn) copyBtn.classList.add('show');
+                    timer = setTimeout(nextCommand, HOLD_MS);
+                    return;
+                }
+                setCursorState('running');
+                codeEl.textContent = '';
+                var i = 0;
+                function typeNext() {
+                    if (i < text.length) {
+                        codeEl.textContent += text[i];
+                        i++;
+                        timer = setTimeout(typeNext, TYPE_SPEED);
+                    } else {
+                        setCursorState('holding');
+                        if (copyBtn) copyBtn.classList.add('show');
+                        timer = setTimeout(nextCommand, HOLD_MS);
+                    }
+                }
+                typeNext();
+            }
+
+            function nextCommand() {
+                idx = (idx + 1) % total;
+                if (reduced) {
+                    typeCommand();
+                    return;
+                }
+                codeEl.classList.add('fading');
+                timer = setTimeout(function () {
+                    codeEl.textContent = '';
+                    codeEl.classList.remove('fading');
+                    typeCommand();
+                }, FADE_MS);
+            }
+
+            function start() {
+                if (started) return;
+                started = true;
+                typeCommand();
+            }
+
+            function pause() {
+                if (timer) { clearTimeout(timer); timer = null; }
+            }
+
+            if (copyBtn) {
+                copyBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    copyString(commands[idx], copyBtn);
+                });
+            }
+
+            if (!('IntersectionObserver' in window)) {
+                showAll();
+                return;
+            }
+            var observer = new IntersectionObserver(function (entries) {
+                entries.forEach(function (entry) {
+                    if (entry.isIntersecting) {
+                        start();
+                    } else {
+                        pause();
+                    }
+                });
+            }, { threshold: 0.3 });
+            observer.observe(cmd);
+        });
+    }
+
+    // === Card click navigation ===
+    function initCardClick() {
+        var cards = document.querySelectorAll('.arch-tech-card[data-href]');
+        cards.forEach(function (card) {
+            card.addEventListener('click', function (e) {
+                if (e.target.closest('.arch-cmd-copy')) return;
+                if (e.target.closest('a')) return;
+                var href = card.getAttribute('data-href');
+                if (href) window.location.href = href;
+            });
+            card.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    var href = card.getAttribute('data-href');
+                    if (href) window.location.href = href;
+                }
+            });
+        });
+    }
+
     // === AI Impact Slider (PPT-style carousel) ===
     function initAiImpact() {
         var slider = document.getElementById('ai-impact-slider');
@@ -698,19 +836,24 @@
         var current = 0;
         var started = false;
         var slideTimer = null;
+        var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
         function go(idx) {
             current = (idx + total) % total;
             track.style.transform = 'translateX(-' + (current * 100) + '%)';
             dots.forEach(function (d, i) { d.classList.toggle('active', i === current); });
             if (counter) counter.textContent = (current + 1) + ' / ' + total;
-            // Reset + restart progress bar via CSS transition
             if (bar) {
                 bar.style.transition = 'none';
-                bar.style.width = '0%';
+                bar.style.transform = 'scaleX(0)';
                 void bar.offsetWidth;
-                bar.style.transition = '';
-                bar.style.width = '100%';
+                if (reduced) {
+                    bar.style.transition = 'none';
+                    bar.style.transform = 'scaleX(1)';
+                } else {
+                    bar.style.transition = '';
+                    bar.style.transform = 'scaleX(1)';
+                }
             }
         }
 
@@ -734,11 +877,12 @@
 
         function pause() {
             if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
-            if (bar) { bar.style.transition = 'none'; bar.style.width = '0%'; }
+            if (bar) { bar.style.transition = 'none'; bar.style.transform = 'scaleX(0)'; }
         }
 
-        nextBtn.addEventListener('click', function () { next(); scheduleAuto(); });
-        prevBtn.addEventListener('click', function () { prev(); scheduleAuto(); });
+        // Null-safe event listeners
+        if (nextBtn) nextBtn.addEventListener('click', function () { next(); scheduleAuto(); });
+        if (prevBtn) prevBtn.addEventListener('click', function () { prev(); scheduleAuto(); });
         dots.forEach(function (dot) {
             dot.addEventListener('click', function () {
                 go(parseInt(dot.getAttribute('data-i'), 10) || 0);
@@ -751,9 +895,10 @@
             start();
             return;
         }
+
         var observer = new IntersectionObserver(function (entries) {
             entries.forEach(function (entry) {
-                if (entry.isIntersecting && entry.intersectionRatio >= 0.2) {
+                if (entry.isIntersecting && entry.intersectionRatio > 0.05) {
                     if (!started) {
                         start();
                     } else {
@@ -764,8 +909,19 @@
                     pause();
                 }
             });
-        }, { threshold: [0, 0.2, 0.4], rootMargin: '0px 0px -40px 0px' });
+        }, { threshold: [0, 0.05, 0.2, 0.5], rootMargin: '0px 0px -30px 0px' });
         observer.observe(slider);
+
+        // Fallback: start after 1.5s if observer hasn't fired yet
+        // (covers edge cases where slider is in a weird viewport position)
+        setTimeout(function () {
+            if (!started) {
+                var rect = slider.getBoundingClientRect();
+                if (rect.top < window.innerHeight && rect.bottom > 0) {
+                    start();
+                }
+            }
+        }, 1500);
 
         // Hover pause/resume
         slider.addEventListener('mouseenter', function () {
@@ -809,6 +965,8 @@
         initHeadingAnchors();
         initSectionNumbers();
         initBentoExpand();
+        initCardClick();
+        initArchCmd();
         initAiImpact();
         document.addEventListener('mermaid:rendered', initMermaidTools);
     }

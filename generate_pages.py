@@ -158,82 +158,83 @@ def clean_pitch(text):
 
 
 # ============================================================
-# Per-technology icon + representative command for homepage cards
+# Per-technology icon + representative commands for homepage cards.
+# Each entry: (emoji, [command1, command2, ...])  2-4 commands per tech.
 # ============================================================
 TECH_META = {
     # Go
-    '/golang/':              ('🐹', 'go build -o app && go test ./...'),
-    '/golang/stringer/':     ('🔤', 'go generate ./...'),
-    '/golang/echo/':         ('🌐', 'e.Start(":8080")'),
-    '/golang/context/':       ('⏱️', 'ctx, cancel := context.WithTimeout()'),
-    '/golang/regexp/':       ('🔍', 'regexp.MustCompile(`pat`).FindAll()'),
-    '/golang/sort/':         ('📊', 'slices.Sort(s)'),
-    '/golang/freetype/':     ('🖋️', 'freetype.ParseFont(b)'),
-    '/golang/iris/':         ('🌈', 'app.Listen(":8080")'),
-    '/golang/shell/':        ('💻', 'exec.Command("sh", "-c", cmd)'),
-    '/golang/io/':           ('📥', 'io.Copy(dst, src)'),
-    '/golang/code/':         ('📝', 'go vet ./... && go fmt'),
-    '/golang/groupby/':      ('🗂️', 'slices.GroupBy(s, keyFn)'),
-    '/golang/log/':          ('📋', 'slog.Info("msg", "k", v)'),
-    '/golang/generic/':      ('🔧', 'func F[T any](x T) T'),
-    '/golang/gin/':          ('🍸', 'r := gin.Default()'),
-    '/golang/package/':      ('📦', 'go get -u module@version'),
-    '/golang/go-git/':       ('🌿', 'git.Clone(ctx, &opts)'),
-    '/golang/generics-update/': ('⬆️', 'func F[T ~int | ~float64](x T)'),
+    '/golang/':              ('🐹', ['go build -o app', 'go test ./...', 'go vet ./...']),
+    '/golang/stringer/':     ('🔤', ['go generate ./...', 'stringer -type=Pill']),
+    '/golang/echo/':        ('🌐', ['e.Start(":8080")', 'e.GET("/users/:id")', 'e.POST("/api", h)']),
+    '/golang/context/':      ('⏱', ['ctx, cancel := context.WithTimeout()', 'defer cancel()', 'ctx.Done()']),
+    '/golang/regexp/':       ('🔍', ['regexp.MustCompile("pat")', '.FindAllString(s, -1)', '.ReplaceAll(s, repl)']),
+    '/golang/sort/':         ('📊', ['slices.Sort(s)', 'slices.Reverse(s)', 'slices.Contains(s, v)']),
+    '/golang/freetype/':     ('🖋', ['freetype.ParseFont(b)', 'c.SetDst(img)', 'c.DrawString("text")']),
+    '/golang/iris/':         ('🌈', ['app.Listen(":8080")', 'app.Get("/", h)', 'app.Post("/api", h)']),
+    '/golang/shell/':        ('💻', ['exec.Command("sh", "-c", cmd)', 'cmd.CombinedOutput()', 'cmd.Run()']),
+    '/golang/io/':           ('📥', ['io.Copy(dst, src)', 'io.ReadAll(r)', 'bufio.NewScanner(r)']),
+    '/golang/code/':         ('📝', ['go vet ./...', 'go fmt ./...', 'golangci-lint run']),
+    '/golang/groupby/':      ('🗂', ['slices.GroupBy(s, keyFn)', 'slices.Chunk(s, n)', 'slices.Compact(s)']),
+    '/golang/log/':          ('📋', ['slog.Info("msg", "k", v)', 'slog.With("mod", "api")', 'slog.NewJSONHandler(w)']),
+    '/golang/generic/':      ('🔧', ['func F[T any](x T)', 'type Set[T comparable]', 'type Stack[T any]']),
+    '/golang/gin/':          ('🍸', ['r := gin.Default()', 'r.GET("/ping", h)', 'r.Run(":8080")']),
+    '/golang/package/':      ('📦', ['go get -u module@version', 'go mod tidy', 'go mod vendor']),
+    '/golang/go-git/':       ('🌿', ['git.Clone(ctx, &opts)', 'repo.Commit("msg")', 'wt.Pull(&opts)']),
+    '/golang/generics-update/': ('⬆', ['func F[T ~int|~float64](x T)', 'type Numeric interface', '~int | ~float64']),
     # Database
-    '/mysql/':               ('🐬', 'mysql -u root -p < schema.sql'),
-    '/redis/':               ('🔴', 'redis-cli SET k v && GET k'),
-    '/memcached/':           ('⚡', 'echo "set k 0 0 5" | nc :11211'),
-    '/elastic/':             ('🔎', 'curl :9200/_search?q=hello'),
+    '/mysql/':               ('🐬', ['mysql -u root -p', 'SHOW DATABASES;', 'EXPLAIN SELECT * FROM t;']),
+    '/redis/':               ('🔴', ['redis-cli SET k v', 'redis-cli GET k', 'redis-cli LPUSH list v']),
+    '/memcached/':           ('⚡', ['echo "set k 0 0 5" | nc :11211', 'echo "get k" | nc :11211']),
+    '/elastic/':             ('🔎', ['curl :9200/_search', 'PUT /idx/_doc/1', 'GET /_cat/indices']),
     # AI
-    '/ai/':                  ('🧠', 'AutoModel.from_pretrained()'),
-    '/ai/llm/':              ('💬', 'model.generate(tokenizer(p))'),
-    '/ai/rag/':              ('📚', 'llm.gen(retriever.search(q))'),
-    '/ai/finetuning/':       ('🔧', 'Trainer(model).train(data)'),
-    '/other/machinelearn/':  ('📈', 'model.fit(X_train, y_train)'),
+    '/ai/':                  ('🧠', ['AutoModel.from_pretrained()', 'model.generate()', 'tokenizer.encode()']),
+    '/ai/llm/':              ('💬', ['model.generate(tokens)', 'tokenizer.decode(ids)', 'model.forward(input)']),
+    '/ai/rag/':              ('📚', ['retriever.search(query)', 'llm.gen(ctx + q)', 'embed.embed_text(doc)']),
+    '/ai/finetuning/':       ('🔧', ['Trainer(model).train()', 'model.eval()', 'optimizer.step()']),
+    '/other/machinelearn/':  ('📈', ['model.fit(X, y)', 'model.predict(X)', 'model.score(X, y)']),
     # Server & Cloud
-    '/nginx/':               ('🟢', 'nginx -t && nginx -s reload'),
-    '/nginx/install/':       ('🔨', './configure --with-http_v3 && make'),
-    '/nginx/use/':           ('⚙️', 'location / { proxy_pass backend; }'),
-    '/nginx/http/':          ('🔒', 'add_header Strict-Transport-Security'),
-    '/nginx/rtmp/':          ('📡', 'rtmp { server { live on; } }'),
-    '/grpc/':                ('🔗', 'grpc.Serve(lis, srv)'),
-    '/grpc/golang/':         ('📋', 'protoc --go_out=. hello.proto'),
-    '/other/rpc/':           ('📡', 'rpc.Call("Svc.Method", args)'),
-    '/other/docker/':        ('🐳', 'docker build -t app . && docker run -p 80:80 app'),
-    '/other/harbor/':        ('⚓', 'docker push harbor.io/app:tag'),
-    '/other/aliyun/':        ('☁️', 'aliyun configure && aliyun cli'),
-    '/other/tencent/':       ('☁️', 'tcloud configure && tcloud cli'),
-    '/other/self-hosted/':   ('🏠', 'git init --bare repo.git'),
-    '/other/brew/':          ('🍺', 'brew install package'),
+    '/nginx/':               ('🟢', ['nginx -t', 'nginx -s reload', 'nginx -s stop']),
+    '/nginx/install/':       ('🔨', ['./configure --with-http_v3', 'make && make install', 'nginx -V']),
+    '/nginx/use/':           ('⚙', ['location / { proxy_pass backend; }', 'upstream backend { }', 'server_name api.com;']),
+    '/nginx/http/':          ('🔒', ['add_header Strict-Transport-Security', 'ssl_certificate /path/cert.pem;', 'return 301 https://$host;']),
+    '/nginx/rtmp/':          ('📡', ['rtmp { server { live on; } }', 'application live { }', 'record all;']),
+    '/grpc/':                ('🔗', ['grpc.Serve(lis, srv)', 'grpc.Dial("addr")', 'pb.NewGreeterClient()']),
+    '/grpc/golang/':         ('📋', ['protoc --go_out=. hello.proto', 'buf generate', 'go run main.go']),
+    '/other/rpc/':           ('📡', ['rpc.Call("Method", args)', 'rpc.RegisterName()', 'jsonrpc.Encode()']),
+    '/other/docker/':        ('🐳', ['docker build -t app .', 'docker run -p 80:80 app', 'docker ps']),
+    '/other/harbor/':        ('⚓', ['docker tag app harbor/app:v1', 'docker push harbor/app:v1', 'docker pull harbor/app:v1']),
+    '/other/aliyun/':        ('☁', ['aliyun configure', 'aliyun oss cp file oss://bucket/', 'aliyun ecs DescribeInstances']),
+    '/other/tencent/':       ('☁', ['tcloud configure', 'tccli cvm DescribeInstances', 'coscli cp file cos://bucket/']),
+    '/other/self-hosted/':   ('🏠', ['git init --bare repo.git', 'git remote add origin', 'git push -u origin main']),
+    '/other/brew/':          ('🍺', ['brew install package', 'brew services start nginx', 'brew upgrade']),
     # Tools
-    '/git/':                 ('🌳', 'git add . && git commit -m "msg"'),
-    '/other/github/':        ('🐙', 'gh pr create --title "feat"'),
-    '/other/gitlab/':        ('🦊', 'gitlab-ctl reconfigure'),
-    '/other/svn/':           ('📋', 'svn checkout URL && svn commit -m'),
-    '/other/opensource/':    ('🌍', 'fork → clone → branch → PR'),
-    '/other/vim/':           ('✏️', 'vim file.py → :wq'),
-    '/other/hugo/':          ('🏗️', 'hugo new site blog && hugo server'),
-    '/other/mermaid/':       ('📐', 'mermaid render diagram.mmd'),
-    '/other/markdown/':      ('📝', 'markdown file.md -o out.html'),
-    '/other/makefile/':      ('🔨', 'make build && make test'),
-    '/other/search/':        ('🔍', 'grep -rn "pattern" .'),
-    '/other/geocode/':       ('📍', 'geocode("address") → lat,lng'),
-    '/other/tesseract/':     ('👁️', 'tesseract image.png output.txt'),
+    '/git/':                 ('🌳', ['git add .', 'git commit -m "msg"', 'git push origin main']),
+    '/other/github/':        ('🐙', ['gh pr create --title "feat"', 'gh issue list', 'gh repo clone owner/repo']),
+    '/other/gitlab/':        ('🦊', ['gitlab-ctl reconfigure', 'gitlab-ctl status', 'gitlab-ctl restart']),
+    '/other/svn/':           ('📋', ['svn checkout URL', 'svn add file', 'svn commit -m "msg"']),
+    '/other/opensource/':    ('🌍', ['fork > clone > branch', 'commit > push > PR', 'review > merge > deploy']),
+    '/other/vim/':           ('✏', ['vim file.py', ':%s/old/new/g', ':wq']),
+    '/other/hugo/':          ('🏗', ['hugo new site blog', 'hugo new posts/page.md', 'hugo server -D']),
+    '/other/mermaid/':       ('📐', ['graph TD; A-->B', 'sequenceDiagram', 'flowchart LR']),
+    '/other/markdown/':      ('📝', ['pandoc -f md -t html', 'mdlint --fix .', 'cat file.md | md2html']),
+    '/other/makefile/':      ('🔨', ['make build', 'make test', 'make clean']),
+    '/other/search/':        ('🔍', ['grep -rn "pattern" .', 'find . -name "*.go"', 'rg "pattern" --type py']),
+    '/other/geocode/':       ('📍', ['geocode("address")', 'reverse_geocode(lat, lng)', '-> lat, lng']),
+    '/other/tesseract/':     ('👁', ['tesseract image.png output', 'tesseract --lang chi_sim', 'tesseract --psm 3']),
     # Misc
-    '/python/':              ('🐍', 'python -m venv venv && pip install'),
-    '/other/rust/':          ('🦀', 'cargo build --release'),
-    '/other/shell/':         ('🐚', 'bash script.sh && echo $?'),
-    '/other/wasm/':          ('🟨', 'wasm-pack build --target web'),
-    '/flutter/':             ('💙', 'flutter create app && flutter run'),
-    '/mac/':                 ('🍎', 'brew install --cask app'),
-    '/other/windows/':       ('🪟', 'winget install Package'),
-    '/other/wireshark/':     ('🦈', 'tshark -i eth0 -f "port 80"'),
-    '/other/web/':           ('🌐', 'curl -sL https://api.io | jq .'),
-    '/other/firefox/':       ('🦎', 'firefox --headless --screenshot'),
-    '/other/unity/':         ('🎮', 'unity build --platform android'),
-    '/other/unity/et/':      ('🎲', 'C# ET 框架: C/S 游戏架构'),
-    '/other/':               ('📦', 'ls ~/tools && which tool'),
+    '/python/':              ('🐍', ['python -m venv venv', 'pip install -r requirements.txt', 'python app.py']),
+    '/other/rust/':          ('🦀', ['cargo build --release', 'cargo test', 'cargo run']),
+    '/other/shell/':         ('🐚', ['bash script.sh', 'echo $?', 'chmod +x script.sh']),
+    '/other/wasm/':          ('🟨', ['wasm-pack build --target web', 'wasm-opt -O3', 'wasm2wat output.wasm']),
+    '/flutter/':             ('💙', ['flutter create app', 'flutter run', 'flutter build apk']),
+    '/mac/':                 ('🍎', ['brew install --cask app', 'brew services start nginx', 'brew upgrade']),
+    '/other/windows/':       ('🪟', ['winget install Package', 'winget upgrade --all', 'winget list']),
+    '/other/wireshark/':     ('🦈', ['tshark -i eth0', 'tshark -f "port 80"', 'tshark -Y "http"']),
+    '/other/web/':           ('🌐', ['curl -sL https://api.io', 'curl -X POST -d "data"', 'jq ".field"']),
+    '/other/firefox/':       ('🦎', ['firefox --headless', 'firefox --screenshot page.png', 'firefox -P dev']),
+    '/other/unity/':         ('🎮', ['unity build --platform android', 'unity run', 'AssetBundle.Build()']),
+    '/other/unity/et/':      ('🎲', ['C# ET Framework', 'C/S Game Server', 'Actor Model']),
+    '/other/':               ('📦', ['ls ~/tools', 'which tool', 'man command']),
 }
 
 
@@ -698,29 +699,46 @@ def build_homepage_content(pages):
 
         items_html = ''.join(
             f'<li class="arch-item">'
+            f'<div class="arch-tech-card" data-href="{page_href(u)}" role="link" tabindex="0">'
             f'<a class="arch-link" href="{page_href(u)}">'
             f'<span class="arch-icon" aria-hidden="true">{TECH_META.get(u, ("\U0001f4c4",""))[0]}</span>'
             f'<span class="arch-title">{escape(title_of(u))}</span>'
             f'<span class="arch-arrow">\u2192</span></a>'
             + (
-                f'<div class="arch-cmd"><span class="arch-cmd-prompt">$</span><code class="arch-cmd-text">{escape(TECH_META[u][1])}</code></div>'
+                f'<div class="arch-cmd" data-cmds=\'{json.dumps(TECH_META[u][1], ensure_ascii=False)}\'>'
+                f'<div class="arch-cmd-bar">'
+                f'<span class="arch-cmd-dot" style="--dc:#ff5f56"></span>'
+                f'<span class="arch-cmd-dot" style="--dc:#ffbd2e"></span>'
+                f'<span class="arch-cmd-dot" style="--dc:#27c93f"></span>'
+                f'<span class="arch-cmd-label">terminal</span>'
+                f'<span class="arch-cmd-count"></span>'
+                f'<button class="arch-cmd-copy" type="button" aria-label="复制命令">复制</button>'
+                f'</div>'
+                f'<div class="arch-cmd-body">'
+                f'<span class="arch-cmd-prompt">$</span>'
+                f'<code class="arch-cmd-text"></code>'
+                f'<span class="arch-cmd-cursor" aria-hidden="true"></span>'
+                f'</div>'
+                f'</div>'
                 if u in TECH_META and TECH_META[u][1]
                 else (f'<p class="arch-pitch">{escape(pitch_of(u))}</p>' if pitch_of(u) else '')
             )
-            + '</li>'
+            + '</div></li>'
             for u in visible)
         if hidden_count > 0:
             items_html += (
-                f'<li class="arch-item arch-more">'
+                f'<li class="arch-item arch-item-more">'
                 f'<a class="arch-more-link" href="#arch-{g["id"]}">'
                 f'<span>\u67e5\u770b\u5168\u90e8</span>'
                 f'<span class="arch-arrow">\u2193</span></a></li>')
             rest_items = ''.join(
                 f'<li class="arch-item arch-hidden">'
+                f'<div class="arch-tech-card" data-href="{page_href(u)}" role="link" tabindex="0">'
                 f'<a class="arch-link" href="{page_href(u)}">'
-                f'<span class="arch-icon" aria-hidden="true">{TECH_META.get(u, ("📄",""))[0]}</span>'
+                f'<span class="arch-icon" aria-hidden="true">{TECH_META.get(u, ("\U0001f4c4",""))[0]}</span>'
                 f'<span class="arch-title">{escape(title_of(u))}</span>'
-                f'<span class="arch-arrow">\u2192</span></a></li>'
+                f'<span class="arch-arrow">\u2192</span></a>'
+                f'</div></li>'
                 for u in page_list[show_count:])
             articles_html = f'<ul class="arch-list">{items_html}</ul><ul class="arch-list arch-hidden-list" hidden>{rest_items}</ul>'
         else:
