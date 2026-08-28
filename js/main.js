@@ -461,6 +461,15 @@
             });
         }, { threshold: 0.2 });
         observer.observe(anim);
+
+        // Fallback: start after 1.5s if observer hasn't fired
+        setTimeout(function () {
+            if (!started) {
+                started = true;
+                cycle();
+                scheduleCycle();
+            }
+        }, 1500);
     }
 
     // === Reading Progress Bar ===
@@ -705,6 +714,8 @@
             var idx = 0;
             var started = false;
             var timer = null;
+            var fallbackTimer = null;
+            var isVisible = false;
 
             function setCursorState(state) {
                 if (!cursor) return;
@@ -767,10 +778,19 @@
             function start() {
                 if (started) return;
                 started = true;
+                isVisible = true;
+                if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+                typeCommand();
+            }
+
+            function resume() {
+                if (!started || isVisible) return;
+                isVisible = true;
                 typeCommand();
             }
 
             function pause() {
+                isVisible = false;
                 if (timer) { clearTimeout(timer); timer = null; }
             }
 
@@ -785,16 +805,27 @@
                 showAll();
                 return;
             }
+
             var observer = new IntersectionObserver(function (entries) {
                 entries.forEach(function (entry) {
                     if (entry.isIntersecting) {
-                        start();
+                        if (started) resume();
+                        else start();
                     } else {
                         pause();
                     }
                 });
-            }, { threshold: 0.3 });
+            }, { threshold: 0.1, rootMargin: '0px 0px 50px 0px' });
             observer.observe(cmd);
+
+            // Fallback: start after 1.5s if IntersectionObserver hasn't fired.
+            // This handles content-visibility:auto containers where the
+            // observer may not report correct intersection for children.
+            fallbackTimer = setTimeout(function () {
+                if (!started) {
+                    start();
+                }
+            }, 1500);
         });
     }
 
@@ -912,14 +943,12 @@
         }, { threshold: [0, 0.05, 0.2, 0.5], rootMargin: '0px 0px -30px 0px' });
         observer.observe(slider);
 
-        // Fallback: start after 1.5s if observer hasn't fired yet
-        // (covers edge cases where slider is in a weird viewport position)
+        // Fallback: start after 1.5s if observer hasn't fired yet.
+        // Unconditional — IntersectionObserver may not fire correctly
+        // for elements that were off-screen on page load.
         setTimeout(function () {
             if (!started) {
-                var rect = slider.getBoundingClientRect();
-                if (rect.top < window.innerHeight && rect.bottom > 0) {
-                    start();
-                }
+                start();
             }
         }, 1500);
 
@@ -950,24 +979,22 @@
     }
 
     // === Init all ===
+    var INIT_FNS = [
+        initTheme, initHeaderNav, initCodeCopy, initHighlight,
+        initSearch, initBackToTop, initTimeline, initAiEra,
+        initReadingProgress, initScrollReveal, initAutoTOC,
+        initHeadingAnchors, initSectionNumbers, initBentoExpand,
+        initCardClick, initArchCmd, initAiImpact
+    ];
+
     function init() {
-        initTheme();
-        initHeaderNav();
-        initCodeCopy();
-        initHighlight();
-        initSearch();
-        initBackToTop();
-        initTimeline();
-        initAiEra();
-        initReadingProgress();
-        initScrollReveal();
-        initAutoTOC();
-        initHeadingAnchors();
-        initSectionNumbers();
-        initBentoExpand();
-        initCardClick();
-        initArchCmd();
-        initAiImpact();
+        for (var i = 0; i < INIT_FNS.length; i++) {
+            try {
+                INIT_FNS[i]();
+            } catch (e) {
+                // Continue even if one module fails
+            }
+        }
         document.addEventListener('mermaid:rendered', initMermaidTools);
     }
 
