@@ -935,6 +935,250 @@ git config --global core.autocrlf true       # Windows</code></pre>
 <h3 id="submodule">子模块</h3>
 <h3 id="branch">分支操作</h3>
 <h3 id="best-practices">最佳实践</h3>
+
+<h3 id="git-internals">Git 底层原理深度解析</h3>
+
+<h4 id="git-object-model">Git 对象模型：Blob、Tree、Commit、Tag</h4>
+<pre><code class="language-text">Git 是一个内容寻址文件系统（Content-Addressable File System）：
+
+  .git/objects/ 目录存储所有对象，按 SHA-1 哈希前 2 位分目录：
+  .git/objects/
+  ├── 01/
+  │   └── 55ebc5...  # 对象内容
+  ├── 0a/
+  │   └── 2c3b4d...
+  └── ...
+
+  四种对象类型：
+
+  1. Blob（二进制大对象）
+     - 存储文件内容，不存储文件名
+     - 内容 = "blob <size>\0" + 文件内容
+     - 哈希 = SHA1(内容)
+     - 相同内容的文件只存一份（内容寻址）
+     - 示例：echo "hello" | git hash-object --stdin
+       → ce013625030ba8dba906f756967f9e9ca394464a
+
+  2. Tree（树对象）
+     - 存储目录结构，指向 Blob 或子 Tree
+     - 每条记录：<mode> <type> <sha1>\t<name>
+     - mode：100644(普通文件)、100755(可执行)、120000(符号链接)、040000(目录)
+     - 示例：
+       100644 blob ce0136...\tREADME.md
+       100644 blob a1b2c3...\tmain.go
+       040000 tree d4e5f6...\tsrc
+
+  3. Commit（提交对象）
+     - 存储提交元信息，指向一个 Tree
+     - 内容：
+       tree <sha1>           # 根目录树
+       parent <sha1>         # 父提交（可多个，合并提交有2个）
+       author <name> <email> <timestamp> <timezone>
+       committer <name> <email> <timestamp> <timezone>
+       
+       <commit message>
+     - 初始提交没有 parent
+     - 合并提交有 2 个 parent
+
+  4. Tag（标签对象）
+     - 存储带注释的标签，指向一个 Commit
+     - 内容：
+       object <sha1>
+       type commit
+       tag v1.0.0
+       tagger <name> <email> <timestamp>
+       
+       <tag message>
+     - 轻量标签（lightweight）只是一个引用，不是对象
+
+  对象关系图：
+  Commit → Tree → Blob（文件内容）
+    ↓ parent
+  Commit → Tree → Blob
+    ↓ parent
+  Commit → Tree → Blob
+
+  关键特性：
+  - 内容寻址：相同内容永远有相同的 SHA-1
+  - 不可变：对象一旦创建就不能修改（修改会产生新哈希）
+  - 完整性：SHA-1 哈希保证数据不被篡改
+  - 去重：相同内容的文件只存一份</code></pre>
+
+<h4 id="git-pack-file">Pack 文件与增量存储</h4>
+<pre><code class="language-text">Git 松散对象（loose object）的问题：
+- 每个对象一个文件，大量小文件影响性能
+- 相同文件的不同版本存储完整内容，浪费空间
+
+解决方案：Pack 文件（Packfile）
+- 将多个对象打包到一个 .pack 文件中
+- 使用增量编码（delta compression）存储相似对象
+- 索引文件 .idx 用于快速查找
+
+  .git/objects/pack/
+  ├── pack-abc123.idx    # 索引文件（快速查找）
+  └── pack-abc123.pack   # 打包文件（对象内容）
+
+  Pack 文件格式：
+  - 头部：签名 "PACK" + 版本号 + 对象数量
+  - 对象序列：每个对象包含
+    - 类型（OBJ_COMMIT/OBJ_TREE/OBJ_BLOB/OBJ_TAG/OBJ_OFS_DELTA/OBJ_REF_DELTA）
+    - 大小（压缩前）
+    - zlib 压缩的内容（或 delta 数据）
+  - 尾部：整个 pack 的 SHA-1 校验和
+
+  增量编码（Delta）：
+  - OBJ_OFS_DELTA：基于偏移量引用（相对当前对象的偏移）
+  - OBJ_REF_DELTA：基于哈希引用（直接引用基础对象的 SHA-1）
+  - Delta 格式：
+    - 基础对象大小
+    - 目标对象大小
+    - 指令序列：
+      - 复制指令（Copy）：从基础对象复制 [offset, size] 范围
+      - 插入指令（Insert）：插入新数据
+  - Git 自动选择最佳的基础对象（相似内容、大小接近）
+
+  触发打包的时机：
+  1. git gc：手动垃圾回收和打包
+  2. git push：推送前自动打包
+  3. 自动：松散对象超过阈值（默认 6700 个）
+  4. git repack：手动重新打包
+
+  查看 pack 内容：
+  $ git verify-pack -v .git/objects/pack/pack-*.idx
+  # 显示每个对象的 SHA-1、类型、大小、偏移量、delta 基础
+
+  性能优化：
+  - 大仓库使用 git gc --aggressive（更彻底的打包，耗时更长）
+  - 二进制文件使用 Git LFS（大文件存储，不纳入 pack）
+  - .gitattributes 配置二进制文件不做 delta（压缩收益低）</code></pre>
+
+<h4 id="git-merge-algorithm">合并算法：3-way merge 与 rebase 原理</h4>
+<pre><code class="language-text">Git 合并（Merge）的核心是 3-way merge（三路合并）：
+
+  为什么需要 3-way merge？
+  - 2-way merge（直接对比两个文件）无法判断谁改了什么
+  - 3-way merge 引入共同祖先（base），可以判断每一方的修改
+  
+  3-way merge 算法：
+  输入：base（共同祖先）、ours（当前分支）、theirs（合并分支）
+  
+  对每个文本块：
+  - base == ours == theirs → 无冲突，取该内容
+  - base != ours, base == theirs → ours 修改，取 ours
+  - base == ours, base != theirs → theirs 修改，取 theirs
+  - base != ours, base != theirs, ours == theirs → 双方相同修改，取该内容
+  - base != ours, base != theirs, ours != theirs → 冲突！需要人工解决
+
+  冲突标记：
+  <<<<<<< HEAD（ours）
+  当前分支的内容
+  =======
+  合并分支的内容
+  >>>>>>> branch-name（theirs）
+
+  查找共同祖先（Merge Base）：
+  - Git 使用 Lowest Common Ancestor（LCA）算法
+  - 在提交图中找到两个分支的最近共同祖先
+  - 可能有多个 LCA（criss-cross merge），此时递归合并
+  
+  递归合并（Recursive Merge，Git 默认策略）：
+  - 当有多个共同祖先时，先合并这些祖先生成一个虚拟 base
+  - 然后用这个虚拟 base 做 3-way merge
+  - 这是 Git 的默认合并策略（-s recursive）
+
+  合并策略（Merge Strategies）：
+  1. recursive（默认）：3-way merge，处理多个祖先
+  2. resolve：简单 3-way merge，只取一个祖先
+  3. octopus：合并超过 2 个分支（git pull 多个远程）
+  4. ours：保留当前分支内容，忽略合并分支（记录合并历史）
+  5. subtree：子树合并，将合并分支当作子目录
+
+  Rebase 原理：
+  - 将当前分支的提交"重新播放"到目标分支之上
+  - 步骤：
+    1. 找到当前分支和目标分支的共同祖先
+    2. 将当前分支从祖先之后的提交保存为补丁（patch）
+    3. 将当前分支指针移动到目标分支最新提交
+    4. 依次应用每个补丁（生成新的提交，新的 SHA-1）
+  - 结果：线性历史，没有合并提交
+  - 注意：rebase 会改变提交历史（SHA-1 变化），不要 rebase 已推送的提交
+
+  Merge vs Rebase 选择：
+  - Merge：保留完整历史，包含合并提交，适合协作分支
+  - Rebase：线性历史，干净，适合个人特性分支
+  - 黄金法则：不要 rebase 已经推送到共享仓库的提交
+  - git pull --rebase：拉取时 rebase，避免无意义的合并提交</code></pre>
+
+<h4 id="git-ref-log">引用、HEAD 与 reflog</h4>
+<pre><code class="language-text">Git 引用（Refs）：
+
+  .git/refs/ 目录存储所有引用：
+  .git/refs/
+  ├── heads/           # 本地分支
+  │   ├── main         # 内容：提交 SHA-1
+  │   └── feature-x
+  ├── tags/            # 标签
+  │   ├── v1.0.0       # 轻量标签：提交 SHA-1
+  │   └── v2.0.0       # 附注标签：标签对象 SHA-1
+  └── remotes/         # 远程跟踪分支
+      └── origin/
+          ├── main
+          └── feature-x
+
+  特殊引用：
+  - HEAD：指向当前分支或提交（.git/HEAD）
+    - 正常状态：ref: refs/heads/main（指向分支）
+    - 分离头指针：直接是提交 SHA-1
+  - ORIG_HEAD：危险操作前的 HEAD 位置（merge、rebase、reset）
+  - FETCH_HEAD：最近一次 git fetch 的结果
+  - MERGE_HEAD：正在合并的分支提交
+
+  reflog（引用日志）：
+  - 记录 HEAD 和分支的所有移动历史
+  - 存储在 .git/logs/ 目录
+  - 格式：<old-sha1> <new-sha1> <author> <timestamp> <action>
+  - 默认保留 90 天（可达引用）或 30 天（不可达引用）
+  
+  示例：
+  $ git reflog
+  a1b2c3d (HEAD -> main) HEAD@{0}: commit: add feature
+  d4e5f6g HEAD@{1}: commit: fix bug
+  h7i8j9k HEAD@{2}: checkout: moving from feature to main
+  
+  reflog 的救命作用：
+  - 误删分支：git reflog 找到提交，git branch <name> <sha1> 恢复
+  - 误 reset --hard：git reflog 找到之前的 HEAD，git reset --hard <sha1>
+  - 误 rebase：git reflog 找到 rebase 前的状态，git reset --hard 恢复
+  - 黄金法则：只要提交过，Git 几乎总能恢复（除非 gc 清理了）
+
+  查看对象内容：
+  $ git cat-file -p <sha1>    # 查看对象内容
+  $ git cat-file -t <sha1>    # 查看对象类型
+  $ git ls-tree <sha1>        # 查看 tree 对象内容
+  $ git show <sha1>           # 查看提交详情
+
+  Git 内部命令（Plumbing）：
+  - git hash-object：计算对象哈希
+  - git cat-file：查看对象
+  - git update-index：更新索引
+  - git write-tree：从索引创建 tree
+  - git commit-tree：创建 commit
+  - git update-ref：更新引用
+  - 日常使用的是 Porcelain（高级命令），底层是 Plumbing</code></pre>
+
+<h4 id="git-pitfalls">Git 常见陷阱与最佳实践</h4>
+<ul>
+<li><strong>陷阱1：提交敏感信息</strong> → 密码/密钥不要提交；已提交用 git filter-repo 清除历史；用 .gitignore + pre-commit hook 预防</li>
+<li><strong>陷阱2：force push 到共享分支</strong> → 不要 git push --force 到 main/master；用 --force-with-lease 更安全；个人分支可以 force push</li>
+<li><strong>陷阱3：大文件提交</strong> → 超过 50MB 的文件用 Git LFS；已提交的大文件用 git filter-repo 清理；.gitignore 排除构建产物</li>
+<li><strong>陷阱4：不写提交信息</strong> → 提交信息要清晰：第一行 50 字符内摘要，空行后详细说明；遵循 Conventional Commits（feat/fix/docs/chore）</li>
+<li><strong>陷阱5：merge 冲突不理解</strong> → 理解 3-way merge；用 git mergetool；冲突后用 git diff --check 检查残留标记；不要盲目接受一方</li>
+<li><strong>陷阱6：rebase 已推送的提交</strong> → 不要 rebase 已推送到共享仓库的提交；rebase 后需要 force push，会影响协作者；个人特性分支可以 rebase</li>
+<li><strong>陷阱7：不理解 detached HEAD</strong> → 分离头指针状态下的提交会丢失（除非创建分支）；看到 "detached HEAD" 警告要注意；git switch -c <branch> 保存提交</li>
+<li><strong>陷阱8：git add . 不加选择</strong> → 用 git add -p 交互式选择要暂存的修改；避免把无关修改或调试代码提交；提交前用 git diff --cached 检查</li>
+</ul>
+
+
 <h4 id="commit">4. commit - 提交</h4>
 <h4 id="restore">1. restore - 恢复文件</h4>
 <h4 id="log">5. log - 查看历史</h4>

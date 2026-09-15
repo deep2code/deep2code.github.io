@@ -160,6 +160,362 @@ gh repo clone owner/repo</code></pre>
 </ul>
 
 <h3 id="github-accelerate">国内访问加速</h3>
+
+<h3 id="github-internals">GitHub 平台架构与开发工作流深度解析</h3>
+
+<h4 id="github-actions">GitHub Actions 架构与 CI/CD 原理</h4>
+<pre><code class="language-yaml"># GitHub Actions 是 GitHub 内置的 CI/CD 平台
+# 工作流文件放在 .github/workflows/ 目录
+
+# 核心概念：
+# 1. Workflow（工作流）：一个 YAML 文件，定义完整的自动化流程
+# 2. Event（事件）：触发工作流的事件（push、pull_request、schedule）
+# 3. Job（任务）：一组步骤，在同一个 Runner 上执行
+# 4. Step（步骤）：单个操作，可以是命令或 Action
+# 5. Action（动作）：可复用的独立单元（市场上有上万个）
+# 6. Runner（运行器）：执行 Job 的虚拟机（ubuntu-latest、macos-latest、windows-latest）
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'  # 每天凌晨2点
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+        os: [ubuntu-latest, macos-latest]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 完整历史
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Lint
+        run: npm run lint
+      
+      - name: Test
+        run: npm test
+        env:
+          CI: true
+      
+      - name: Build
+        run: npm run build
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}
+          path: dist/
+
+  deploy:
+    needs: build  # 依赖 build 任务
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'  # 只在 main 分支
+    
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-ubuntu-latest
+      
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/app
+            git pull
+            npm ci --production
+            pm2 restart app
+
+# 上下文变量（Contexts）：
+# - github.repository：仓库名
+# - github.ref：分支引用（refs/heads/main）
+# - github.sha：提交 SHA
+# - github.event_name：触发事件名
+# - runner.os：运行器操作系统
+# - secrets.*：加密的密钥
+# - matrix.*：矩阵参数
+
+# 密钥管理（Secrets）：
+# - 在仓库 Settings → Secrets and variables → Actions 中设置
+# - 加密存储，不会在日志中显示
+# - 可以在 workflow 中通过 ${{ secrets.NAME }} 引用
+# - 注意：secrets 不会传递给 fork 的 PR（安全考虑）
+
+# 缓存优化：
+# - actions/cache：缓存依赖（node_modules、~/.m2、~/.cargo）
+# - setup-node 的 cache 选项：自动缓存 npm 依赖
+# - 缓存 key 基于 lockfile hash，依赖变更时自动失效
+
+# 自托管 Runner（Self-hosted Runner）：
+# - 在自己的服务器上运行 Job
+# - 适合需要特定硬件/软件/网络的场景
+# - 安全性：不要在公共仓库使用（恶意 PR 可能执行代码）
+# - 标签：runs-on: [self-hosted, linux, x64]</code></pre>
+
+<h4 id="github-api">GitHub API 与自动化集成</h4>
+<pre><code class="language-bash"># GitHub REST API v3：通过 HTTP 接口操作 GitHub
+
+# 认证方式：
+# 1. Personal Access Token (PAT)：个人访问令牌
+#    - Settings → Developer settings → Personal access tokens
+#    - 细粒度令牌（Fine-grained）：精确控制权限和仓库
+#    - 经典令牌（Classic）：较粗粒度权限
+# 2. GitHub App：应用级认证，适合组织/工具
+# 3. OAuth App：用户授权，适合第三方应用
+
+# 常用 API 示例：
+
+# 1. 获取仓库信息
+curl -s https://api.github.com/repos/deep2code/deep2code.github.io \
+  -H "Authorization: token $GITHUB_TOKEN"
+
+# 2. 列出 Issues
+curl -s "https://api.github.com/repos/deep2code/deep2code.github.io/issues?state=open&per_page=10" \
+  -H "Authorization: token $GITHUB_TOKEN"
+
+# 3. 创建 Issue
+curl -s -X POST https://api.github.com/repos/deep2code/deep2code.github.io/issues \
+  -H "Authorization: token $GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Bug: 页面加载慢","body":"## 描述\n首页加载超过3秒","labels":["bug","performance"]}'
+
+# 4. 创建 PR 评论
+curl -s -X POST \
+  https://api.github.com/repos/deep2code/deep2code.github.io/issues/123/comments \
+  -H "Authorization: token $GITHUB_TOKEN" \
+  -d '{"body":"代码看起来不错，建议添加单元测试"}'
+
+# 5. 触发工作流（workflow_dispatch）
+curl -s -X POST \
+  https://api.github.com/repos/deep2code/deep2code.github.io/actions/workflows/deploy.yml/dispatches \
+  -H "Authorization: token $GITHUB_TOKEN" \
+  -d '{"ref":"main","inputs":{"environment":"production"}}'
+
+# 6. 搜索代码
+curl -s "https://api.github.com/search/code?q=TODO+repo:deep2code/deep2code.github.io" \
+  -H "Authorization: token $GITHUB_TOKEN"
+
+# GitHub CLI（gh）：命令行工具，封装了 API
+# 安装：brew install gh
+# 登录：gh auth login
+
+# 常用 gh 命令：
+gh repo view deep2code/deep2code.github.io        # 查看仓库
+gh issue list                                       # 列出 Issues
+gh issue create --title "Bug" --body "描述"        # 创建 Issue
+gh pr list                                          # 列出 PR
+gh pr checkout 123                                  # 检出 PR
+gh pr review --approve                              # 批准 PR
+gh pr merge --squash --delete-branch               # 合并 PR
+gh run list                                         # 列出 Actions 运行
+gh run watch                                        # 实时查看运行
+gh release create v1.0.0 --notes "发布说明"         # 创建 Release
+gh api repos/deep2code/deep2code.github.io         # 直接调用 API
+
+# GraphQL API v4：更灵活的查询，一次请求获取多个资源
+# 优势：按需获取字段，避免过度获取（over-fetching）
+# 工具：https://docs.github.com/en/graphql/overview/explorer
+
+# GraphQL 示例：
+query {
+  repository(owner: "deep2code", name: "deep2code.github.io") {
+    name
+    stargazerCount
+    issues(states: OPEN, first: 5) {
+      nodes {
+        number
+        title
+        author { login }
+      }
+    }
+    pullRequests(states: OPEN, first: 5) {
+      nodes {
+        number
+        title
+        headRefName
+      }
+    }
+  }
+}</code></pre>
+
+<h4 id="github-flow">GitHub Flow 与分支策略</h4>
+<pre><code class="language-text">GitHub Flow（GitHub 推荐的工作流）：
+
+  1. 创建分支（Create a branch）
+     - 从 main 分支创建特性分支
+     - 命名：feature/xxx、fix/xxx、hotfix/xxx
+     - 分支是隔离的，不影响 main
+     
+  2. 提交修改（Add commits）
+     - 在特性分支上提交代码
+     - 每次提交是一个逻辑单元
+     - 提交信息清晰（Conventional Commits）
+     
+  3. 发起 Pull Request（Open a PR）
+     - 将特性分支合并到 main 的请求
+     - PR 包含：标题、描述、修改内容、讨论
+     - 触发 CI 检查（自动测试、代码审查）
+     
+  4. 讨论与审查（Discuss and review）
+     - 团队成员审查代码
+     - 可以在具体代码行上评论
+     - 修改后推送，PR 自动更新
+     - 审查通过后批准（Approve）
+     
+  5. 合并（Merge）
+     - CI 通过 + 审查通过后合并
+     - 合并方式：
+       - Merge commit：保留完整历史（3-way merge）
+       - Squash and merge：压缩为一个提交（干净历史）
+       - Rebase and merge：变基合并（线性历史）
+     - 合并后删除特性分支
+
+  其他分支策略：
+
+  1. Git Flow（Vincent Driessen）
+     - 分支：main（生产）、develop（开发）、feature/*、release/*、hotfix/*
+     - 优点：严谨，适合有计划发布的项目
+     - 缺点：复杂，持续部署项目过于繁琐
+     
+  2. Trunk-Based Development（主干开发）
+     - 所有人直接提交到 main（或短期特性分支）
+     - 配合 Feature Flag（功能开关）控制发布
+     - 优点：快速，适合 CI/CD
+     - 缺点：需要高质量的测试和代码审查
+     
+  3. Forking Workflow（Fork 工作流）
+     - 贡献者 Fork 仓库，在自己的 Fork 上开发
+     - 通过 PR 向上游仓库贡献
+     - 优点：安全，不需要上游写权限
+     - 适用：开源项目
+
+  PR 最佳实践：
+  - 小 PR：单个 PR 不超过 400 行变更（审查效率高）
+  - 清晰标题：用动词开头，如 "Add user authentication"
+  - 详细描述：背景、实现方式、测试方法、截图
+  - 关联 Issue：Closes #123（合并后自动关闭 Issue）
+  - 标签：bug、feature、enhancement、documentation
+  - 审查者：至少 1-2 人审查，关键代码需要核心成员
+  - CI 必须通过：测试、lint、类型检查、构建
+
+  Code Review 检查清单：
+  - [ ] 功能是否正确实现
+  - [ ] 是否有边界条件处理
+  - [ ] 是否有安全漏洞（SQL注入、XSS、密钥泄露）
+  - [ ] 性能是否合理（N+1查询、大循环）
+  - [ ] 是否有单元测试
+  - [ ] 命名是否清晰
+  - [ ] 是否有重复代码
+  - [ ] 注释是否必要且准确</code></pre>
+
+<h4 id="github-security">GitHub 安全机制与最佳实践</h4>
+<pre><code class="language-text">GitHub 安全功能：
+
+  1. Dependabot（依赖安全更新）
+     - 自动检测依赖中的已知漏洞
+     - 数据源：GitHub Advisory Database（CVE、GHSA）
+     - 自动创建 PR 更新依赖
+     - 配置：.github/dependabot.yml
+     - 支持：npm、pip、maven、gradle、cargo、gomod、docker、composer
+     
+  2. Code Scanning（代码扫描）
+     - CodeQL：GitHub 的语义代码分析引擎
+     - 支持语言：JavaScript、Python、Go、Java、C/C++、C#、Ruby
+     - 检测：SQL注入、XSS、路径遍历、硬编码密钥、不安全的加密
+     - 配置：.github/workflows/codeql.yml
+     - 结果在 Security → Code scanning 中查看
+     
+  3. Secret Scanning（密钥扫描）
+     - 自动检测提交中的密钥和令牌
+     - 支持：AWS、Azure、Google Cloud、Slack、Stripe、GitHub Token 等 100+ 种
+     - 检测到后自动通知提供商吊销（Push Protection）
+     - 公共仓库默认开启，私有仓库需手动开启
+     
+  4. Branch Protection（分支保护）
+     - 保护重要分支（main、develop）
+     - 规则：
+       - Require pull request reviews before merging：合并前需要 PR 审查
+       - Require status checks to pass：CI 必须通过
+       - Require signed commits：提交必须 GPG 签名
+       - Require linear history：线性历史（禁止 merge commit）
+       - Include administrators：管理员也受规则约束
+       - Restrict who can push to this branch：限制推送人员
+     
+  5. Security Advisories（安全公告）
+     - 私下报告和修复安全漏洞
+     - 流程：报告 → 讨论 → 修复 → 发布 CVE
+     - 可以创建临时私有分支修复
+     - 修复后发布安全公告和 CVE 编号
+
+  最佳实践：
+
+  1. 密钥管理
+     - 永远不要把密钥提交到仓库
+     - 使用 GitHub Secrets 存储密钥
+     - 使用 .gitignore 排除 .env、*.pem、id_rsa
+     - 已泄露的密钥立即吊销（不要只删除提交）
+     - 使用 git-secrets、truffleHog 扫描历史
+     
+  2. 依赖安全
+     - 启用 Dependabot 自动更新
+     - 定期运行 npm audit / pip-audit
+     - 锁定依赖版本（package-lock.json、poetry.lock）
+     - 不要使用 * 或 latest 版本
+     
+  3. 提交安全
+     - 使用 GPG 签名提交（git commit -S）
+     - 验证提交者身份
+     - 不要在提交信息中包含敏感信息
+     
+  4. 访问控制
+     - 遵循最小权限原则
+     - 组织级角色：Owner、Member、Outside Collaborator
+     - 仓库级角色：Read、Triage、Write、Maintain、Admin
+     - 定期审查团队成员和访问权限
+     - 离职员工立即移除访问权限
+     
+  5. 开源项目安全
+     - 启用 Security Policy（SECURITY.md）
+     - 提供安全报告渠道（私人 Issue 或邮箱）
+     - 及时响应安全报告（90天内修复）
+     - 发布安全公告和 CVE</code></pre>
+
+<h4 id="github-pitfalls">GitHub 常见陷阱与最佳实践</h4>
+<ul>
+<li><strong>陷阱1：提交大文件</strong> → GitHub 单文件限制 100MB，超过会警告；用 Git LFS 管理大文件；已提交的用 git filter-repo 清理历史</li>
+<li><strong>陷阱2：提交敏感信息</strong> → 密钥/密码/.env 不要提交；用 .gitignore + pre-commit hook 预防；已泄露立即吊销密钥并清理历史</li>
+<li><strong>陷阱3：直接 push 到 main</strong> → 开启分支保护，所有修改通过 PR；main 分支只接受经过审查和 CI 的代码</li>
+<li><strong>陷阱4：PR 过大</strong> → 单个 PR 控制在 400 行以内；大功能拆分为多个小 PR；审查效率和质量更高</li>
+<li><strong>陷阱5：不写 PR 描述</strong> → PR 描述包含背景、实现方式、测试方法、截图；关联 Issue（Closes #123）；让审查者快速理解</li>
+<li><strong>陷阱6：忽略 CI 失败</strong> → CI 必须通过才能合并；不要用 "admin override" 跳过；修复失败而不是绕过</li>
+<li><strong>陷阱7：fork 同步不及时</strong> → 定期同步上游（git fetch upstream && git rebase upstream/main）；避免 PR 有大量冲突</li>
+<li><strong>陷阱8：不使用 .gitignore</strong> → 根目录必须有 .gitignore；排除 node_modules、.env、*.log、.DS_Store、构建产物；用 gitignore.io 生成</li>
+</ul>
+
+
 <hr>
 <p>GitHub 国内访问经常抽风，推荐方案：</p>
 <ul>

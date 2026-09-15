@@ -452,6 +452,401 @@ open data.json | get users | where age > 18 | count</code></pre></li>
 
 <!-- 保留原始标题锚点 -->
 <h3 id="shell-overview">Shell 脚本</h3>
+
+<h3 id="shell-internals">Shell 底层原理与脚本编程深度解析</h3>
+
+<h4 id="shell-architecture">Shell 架构与命令执行原理</h4>
+<pre><code class="language-text">Shell 是用户与操作系统内核之间的接口：
+
+  Shell 的工作流程：
+  1. 读取输入（交互式：终端；脚本：文件）
+  2. 词法分析（Tokenization）：将输入拆分为 token
+  3. 语法分析（Parsing）：构建命令树
+  4. 展开（Expansion）：变量、命令替换、通配符、花括号
+  5. 重定向（Redirection）：设置 stdin/stdout/stderr
+  6. 执行（Execution）：fork + exec 执行命令
+  7. 等待（Wait）：等待命令完成，获取退出码
+
+  命令执行过程（外部命令）：
+  1. Shell 调用 fork() 创建子进程
+  2. 子进程调用 execve() 加载命令程序（替换进程映像）
+  3. Shell 调用 wait() 等待子进程完成
+  4. 子进程退出码返回给 Shell（$?）
+
+  内置命令（Builtin）vs 外部命令：
+  - 内置命令：Shell 内部实现，不需要 fork/exec（快）
+    - cd、pwd、echo、export、alias、history、read、test、[、ulimit
+  - 外部命令：独立的可执行文件，需要 fork/exec（慢）
+    - ls、grep、awk、sed、find、cat
+  - 用 type 命令查看：type cd（builtin）、type ls（file）
+
+  命令查找顺序（PATH）：
+  1. 别名（Alias）
+  2. 关键字（Keyword）：if、for、while、function
+  3. 函数（Function）
+  4. 内置命令（Builtin）
+  5. 哈希表（Hash）：缓存的外部命令路径
+  6. PATH 环境变量中的目录
+
+  示例：
+  $ type -a echo
+  echo is a shell builtin
+  echo is /bin/echo
+  # 内置命令优先，所以 echo 用的是 builtin
+
+  子 Shell（Subshell）：
+  - (command)：在子 Shell 中执行，不影响当前 Shell
+  - 变量修改、cd 等只在子 Shell 中生效
+  - 示例：(cd /tmp && pwd)  # 执行完后当前目录不变
+  - 管道中的每个命令都在子 Shell 中执行（Bash 默认）
+
+  进程替换（Process Substitution）：
+  - <(command)：将命令输出作为文件（读）
+  - >(command)：将文件作为命令输入（写）
+  - 示例：diff <(sort file1) <(sort file2)
+  - 本质：创建命名管道（FIFO）或 /dev/fd/n</code></pre>
+
+<h4 id="shell-expansion">Shell 展开机制详解</h4>
+<pre><code class="language-bash"># Shell 展开（Expansion）是 Shell 最强大也最容易混淆的特性
+# 展开顺序（Bash）：
+# 1. 大括号展开（Brace Expansion）
+# 2. 波浪号展开（Tilde Expansion）
+# 3. 参数和变量展开（Parameter & Variable Expansion）
+# 4. 命令替换（Command Substitution）
+# 5. 算术展开（Arithmetic Expansion）
+# 6. 单词拆分（Word Splitting）
+# 7. 路径名展开（Pathname Expansion / Globbing）
+
+# 1. 大括号展开（Brace Expansion）
+echo {a,b,c}        # a b c
+echo {1..5}          # 1 2 3 4 5
+echo {01..10}        # 01 02 ... 10（补零）
+echo {a..z}          # a b c ... z
+echo {1..10..2}      # 1 3 5 7 9（步长）
+echo file{.txt,.md}  # file.txt file.md
+echo {a,b}{1,2}      # a1 a2 b1 b2（笛卡尔积）
+
+# 2. 波浪号展开（Tilde Expansion）
+echo ~              # 当前用户家目录 /home/user
+echo ~/projects     # /home/user/projects
+echo ~username      # 指定用户家目录
+echo ~+             # 当前目录 $PWD
+echo ~-             # 上一个目录 $OLDPWD
+
+# 3. 变量展开（Parameter Expansion）
+name="World"
+echo "Hello, $name!"           # 简单展开
+echo "Hello, ${name}!"         # 显式边界（推荐）
+echo "${name:-default}"        # 默认值（未设置时用 default）
+echo "${name:=default}"        # 默认值并赋值
+echo "${name:?error message}"  # 未设置时报错
+echo "${name:+alt}"            # 已设置时用 alt
+echo "${#name}"                # 字符串长度 5
+echo "${name:0:3}"             # 子串 Wor（从0开始，长度3）
+echo "${name#Wor}"             # 删除前缀 ld
+echo "${name##Wor}"            # 贪婪删除前缀
+echo "${name%ld}"              # 删除后缀 Wor
+echo "${name%%ld}"             # 贪婪删除后缀
+echo "${name/o/0}"             # 替换第一个 o → 0
+echo "${name//o/0}"            # 替换所有 o → 0
+echo "${name^^}"               # 全部大写 WORLD
+echo "${name,,}"               # 全部小写 world
+echo "${!prefix*}"             # 以 prefix 开头的变量名列表
+
+# 数组操作
+arr=(apple banana cherry)
+echo "${arr[0]}"        # apple（第一个元素）
+echo "${arr[@]}"        # apple banana cherry（所有元素）
+echo "${arr[*]}"        # apple banana cherry（所有元素，作为一个单词）
+echo "${#arr[@]}"       # 3（数组长度）
+echo "${arr[@]:1:2}"    # banana cherry（切片）
+arr+=("date")           # 追加元素
+unset arr[1]            # 删除元素
+
+# 4. 命令替换（Command Substitution）
+echo "Today is $(date)"          # 推荐写法
+echo "Today is `date`"           # 旧写法（反引号，不推荐）
+files=$(ls -1)                    # 捕获命令输出
+dir=$(cd "$(dirname "$0")" && pwd)  # 脚本所在目录
+
+# 5. 算术展开（Arithmetic Expansion）
+echo $((1 + 2))          # 3
+echo $(( (5 + 3) * 2 ))  # 16
+x=5
+echo $((x++))            # 5（后置递增，返回旧值）
+echo $((++x))            # 7（前置递增，返回新值）
+echo $((x > 3 ? 1 : 0))  # 1（三元运算符）
+# 支持：+ - * / % **（幂） << >> & | ^ ~ && ||
+# 注意：只支持整数，小数用 bc 或 awk
+
+# 6. 单词拆分（Word Splitting）
+# 未加引号的变量展开后会按 IFS 拆分
+IFS=' '  # 默认：空格、制表符、换行
+var="a b c"
+echo $var    # a b c（拆分为3个参数）
+echo "$var"  # a b c（作为1个参数，推荐加引号）
+
+# 7. 路径名展开（Globbing）
+echo *.txt          # 所有 .txt 文件
+echo *.?            # 所有后缀为1个字符的文件
+echo [abc]*.txt     # 以 a/b/c 开头的 .txt 文件
+echo [^abc]*.txt    # 不以 a/b/c 开头的 .txt 文件
+echo {*.txt,*.md}   # .txt 和 .md 文件
+echo **/*.txt        # 递归匹配（需要 shopt -s globstar）
+echo ?at.txt         # 匹配任意单字符：cat.txt, bat.txt
+
+# 重要：始终给变量加引号！
+# 未加引号的变量会经历单词拆分和路径名展开
+# 可能导致意外行为（如文件名包含空格时）
+# 正确：cp "$file" "$dest"
+# 错误：cp $file $dest</code></pre>
+
+<h4 id="shell-scripting">Shell 脚本编程高级技巧</h4>
+<pre><code class="language-bash">#!/bin/bash
+# 严格模式（推荐所有脚本开头加上）
+set -euo pipefail
+# -e：命令失败时立即退出
+# -u：使用未定义变量时报错
+# -o pipefail：管道中任一命令失败则整个管道失败
+IFS=$'\n\t'  # 设置内部字段分隔符（只按换行和制表符拆分）
+
+# 1. 脚本参数处理
+# $0：脚本名
+# $1-$9：第1-9个参数
+# ${10}：第10个参数（超过9需要大括号）
+# $#：参数个数
+# $@：所有参数（作为独立单词）
+# $*：所有参数（作为一个单词）
+# $?：上一个命令的退出码
+# $$：当前进程 PID
+# $!：上一个后台进程 PID
+
+# 2. getopts 解析命令行选项
+verbose=false
+output=""
+while getopts "vo:h" opt; do
+  case $opt in
+    v) verbose=true ;;
+    o) output="$OPTARG" ;;
+    h) echo "Usage: $0 [-v] [-o FILE] [-h]"; exit 0 ;;
+    *) echo "Invalid option"; exit 1 ;;
+  esac
+done
+shift $((OPTIND - 1))  # 移除已解析的选项
+
+# 3. 条件判断
+# test 命令或 [ ] 或 [[ ]]（推荐 [[ ]]）
+if [[ -f "$file" ]]; then
+  echo "File exists"
+elif [[ -d "$file" ]]; then
+  echo "Directory exists"
+else
+  echo "Not found"
+fi
+
+# 文件测试：
+# -e 存在  -f 普通文件  -d 目录  -L 符号链接
+# -r 可读  -w 可写  -x 可执行  -s 非空
+# -nt 比...新  -ot 比...旧  -ef 同一文件
+
+# 字符串比较：
+# = 等于  != 不等于  < 小于（字典序）  > 大于
+# -z 空字符串  -n 非空字符串
+# 注意：[[ ]] 中 < > 不需要转义，[ ] 中需要 \< \>
+
+# 数字比较：
+# -eq 等于  -ne 不等于  -lt 小于  -le 小于等于
+# -gt 大于  -ge 大于等于
+# 或者用 (( ))：if (( x > 5 )); then
+
+# 4. 循环
+# for 循环
+for file in *.txt; do
+  echo "Processing $file"
+done
+
+# C 风格 for 循环
+for ((i=0; i<10; i++)); do
+  echo "Number: $i"
+done
+
+# while 循环
+while read -r line; do
+  echo "$line"
+done < file.txt
+
+# until 循环（条件为假时执行）
+until [[ -f "$lockfile" ]]; do
+  sleep 1
+done
+
+# 5. 函数
+# 定义函数
+my_function() {
+  local name="$1"  # 局部变量
+  echo "Hello, $name!"
+  return 0  # 返回码（0-255）
+}
+
+# 调用函数
+my_function "World"
+
+# 函数返回值
+add() {
+  echo $(( $1 + $2 ))
+}
+result=$(add 3 5)  # result=8
+
+# 6. 错误处理
+# 自定义错误处理函数
+error_exit() {
+  echo "ERROR: $1" >&2
+  exit 1
+}
+
+# 命令失败时执行
+command_that_might_fail || error_exit "Command failed"
+
+# 临时文件清理
+cleanup() {
+  rm -f "$tmpfile"
+}
+trap cleanup EXIT  # 脚本退出时执行
+trap 'echo "Interrupted"; exit 130' INT  # Ctrl+C 时执行
+
+# 7. 日志
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+log "Starting script"
+
+# 8. 并行执行
+# 后台执行 &
+task1 &
+task2 &
+wait  # 等待所有后台任务完成
+
+# 限制并发数（xargs -P）
+cat urls.txt | xargs -P 4 -I {} curl -O {}
+
+# 9. 脚本调试
+# bash -x script.sh  # 跟踪执行（显示每条命令）
+# bash -n script.sh  # 语法检查（不执行）
+# set -x  # 开启跟踪
+# set +x  # 关闭跟踪</code></pre>
+
+<h4 id="shell-performance">Shell 脚本性能优化</h4>
+<pre><code class="language-text">Shell 脚本性能优化：
+
+  1. 减少外部命令调用
+     - 外部命令需要 fork/exec，开销大（~1-10ms/次）
+     - 用内置命令替代外部命令
+     - 用参数展开替代 sed/awk 做简单字符串处理
+     
+     # 慢：循环中调用 sed
+     while read line; do
+       echo "$line" | sed 's/foo/bar/g'
+     done < file
+     
+     # 快：一次 sed 处理整个文件
+     sed 's/foo/bar/g' file
+     
+     # 慢：用 expr 做算术
+     result=$(expr $a + $b)
+     
+     # 快：用算术展开
+     result=$((a + b))
+
+  2. 用内置功能替代管道
+     # 慢：多个命令管道
+     echo "$string" | tr 'a-z' 'A-Z'
+     echo "$string" | sed 's/^[[:space:]]*//'
+     
+     # 快：参数展开
+     echo "${string^^}"           # 大写
+     echo "${string#"${string%%[![:space:]]*}"}"  # 去前导空格
+
+  3. 避免 cat 管道（Useless Use of Cat）
+     # 慢：cat file | grep pattern
+     cat file | grep pattern
+     
+     # 快：直接重定向
+     grep pattern < file
+     # 或直接传文件名
+     grep pattern file
+
+  4. 批量处理而非逐行处理
+     # 慢：逐行循环
+     while read -r line; do
+       echo "$line" | awk '{print $1}'
+     done < file
+     
+     # 快：awk 一次处理
+     awk '{print $1}' file
+
+  5. 使用高效的文本处理工具
+     - grep：最快的行过滤（C 实现， Boyer-Moore 算法）
+     - awk：字段处理和报表生成
+     - sed：流式编辑
+     - cut：简单字段提取（比 awk 快）
+     - sort：排序（外部排序，处理大文件）
+     - 选择原则：能 grep 不 awk，能 cut 不 awk
+
+  6. 并行处理
+     # 串行：逐个处理
+     for url in $(cat urls.txt); do
+       curl -s "$url" > /dev/null
+     done
+     
+     # 并行：xargs -P
+     cat urls.txt | xargs -P 10 -I {} curl -s {} > /dev/null
+     
+     # 并行：GNU parallel
+     cat urls.txt | parallel -j 10 curl -s {} > /dev/null
+
+  7. 避免子 Shell
+     # 子 Shell：管道中的命令在子 Shell 中
+     count=0
+     cat file | while read line; do
+       count=$((count + 1))  # 子 Shell 中修改，不影响外部
+     done
+     echo $count  # 仍然是 0！
+     
+     # 解决：用进程替换或重定向
+     count=0
+     while read line; do
+       count=$((count + 1))
+     done < file
+     echo $count  # 正确
+
+  8. 大文件处理
+     - 不要把整个文件读入内存
+     - 用流式处理（grep/awk/sed 逐行处理）
+     - 用 split 分割大文件，并行处理后合并
+     - 用 sort -S 控制内存使用，--parallel 并行排序
+
+  性能对比参考：
+  - 内置命令：~0.01ms
+  - 参数展开：~0.01ms
+  - 外部命令（echo/test）：~1ms
+  - 外部命令（grep/awk）：~5-10ms
+  - 管道（2个命令）：~10-20ms
+  - 循环 1000 次外部命令：~5-10 秒
+  - 单次 awk 处理 1000 行：~5ms</code></pre>
+
+<h4 id="shell-pitfalls">Shell 脚本常见陷阱与最佳实践</h4>
+<ul>
+<li><strong>陷阱1：变量不加引号</strong> → 始终给变量加双引号 "$var"；未加引号会经历单词拆分和路径名展开，文件名含空格时会出问题</li>
+<li><strong>陷阱2：用 echo 输出任意数据</strong> → echo 会解释 -n/-e 等选项和反斜杠转义；用 printf '%s\n' "$var" 更安全</li>
+<li><strong>陷阱3：[ ] 中用 < ></strong> → [ ] 中 < > 需要转义 \< \>，否则会被当作重定向；用 [[ ]] 或 (( )) 更安全</li>
+<li><strong>陷阱4：管道中修改变量</strong> → 管道中的命令在子 Shell 中执行，变量修改不影响外部；用进程替换 < <(command) 或 while read < file</li>
+<li><strong>陷阱5：用 $? 判断错误</strong> → 不要 if [ $? -eq 0 ]; then；直接 if command; then；set -e 让脚本在错误时自动退出</li>
+<li><strong>陷阱6：for line in $(cat file)</strong> → 会按空格拆分，不是按行；用 while IFS= read -r line; do ... done < file</li>
+<li><strong>陷阱7：不检查命令是否存在</strong> → 用 command -v cmd >/dev/null || { echo "cmd not found"; exit 1; }</li>
+<li><strong>陷阱8：脚本开头不加严格模式</strong> → 所有脚本开头加 set -euo pipefail 和 IFS=$'\n\t'；能捕获大部分常见错误</li>
+</ul>
+
+
 <h4 id="shell-scripts">常用脚本</h4>
 <h4 id="shell-tools">现代工具（2026 推荐）</h4>
 <h4 id="shell-basics">基础语法</h4>

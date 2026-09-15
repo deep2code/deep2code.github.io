@@ -187,6 +187,352 @@ call plug#end()</code></pre><ul>
 <li><strong><code>packspec</code> / <code>pkg.JSON</code></strong>：包规范和远程 SSH 支持，向 1.0 迈进。</li>
 </ul>
 <p>0.13 尚在开发中（可以在 nightly 体验），当前稳定版仍是 0.12 线。</p><h3 id="vim-lazyvim-2026">LazyVim 16.0：配置发行版的演进</h3>
+
+<h3 id="vim-architecture">Vim/Neovim 架构与编辑原理深度解析</h3>
+
+<h4 id="vim-modal-editing">模态编辑：Vim 的核心哲学</h4>
+<pre><code class="language-text">Vim 是模态编辑器（Modal Editor），不同模式下按键有不同含义：
+
+  6 种主要模式：
+
+  1. Normal（普通模式，默认）
+     - 按键是命令，不是输入文本
+     - 用于移动、删除、复制、粘贴、搜索
+     - 这是 Vim 的"home"模式，操作完应回到此模式
+     - 其他模式按 <Esc> 回到 Normal
+     
+  2. Insert（插入模式）
+     - 按键直接输入文本
+     - 进入方式：i（当前字符前）、a（当前字符后）、o（下一行）
+     - 类似普通编辑器，但功能更少
+     - 应该尽量少待在 Insert 模式（效率低）
+     
+  3. Visual（可视模式）
+     - 选择文本区域
+     - 进入方式：v（字符选择）、V（行选择）、<C-v>（块选择）
+     - 选择后可以对选区执行命令（d删除、y复制、>缩进）
+     
+  4. Visual Block（可视块模式）
+     - <C-v> 进入，选择矩形区域
+     - 强大功能：列编辑（同时修改多行的同一列）
+     - 示例：<C-v> 选择多行 → I 输入注释 → <Esc> 批量注释
+     
+  5. Command-line（命令行模式）
+     - : 进入，底部输入 Ex 命令
+     - 用于保存、退出、搜索替换、设置选项
+     - 示例：:w 保存、:q 退出、:s/foo/bar/g 替换
+     
+  6. Terminal（终端模式，Neovim）
+     - :terminal 打开内置终端
+     - <C-\><C-n> 回到 Normal 模式
+     - 可以在终端缓冲区中用 Vim 命令操作输出
+
+  操作符 + 动作 = 命令（Operator + Motion）：
+  Vim 的语法结构：
+  - 操作符（Operator）：d(删除)、y(复制)、c(修改)、>(缩进)、gU(大写)
+  - 动作（Motion）：w(下一个词)、$(行尾)、gg(文件首)、/(搜索)
+  - 文本对象（Text Object）：iw(词)、it(标签内)、ip(段落)
+  
+  组合示例：
+  - dw = 删除一个词（d + w）
+  - d$ = 删除到行尾（d + $）
+  - diw = 删除当前词（d + iw，不包含空格）
+  - yip = 复制当前段落（y + ip）
+  - ci" = 修改引号内内容（c + i"）
+  - gU2w = 后面两个词大写（gU + 2w）
+  
+  数字前缀：
+  - 3dd = 删除 3 行
+  - 5yy = 复制 5 行
+  - 2w = 前进 2 个词
+  - 10j = 向下 10 行
+
+  为什么模态编辑更快？
+  - 不需要移动手到方向键/鼠标
+  - 命令是组合式的，学习一次可无限组合
+  - 文本对象精确操作（di" 比双击选中引号内容快）
+  - 重复操作（. 命令重复上次修改）</code></pre>
+
+<h4 id="vim-buffer-window">缓冲区、窗口、标签页架构</h4>
+<pre><code class="language-text">Vim 的多文件管理三层架构：
+
+  1. Buffer（缓冲区）
+     - 内存中打开的文件
+     - 一个文件对应一个 Buffer
+     - Buffer 可以不显示（隐藏）
+     - :ls 列出所有缓冲区
+     - :b <name> 切换缓冲区
+     - :bd 删除缓冲区
+     - 状态：%（当前）、#（交替）、a（活动）、h（隐藏）、+（已修改）
+     
+  2. Window（窗口）
+     - Buffer 的视口（显示区域）
+     - 一个 Buffer 可以在多个 Window 中显示
+     - 一个 Window 只显示一个 Buffer
+     - :sp 水平分割、:vsp 垂直分割
+     - <C-w>w 切换窗口、<C-w>h/j/k/l 方向切换
+     - <C-w>= 平均大小、<C-w>_ 最大化高度、<C-w>| 最大化宽度
+     - :q 关闭窗口（不关闭 Buffer）
+     
+  3. Tabpage（标签页）
+     - 窗口布局的集合
+     - 每个 Tabpage 可以有自己的窗口布局
+     - :tabnew 新建标签页、:tabclose 关闭
+     - gt 下一个标签页、gT 上一个标签页
+     - 注意：Vim 的 Tab 不同于浏览器 Tab，它是布局集合
+
+  关系图：
+  Tabpage 1
+  ├── Window 1 → Buffer A (main.go)
+  └── Window 2 → Buffer B (utils.go)
+  
+  Tabpage 2
+  ├── Window 1 → Buffer C (README.md)
+  ├── Window 2 → Buffer A (main.go)  ← 同一 Buffer 可在多窗口显示
+  └── Window 3 → Buffer D (config.yaml)
+
+  隐藏缓冲区（Hidden Buffer）：
+  - :set hidden 允许切换缓冲区时不保存（隐藏已修改的缓冲区）
+  - 没有 hidden 时，切换修改过的缓冲区会报错
+  - 现代配置默认开启 hidden
+  - :qa! 强制退出所有（放弃修改）
+  - :wa 保存所有缓冲区
+
+  缓冲区列表操作：
+  - :bnext / :bprev 下一个/上一个缓冲区
+  - :bfirst / :blast 第一个/最后一个
+  - :b <number> 按编号切换
+  - :b <partial-name> 按名称模糊匹配
+  - :bufdo <cmd> 对所有缓冲区执行命令
+
+  最佳实践：
+  - 用缓冲区管理文件，而不是标签页
+  - 标签页用于不同的工作布局（如编码 vs 测试）
+  - 窗口用于同时查看多个文件（如代码 + 测试）
+  - 插件：fzf/telescope 快速切换缓冲区</code></pre>
+
+<h4 id="vim-text-objects">文本对象与高级移动</h4>
+<pre><code class="language-text">文本对象（Text Objects）是 Vim 最强大的特性之一：
+
+  内置文本对象：
+
+  1. 词（Word）
+     - aw：一个词（包含周围空格）
+     - iw：一个词（不包含空格）
+     - 示例：diw 删除当前词，ciw 修改当前词
+     
+  2. 句子（Sentence）
+     - as：一个句子（包含空格）
+     - is：一个句子（不包含空格）
+     - 句子定义：以 . ! ? 结尾，后跟空格或换行
+     
+  3. 段落（Paragraph）
+     - ap：一个段落（包含空行）
+     - ip：一个段落（不包含空行）
+     - 段落定义：空行分隔的文本块
+     
+  4. 引号（Quotes）
+     - a" / i"：双引号
+     - a' / i'：单引号
+     - a` / i`：反引号
+     - 示例：ci" 修改引号内内容，da" 删除引号及内容
+     
+  5. 括号（Brackets）
+     - ab / ib：圆括号 ()
+     - aB / iB：花括号 {}
+     - a[ / i[：方括号 []
+     - a< / i<：尖括号 <>
+     - 示例：ci( 修改括号内内容，daB 删除代码块
+     
+  6. 标签（Tags，HTML/XML）
+     - at：一个标签（包含标签本身）
+     - it：标签内内容
+     - 示例：cit 修改标签内内容，dat 删除整个标签
+     
+  7. 函数/类（需要插件或 textobj-user）
+     - af / if：函数
+     - ac / ic：类
+     - 需要 vim-textobj-function 等插件
+
+  文本对象的威力：
+  - 精确操作，不需要手动选择
+  - 嵌套感知：di( 会找到匹配的右括号
+  - 可重复：. 命令重复上次文本对象操作
+  - 组合：d + i + " = 删除引号内内容
+
+  高级移动（Motion）：
+
+  1. f/F/t/T（行内查找）
+     - f{char}：跳到下一个 char
+     - F{char}：跳到上一个 char
+     - t{char}：跳到下一个 char 的前一个字符
+     - T{char}：跳到上一个 char 的后一个字符
+     - ; 重复上次查找，, 反向重复
+     - 示例：df, 删除到逗号，ct= 修改到等号
+     
+  2. / 和 ?（搜索）
+     - /{pattern}：向下搜索
+     - ?{pattern}：向上搜索
+     - n 下一个，N 上一个
+     - * 搜索当前词，# 反向搜索当前词
+     - 操作符 + 搜索：d/foo 删除到 foo
+     
+  3. %（匹配括号）
+     - 跳到匹配的括号 () {} []
+     - 也可以匹配 if/endif、begin/end（需要 matchit 插件）
+     
+  4. 标记（Mark）
+     - m{a-z}：设置小写标记（当前文件）
+     - m{A-Z}：设置大写标记（跨文件）
+     - '{mark}：跳到标记行
+     - `{mark}：跳到标记精确位置
+     - ``：回到上次跳转位置
+     - 特殊标记：'.（上次修改行）、'.（上次修改位置）、'<（选区首）
+
+  5. 跳转列表（Jump List）
+     - <C-o>：上一个跳转位置
+     - <C-i>：下一个跳转位置
+     - :jumps 查看跳转列表
+     - 记录所有"大跳转"（gg、G、/、n、%等）</code></pre>
+
+<h4 id="neovim-lua">Neovim Lua 配置与插件架构</h4>
+<pre><code class="language-lua">-- Neovim 0.5+ 支持 Lua 作为一等配置语言
+-- init.lua 替代 init.vim
+
+-- 1. 选项设置（Vim options）
+vim.opt.number = true           -- 行号
+vim.opt.relativenumber = true   -- 相对行号
+vim.opt.expandtab = true        -- Tab 转空格
+vim.opt.shiftwidth = 4          -- 缩进宽度
+vim.opt.tabstop = 4             -- Tab 宽度
+vim.opt.termguicolors = true    -- 24位真彩色
+vim.opt.clipboard = "unnamedplus" -- 系统剪贴板
+vim.opt.undofile = true         -- 持久化撤销
+vim.opt.ignorecase = true       -- 搜索忽略大小写
+vim.opt.smartcase = true        -- 有大写时区分大小写
+
+-- 2. 键位映射（Keymaps）
+vim.g.mapleader = " "            -- Leader 键设为空格
+
+-- 普通模式映射
+vim.keymap.set("n", "<leader>w", ":w<CR>", { desc = "Save" })
+vim.keymap.set("n", "<leader>q", ":q<CR>", { desc = "Quit" })
+vim.keymap.set("n", "<leader>h", ":nohlsearch<CR>", { desc = "Clear highlight" })
+
+-- 窗口导航（Ctrl + hjkl）
+vim.keymap.set("n", "<C-h>", "<C-w>h")
+vim.keymap.set("n", "<C-j>", "<C-w>j")
+vim.keymap.set("n", "<C-k>", "<C-w>k")
+vim.keymap.set("n", "<C-l>", "<C-w>l")
+
+-- 可视模式缩进后保持选择
+vim.keymap.set("v", "<", "<gv")
+vim.keymap.set("v", ">", ">gv")
+
+-- 3. 自动命令（Autocommands）
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = { "python", "lua", "javascript" },
+  callback = function()
+    vim.opt_local.shiftwidth = 2
+    vim.opt_local.tabstop = 2
+  end,
+})
+
+-- 保存时删除行尾空格
+vim.api.nvim_create_autocmd("BufWritePre", {
+  pattern = "*",
+  command = "%s/\s\+$//e",
+})
+
+-- 4. 插件管理器（Lazy.nvim，现代标准）
+-- init.lua 中引导 Lazy.nvim：
+local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
+if not vim.loop.fs_stat(lazypath) then
+  vim.fn.system({
+    "git", "clone", "--filter=blob:none",
+    "https://github.com/folke/lazy.nvim.git",
+    "--branch=stable", lazypath,
+  })
+end
+vim.opt.rtp:prepend(lazypath)
+
+-- 插件配置
+require("lazy").setup({
+  -- 颜色主题
+  { "folke/tokyonight.nvim", config = function() vim.cmd.colorscheme("tokyonight") end },
+  
+  -- 文件树
+  { "nvim-tree/nvim-tree.lua", config = true },
+  
+  -- 模糊查找
+  {
+    "nvim-telescope/telescope.nvim",
+    dependencies = { "nvim-lua/plenary.nvim" },
+    config = function()
+      local builtin = require("telescope.builtin")
+      vim.keymap.set("n", "<leader>f", builtin.find_files)
+      vim.keymap.set("n", "<leader>g", builtin.live_grep)
+      vim.keymap.set("n", "<leader>b", builtin.buffers)
+    end,
+  },
+  
+  -- 语法高亮（Tree-sitter）
+  {
+    "nvim-treesitter/nvim-treesitter",
+    build = ":TSUpdate",
+    config = function()
+      require("nvim-treesitter.configs").setup({
+        ensure_installed = { "lua", "python", "go", "javascript", "typescript" },
+        highlight = { enable = true },
+        indent = { enable = true },
+      })
+    end,
+  },
+  
+  -- LSP 配置
+  {
+    "neovim/nvim-lspconfig",
+    config = function()
+      local lspconfig = require("lspconfig")
+      lspconfig.gopls.setup({})
+      lspconfig.pyright.setup({})
+      lspconfig.tsserver.setup({})
+    end,
+  },
+  
+  -- 自动补全
+  { "hrsh7th/nvim-cmp", dependencies = { "hrsh7th/cmp-nvim-lsp", "hrsh7th/cmp-buffer" } },
+})
+
+-- 5. LSP（Language Server Protocol）
+-- Neovim 内置 LSP 客户端，不需要插件
+-- 常用 LSP 命令：
+-- :LspInfo          查看 LSP 状态
+-- :lua vim.lsp.buf.definition()      跳转到定义（gd）
+-- :lua vim.lsp.buf.references()      查找引用（gr）
+-- :lua vim.lsp.buf.rename()          重命名（rn）
+-- :lua vim.lsp.buf.code_action()     代码操作（ca）
+-- :lua vim.lsp.buf.hover()           悬停文档（K）
+-- :lua vim.diagnostic.open_float()   查看错误（gl）
+
+-- Tree-sitter 增量解析：
+-- 传统正则高亮：慢、不准确、嵌套语言支持差
+-- Tree-sitter：增量解析器，生成 AST，高亮准确快速
+-- 支持：语法高亮、增量选择、自动缩进、文本对象</code></pre>
+
+<h4 id="vim-pitfalls">Vim/Neovim 常见陷阱与最佳实践</h4>
+<ul>
+<li><strong>陷阱1：长时间停在 Insert 模式</strong> → 操作完立即按 <Esc> 回 Normal 模式；用 jj 或 jk 映射快速退出（inoremap jj <Esc>）</li>
+<li><strong>陷阱2：用方向键移动</strong> → 强制自己用 hjkl，把方向键映射为空；开始慢，长期效率高</li>
+<li><strong>陷阱3：不使用文本对象</strong> → 学习 iw/it/ip/i" 等文本对象，比手动选择快得多；di" 比双击选中引号内容快</li>
+<li><strong>陷阱4：重复操作不用 .</strong> → . 命令重复上次修改，是 Vim 最强大的命令之一；学会构造可重复的操作（如 ciw）</li>
+<li><strong>陷阱5：配置文件过长</strong> → 用 Lazy.nvim 管理插件，按需加载；配置模块化（lua/plugins/、lua/config/）；不要复制别人的整个配置</li>
+<li><strong>陷阱6：插件装太多</strong> → 每个插件都有性能开销；只装真正需要的；用 :checkhealth 检查插件状态；启动时间 < 50ms 为佳</li>
+<li><strong>陷阱7：不理解 Buffer vs Window</strong> → Buffer 是文件，Window 是视口；关闭窗口不关闭缓冲区；用 :ls 查看缓冲区，:b 切换</li>
+<li><strong>陷阱8：不学习 Ex 命令</strong> → :s 替换、:g 全局命令、:normal 批量执行、:argdo 多文件操作；掌握 Ex 命令是 Vim 进阶的关键</li>
+</ul>
+
+
 <p>LazyVim（基于 lazy.nvim 的现代化配置发行版）2026-06-02 发布 <strong>v16.0.0</strong>，要求 Neovim ≥ 0.11.2。它仍然是新手最快上手的路径：</p>
 <ul>
 <li><strong>按需加载</strong>：只打开对应文件类型才加载相关插件，86 插件配置启动可以压到 400ms 左右。</li>
