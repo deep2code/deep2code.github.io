@@ -75,7 +75,205 @@
 
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
-                <h3 id="rag-overview">检索增强生成（RAG）</h3>
+                <h3 id="rag-architecture-deep">RAG 架构深度解析</h3>
+
+<h4 id="rag-pipeline">完整 RAG 流水线</h4>
+<pre><code class="language-text">用户 Query
+    │
+    ▼
+┌─────────────────────────────────────────┐
+│  1. 查询理解（Query Understanding）       │
+│  - 意图识别（是事实查询还是闲聊？）        │
+│  - 实体抽取（关键名词、时间、地点）        │
+│  - 查询改写（Query Rewriting）           │
+│  - 查询分解（Query Decomposition，多跳）  │
+│  - HyDE（假设文档嵌入，用 LLM 生成假设答案再检索）│
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  2. 检索（Retrieval）                    │
+│  ┌─────────────────────────────────────┐│
+│  │  向量检索（Dense Retrieval）         ││
+│  │  - Query Embedding（嵌入模型）       ││
+│  │  - ANN 搜索（HNSW / IVF / PQ）      ││
+│  │  - Top-K 候选（通常 K=20~100）      ││
+│  └─────────────────────────────────────┘│
+│  ┌─────────────────────────────────────┐│
+│  │  关键词检索（Sparse Retrieval）      ││
+│  │  - BM25（词频-逆文档频率）           ││
+│  │  - Elasticsearch / OpenSearch       ││
+│  │  - 精确匹配专有名词、代码、数字       ││
+│  └─────────────────────────────────────┘│
+│  ┌─────────────────────────────────────┐│
+│  │  混合检索（Hybrid Retrieval）        ││
+│  │  - RRF（Reciprocal Rank Fusion）    ││
+│  │  - 加权求和：score = α·dense + β·sparse│
+│  └─────────────────────────────────────┘│
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  3. 重排序（Reranking）                  │
+│  - Cross-Encoder 模型（更精准，更慢）    │
+│  - 输入：[Query, Document] 对            │
+│  - 输出：相关性分数（0~1）                │
+│  - 从 Top-K（50~100）选出 Top-N（3~10） │
+│  - 常用模型：bge-reranker、Cohere Rerank │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  4. 上下文构建（Context Construction）    │
+│  - 文档拼接（按相关性排序）               │
+│  - 上下文窗口管理（不超过模型最大长度）    │
+│  - 引用标注（[1] [2] [3]，便于溯源）     │
+│  - 元数据注入（标题、来源、时间）         │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  5. 生成（Generation）                   │
+│  - Prompt 模板：System + Context + Query │
+│  - LLM 生成答案                           │
+│  - 约束：基于上下文回答，不知道就说不知道  │
+│  - 引用生成（答案中标注来源编号）         │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  6. 后处理（Post-processing）             │
+│  - 答案验证（是否与检索内容一致）         │
+│  - 引用格式化（可点击的来源链接）         │
+│  - 安全过滤（敏感信息、有害内容）         │
+│  - 反馈收集（用户点赞/点踩，用于优化）    │
+└─────────────────────────────────────────┘</code></pre>
+
+<h4 id="vector-embedding">向量嵌入（Embedding）深度解析</h4>
+<pre><code class="language-text">Embedding 模型原理：
+
+  输入文本 → Transformer Encoder → <[BOS_never_used_51bce0c785ca2f68081bfa7d91973934]> 向量（或平均池化）
+
+  关键技术：
+  1. 对比学习（Contrastive Learning）
+     - 正样本：语义相似的文本对
+     - 负样本：语义不同的文本对
+     - Loss：InfoNCE = -log(exp(sim(q,p+)/τ) / Σ exp(sim(q,p_i)/τ))
+     - τ 是温度参数，控制分布尖锐程度
+
+  2. 难负样本挖掘（Hard Negative Mining）
+     - 随机负样本太容易，模型学不到细粒度差异
+     - 用 BM25 检索 Top-K 作为难负样本
+     - 或用模型自身检索的错误结果作为难负样本
+
+  3. 指令微调（Instruction-tuned Embedding）
+     - E5、BGE、GTE 等模型支持查询指令
+     - Query: "为这个查询生成向量：{query}"
+     - Passage: "为这段文本生成向量：{passage}"
+     - 显著提升检索效果
+
+  主流 Embedding 模型对比（2026年）：
+  ┌──────────────────┬────────┬──────────┬──────────────┐
+  │ 模型             │ 维度   │ 最大长度 │ MTEB 排名    │
+  ├──────────────────┼────────┼──────────┼──────────────┤
+  │ OpenAI text-3   │ 3072   │ 8191     │ 闭源，高质量 │
+  │ BGE-M3           │ 1024   │ 8192     │ 开源，多语言 │
+  │ GTE-Qwen2        │ 1536   │ 32768    │ 阿里，长文本 │
+  │ E5-Mistral       │ 4096   │ 4096     │ 多语言       │
+  │ Jina v3          │ 1024   │ 8192     │ 多语言       │
+  └──────────────────┴────────┴──────────┴──────────────┘
+
+  相似度计算：
+  - 余弦相似度：cos(a,b) = (a·b) / (||a|| · ||b||)
+  - 点积：a·b（向量归一化后等价于余弦）
+  - 欧氏距离：||a - b||（越小越相似）
+  - 大多数向量数据库用余弦或点积</code></pre>
+
+<h4 id="ann-search">ANN 近似最近邻搜索算法</h4>
+<pre><code class="language-text">暴力搜索复杂度：O(N · d)，N=向量数，d=维度
+  1000 万向量 × 1024 维 = 100 亿次运算/查询 → 太慢
+
+HNSW（Hierarchical Navigable Small World）：
+  目前最主流的 ANN 算法，Milvus、Qdrant、Weaviate 默认
+
+  结构：多层有向图
+  ┌─────────────────────────────────────────┐
+  │  Layer 2:  少量节点，长距离连接           │  快速跳到目标区域
+  │  Layer 1:  中等节点数，中距离连接         │  缩小搜索范围
+  │  Layer 0:  所有节点，短距离连接           │  精细搜索最近邻
+  └─────────────────────────────────────────┘
+
+  搜索过程：
+  1. 从最上层的入口节点开始
+  2. 在当前层贪心搜索，找到最近的节点
+  3. 下降到下一层，从该节点继续搜索
+  4. 重复直到最底层，返回 Top-K
+
+  关键参数：
+  - M：每个节点的最大连接数（通常 16~64）
+  - efConstruction：构建时的搜索宽度（通常 100~500）
+  - efSearch：查询时的搜索宽度（通常 50~200）
+  - 权衡：efSearch 越大，召回率越高，速度越慢
+
+  性能：
+  - 1000 万向量，召回率 99%，查询延迟 < 10ms
+  - 内存占用：约 2GB（1000万 × 1024维 × 2 bytes + 图结构）
+
+其他算法：
+  - IVF（Inverted File）：聚类分桶，先查聚类中心再查桶内
+  - PQ（Product Quantization）：向量压缩，内存节省 10x+
+  - ScaNN：Google 的算法，各向异性量化
+  - DiskANN：基于磁盘的 ANN，支持十亿级向量</code></pre>
+
+<h4 id="rag-evaluation">RAG 评估指标</h4>
+<table>
+<tr><th>维度</th><th>指标</th><th>说明</th></tr>
+<tr><td rowspan="3">检索质量</td><td>Recall@K</td><td>Top-K 检索结果中包含正确答案的比例</td></tr>
+<tr><td>MRR</td><td>平均倒数排名，正确答案排名越靠前分数越高</td></tr>
+<tr><td>nDCG@K</td><td>归一化折损累计增益，考虑相关性等级</td></tr>
+<tr><td rowspan="3">生成质量</td><td>Faithfulness</td><td>答案是否忠实于检索上下文（无幻觉）</td></tr>
+<tr><td>Answer Relevance</td><td>答案是否与问题相关</td></tr>
+<tr><td>Context Precision</td><td>检索上下文的精准度</td></tr>
+<tr><td rowspan="2">端到端</td><td>Exact Match</td><td>答案与标准答案完全匹配</td></tr>
+<tr><td>F1 / ROUGE</td><td>词级重叠度</td></tr>
+</table>
+
+<h4 id="rag-pitfalls">RAG 常见陷阱与优化</h4>
+<ul>
+<li><strong>陷阱1：Chunk 大小不合适</strong>
+  <ul>
+  <li>太小：上下文不完整，语义被切断</li>
+  <li>太大：噪声多，检索精准度下降，占用上下文窗口</li>
+  <li>最佳实践：256~512 tokens，重叠 10~20%，按语义边界切分（段落/标题）</li>
+  </ul>
+</li>
+<li><strong>陷阱2：只用向量检索，忽略关键词</strong>
+  <ul>
+  <li>向量检索擅长语义匹配，但对专有名词、代码、数字不精准</li>
+  <li>必须用混合检索（Dense + Sparse），RRF 融合</li>
+  </ul>
+</li>
+<li><strong>陷阱3：不做 Reranking</strong>
+  <ul>
+  <li>向量检索的 Top-K 排序不够精准，尤其是 K 较大时</li>
+  <li>必须用 Cross-Encoder Reranker 重新排序，从 Top-50 选 Top-5</li>
+  </ul>
+</li>
+<li><strong>陷阱4：忽略查询改写</strong>
+  <ul>
+  <li>用户的查询可能模糊、有指代、多轮对话</li>
+  <li>用 LLM 做查询改写：指代消解、补全上下文、拆分多跳问题</li>
+  </ul>
+</li>
+<li><strong>陷阱5：没有引用溯源</strong>
+  <ul>
+  <li>用户无法验证答案来源，降低信任度</li>
+  <li>必须在答案中标注 [1] [2] 引用，并提供可点击的来源链接</li>
+  </ul>
+</li>
+</ul>
+
+<h3 id="rag-overview">检索增强生成（RAG）</h3>
 <p>RAG（Retrieval-Augmented Generation）把信息检索和大语言模型拼到一起：先从外部知识库捞相关文档，再喂给 LLM 来增强回答，既压幻觉又能给出可溯源的知识。</p>
 <h4 id="rag-architecture">RAG 架构</h4>
 <div class="mermaid" data-src="flowchart TD
