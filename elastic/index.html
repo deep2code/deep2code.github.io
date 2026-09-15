@@ -477,6 +477,105 @@ FST 状态机（共享前缀和后缀）：
 </ul>
 
 <h3 id="es-2026">2026 更新</h3>
+<h3 id="es-lucene-architecture">Lucene 底层架构与索引原理</h3>
+
+<p>Elasticsearch 的核心是 Apache Lucene，一个高性能的全文检索库。理解 Lucene 的索引结构和搜索流程，是优化 Elasticsearch 性能的基础。</p>
+
+<h4 id="es-segment">Segment 与不可变段</h4>
+
+<p>Lucene 的索引由多个<strong>段（Segment）</strong>组成，每个段是一个独立的倒排索引：</p>
+
+<ul>
+<li><strong>不可变性（Immutable）</strong>：段一旦写入就不再修改。删除操作不会真正删除文档，而是在 <code>.del</code> 文件中标记。更新操作 = 删除旧文档 + 写入新文档。不可变性带来的好处：不需要锁、可以被操作系统文件缓存高效缓存、并发安全</li>
+<li><strong>Refresh</strong>：文档写入后先在内存中，每隔 <code>refresh_interval</code>（默认 1s）刷新为一个新段，新段才可以被搜索。Refresh 是轻量级操作（生成段文件，不刷盘），但频繁 refresh 会产生大量小段</li>
+<li><strong>Flush</strong>：将内存中的段写入磁盘，同时清空 Translog。由事务日志大小（<code>index.translog.flush_threshold_size=512mb</code>）或时间触发。Flush 后数据持久化</li>
+<li><strong>段合并（Segment Merge）</strong>：后台线程定期将小段合并为大段，减少段数量，同时物理删除已标记删除的文档。合并策略由 <code>index.merge.policy</code> 控制（默认 TieredMergePolicy）。合并是 IO 密集型操作，可能影响搜索性能</li>
+</ul>
+
+<h4 id="es-inverted-index">倒排索引深度解析</h4>
+
+<p>倒排索引（Inverted Index）是全文检索的核心数据结构，由两部分组成：</p>
+
+<ul>
+<li><strong>词典（Term Dictionary）</strong>：所有文档中出现的词（Term）的有序列表。Lucene 使用 <strong>FST（Finite State Transducer，有限状态转换器）</strong>存储词典，将词映射到词的元数据（倒排表位置、词频等）。FST 是一种高度压缩的数据结构，前缀和后缀共享，可以在内存中存储整个词典</li>
+<li><strong>倒排表（Posting List）</strong>：每个词对应的文档列表，包含文档 ID（DocID）、词频（TF，用于评分）、位置（Position，用于短语查询）、偏移量（Offset，用于高亮）。倒排表使用<strong>帧编码（Frame of Reference）</strong>压缩，DocID 用增量编码+位图压缩</li>
+<li><strong>跳表（Skip List）</strong>：倒排表中的加速结构，用于多词查询时的交集计算。每隔 N 个文档建立一个跳跃点，跳过不可能匹配的部分</li>
+</ul>
+
+<p><strong>评分算法 BM25</strong>：Elasticsearch 默认的相关性评分算法，替代了旧的 TF-IDF。BM25 的公式考虑三个因素：</p>
+<ul>
+<li><strong>词频（TF）</strong>：词在文档中出现的次数，但有饱和效应（出现 100 次不等于 100 倍重要），参数 <code>k1</code>（默认 1.2）控制饱和速度</li>
+<li><strong>逆文档频率（IDF）</strong>：词在多少文档中出现，越罕见的词权重越高</li>
+<li><strong>文档长度归一化</strong>：长文档中词的权重被降低（因为长文档更容易包含任意词），参数 <code>b</code>（默认 0.75）控制长度归一化的强度</li>
+</ul>
+
+<h3 id="es-distributed">分布式架构与读写流程</h3>
+
+<h4 id="es-shard">分片与副本机制</h4>
+
+<p>Elasticsearch 的分布式基于<strong>分片（Shard）</strong>：</p>
+
+<ul>
+<li><strong>主分片（Primary Shard）</strong>：索引创建时指定数量（默认 1，7.0 前是 5），<strong>创建后不可修改</strong>（只能通过 Reindex 或 Split/Shrink 调整）。每个主分片是一个完整的 Lucene 索引</li>
+<li><strong>副本分片（Replica Shard）</strong>：主分片的拷贝，可以随时修改数量。副本用于高可用（主分片故障时提升为主）和读性能（搜索可以在副本上执行）。副本数默认 1，生产环境建议至少 1</li>
+<li><strong>分片分配</strong>：主节点（Master Node）负责将分片分配到数据节点，遵循：主分片和副本不在同一节点、尽量均匀分布、感知分配（<code>cluster.routing.allocation.awareness</code>，如机架感知）</li>
+<li><strong>路由（Routing）</strong>：文档通过 <code>shard = hash(routing) % number_of_primary_shards</code> 计算所在分片。默认 routing 是文档 ID。自定义 routing（如按用户 ID）可以将相关数据放在同一分片，提高查询效率，但可能导致数据倾斜</li>
+</ul>
+
+<h4 id="es-write-read">写入与查询流程</h4>
+
+<p><strong>写入流程（Index/Create/Update/Delete）</strong>：</p>
+<ol>
+<li>客户端请求到达<strong>协调节点（Coordinating Node）</strong>（任何节点都可以是协调节点）</li>
+<li>协调节点根据文档 ID（或 routing）计算目标分片，将请求转发到该分片的主分片所在节点</li>
+<li>主分片节点执行写入：先写 Translog（事务日志，用于崩溃恢复），再写内存缓冲区（Indexing Buffer）</li>
+<li>主分片写入成功后，并行转发到所有副本分片</li>
+<li>所有副本确认后，主分片节点返回成功给协调节点，协调节点返回客户端</li>
+<li>后台每隔 <code>refresh_interval</code> 将内存缓冲区刷新为新段（可搜索），每隔一段时间 Flush 到磁盘并清空 Translog</li>
+</ol>
+
+<p><strong>查询流程（Search）</strong>：分为两个阶段：</p>
+<ul>
+<li><strong>Query Phase（查询阶段）</strong>：协调节点将查询请求转发到所有相关分片（主或副本，负载均衡）。每个分片在本地执行查询，返回匹配文档的 ID 和评分（from+size 条）。协调节点收集所有分片的结果，合并排序，取全局的 from+size 条</li>
+<li><strong>Fetch Phase（获取阶段）</strong>：协调节点根据上一步的文档 ID，向对应分片请求完整文档（_source 或指定字段）。分片返回文档后，协调节点组装最终结果返回客户端</li>
+</ul>
+
+<p>深分页问题：<code>from=10000&size=10</code> 需要每个分片返回 10010 条，协调节点合并排序后取 10 条，内存和 CPU 开销巨大。Elasticsearch 默认限制 <code>index.max_result_window=10000</code>。深分页用 <code>search_after</code>（基于上一页最后一条的排序值）或 <code>scroll</code>（已不推荐，用 PIT + search_after 替代）。</p>
+
+<h3 id="es-performance">性能优化与资源管理</h3>
+
+<h4 id="es-indexing-optimize">写入性能优化</h4>
+
+<ul>
+<li><strong>批量写入（Bulk API）</strong>：单条写入的开销主要在网络往返和刷新。Bulk 批量写入可以将吞吐量提升 10-100 倍。推荐批量大小 5-15MB（不是条数，是字节数），根据文档大小调整。用 <code>_bulk</code> API，动作类型：index（覆盖）、create（不存在才创建）、update（更新）、delete（删除）</li>
+<li><strong>调整 Refresh Interval</strong>：默认 1s，对于写入密集型场景（如日志导入），可以临时设置为 <code>-1</code>（关闭自动刷新），导入完成后恢复。注意：关闭 refresh 期间写入的数据不可搜索</li>
+<li><strong>减少副本</strong>：初始导入时设置 <code>number_of_replicas=0</code>，导入完成后再增加副本。副本会增加写入开销（每个副本都要执行写入）</li>
+<li><strong>Translog 优化</strong>：默认 <code>index.translog.durability=request</code>（每次请求都 fsync，最安全）。写入密集型可以设置为 <code>async</code>（每 5s 刷盘，可能丢 5s 数据），或增大 <code>index.translog.flush_threshold_size</code>（默认 512MB）减少 Flush 次数</li>
+<li><strong>禁用 _all 和不必要的字段</strong>：<code>_all</code> 字段（6.0+ 默认禁用）会将所有字段内容复制一份，增加索引体积和写入时间。在 Mapping 中为不需要搜索的字段设置 <code>index: false</code>，不需要聚合的字段设置 <code>doc_values: false</code></li>
+</ul>
+
+<h4 id="es-query-optimize">查询性能优化</h4>
+
+<ul>
+<li><strong>Filter Context vs Query Context</strong>：Filter 上下文只过滤不评分，结果可以被缓存（Query Cache）。将不需要评分的条件（范围、精确匹配、存在性）放在 <code>filter</code> 子句中。Query Context 用于需要相关性评分的全文搜索</li>
+<li><strong>避免深度聚合</strong>：聚合（Aggregation）是内存密集型操作，高基数（high cardinality）字段的 terms 聚合需要加载所有唯一值到内存。设置 <code>size</code> 限制返回桶数量，使用 <code>composite</code> 聚合分页处理高基数聚合，避免 <code>cardinality</code> 聚合在超大基数上的精度问题</li>
+<li><strong>路由查询</strong>：如果查询条件包含 routing 值（如用户 ID），使用 <code>?routing=user_1001</code> 只查询相关分片，避免广播到所有分片。适用于多租户场景</li>
+<li><strong>字段数据类型选择</strong>：<code>keyword</code> 用于精确匹配和聚合，<code>text</code> 用于全文搜索。同时需要两种时用 multi-fields（<code>fields: { raw: { type: keyword } }</code>）。日期字段用 <code>date</code> 类型，数字用 <code>long</code>/<code>double</code> 而非 <code>keyword</code></li>
+</ul>
+
+<h3 id="es-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>分片数设置不当</strong>：分片过多（每个分片有开销，约 1 万字段/分片的元数据）导致集群状态大、查询慢；分片过少导致单分片过大（建议 < 50GB）、无法水平扩展。7.0+ 默认 1 个主分片，根据数据量规划：每分片 10-50GB，每节点分片数不超过 20（每GB堆内存对应不超过 20 个分片）。用 <code>_split</code>（翻倍）和 <code>_shrink</code>（减少）调整，但有前置条件</li>
+<li><strong>Mapping 动态映射导致类型错误</strong>：Elasticsearch 默认根据第一条文档推断字段类型，可能推断错误（如数字推断为 long 后无法存小数，日期格式不匹配）。生产环境应显式定义 Mapping，设置 <code>dynamic: strict</code>（拒绝未定义字段）或 <code>runtime</code>（运行时字段，不索引）。用 <code>_mapping</code> API 查看当前 Mapping</li>
+<li><strong>集群脑裂（Split Brain）</strong>：网络分区时，多个节点都认为自己是 Master，导致集群状态不一致。Elasticsearch 7.0+ 使用新的集群协调协议（基于 Raft），需要配置 <code>discovery.seed_hosts</code> 和 <code>cluster.initial_master_nodes</code>（首次启动）。Master 节点数应为奇数（3或5），<code>discovery.zen.minimum_master_nodes</code>（6.x 及之前）设为 N/2+1</li>
+<li><strong>JVM 堆内存设置不当</strong>：堆太小导致频繁 GC 和 OOM，堆太大导致 GC 停顿时间长（Full GC 可能停顿数秒）。建议堆大小为物理内存的 50%，且不超过 31GB（超过 32GB 后 JVM 无法使用压缩指针 Compressed Oops，内存效率骤降）。使用 G1GC（7.0+ 默认），监控 <code>jvm.gc.collectors.old.collection_time_in_millis</code></li>
+<li><strong>段合并占用大量 IO</strong>：写入密集时，段合并可能占用大量磁盘 IO 和 CPU，影响搜索性能。Elasticsearch 有合并限流（<code>indices.store.throttle.type=merge</code>，默认 20MB/s），但可能不够。可以调整 <code>index.merge.scheduler.max_thread_count</code>（SSD 设为 4-8，HDD 设为 1），或在低峰期手动触发 <code>_forcemerge</code>（只对只读索引使用，正在写入的索引不要 forcemerge）</li>
+<li><strong>查询超时与熔断</strong>：Elasticsearch 有多种熔断器（Circuit Breaker）防止 OOM：父熔断器（总堆 70%）、字段数据熔断器（40%）、请求熔断器（60%）。查询触发熔断时返回 <code>circuit_breaking_exception</code>。大查询用 <code>search.max_buckets</code>（默认 65536）限制聚合桶数，用 <code>timeout</code> 参数限制查询时间，避免慢查询拖垮集群</li>
+<li><strong>磁盘水位线导致只读</strong>：Elasticsearch 有三个磁盘水位线：低水位（85%，不再分配新分片）、高水位（90%，将分片迁移到其他节点）、洪水水位（95%，索引设置为只读，<code>index.blocks.read_only_allow_delete</code>）。生产环境必须监控磁盘使用率，提前扩容。达到洪水水位后，清理磁盘需要手动解除只读：<code>PUT _all/_settings { "index.blocks.read_only_allow_delete": null }</code></li>
+<li><strong>_source 字段过大</strong>：<code>_source</code> 存储原始 JSON 文档，默认开启。大文档（如包含 base64 图片、长文本）会导致：存储开销大、网络传输慢、Fetch 阶段慢。优化：在 Mapping 中设置 <code>_source: { excludes: ["big_field"] }</code> 排除大字段，或使用 <code>store: true</code> 单独存储需要的字段。查询时用 <code>_source_includes</code>/<code>_source_excludes</code> 只返回需要的字段。注意：关闭 _source 后无法更新文档、无法 reindex、无法查看原始数据</li>
+</ol>
+
                 <div class="page-nav">
 <a class="nav-prev" href="../memcached/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">Memcached</span></a>
 </div>

@@ -1052,6 +1052,92 @@ LIMIT 5;
 </table>
 
 <h3 id="sharding">20. 分库分表</h3>
+<h3 id="mysql-innodb-architecture">InnoDB 存储引擎架构深度解析</h3>
+
+<p>InnoDB 是 MySQL 默认的事务型存储引擎，其架构设计围绕<strong>事务安全、并发性能、崩溃恢复</strong>三大目标。理解 InnoDB 的内存结构和磁盘文件，是优化 MySQL 性能的基础。</p>
+
+<h4 id="mysql-memory-structure">内存结构</h4>
+
+<p>InnoDB 的内存分为三大区域：</p>
+
+<ul>
+<li><strong>Buffer Pool（缓冲池）</strong>：最大的内存区域，默认占物理内存的 50-75%。缓存数据页和索引页，采用 LRU 算法（改进的 Midpoint Insertion Strategy，防止全表扫描污染缓存）。包含数据页、索引页、Insert Buffer、自适应哈希索引、锁信息、数据字典等</li>
+<li><strong>Change Buffer（写缓冲）</strong>：二级索引的插入/更新缓冲。当修改的二级索引页不在 Buffer Pool 中时，先记录到 Change Buffer，避免随机 IO，后续合并到磁盘。适用于写多读少的场景</li>
+<li><strong>Log Buffer（日志缓冲）</strong>：Redo Log 的内存缓冲，默认 16MB。事务提交时根据 <code>innodb_flush_log_at_trx_commit</code> 策略刷入磁盘（0=每秒刷、1=每次提交刷、2=每次提交写OS缓存）</li>
+</ul>
+
+<p>Adaptive Hash Index（自适应哈希索引）：InnoDB 自动监控索引页的访问模式，对热点索引页建立哈希索引，将 B+树的 O(log n) 查找降为 O(1)。由 <code>innodb_adaptive_hash_index</code> 控制，默认开启。</p>
+
+<h4 id="mysql-disk-structure">磁盘文件结构</h4>
+
+<ul>
+<li><strong>表空间（Tablespace）</strong>：InnoDB 8.0 默认使用独立表空间（<code>innodb_file_per_table=1</code>），每张表一个 .ibd 文件。系统表空间 ibdata1 存储数据字典、Undo Log（8.0 前）、Change Buffer 等</li>
+<li><strong>Redo Log（重做日志）</strong>：循环写入的物理日志，记录页的物理修改。用于崩溃恢复（Crash Recovery），保证已提交事务不丢失。默认两个 48MB 文件（ib_logfile0/1），循环覆盖</li>
+<li><strong>Undo Log（回滚日志）</strong>：逻辑日志，记录数据修改前的状态。用于事务回滚和 MVCC。8.0 后独立表空间存储，支持自动截断</li>
+<li><strong>Doublewrite Buffer（双写缓冲）</strong>：防止部分写（Partial Write）导致页损坏。数据页先写入 Doublewrite Buffer（连续写），再写入实际位置（随机写）。崩溃时可从 Doublewrite 恢复完整页</li>
+</ul>
+
+<h3 id="mysql-mvcc-index">MVCC 与索引底层原理</h3>
+
+<h4 id="mysql-mvcc-deep">MVCC 实现原理</h4>
+
+<p>多版本并发控制（MVCC）是 InnoDB 实现隔离级别的核心机制，通过<strong>保存数据的多个版本</strong>来实现读写不阻塞。</p>
+
+<p>关键组件：</p>
+<ul>
+<li><strong>隐藏列</strong>：每行数据包含 <code>DB_TRX_ID</code>（最后修改该行的事务ID）、<code>DB_ROLL_PTR</code>（指向 Undo Log 的回滚指针）、<code>DB_ROW_ID</code>（无主键时的隐藏行ID）</li>
+<li><strong>Undo Log 链</strong>：每次修改都会在 Undo Log 中记录旧版本，通过 <code>DB_ROLL_PTR</code> 形成版本链。Purge 线程定期清理不再需要的旧版本</li>
+<li><strong>Read View（一致性视图）</strong>：事务开始时生成的快照，包含当前活跃事务列表。判断某行版本是否可见的规则：trx_id < min_id（已提交，可见）、trx_id > max_id（未来事务，不可见）、在活跃列表中（未提交，不可见）</li>
+</ul>
+
+<p>隔离级别与 MVCC 的关系：</p>
+<ul>
+<li><strong>READ COMMITTED</strong>：每条 SELECT 都生成新的 Read View，能看到其他事务已提交的修改</li>
+<li><strong>REPEATABLE READ</strong>：事务中第一条 SELECT 生成 Read View，后续复用，保证可重复读。这是 MySQL 默认隔离级别</li>
+<li><strong>SERIALIZABLE</strong>：所有 SELECT 都加共享锁，退化为锁机制并发控制</li>
+</ul>
+
+<h4 id="mysql-b-plus-tree">B+树索引底层</h4>
+
+<p>InnoDB 使用 B+树作为索引结构，与 B 树的关键区别：<strong>非叶子节点只存键，数据只在叶子节点；叶子节点通过双向链表连接</strong>。</p>
+
+<ul>
+<li><strong>聚簇索引（Clustered Index）</strong>：主键索引，叶子节点存储完整行数据。表数据就是聚簇索引的一部分。如果没有定义主键，InnoDB 选择第一个唯一非空索引，或自动生成 6 字节隐藏主键</li>
+<li><strong>二级索引（Secondary Index）</strong>：叶子节点存储主键值。查询时需要<strong>回表</strong>（先用二级索引找到主键，再用聚簇索引找行数据）。覆盖索引（Covering Index）可以避免回表</li>
+<li><strong>索引下推（ICP）</strong>：MySQL 5.6 引入，将 WHERE 条件中索引包含的列下推到存储引擎层过滤，减少回表次数。由 <code>optimizer_switch='index_condition_pushdown=on'</code> 控制</li>
+<li><strong>页分裂与合并</strong>：B+树页（默认 16KB）满时分裂，删除后合并。随机插入会导致频繁页分裂和碎片，自增主键是最佳实践</li>
+</ul>
+
+<h3 id="mysql-locking">锁机制与并发控制</h3>
+
+<h4 id="mysql-row-lock">行锁与间隙锁</h4>
+
+<p>InnoDB 的锁分为多个层次：</p>
+
+<ul>
+<li><strong>共享锁（S Lock）</strong>：读锁，允许多个事务同时持有，阻止写。<code>SELECT ... LOCK IN SHARE MODE</code></li>
+<li><strong>排他锁（X Lock）</strong>：写锁，只允许一个事务持有，阻止其他读写。<code>INSERT/UPDATE/DELETE</code> 自动加</li>
+<li><strong>意向锁（Intention Lock）</strong>：表级锁，表明事务即将在表中的某些行加锁。IS/IX 锁之间兼容，提高加锁效率（不需要逐行检查）</li>
+<li><strong>记录锁（Record Lock）</strong>：锁定索引记录。例如 <code>WHERE id=10 FOR UPDATE</code></li>
+<li><strong>间隙锁（Gap Lock）</strong>：锁定索引记录之间的间隙，防止其他事务在间隙中插入新记录。只在 REPEATABLE READ 隔离级别下使用，用于防止幻读</li>
+<li><strong>Next-Key Lock</strong>：记录锁 + 间隙锁，锁定记录本身及其前面的间隙。InnoDB 默认的行锁算法，左开右闭区间</li>
+</ul>
+
+<p>死锁检测：InnoDB 使用<strong>等待图（Wait-for Graph）</strong>检测死锁，当检测到循环等待时，回滚代价最小的事务（undo 量最少的）。可以通过 <code>SHOW ENGINE INNODB STATUS</code> 查看最近的死锁信息。</p>
+
+<h3 id="mysql-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>索引失效场景</strong>：对索引列使用函数/运算（<code>WHERE YEAR(create_time)=2026</code>）、隐式类型转换（字符串列用数字查询）、LIKE 左模糊（<code>%abc</code>）、OR 连接非索引列、不符合最左前缀原则。用 <code>EXPLAIN</code> 检查 type 列（ALL 是全表扫描，ref/range 是索引）</li>
+<li><strong>大事务导致 Undo 膨胀</strong>：长事务持有 Undo Log 不释放，导致 Undo 表空间膨胀，影响性能。避免在事务中等待用户输入、批量操作分批提交、监控 <code>information_schema.INNODB_TRX</code> 中的长事务</li>
+<li><strong>Redo Log 太小导致性能抖动</strong>：Redo Log 写满时触发 Checkpoint，强制刷脏页，导致性能尖刺。建议设置 <code>innodb_log_file_size</code> 为 1-2GB（8.0 最大 128GB），<code>innodb_log_files_in_group=2-4</code></li>
+<li><strong>Buffer Pool 命中率低</strong>：全表扫描、大结果集查询会污染 Buffer Pool。用 <code>SHOW STATUS LIKE 'Innodb_buffer_pool_read%'</code> 计算命中率（应 > 99%）。大表查询考虑 <code>SQL_BUFFER_RESULT</code> 或分批处理</li>
+<li><strong>间隙锁导致的死锁</strong>：REPEATABLE READ 下，唯一索引的等值查询会退化为记录锁，但范围查询和非唯一索引会加 Next-Key Lock。高并发插入场景可能因间隙锁冲突导致死锁。考虑降低隔离级别为 READ COMMITTED（间隙锁关闭）</li>
+<li><strong>慢查询未及时发现</strong>：开启 <code>slow_query_log=1</code>，设置 <code>long_query_time=1</code>（秒），用 <code>pt-query-digest</code> 分析慢查询日志。注意 <code>log_queries_not_using_indexes</code> 会记录所有未用索引的查询，可能产生大量日志</li>
+<li><strong>连接数耗尽</strong>：<code>max_connections</code> 默认 151，高并发时可能耗尽。应用层使用连接池（HikariCP、go-sql-driver 的 SetMaxOpenConns），监控 <code>Threads_connected</code> 和 <code>Aborted_connects</code>。不要盲目调大 max_connections，每个连接占用内存（约 2-3MB）</li>
+<li><strong>主从延迟</strong>：大事务、DDL 操作、网络延迟、从库性能不足都会导致主从延迟。监控 <code>Seconds_Behind_Master</code>（不准确，仅参考），使用 <code>pt-heartbeat</code> 精确测量。8.0 支持并行复制（<code>slave_parallel_workers</code>），基于 WriteSet 的并行复制可显著提升吞吐量</li>
+</ol>
+
 <hr>
 <div class="mermaid" data-src="flowchart TB
     A[分库分表] --> B[垂直拆分]

@@ -459,6 +459,124 @@ hello</code></pre>
 <h3 id="memcached-install">安装</h3>
 <h3 id="memcached-commands">常用命令</h3>
 <h3 id="memcached-python">Python 客户端</h3>
+<h3 id="memcached-architecture">架构与多线程模型深度解析</h3>
+
+<p>Memcached 是一个高性能的分布式内存对象缓存系统，其设计哲学是<strong>简单、快速、无状态</strong>。与 Redis 不同，Memcached 不提供持久化、集群、复杂数据类型，而是将这些功能交给客户端实现，自身专注于极致的缓存性能。</p>
+
+<h4 id="memcached-multithread">多线程架构</h4>
+
+<p>Memcached 使用<strong>多线程模型</strong>（Redis 6.0 前是单线程），充分利用多核 CPU：</p>
+
+<ul>
+<li><strong>主线程（Main Thread）</strong>：监听端口，接受新连接，将连接分配给工作线程</li>
+<li><strong>工作线程（Worker Thread）</strong>：默认 4 个（<code>-t</code> 参数调整），每个线程处理一部分连接的请求。每个工作线程有独立的事件循环（libevent），独立的连接队列</li>
+<li><strong>线程间通信</strong>：使用<strong>管道（Pipe）</strong>进行线程间通信。主线程通过管道向工作线程发送新连接，工作线程通过管道向主线程发送统计信息。避免了复杂的锁机制</li>
+<li><strong>全局锁</strong>：Memcached 的核心数据结构（哈希表、LRU）是全局共享的，操作时需要获取全局锁。这是多线程模型的瓶颈，但由于 Memcached 的操作都是 O(1) 且极快，锁竞争通常不是问题。1.4.0+ 引入了分片锁（每 LRU 队列一个锁），减少锁竞争</li>
+</ul>
+
+<p>事件驱动：Memcached 使用 <strong>libevent</strong> 库实现异步 IO，每个工作线程运行一个事件循环。连接建立后注册读事件，请求到达时触发回调处理，处理完注册写事件发送响应。这种模型可以在单线程中处理数千个并发连接（C10K 问题的经典解决方案）。</p>
+
+<h4 id="memcached-protocol">协议与命令格式</h4>
+
+<p>Memcached 支持两种协议：</p>
+
+<ul>
+<li><strong>文本协议（Text Protocol）</strong>：默认，人类可读，便于调试。命令格式：<code>&lt;command&gt; &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; [noreply]\r\n</code>，然后是数据块 <code>&lt;data block&gt;\r\n</code>。响应：<code>STORED</code>、<code>NOT_STORED</code>、<code>EXISTS</code>、<code>NOT_FOUND</code>、<code>VALUE &lt;key&gt; &lt;flags&gt; &lt;bytes&gt;\r\n&lt;data&gt;\r\nEND\r\n</code></li>
+<li><strong>二进制协议（Binary Protocol）</strong>：1.3+ 支持，更紧凑、解析更快、支持更多特性（如无返回值操作、批量获取的版本信息）。请求/响应头 24 字节，包含魔数、操作码、键长度、额外信息长度、数据类型、状态、总字节数、Opaque、CAS 值。二进制协议的解析开销比文本协议低约 30%</li>
+</ul>
+
+<p>核心命令：</p>
+<ul>
+<li><strong>存储命令</strong>：<code>set</code>（覆盖存储）、<code>add</code>（不存在才存储）、<code>replace</code>（存在才替换）、<code>append</code>/<code>prepend</code>（追加/前置数据）、<code>cas</code>（Check And Set，乐观锁）</li>
+<li><strong>检索命令</strong>：<code>get</code>（获取，支持多 key）、<code>gets</code>（获取带 CAS 值）、<code>gat</code>（Get And Touch，获取并更新过期时间）</li>
+<li><strong>删除</strong>：<code>delete</code>（删除 key）</li>
+<li><strong>自增自减</strong>：<code>incr</code>/<code>decr</code>（对 64 位无符号整数操作，非数字值会报错）</li>
+<li><strong>统计</strong>：<code>stats</code>（通用统计）、<code>stats items</code>（各 Slab 的 item 统计）、<code>stats slabs</code>（Slab 详细统计）、<code>stats settings</code>（配置参数）</li>
+</ul>
+
+<h3 id="memcached-memory">内存管理：Slab Allocator 深度解析</h3>
+
+<h4 id="memcached-slab">Slab 分配机制</h4>
+
+<p>Memcached 使用<strong>Slab Allocator</strong>管理内存，解决了传统 malloc/free 的内存碎片问题：</p>
+
+<ul>
+<li><strong>Slab Class</strong>：Memcached 将内存分为多个 Slab Class，每个 Class 对应固定大小的 Chunk（数据块）。默认从 96 字节开始，按 1.25 倍增长（<code>-f</code> 参数调整增长因子），直到达到最大 1MB（<code>-I</code> 参数调整，最大支持 128MB）。例如：96B、120B、152B、192B、240B... 1MB</li>
+<li><strong>Page</strong>：每个 Slab Class 以 Page（默认 1MB，<code>-I</code> 同时影响 Page 大小）为单位向系统申请内存。一个 Page 被切分为多个固定大小的 Chunk。例如 1MB Page / 96B Chunk = 约 10922 个 Chunk</li>
+<li><strong>Chunk</strong>：存储实际数据的最小单元。存储数据时，选择能容纳数据的最小 Chunk 大小的 Slab Class。例如 100 字节的数据存在 120 字节的 Chunk 中，浪费 20 字节（内部碎片）</li>
+<li><strong>内存分配流程</strong>：新数据到达 → 计算数据大小 → 选择最小的能容纳的 Slab Class → 该 Class 有空闲 Chunk 则直接使用 → 没有空闲 Chunk 则申请新 Page（如果还有内存）→ 没有内存则从该 Class 的 LRU 尾部淘汰一个 item</li>
+</ul>
+
+<p>Slab Allocator 的优缺点：</p>
+<ul>
+<li>优点：无外部碎片（内存都是 Page 对齐的）、分配/释放 O(1)、内存复用（Chunk 不会归还系统，只会在 Slab 内复用）</li>
+<li>缺点：内部碎片（数据小于 Chunk 时浪费空间）、Slab 间内存不共享（一个 Slab 占满内存后，其他 Slab 无法使用，即使有空闲 Chunk）、增长因子设置不当会导致大量浪费</li>
+</ul>
+
+<h4 id="memcached-lru">LRU 淘汰与过期机制</h4>
+
+<p>Memcached 的 LRU（Least Recently Used）淘汰机制：</p>
+
+<ul>
+<li><strong>每个 Slab Class 独立的 LRU 队列</strong>：不是全局 LRU，而是每个 Slab Class 维护自己的 LRU 链表。这意味着：如果 1MB 的 Slab 占满了，即使 96B 的 Slab 有大量空闲，也不会从 96B 的 Slab 借内存，而是淘汰 1MB Slab 中的 item</li>
+<li><strong>LRU 操作</strong>：get 操作将 item 移到 LRU 头部（最近使用），新插入的 item 也在头部。内存不足时从 LRU 尾部（最久未使用）淘汰</li>
+<li><strong>过期机制</strong>：Memcached 是<strong>惰性过期</strong>（Lazy Expiration），不会主动扫描过期 item。get 时检查 item 是否过期，过期则返回 NOT_FOUND 并标记为可回收。过期的 item 占用的内存不会立即释放，而是在新数据需要空间时被覆盖（Slab 内的 Chunk 复用）</li>
+<li><strong>LRU 爬虫（LRU Crawler）</strong>：1.4.11+ 引入的后台线程，定期扫描 LRU 队列，回收过期 item。可以通过 <code>lru_crawler</code> 命令启动/停止，<code>lru_maintainer</code> 命令启用自动维护（自动调整 LRU、回收过期、处理 Slab 内存平衡）</li>
+</ul>
+
+<h3 id="memcached-cas-distributed">CAS 机制与分布式架构</h3>
+
+<h4 id="memcached-cas">CAS（Check And Set）乐观锁</h4>
+
+<p>CAS 是 Memcached 提供的<strong>乐观并发控制</strong>机制，解决并发更新时的竞态条件：</p>
+
+<ul>
+<li><strong>原理</strong>：每个 item 有一个 64 位的 CAS 值（版本号），每次修改 item 时 CAS 值递增。客户端用 <code>gets</code> 获取数据和 CAS 值，修改后用 <code>cas</code> 命令提交，携带获取时的 CAS 值。如果服务端的 CAS 值与客户端携带的一致，说明期间没有被修改，更新成功；如果不一致，返回 <code>EXISTS</code>，更新失败</li>
+<li><strong>使用场景</strong>：计数器（先 get 当前值，加 1 后 cas 提交，失败则重试）、配置更新（防止覆盖他人的修改）、库存扣减等需要原子性的读-改-写操作</li>
+<li><strong>与 Redis 对比</strong>：Redis 的 <code>WATCH/MULTI/EXEC</code> 提供类似的乐观锁，但 Redis 还支持 Lua 脚本实现更复杂的原子操作。Memcached 的 CAS 只支持单 key 的读-改-写原子性</li>
+</ul>
+
+<h4 id="memcached-distributed">分布式：客户端分片与一致性哈希</h4>
+
+<p>Memcached 本身是<strong>无状态的单节点服务</strong>，分布式能力完全由客户端实现：</p>
+
+<ul>
+<li><strong>客户端分片（Client-Side Sharding）</strong>：客户端根据 key 的哈希值选择目标节点。最简单的算法是 <code>hash(key) % N</code>（N 是节点数）。这种算法的问题：节点数变化时（扩容/缩容/故障），几乎所有 key 的映射都会改变，导致缓存雪崩</li>
+<li><strong>一致性哈希（Consistent Hashing）</strong>：将哈希空间（0 到 2^32-1）组织成一个环，每个节点在环上有多个位置（虚拟节点，通常 100-200 个）。key 哈希后在环上顺时针找到最近的节点。节点变化时只影响相邻节点的 key（约 1/N 的数据需要迁移）。虚拟节点解决了节点数据不均的问题</li>
+<li><strong>主流客户端支持</strong>：spymemcached（Java）、xmemcached（Java）、pylibmc（Python）、libmemcached（C/C++）、go-memcached（Go）等都支持一致性哈希。部分客户端还支持故障转移（节点故障时自动切换到备用节点）和连接池</li>
+<li><strong>Memcached 不支持的特性</strong>：没有主从复制、没有持久化、没有集群管理、没有事务、没有复杂数据类型（只有 String）。这些特性需要在应用层或通过其他组件实现。这是 Memcached 的设计选择：简单的核心，极致的性能</li>
+</ul>
+
+<h3 id="memcached-vs-redis">Memcached vs Redis 深度对比</h3>
+
+<table>
+<tr><th>维度</th><th>Memcached</th><th>Redis</th></tr>
+<tr><td>数据类型</td><td>仅 String</td><td>String/List/Hash/Set/ZSet/Stream/Geo/Bitmap/HyperLogLog</td></tr>
+<tr><td>线程模型</td><td>多线程（默认4线程）</td><td>6.0前单线程，6.0+多线程IO（命令执行仍单线程）</td></tr>
+<tr><td>持久化</td><td>无</td><td>RDB + AOF + 混合持久化</td></tr>
+<tr><td>集群</td><td>客户端分片</td><td>Redis Cluster（服务端分片、故障转移、槽路由）</td></tr>
+<tr><td>内存管理</td><td>Slab Allocator（无外部碎片，有内部碎片）</td><td>jemalloc（有碎片，支持主动碎片整理）</td></tr>
+<tr><td>最大 Value</td><td>默认 1MB（可调至 128MB）</td><td>512MB</td></tr>
+<tr><td>事务</td><td>无（CAS 乐观锁）</td><td>MULTI/EXEC + Lua 脚本</td></tr>
+<tr><td>发布订阅</td><td>无</td><td>Pub/Sub + Stream</td></tr>
+<tr><td>适用场景</td><td>纯缓存、简单 KV、多线程高吞吐</td><td>缓存 + 数据结构存储、持久化、分布式、复杂业务逻辑</td></tr>
+</table>
+
+<p>选择建议：如果只需要简单的 KV 缓存，且追求极致的多线程吞吐，Memcached 更轻量；如果需要复杂数据类型、持久化、分布式集群、原子操作，Redis 是更好的选择。实际生产中 Redis 已经基本取代了 Memcached，但在某些特定场景（如纯会话缓存、CDN 边缘缓存）Memcached 仍有优势。</p>
+
+<h3 id="memcached-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>Slab 内存不共享导致的浪费</strong>：如果数据大小分布集中在某个 Slab Class，该 Class 会占满所有内存，其他 Class 即使有需求也无法分配。例如大量 1MB 的视频缓存占满内存后，96B 的小缓存无法存储。解决方案：合理设置增长因子 <code>-f</code>（数据大小均匀用 1.25，集中用 1.1），监控 <code>stats slabs</code> 中各 Slab 的 <code>free_chunks</code> 和 <code>evicted</code>，使用 LRU Maintainer（<code>lru_maintainer</code>）在 Slab 间平衡内存</li>
+<li><strong>大 Value 导致的性能问题</strong>：默认最大 Value 是 1MB，超过会报错 <code>CLIENT_ERROR bad command line format</code> 或 <code>SERVER_ERROR object too large for cache</code>。大 Value 会：占用大 Chunk（浪费空间）、网络传输慢、序列化/反序列化开销大。最佳实践：Value 控制在 100KB 以内，大对象拆分存储（如用 Hash 结构，但 Memcached 只有 String，需要应用层拆分），或增大 <code>-I</code> 参数（如 <code>-I 5m</code>）</li>
+<li><strong>缓存雪崩（节点故障）</strong>：Memcached 节点故障时，该节点的所有缓存同时失效，请求打到数据库。一致性哈希只能减少影响范围（约 1/N），不能完全避免。解决方案：使用一致性哈希 + 虚拟节点减少迁移量、应用层熔断降级、数据库读写分离、缓存预热（节点上线后主动加载热点数据）、使用 Magagent（代理层，支持一致性哈希和故障转移）</li>
+<li><strong>过期时间设置不当</strong>：Memcached 的过期时间（exptime）有特殊规则：≤ 30 天（2592000 秒）时视为相对时间（从当前时间起算），> 30 天时视为绝对时间（Unix 时间戳）。如果误将 3600 秒（1小时）当作绝对时间，会立即过期。另外，exptime=0 表示永不过期（但仍可能被 LRU 淘汰）。注意：Memcached 的最大过期时间是 30 天（相对）或任意未来时间（绝对），不要设置为过去的时间戳</li>
+<li><strong>多线程下的 CAS 竞态</strong>：CAS 是乐观锁，高并发下可能频繁失败（EXISTS），需要客户端重试。但重试次数过多会导致 CPU 飙升。最佳实践：CAS 操作设置最大重试次数（如 3-5 次），失败后回退到数据库或返回默认值；对于计数器场景，使用 <code>incr</code>/<code>decr</code>（原子操作，不需要 CAS）；避免在 CAS 循环中执行耗时操作</li>
+<li><strong>Stats 命令影响性能</strong>：<code>stats</code>、<code>stats items</code>、<code>stats slabs</code> 等命令需要遍历全局数据结构，在大内存实例（>10GB）上可能阻塞数百毫秒。不要在业务代码中频繁调用 stats，监控系统应降低采集频率（如每 30 秒一次）。使用 <code>stats cachedump</code> 命令（调试用）会遍历 LRU 队列，生产环境禁止使用</li>
+<li><strong>Key 设计不规范</strong>：Memcached 的 key 最大 250 字节，不能包含空格和控制字符（\r\n 等）。key 设计应：有前缀标识业务（如 <code>user:1001:profile</code>）、长度适中（过长浪费内存和网络）、避免特殊字符（用 MD5 哈希长 key）、不要包含敏感信息（key 以明文存储，stats 命令可能泄露）。注意：Memcached 是二进制安全的 Value，但 key 不是</li>
+<li><strong>不监控命中率导致的资源浪费</strong>：Memcached 的核心价值是缓存命中率，命中率低意味着大量请求打到数据库，同时浪费了 Memcached 的内存和 CPU。用 <code>stats</code> 查看 <code>get_hits</code> 和 <code>get_misses</code>，命中率 = get_hits / (get_hits + get_misses)，应 > 90%。命中率低的原因：缓存容量不足（LRU 频繁淘汰）、过期时间太短、key 设计不合理（大量一次性查询）、数据更新频繁。优化：增大内存、调整过期时间、优化 key 设计、对不常变化的数据用更长 TTL</li>
+</ol>
+
                 <div class="page-nav">
 <a class="nav-prev" href="../redis/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">Redis</span></a>
 <a class="nav-next" href="../elastic/index.html"><span class="nav-label">下一篇 →</span><span class="nav-title">Elasticsearch</span></a>
