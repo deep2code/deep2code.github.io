@@ -315,6 +315,112 @@ func main() {
 
 <!-- 保留原始标题锚点 -->
 <h3 id="echo-overview">Echo Web 框架</h3>
+<h3 id="echo-routing">路由系统：Radix Tree 与优先级</h3>
+
+<p>Echo 的路由系统基于<strong>压缩前缀树（Radix Tree）</strong>，与 Gin 类似但有自己的实现特点。Echo 的路由支持静态路径、命名参数（<code>:id</code>）、通配符（<code>*</code>），以及更灵活的路由优先级规则。</p>
+
+<h4 id="echo-tree-structure">树结构与匹配算法</h4>
+
+<ul>
+<li><strong>节点类型</strong>：<code>skind</code>（静态）、<code>pkind</code>（参数）、<code>akind</code>（通配符/any）。与 Gin 不同，Echo 的参数节点和通配符节点可以有更灵活的组合</li>
+<li><strong>边索引</strong>：每个节点维护子节点的首字符索引（<code>edges</code>），实现 O(1) 字符跳转。静态节点按首字符排序，支持二分查找</li>
+<li><strong>优先级排序</strong>：节点按 <code>priority</code>（子树路由数量）排序，保证最常用的路由优先匹配。与 Gin 不同，Echo 允许在同一层级混合静态节点和参数节点，通过优先级决定匹配顺序</li>
+<li><strong>参数提取</strong>：匹配过程中，参数节点将匹配到的路径段存入 <code>Param</code> 列表。Echo 使用 <strong>sync.Pool</strong> 复用 Param 切片，减少分配</li>
+</ul>
+
+<p>Echo 4 vs Echo 5 路由变化：Echo 5 重构了路由树实现，修复了 v4 中一些路由冲突的边界情况，支持更复杂的参数路由组合（如 <code>/users/:id/files/*</code>），同时提升了路由匹配性能（减少了内存分配和反射使用）。</p>
+
+<h4 id="echo-route-naming">路由命名与反向路由</h4>
+
+<p>Echo 支持路由命名（<code>e.GET("/users/:id", handler).Name = "get-user"</code>），可以通过 <code>e.Reverse("get-user", 123)</code> 生成 URL（<code>/users/123</code>）。这在模板渲染和 API 文档生成中很有用。Echo 5 增强了 Reverse 方法，支持更多参数类型和自动 URL 编码。</p>
+
+<h3 id="echo-context">Context 架构与请求生命周期</h3>
+
+<h4 id="echo-context-impl">Context 实现</h4>
+
+<p>Echo 的 Context 是一个<strong>接口</strong>（<code>echo.Context</code>），定义了 40+ 方法，默认实现是 <code>context</code> 结构体：</p>
+
+<ul>
+<li><strong>请求方法</strong>：<code>Request()</code> / <code>SetRequest()</code>、<code>Param()</code> / <code>ParamNames()</code> / <code>ParamValues()</code>、<code>QueryParam()</code> / <code>QueryParams()</code>、<code>FormValue()</code> / <code>FormParams()</code>、<code>Cookie()</code> / <code>Cookies()</code></li>
+<li><strong>响应方法</strong>：<code>Response()</code>、<code>JSON()</code>、<code>String()</code>、<code>HTML()</code>、<code>Blob()</code>、<code>File()</code>、<code>Attachment()</code>、<code>Stream()</code>、<code>Redirect()</code>、<code>NoContent()</code></li>
+<li><strong>绑定与验证</strong>：<code>Bind()</code>、<code>Validate()</code></li>
+<li><strong>数据传递</strong>：<code>Get()</code> / <code>Set()</code>（请求级键值存储）</li>
+<li><strong>其他</strong>：<code>Logger()</code>、<code>Echo()</code>（获取 Echo 实例引用）、<code>Path()</code>（匹配的路由模板）、<code>RealIP()</code>（客户端真实 IP）</li>
+</ul>
+
+<p>Context 也使用 <strong>sync.Pool</strong> 复用。与 Gin 类似，Echo 的 Context 不是线程安全的，在 goroutine 中使用需要调用 <code>c.(*context).Copy()</code>（Echo 4）或 <code>context.Clone()</code>（Echo 5 新增方法）。</p>
+
+<h4 id="echo-response-writer">Response 包装器</h4>
+
+<p>Echo 的 <code>Response</code> 是 <code>http.ResponseWriter</code> 的包装器，增加了：</p>
+<ul>
+<li><strong>状态码记录</strong>：<code>Status</code> 字段记录响应状态码，未写入时为 0</li>
+<li><strong>响应大小统计</strong>：<code>Size</code> 字段记录已写入的字节数</li>
+<li><strong>Committed 标记</strong>：<code>Committed</code> 表示是否已经写入 header（一旦 committed，状态码和 header 不可修改）</li>
+<li><strong>BeforeResponse 钩子</strong>：<code>BeforeResponse(func(Response))</code> 注册在写入响应前执行的回调，用于日志、压缩等</li>
+</ul>
+
+<h3 id="echo-middleware">中间件机制与 Echo 5 变化</h3>
+
+<h4 id="echo-middleware-chain">中间件链执行模型</h4>
+
+<p>Echo 的中间件是<strong>函数包装</strong>模型，与 Gin 的递归链不同：</p>
+
+<ul>
+<li><strong>中间件签名</strong>：<code>func(echo.HandlerFunc) echo.HandlerFunc</code>，接收下一个 handler，返回包装后的 handler</li>
+<li><strong>链的构建</strong>：<code>e.Use(m1, m2, m3)</code> 注册全局中间件，执行时从右向左包装：<code>m1(m2(m3(handler)))</code>。因此 m1 最先执行（最外层），m3 最后执行（最内层，紧邻处理函数）</li>
+<li><strong>组中间件</strong>：<code>g := e.Group("/api", m1)</code> 组级中间件，在全局中间件之后、路由处理函数之前执行</li>
+<li><strong>路由级中间件</strong>：<code>e.GET("/path", handler, m1, m2)</code> 路由级中间件，在组中间件之后执行</li>
+</ul>
+
+<p>执行顺序：全局中间件（Use 注册顺序）→ 组中间件 → 路由级中间件 → 处理函数。与 Gin 不同，Echo 的中间件不需要显式调用 <code>Next()</code>，而是通过调用传入的 <code>next(c)</code> 继续执行链。如果不调用 next，则链中断。</p>
+
+<h4 id="echo-v5-changes">Echo 5 主要变化</h4>
+
+<p>Echo 5（2024 年发布）是一个大版本更新，主要变化：</p>
+
+<ul>
+<li><strong>Context 接口扩展</strong>：新增 <code>Clone()</code> 方法（替代 v4 的手动 Copy）、<code>JSONPretty()</code>、<code>JSONBlob()</code>、<code>Render()</code> 等方法</li>
+<li><strong>路由树重构</strong>：修复了 v4 中参数路由与静态路由冲突的问题，支持更复杂的路由模式，匹配性能提升约 15%</li>
+<li><strong>中间件改进</strong>：内置中间件（CORS、Logger、Recover、Gzip 等）全部重构，支持更多配置选项，修复了 v4 中的一些 bug</li>
+<li><strong>验证器升级</strong>：默认验证器升级到 <code>go-playground/validator/v10</code>，支持自定义验证器和错误翻译</li>
+<li><strong>Binder 重构</strong>：新的 Binder 接口，支持自定义绑定器，修复了 v4 中 Bind 多次调用的问题（v5 的 Bind 默认支持多次绑定同一请求体）</li>
+<li><strong>移除过时 API</strong>：移除了 v4 中标记为 deprecated 的方法（如 <code>Context#Bind</code> 的旧签名），需要代码迁移</li>
+</ul>
+
+<h3 id="echo-vs-gin">Echo vs Gin 深度对比</h3>
+
+<table>
+<tr><th>维度</th><th>Echo</th><th>Gin</th></tr>
+<tr><td>设计哲学</td><td>简洁、灵活、可扩展</td><td>高性能、API 丰富、开箱即用</td></tr>
+<tr><td>Context</td><td>接口（可自定义实现）</td><td>结构体（不可替换）</td></tr>
+<tr><td>中间件模型</td><td>函数包装（洋葱模型）</td><td>递归链（Next() 调用）</td></tr>
+<tr><td>路由树</td><td>Radix Tree（v5 重构）</td><td>Radix Tree（成熟稳定）</td></tr>
+<tr><td>JSON 性能</td><td>默认 encoding/json，可替换</td><td>默认 encoding/json，构建 tag 可换 jsoniter/sonic</td></tr>
+<tr><td>验证器</td><td>内置 validator/v10</td><td>内置 validator/v10</td></tr>
+<tr><td>模板渲染</td><td>内置 html/template 支持</td><td>需自定义 Render 接口</td></tr>
+<tr><td>静态文件</td><td>Static/StaticFS/File</td><td>Static/StaticFS/File</td></tr>
+<tr><td>HTTP/2</td><td>支持（基于 net/http）</td><td>支持（基于 net/http）</td></tr>
+<tr><td>WebSocket</td><td>需第三方库（gorilla/websocket）</td><td>需第三方库（gorilla/websocket）</td></tr>
+<tr><td>社区生态</td><td>中等，内置中间件丰富</td><td>活跃，第三方中间件和示例最多</td></tr>
+<tr><td>学习曲线</td><td>平缓，API 简洁直观</td><td>中等，API 多但文档完善</td></tr>
+</table>
+
+<p>选择建议：追求极致性能和丰富生态选 Gin；偏好简洁 API、灵活的 Context 接口、函数式中间件模型选 Echo。两者性能差距不大（都在 10% 以内），实际项目中瓶颈通常在数据库和外部服务，而非框架本身。</p>
+
+<h3 id="echo-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>Context 不是线程安全的</strong>：与 Gin 一样，Echo 的 Context 使用 sync.Pool 复用，请求结束后可能被其他请求复用。在 goroutine 中使用 Context 必须调用 <code>c.Clone()</code>（Echo 5）或手动复制所需数据。Echo 5 的 Clone 方法返回一个新的 Context，持有原始数据的副本，可以安全地在 goroutine 中使用</li>
+<li><strong>中间件执行顺序误解</strong>：Echo 的中间件是洋葱模型，<code>e.Use(m1, m2, m3)</code> 的执行顺序是 m1 → m2 → m3 → handler → m3 → m2 → m1。m1 的前置代码最先执行，后置代码最后执行。与 Gin 的链式模型不同，Echo 不需要显式调用 Next，而是调用传入的 <code>next(c)</code>。如果中间件不调用 next，后续 handler 不会执行，但当前中间件 next 之后的代码也不会执行</li>
+<li><strong>Bind 方法的 Content-Type 依赖</strong>：Echo 的 <code>c.Bind()</code> 根据请求的 Content-Type 选择绑定器。如果请求没有 Content-Type 头（如 GET 请求的 query 参数），Bind 可能不会按预期工作。对于 query 参数绑定，使用 <code>c.QueryParams()</code> 或手动解析。Echo 5 改进了 Bind 的默认行为，对 GET 请求自动绑定 query 参数</li>
+<li><strong>路由参数与静态路径冲突</strong>：Echo 4 中，<code>/users/new</code> 和 <code>/users/:id</code> 可能导致路由冲突或匹配错误。Echo 5 重构了路由树，修复了大部分冲突问题，但仍建议避免设计有歧义的路由。如果必须共存，确保静态路由先注册（Echo 的优先级机制会优先匹配静态路由）</li>
+<li><strong>Response.Committed 后修改 header 无效</strong>：一旦调用了任何写入响应的方法（JSON、String、Write 等），Response 的 Committed 标记为 true，此后修改 header 或状态码不会生效。中间件中需要修改响应头时，必须在调用 next(c) 之前设置，或使用 BeforeResponse 钩子</li>
+<li><strong>文件下载的 Content-Disposition</strong>：<code>c.Attachment(file, name)</code> 会设置 Content-Disposition 为 attachment，触发浏览器下载。但文件名包含中文或特殊字符时，需要正确编码（RFC 5987 格式：<code>filename*=UTF-8''%E4%B8%AD%E6%96%87.pdf</code>）。Echo 的 Attachment 方法在 v5 中修复了中文文件名编码问题，v4 中可能需要手动设置 header</li>
+<li><strong>Gzip 中间件与 SSE 冲突</strong>：Gzip 中间件会缓冲响应内容进行压缩，但 SSE（Server-Sent Events）需要流式推送，缓冲会导致事件延迟。使用 SSE 时，在 Gzip 中间件中跳过特定路径（<code>Skipper</code> 函数），或不使用 Gzip。Echo 的 Gzip 中间件支持 Skipper 配置，可以跳过 SSE 端点</li>
+<li><strong>Logger 中间件的性能开销</strong>：默认 Logger 中间件使用 <code>fmt.Sprintf</code> 格式化日志，在高并发场景下有一定开销。生产环境建议使用结构化日志（如 zap、zerolog），自定义 Logger 中间件。同时注意：Logger 中间件应放在最外层（第一个 Use），才能记录完整的请求耗时和所有中间件的状态</li>
+</ol>
+
 <h4 id="echo-example">示例</h4>
 <h4 id="echo-2026">2026 更新</h4>
                 <div class="page-nav">

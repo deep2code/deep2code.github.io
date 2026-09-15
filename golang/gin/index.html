@@ -288,6 +288,122 @@ func AuthMiddleware[T User]() gin.HandlerFunc {
 
 <!-- 保留原始标题锚点 -->
 <h3 id="gorm-overview">GORM ORM</h3>
+<h3 id="gin-routing-tree">路由树：Radix Tree 深度解析</h3>
+
+<p>Gin 的高性能核心之一是其基于<strong>Radix Tree（基数树/压缩前缀树）</strong>的路由实现。与 http.ServeMux 的简单 map 匹配不同，Radix Tree 支持动态参数（<code>:id</code>）和通配符（<code>*filepath</code>），同时保持 O(k) 的查找复杂度（k 为 URL 路径长度）。</p>
+
+<h4 id="gin-radix-structure">Radix Tree 数据结构</h4>
+
+<p>Gin 的路由树节点结构：</p>
+
+<ul>
+<li><strong>节点类型</strong>：<code>static</code>（静态节点，如 /api）、<code>param</code>（参数节点，如 /:id）、<code>catchAll</code>（通配符节点，如 /*filepath）</li>
+<li><strong>边（Edge）</strong>：每个节点有子节点列表，按首字符索引（<code>indices</code> 字段存储子节点首字符，实现 O(1) 跳转）</li>
+<li><strong>优先级</strong>：节点按子树中注册的路由数量排序，静态节点优先于参数节点，参数节点优先于通配符节点。这保证了最具体的路由优先匹配</li>
+<li><strong>handlers</code>：每个节点可以绑定一个 HandlerFunc 链（中间件 + 最终处理函数）</li>
+</ul>
+
+<p>路由注册过程：将路径按 <code>/</code> 分段，逐段插入树中。如果已有公共前缀则压缩（如 /api/user 和 /api/post 共享 /api/ 前缀），遇到 <code>:</code> 开头的段创建 param 节点，遇到 <code>*</code> 开头的段创建 catchAll 节点。</p>
+
+<p>路由匹配过程：从根节点开始，逐字符匹配路径。静态节点精确匹配字符，param 节点匹配到下一个 <code>/</code> 为止，catchAll 节点匹配剩余全部路径。匹配到叶子节点时返回其 handlers 和提取的参数值。</p>
+
+<h4 id="gin-route-group">路由组与中间件链</h4>
+
+<p>路由组（RouterGroup）是 Gin 的组织机制：</p>
+
+<ul>
+<li><strong>组的本质</strong>：RouterGroup 包含一个基础路径前缀（<code>basePath</code>）和一组中间件（<code>Handlers</code>）。创建子组时，子组继承父组的路径前缀和中间件</li>
+<li><strong>中间件链合并</strong>：注册路由时，最终的 HandlerFunc 链 = 全局中间件 + 路由组中间件 + 路由处理函数。使用 <code>combineHandlers</code> 函数合并，预分配容量避免多次扩容</li>
+<li><strong>Use 方法</strong>：<code>r.Use(middleware)</code> 将中间件添加到当前组的中间件列表。在路由注册后调用 Use 不会影响已注册的路由（因为 handlers 已经合并到树节点中）</li>
+</ul>
+
+<h3 id="gin-context">Context 架构与 goroutine 池</h3>
+
+<h4 id="gin-context-pool">Context 对象池（sync.Pool）</h4>
+
+<p>Gin 使用 <strong>sync.Pool</strong> 复用 Context 对象，避免每次请求都分配内存：</p>
+
+<ul>
+<li><strong>获取</strong>：请求到达时从 pool 获取一个 Context，重置其字段（Request、Writer、Params、handlers 等）</li>
+<li><strong>使用</strong>：整个请求生命周期中使用同一个 Context，传递给所有中间件和处理函数</li>
+<li><strong>归还</strong>：请求处理完成后，将 Context 放回 pool 供下次复用。注意：如果在 goroutine 中持有 Context 引用，请求结束后 Context 可能被复用，导致数据竞争。必须使用 <code>c.Copy()</code> 创建副本</li>
+</ul>
+
+<p>Context 的核心字段：</p>
+<ul>
+<li><code>Request</code>：*http.Request，原始请求对象</li>
+<li><code>Writer</code>：ResponseWriter，响应写入器（Gin 的 ResponseWriter 是包装器，支持状态码记录、响应大小统计、WriteString 优化）</li>
+<li><code>Params</code>：路由参数（如 :id 的值）</li>
+<li><code>handlers</code>：当前路由的中间件链 + 处理函数</li>
+<li><code>index</code>：当前执行到的 handler 索引，<code>c.Next()</code> 递增 index 并调用下一个 handler</li>
+<li><code>Keys</code>：请求级别的键值存储，用于中间件之间传递数据</li>
+<li><code>Errors</code>：请求处理过程中收集的错误列表</li>
+</ul>
+
+<h4 id="gin-middleware-chain">中间件执行机制</h4>
+
+<p>Gin 的中间件链是一个<strong>递归调用</strong>模型：</p>
+
+<ol>
+<li>请求到达，<code>index = -1</code></li>
+<li>调用 <code>c.Next()</code>，index 递增到 0，执行 handlers[0]（第一个中间件）</li>
+<li>中间件内部可以调用 <code>c.Next()</code> 继续执行链中的下一个 handler</li>
+<li>如果中间件不调用 <code>c.Next()</code>，链中断，后续 handler 不执行（用于权限校验失败等场景）</li>
+<li>所有 handler 执行完毕后，递归返回，中间件中 <code>c.Next()</code> 之后的代码继续执行（用于记录响应、日志等后置操作）</li>
+</ol>
+
+<p>这种模型的优势：中间件可以在请求处理前和处理后都执行逻辑（如 Logger 中间件在 Next 前记录开始时间，Next 后计算耗时）。注意：<code>c.Abort()</code> 将 index 设置为 math.MaxInt8，阻止后续 handler 执行，但当前中间件中 Next 之后的代码仍会执行。</p>
+
+<h3 id="gin-binding-render">绑定、验证与渲染</h3>
+
+<h4 id="gin-binding">请求绑定（ShouldBind）</h4>
+
+<p>Gin 的绑定机制基于 <strong>reflect</strong> 和 <strong>tag</strong>：</p>
+
+<ul>
+<li><strong>绑定方法</strong>：<code>ShouldBindJSON</code>（JSON body）、<code>ShouldBindXML</code>、<code>ShouldBindQuery</code>（URL query）、<code>ShouldBindForm</code>（表单）、<code>ShouldBindUri</code>（路由参数）、<code>ShouldBindHeader</code>（请求头）</li>
+<li><strong>通用 ShouldBind</strong>：根据 Content-Type 自动选择绑定器（application/json → JSON，multipart/form-data → Form）。注意：ShouldBind 会在第一次绑定失败后返回错误，后续绑定不会执行</li>
+<li><strong>Tag 解析</strong>：使用结构体 tag 指定字段映射，如 <code>json:"name" binding:"required"</code>、<code>form:"age" binding:"min=0,max=120"</code>、<code>uri:"id"</code></li>
+<li><strong>验证器</strong>：基于 <strong>go-playground/validator/v10</strong>，支持 30+ 验证规则（required、min、max、email、url、uuid、oneof 等），支持自定义验证函数（<code>v.RegisterValidation</code>）和自定义错误消息</li>
+</ul>
+
+<p>性能注意：绑定使用反射，有一定开销。对于性能敏感的场景，可以手动解析请求体（如使用 <code>json.Unmarshal</code>），或使用 <code>c.ShouldBindBodyWith</code> 多次绑定同一请求体（ShouldBind 只能调用一次，因为 body 是 io.ReadCloser，读取后不可重读）。</p>
+
+<h4 id="gin-render">响应渲染</h4>
+
+<ul>
+<li><strong>JSON</strong>：<code>c.JSON(code, obj)</code>，使用 <strong>encoding/json</strong> 序列化。Gin 1.8+ 支持通过 <code>jsoniter</code> 或 <code>sonic</code> 替换默认 JSON 库（构建 tag <code>jsoniter</code> 或 <code>sonic</code>），性能提升 2-5 倍</li>
+<li><strong>String</strong>：<code>c.String(code, format, args...)</code>，使用 <code>fmt.Sprintf</code> 格式化。纯文本响应比 JSON 快</li>
+<li><strong>Data</strong>：<code>c.Data(code, contentType, []byte)</code>，直接写入字节切片，零拷贝</li>
+<li><strong>File</strong>：<code>c.File(filepath)</code>，使用 <code>http.ServeFile</code>，支持 Range 请求（断点续传）</li>
+<li><strong>渲染器接口</strong>：<code>render.Render</code> 接口（<code>Render(http.ResponseWriter)</code> 和 <code>WriteContentType()</code>），可以自定义渲染器（如 Protobuf、MessagePack、XML 等）</li>
+</ul>
+
+<h3 id="gin-performance">性能优化与最佳实践</h3>
+
+<h4 id="gin-optimization">性能优化要点</h4>
+
+<ul>
+<li><strong>使用 sync.Pool 复用对象</strong>：除了 Context，Gin 内部还使用 pool 复用 <code>sync.Pool</code> 中的 <code>[]byte</code> 缓冲区（用于 JSON 序列化）。应用层也可以用 sync.Pool 复用大对象</li>
+<li><strong>避免在中间件中使用 goroutine 持有 Context</strong>：如果需要异步处理，使用 <code>c.Copy()</code> 创建副本，或在 goroutine 中只使用从 Context 提取的基本类型值</li>
+<li><strong>合理使用中间件</strong>：中间件链越长，请求处理越慢。只注册必要的中间件，将高频中间件放在链的前面（可以提前 Abort）</li>
+<li><strong>静态文件服务</strong>：<code>c.Static</code> 使用 <code>http.FileServer</code>，对于大量静态文件建议使用 CDN 或 Nginx 代理，避免 Go 进程处理静态文件</li>
+<li><strong>HTTP/2 支持</strong>：Gin 基于 <code>net/http</code>，Go 1.6+ 默认支持 HTTP/2。使用 <code>http2.ConfigureServer</code> 或 <code>ListenAndServeTLS</code> 启用</li>
+</ul>
+
+<h3 id="gin-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>Context 在 goroutine 中使用导致数据竞争</strong>：请求结束后 Context 被放回 sync.Pool 复用，goroutine 中持有的引用会读到其他请求的数据。必须用 <code>c.Copy()</code> 或提取所需值后再启动 goroutine。Gin 的源码注释明确警告："Context is not thread safe"</li>
+<li><strong>ShouldBind 只能调用一次</strong>：请求体（Body）是 io.ReadCloser，第一次绑定后被消费，第二次绑定会得到 EOF。需要多次绑定时使用 <code>c.ShouldBindBodyWith(&obj, binding.JSON)</code>，它会将 body 缓存到 Context 中。或者先读取 body 到字节切片，再手动 Unmarshal</li>
+<li><strong>路由冲突与优先级</strong>：静态路由和参数路由可能冲突（如 /user/new 和 /user/:id）。Gin 的 Radix Tree 按优先级匹配，静态节点优先于参数节点，但在某些边界情况下可能 panic（"conflicts with existing wildcard"）。设计路由时避免歧义，保持 RESTful 风格</li>
+<li><strong>中间件顺序错误</strong>：中间件按注册顺序执行，<code>c.Next()</code> 之前的代码是前置操作，之后的是后置操作。Logger 中间件应放在最外层（第一个注册），Recovery 中间件应放在最前面（捕获后续所有 panic）。路由组的中间件在全局中间件之后执行</li>
+<li><strong>c.Abort() 不中断当前函数</strong>：<code>c.Abort()</code> 只是将 index 设置为最大值，阻止后续 handler 执行，但当前函数继续执行。必须在 Abort 后 <code>return</code>，否则后续代码仍会运行。常见错误：权限校验失败后 Abort 但没有 return，继续执行业务逻辑</li>
+<li><strong>文件上传内存限制</strong>：<code>c.FormFile</code> 和 <code>c.MultipartForm</code> 默认将小于 32MB 的文件缓存在内存中，大于 32MB 的写入临时文件。大文件上传时调整 <code>r.MaxMultipartMemory</code>（如 8 << 20 = 8MB），避免内存溢出。同时注意设置 Nginx/反向代理的 client_max_body_size</li>
+<li><strong>JSON 序列化性能瓶颈</strong>：默认 encoding/json 使用反射，在高并发大响应场景可能成为瓶颈。使用构建 tag 切换到 jsoniter（<code>-tags=jsoniter</code>）或 sonic（<code>-tags=sonic</code>），性能提升显著。注意：sonic 只支持 amd64/arm64，且对某些特殊类型支持有限</li>
+<li><strong>Gin 的 Writer 被替换后状态丢失</strong>：某些中间件（如 gzip 压缩）会替换 <code>c.Writer</code> 为自定义的 ResponseWriter。如果在替换前已经写入了状态码或 header，替换后可能丢失。自定义 ResponseWriter 必须正确实现 <code>http.ResponseWriter</code>、<code>http.Flusher</code>、<code>http.Hijacker</code>、<code>io.ReaderFrom</code> 等接口，否则可能导致功能异常（如 SSE 流式推送不工作）</li>
+</ol>
+
 <h4 id="gorm-2026">2026 状态</h4>
 <h4 id="gorm-example">示例</h4>
                 <div class="page-nav">

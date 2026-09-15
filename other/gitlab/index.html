@@ -382,6 +382,139 @@ stop_deploy:
   when: manual</code></pre>
 
 <h3 id="gitlab-terraform">Terraform 集成</h3>
+<h3 id="gitlab-architecture">系统架构与组件深度解析</h3>
+
+<p>GitLab 是一个全功能的 DevOps 平台，其架构经历了从单体 Rails 应用到微服务化的演进。理解 GitLab 的内部组件和交互流程，有助于排查性能问题、规划高可用部署和优化 CI/CD 流水线。</p>
+
+<h4 id="gitlab-components">核心组件</h4>
+
+<ul>
+<li><strong>GitLab Rails（Web/API）</strong>：基于 Ruby on Rails 的单体应用，提供 Web UI 和 REST/GraphQL API。处理用户认证、项目管理、Issue/Merge Request、代码浏览等。使用 Unicorn/Puma 作为应用服务器（多进程模型）</li>
+<li><strong>Sidekiq（后台任务）</strong>：基于 Redis 的异步任务队列，处理邮件发送、Webhook 通知、仓库同步、CI 流水线调度、导出导入等耗时操作。Sidekiq 是多线程的，使用 Redis 作为队列存储和状态跟踪</li>
+<li><strong>Gitaly（Git 存储服务）</strong>：GitLab 10.0 引入的 Git RPC 服务，用 Go 编写。所有 Git 操作（clone、push、commit、diff 等）都通过 Gitaly 的 gRPC 接口执行，不再由 Rails 直接调用 git 命令。Gitaly 负责仓库存储、Git 协议处理、仓库维护（gc、repack）</li>
+<li><strong>Praefect（Gitaly 路由层）</strong>：Gitaly 的代理和协调层，提供仓库级的复制和故障转移。Praefect 跟踪每个仓库的主副本位置，协调写入到主副本，读取可以从副本负载均衡。用于 Gitaly 集群的高可用部署</li>
+<li><strong>GitLab Workhorse（智能反向代理）</strong>：用 Go 编写的反向代理，位于 Nginx 和 Rails 之间。处理大文件上传（LFS、artifacts）、Git HTTP 智能协议、文件下载、SSE 流式推送等耗时操作，避免阻塞 Rails 进程。Workhorse 可以直接与 Gitaly 通信，绕过 Rails</li>
+<li><strong>Redis（缓存/队列/会话）</strong>：存储 Rails 缓存、Sidekiq 队列、会话、Rate Limit、分布式锁等。GitLab 使用 Redis Sentinel 或 Redis Cluster 实现高可用。注意：GitLab 的 Redis 不支持 Redis Cluster 的多键操作（因为键可能在不同节点），所以使用 Sentinel 模式更常见</li>
+<li><strong>PostgreSQL（主数据库）</strong>：存储用户、项目、Issue、MR、CI 配置等元数据。GitLab 要求 PostgreSQL 12+，使用 Patroni 实现高可用（自动故障转移）。GitLab 不支持 MySQL（从 12.0 开始完全移除 MySQL 支持）</li>
+</ul>
+
+<h4 id="gitlab-request-flow">请求处理流程</h4>
+
+<p>一个 Git push 请求的完整流程：</p>
+<ol>
+<li>客户端 <code>git push</code> → Nginx（SSL 终止、负载均衡）</li>
+<li>Nginx → Workhorse（检测到 Git HTTP 智能协议请求）</li>
+<li>Workhorse → Rails（认证请求，验证用户权限和仓库存在）</li>
+<li>Rails → Workhorse（返回认证结果和 Gitaly 地址）</li>
+<li>Workhorse → Gitaly（直接转发 Git 协议数据，不经过 Rails）</li>
+<li>Gitaly → 磁盘（执行 Git 接收操作，更新仓库引用）</li>
+<li>Gitaly → Rails（通过内部 API 通知 PostReceive 事件）</li>
+<li>Rails → Sidekiq（异步处理：触发 CI 流水线、发送 Webhook、更新统计、通知用户）</li>
+</ol>
+
+<p>这种架构的关键优化：大文件传输（Git pack、LFS、artifacts）由 Workhorse 和 Gitaly 直接处理，Rails 只做认证和元数据操作，避免了 Ruby 进程被 IO 阻塞。</p>
+
+<h3 id="gitlab-cicd">CI/CD 架构与 Runner 深度解析</h3>
+
+<h4 id="gitlab-runner-architecture">GitLab Runner 架构</h4>
+
+<p>GitLab Runner 是用 Go 编写的 CI/CD 执行器，独立于 GitLab 主应用：</p>
+
+<ul>
+<li><strong>注册与认证</strong>：Runner 通过 <code>gitlab-runner register</code> 注册到 GitLab 实例，使用 registration token 认证。注册后获得唯一的 runner token，用于后续的 API 通信。Runner 可以是 shared（全实例共享）、group（组级共享）或 specific（项目专用）</li>
+<li><strong>任务获取</strong>：Runner 通过长轮询（long polling）向 GitLab API 请求任务（<code>/api/v4/jobs/request</code>）。GitLab 在有新任务时立即返回，否则等待到超时（默认 50 分钟）后重新请求。这种模式减少了无效轮询，同时保证任务延迟低</li>
+<li><strong>执行器（Executor）</strong>：Runner 支持多种执行环境：
+  <ul>
+  <li><strong>Shell</strong>：直接在 Runner 所在机器上执行，最简单但隔离性差</li>
+  <li><strong>Docker</strong>：每个 Job 在独立的 Docker 容器中执行，支持自定义镜像、服务容器（services）、缓存挂载。最常用的执行器</li>
+  <li><strong>Kubernetes</strong>：在 K8s 集群中为每个 Job 创建 Pod，支持自动扩缩容、资源限制、亲和性调度。适合大规模 CI 环境</li>
+  <li><strong>SSH</strong>：通过 SSH 连接到远程机器执行</li>
+  <li><strong>VirtualBox/Parallels</strong>：在虚拟机中执行，支持完整的操作系统隔离</li>
+  </ul>
+</li>
+<li><strong>Job 执行流程</strong>：
+  <ol>
+  <li>Runner 获取 Job（包含脚本、镜像、变量、缓存配置等）</li>
+  <li>准备执行环境（拉取 Docker 镜像、创建容器/Pod）</li>
+  <li>执行 pre-build 脚本（克隆仓库、恢复缓存、下载 artifacts）</li>
+  <li>执行用户定义的 script 阶段</li>
+  <li>执行 post-build 脚本（上传 artifacts、更新缓存）</li>
+  <li>清理环境（删除容器/Pod）</li>
+  <li>向 GitLab 上报 Job 结果（成功/失败/取消）和日志</li>
+  </ol>
+</li>
+</ul>
+
+<h4 id="gitlab-pipeline">Pipeline 与 DAG</h4>
+
+<ul>
+<li><strong>Stage 与 Job</strong>：Pipeline 由多个 Stage 组成（build → test → deploy），同一 Stage 的 Job 并行执行，不同 Stage 顺序执行。这是传统的流水线模型</li>
+<li><strong>DAG（有向无环图）</strong>：GitLab 12.2 引入的 <code>needs</code> 关键字，允许 Job 直接依赖其他 Job 的完成，而不是等待整个 Stage。这打破了 Stage 的顺序限制，可以构建更灵活的依赖图，减少流水线总时间</li>
+<li><strong>缓存（Cache）</strong>：Job 之间共享文件的机制，基于 key（可以是分支名、锁文件哈希等）。缓存存储在 Runner 本地或分布式缓存（S3、GCS）中。注意：缓存是最佳努力（best-effort）的，不保证一定存在，不能用于传递必须的文件（用 artifacts）</li>
+<li><strong>Artifacts（制品）</strong>：Job 生成的文件，可以被后续 Job 下载（<code>dependencies</code> 或 <code>needs</code>）。Artifacts 有过期时间（默认 30 天），存储在 GitLab 服务器或对象存储中。Artifacts 是可靠的文件传递机制</li>
+<li><strong>父-子流水线（Parent-Child Pipelines）</strong>：一个 Pipeline 可以触发另一个 Pipeline（通过 <code>trigger</code> 关键字），用于大型单体仓库的模块化 CI。父流水线等待子流水线完成，可以传递变量</li>
+<li><strong>多项目流水线（Multi-project Pipelines）</strong>：跨项目触发 Pipeline，用于微服务架构中的集成测试和部署编排</li>
+</ul>
+
+<h3 id="gitlab-git-storage">Git 存储与 Gitaly 深度解析</h3>
+
+<h4 id="gitlab-gitaly">Gitaly 架构</h4>
+
+<p>Gitaly 是 GitLab 的 Git RPC 服务，用 Go 编写，基于 gRPC：</p>
+
+<ul>
+<li><strong>RPC 接口</strong>：定义了 100+ 个 RPC 方法，覆盖所有 Git 操作：<code>SSHReceivePack</code>（git push over SSH）、<code>PostReceivePack</code>（git push over HTTP）、<code>Diff</code>、<code>Commit</code>、<code>Tree</code>、<code>Blob</code>、<code>CreateBranch</code>、<code>MergeBranch</code>、<code>GarbageCollect</code> 等</li>
+<li><strong>仓库存储</strong>：Gitaly 将仓库存储在本地磁盘（<code>repositories</code> 目录），路径格式为 <code>@hashed/xx/yy/xxxxxxxxxxxx.git</code>（哈希路径，避免目录层级过深和特殊字符问题）。每个仓库是一个裸仓库（bare repo，没有工作区）</li>
+<li><strong>Git 协议 v2</strong>：Gitaly 支持 Git 协议 v2，通过 <code>ls-refs</code>、<code>fetch</code> 等命令替代 v1 的 <code>ls-remote</code>，减少了大仓库的引用列表传输量（v2 可以按需过滤引用），提升了 clone/fetch 性能</li>
+<li><strong>维护操作</strong>：Gitaly 定期执行仓库维护：<code>git gc</code>（垃圾回收，清理不可达对象）、<code>git repack</code>（重新打包对象，减少碎片）、<code>git commit-graph</code>（生成提交图，加速提交遍历）。这些操作由 Sidekiq 调度，在低峰期执行</li>
+</ul>
+
+<h4 id="gitlab-object-pool">对象池（Object Pool）与仓库分叉</h4>
+
+<p>GitLab 使用<strong>对象池（Object Pool）</strong>优化 fork 仓库的存储：</p>
+<ul>
+<li><strong>原理</strong>：当用户 fork 一个项目时，GitLab 不为 fork 创建完整的仓库副本，而是创建一个<strong>池仓库（pool repository）</code>（包含原始仓库的所有对象），然后 fork 仓库通过 <code>git alternates</code> 共享池仓库的对象。fork 仓库只存储自己独有的新对象</li>
+<li><strong>存储节省</strong>：对于有大量 fork 的热门项目，对象池可以节省 90% 以上的存储。每个 fork 只存储差异部分</li>
+<li><strong>隔离性</strong>：虽然共享对象，但 fork 仓库的引用（refs）是独立的，push 操作只修改 fork 自己的引用，不会影响原始仓库或其他 fork</li>
+<li><strong>限制</strong>：对象池中的对象是只读的，原始仓库的新对象会定期同步到池中。Gitaly 负责管理池的生命周期和对象同步</li>
+</ul>
+
+<h3 id="gitlab-ha">高可用与 Geo 复制</h3>
+
+<h4 id="gitlab-ha-architecture">高可用架构</h4>
+
+<p>GitLab 高可用部署的核心组件：</p>
+<ul>
+<li><strong>应用层高可用</strong>：多个 Rails/Workhorse 节点，通过 Nginx 负载均衡。会话存储在 Redis 中（共享会话），所以任意节点可以处理任意请求</li>
+<li><strong>数据库高可用</strong>：PostgreSQL + Patroni（自动故障转移），或使用云厂商的托管 PostgreSQL（RDS、Cloud SQL）。Patroni 使用 etcd/Consul/ZooKeeper 作为分布式协调，自动检测主库故障并提升从库</li>
+<li><strong>Redis 高可用</strong>：Redis Sentinel（主从+哨兵，自动故障转移），或 Redis Cluster。GitLab 推荐 Sentinel 模式（因为不支持多键操作在 Cluster 模式下）</li>
+<li><strong>Gitaly 高可用</strong>：Gitaly Cluster（Praefect + 多个 Gitaly 节点），每个仓库有 3 个副本（1 主 2 从），Praefect 协调写入和故障转移。注意：Gitaly Cluster 配置复杂，小规模部署可以用单 Gitaly 节点+定期备份</li>
+<li><strong>对象存储</strong>：LFS 对象、artifacts、上传文件、容器镜像等使用 S3 兼容的对象存储（MinIO、AWS S3、云存储），不存储在本地磁盘。这使得应用节点无状态，易于扩缩容</li>
+</ul>
+
+<h4 id="gitlab-geo">Geo 地理复制</h4>
+
+<p>GitLab Geo 是跨区域复制方案，用于：</p>
+<ul>
+<li><strong>只读副本</strong>：在远程站点部署 Geo 次级节点，提供只读的代码浏览、Issue/MR 查看、制品下载等，加速远程用户的访问</li>
+<li><strong>数据复制</strong>：PostgreSQL 流式复制（主→从）、Gitaly 仓库复制（通过 API 触发，异步）、对象存储复制（通过云厂商的跨区域复制或 Geo 的同步任务）</li>
+<li><strong>故障转移</strong>：主站点故障时，可以将 Geo 次级节点提升为主节点（需要手动操作或自动化脚本），实现灾难恢复。提升过程需要重新配置数据库、Gitaly、对象存储等</li>
+<li><strong>限制</strong>：Geo 次级节点是只读的，不能执行写操作（push、创建 MR 等）。写操作必须路由到主节点。Geo 复制是异步的，次级节点的数据可能有延迟（秒到分钟级）</li>
+</ul>
+
+<h3 id="gitlab-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>Gitaly 磁盘 IO 瓶颈</strong>：Gitaly 是 IO 密集型服务，Git 操作（特别是 push、gc、repack）对磁盘延迟敏感。使用 SSD（而非 HDD），推荐本地 NVMe SSD（延迟 < 100μs）。避免使用网络存储（NFS、EFS）存储 Gitaly 仓库（Git 对 NFS 的一致性问题敏感，可能导致仓库损坏）。监控 Gitaly 的 <code>gitaly_service_client_requests</code> 和磁盘 IO 延迟</li>
+<li><strong>Sidekiq 队列积压</strong>：Sidekiq 处理大量异步任务（邮件、Webhook、CI 调度、仓库同步等），高负载时可能积压。监控 <code>sidekiq_queue_size</code> 和 <code>sidekiq_queue_latency</code>。优化：增加 Sidekiq 进程数/线程数、将耗时任务移到专用队列（<code>background_migration</code>、<code>import</code>）、使用 <code>sidekiq-cluster</code> 为不同队列分配独立进程。注意：Sidekiq 是多线程的，任务必须线程安全</li>
+<li><strong>CI Runner 资源耗尽</strong>：Docker 执行器下，每个 Job 启动容器，大量并行 Job 可能导致 Runner 机器的 CPU、内存、磁盘耗尽。优化：设置 <code>concurrent</code>（全局并发 Job 数）和 <code>limit</code>（单个 Runner 的并发数）、使用 Kubernetes 执行器（自动扩缩容）、为 Job 设置 <code>resource_group</code>（限制同一资源组的并发数）、定期清理 Docker 镜像和容器（<code>docker system prune</code>）</li>
+<li><strong>数据库连接池耗尽</strong>：Rails 使用数据库连接池（默认 <code>db_pool</code> = 10），高并发时可能耗尽，导致请求排队或失败。优化：增加 <code>db_pool</code>（建议 = Puma 线程数 + 余量）、使用 PgBouncer（PostgreSQL 连接池代理，在应用和数据库之间复用连接）、监控 <code>pg_stat_activity</code> 中的活跃连接数和等待查询。注意：连接池过大可能导致数据库负载过高</li>
+<li><strong>仓库膨胀与 Git 性能下降</strong>：长期使用的仓库可能积累大量不可达对象、松散对象、大文件，导致 Git 操作变慢和磁盘占用增加。优化：定期执行 <code>git gc</code> 和 <code>git repack</code>（Gitaly 自动调度，但可以手动触发 <code>Housekeeping</code>）、使用 Git LFS 管理大文件（避免大二进制文件进入 Git 历史）、使用 <code>git filter-repo</code> 清理历史中的大文件。监控仓库大小和 <code>git count-objects -v</code> 的输出</li>
+<li><strong>CI/CD 变量泄露</strong>：CI/CD 变量（特别是受保护的变量和 masked 变量）可能被恶意 Job 脚本泄露（通过 echo、上传到外部服务等）。安全最佳实践：使用 <code>protected</code> 变量（只在受保护分支/tag 上可用）、使用 <code>masked</code> 变量（在日志中自动遮蔽，但只支持特定格式：≥ 8 字符，只含字母数字和 <code>+-_.:/@</code>）、使用 HashiCorp Vault 集成（动态生成临时凭证，不存储在 GitLab 中）、限制可以运行 CI 的用户和分支</li>
+<li><strong>Nginx 上传大小限制</strong>：Git LFS 推送、artifacts 上传、容器镜像推送可能遇到 Nginx 的 <code>client_max_body_size</code> 限制（默认 1MB），导致大文件上传失败。GitLab Omnibus 默认设置为 0（不限制），但如果使用自定义 Nginx 或反向代理，需要确保 <code>client_max_body_size 0;</code>（或足够大的值）。同时检查 Workhorse 的上传超时设置和对象存储的上传限制</li>
+<li><strong>升级失败与版本兼容性</strong>：GitLab 升级需要按版本路径逐步升级（不能跨大版本直接升级，如 14.x → 16.x 需要先升到 15.x 的最后一个小版本）。升级前必须阅读版本的 <code>deprecations</code> 和 <code>breaking changes</code>，特别是配置变更、数据库迁移、第三方集成。最佳实践：先在测试环境升级验证、备份数据库和配置文件（<code>gitlab-backup create</code>）、查看 <code>gitlab:check</code> 和 <code>gitlab:doctor:check</code> 的输出、对于大规模部署，使用零停机升级（多节点滚动升级，先升级 Gitaly 和 Rails，最后升级数据库）</li>
+</ol>
+
 <pre><code class="language-yaml">terraform:
   image: hashicorp/terraform:latest
   stage: deploy
