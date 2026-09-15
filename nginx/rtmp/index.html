@@ -332,6 +332,150 @@ ffmpeg -i srt://localhost:9990 -c copy output.mp4
 </ul>
 
 <h3 id="srt-vs-rtmp">协议对比</h3>
+<h3 id="rtmp-protocol-deep">RTMP 协议底层原理深度解析</h3>
+
+<p>RTMP（Real-Time Messaging Protocol）是 Adobe 开发的流媒体传输协议，最初用于 Flash Player 与服务器之间的音视频传输。理解 RTMP 的协议细节，是排查直播卡顿、延迟、推流失败等问题的基础。</p>
+
+<h4 id="rtmp-handshake">握手过程（Handshake）</h4>
+
+<p>RTMP 连接建立前需要完成三次握手：</p>
+
+<ol>
+<li><strong>C0/S0</strong>：客户端发送 1 字节版本号（当前为 3），服务器回应相同版本号</li>
+<li><strong>C1/S1</strong>：1536 字节，包含：4 字节时间戳（客户端当前时间）、4 字节零（保留）、1528 字节随机数据。服务器收到 C1 后立即发送 S1（时间戳为服务器当前时间）</li>
+<li><strong>C2/S2</strong>：1536 字节，是对对方 C1/S1 的回声（时间戳填对方的时间戳，随机数据完全复制对方的）。C2 是对 S1 的回应，S2 是对 C1 的回应</li>
+</ol>
+
+<p>RTMP 握手的特殊之处：<strong>C2 和 S2 可以在收到 C1/S1 后立即发送，不需要等待对方的 C2/S2</strong>。这意味着握手可以在 1.5 个 RTT 内完成（比 TCP 三次握手的 1.5 RTT 多一个 C1/S1 的传输）。简单握手（Simple Handshake）不验证随机数据，复杂握手（Complex Handshake）使用 HMAC 验证，用于 RTMPE（加密）。</p>
+
+<h4 id="rtmp-chunking">块流（Chunking）与消息分块</h4>
+
+<p>RTMP 将上层消息（Message）分割为块（Chunk）传输，每个块有一个块头：</p>
+
+<ul>
+<li><strong>块基本头（Basic Header）</strong>：1-3 字节，包含块流 ID（CSID，Chunk Stream ID）和块类型（fmt，0-3）。CSID 标识逻辑通道，不同流（音频、视频、命令）使用不同 CSID</li>
+<li><strong>块消息头（Message Header）</strong>：根据 fmt 不同有 4 种格式：
+  <ul>
+  <li><strong>fmt=0</strong>（11 字节）：完整消息头，包含时间戳（3 字节）、消息长度（3 字节）、消息类型（1 字节）、消息流 ID（4 字节，小端序）。流的第一个块使用此格式</li>
+  <li><strong>fmt=1</strong>（7 字节）：不包含消息流 ID（继承前一个块），用于同一条流的后续消息的第一个块</li>
+  <li><strong>fmt=2</strong>（3 字节）：只包含时间戳差（delta），用于同一条流中相同长度和类型的后续消息</li>
+  <li><strong>fmt=3</strong>（0 字节）：完全继承前一个块的头，用于消息被分割为多个块时的后续块</li>
+  </ul>
+</li>
+<li><strong>扩展时间戳（Extended Timestamp）</strong>：当时间戳 >= 0xFFFFFF（16777215，约 4.6 小时）时，使用 4 字节扩展时间戳字段</li>
+</ul>
+
+<p>分块的目的：<strong>复用 TCP 连接，多路复用不同类型的流</strong>。一个 RTMP 连接可以同时传输音频、视频、命令消息，通过 CSID 区分。块大小（Chunk Size）默认 128 字节，可以通过 Set Chunk Size 命令调整（最大 65536 字节）。大块减少头开销但增加延迟，小块增加头开销但降低延迟（可以更快地交错发送音频和视频）。</p>
+
+<h4 id="rtmp-amf">AMF 编码与命令消息</h4>
+
+<p>RTMP 的命令消息使用 <strong>AMF（Action Message Format）</strong>编码：</p>
+
+<ul>
+<li><strong>AMF0</strong>：旧版编码，支持 Number（8 字节浮点）、Boolean、String、Object、Null、Undefined、Reference、ECMA Array、Strict Array、Date、XML、Typed Object 等类型。每个值前有 1 字节类型标记</li>
+<li><strong>AMF3</strong>：新版编码，更紧凑，支持 int（可变长度整数）、uint、double、string、xml、date、array、object、bytearray、vector、dictionary 等。使用引用表减少重复字符串和对象的传输</li>
+</ul>
+
+<p>RTMP 连接建立流程（NetConnection）：</p>
+<ol>
+<li>客户端发送 <code>connect</code> 命令（AMF0 编码），包含 app（应用名）、tcUrl（服务器 URL）、flashVer、swfUrl 等参数</li>
+<li>服务器回应 <code>Window Acknowledgement Size</code>（窗口确认大小，默认 5000000 字节）、<code>Set Peer Bandwidth</code>（对端带宽限制）、<code>Set Chunk Size</code>（块大小）</li>
+<li>服务器发送 <code>_result</code> 命令，包含 level（status）、code（NetConnection.Connect.Success）、description、objectEncoding（AMF 版本）</li>
+<li>客户端发送 <code>createStream</code> 命令创建流，服务器返回流 ID</li>
+<li>推流：客户端发送 <code>publish</code> 命令（流名、类型 live/record/append），然后发送音频（Audio Message，type=8）和视频（Video Message，type=9）数据</li>
+<li>拉流：客户端发送 <code>play</code> 命令（流名、起始位置、持续时间、重置标志），服务器发送音视频数据</li>
+</ol>
+
+<h3 id="nginx-rtmp-architecture">Nginx RTMP 模块架构深度解析</h3>
+
+<h4 id="nginx-rtmp-event">事件驱动与多进程架构</h4>
+
+<p>Nginx RTMP 模块（nginx-rtmp-module，由 Roman Arutyunyan 开发）基于 Nginx 的事件驱动架构：</p>
+
+<ul>
+<li><strong>多进程模型</strong>：Nginx 主进程（master）管理工作进程（worker），每个 worker 独立处理连接。RTMP 模块在 worker 进程内运行，使用 Nginx 的事件循环（epoll/kqueue）处理 IO</li>
+<li><strong>状态机</strong>：每个 RTMP 连接是一个状态机，状态包括：握手（handshake）、接收块头（recv_chunk_header）、接收块数据（recv_chunk_data）、处理消息（process_message）。状态机由事件驱动，每次可读事件推进状态</li>
+<li><strong>输入缓冲区</strong>：每个连接有输入缓冲区，接收 TCP 数据后解析 RTMP 块。由于 TCP 是流式协议，RTMP 块可能被分割或合并，模块需要处理粘包和拆包</li>
+<li><strong>输出队列</strong>：每个连接有输出队列，待发送的 RTMP 块排队发送。使用 Nginx 的写事件，当 socket 可写时发送队列中的数据</li>
+</ul>
+
+<h4 id="nginx-rtmp-live">直播流程：推流、转封装、拉流</h4>
+
+<p>一个完整的直播流程：</p>
+
+<ol>
+<li><strong>推流（Publish）</strong>：推流端（OBS、FFmpeg）通过 RTMP 连接到 Nginx，发送 publish 命令，然后持续发送音视频数据。Nginx 将音视频数据存入该流的输入缓冲区</li>
+<li><strong>流注册</strong>：Nginx 维护一个全局的流表（stream table），key 是 app/stream_name。推流连接注册为生产者（producer），拉流连接注册为消费者（consumer）</li>
+<li><strong>数据分发</strong>：推流端的音视频数据到达后，Nginx 将数据复制到所有订阅该流的消费者的输出队列。这是一个<strong>扇出（fan-out）</strong>过程，N 个观众意味着数据被复制 N 份</li>
+<li><strong>GOP 缓存</strong>：为了让新加入的观众能立即看到画面（不需要等到下一个关键帧），Nginx 缓存最近的 GOP（Group of Pictures，从一个关键帧到下一个关键帧之间的所有帧）。新观众连接后先发送缓存的 GOP，然后发送实时数据</li>
+<li><strong>转封装（Remuxing）</strong>：Nginx RTMP 模块可以将 RTMP 流转封装为 HLS（HTTP Live Streaming）或 DASH（Dynamic Adaptive Streaming over HTTP）。转封装过程不重新编码（transcoding），只是将音视频数据从 FLV 容器转换为 MPEG-TS（HLS）或 fMP4（DASH）容器</li>
+</ol>
+
+<h4 id="nginx-rtmp-hls">HLS 转封装原理</h4>
+
+<p>HLS（HTTP Live Streaming）是 Apple 开发的流媒体协议，基于 HTTP：</p>
+
+<ul>
+<li><strong>M3U8 播放列表</strong>：文本文件，包含分片列表和元信息（目标分片时长、序列号、加密密钥等）。分为主播放列表（Master Playlist，包含多码率）和媒体播放列表（Media Playlist，包含分片列表）</li>
+<li><strong>TS 分片</strong>：MPEG-2 Transport Stream 格式的视频分片，每个分片包含若干秒的音视频数据。Nginx 按关键帧切割（保证分片边界是关键帧，播放器可以从任意分片开始播放）</li>
+<li><strong>切片过程</strong>：Nginx 接收 RTMP 流，解析音视频帧，当遇到关键帧且累计时长达到 hls_fragment（默认 5 秒）时，关闭当前 TS 文件，开始新的分片。同时更新 M3U8 播放列表，移除最旧的分片（保留 hls_playlist_length，默认 30 秒）</li>
+<li><strong>延迟</strong>：HLS 的端到端延迟通常为 15-30 秒（3-6 个分片）。低延迟 HLS（LL-HLS）通过使用部分分片（Partial Segment）和 Blocking Playlist Request 将延迟降低到 2-3 秒</li>
+</ul>
+
+<h3 id="rtmp-srt-webrtc">SRT 与 WebRTC 协议深度对比</h3>
+
+<h4 id="srt-protocol">SRT 协议原理</h4>
+
+<p>SRT（Secure Reliable Transport）是 Haivision 开发的开源流媒体传输协议，基于 UDP：</p>
+
+<ul>
+<li><strong>可靠传输</strong>：在 UDP 之上实现 ARQ（Automatic Repeat reQuest，自动重传请求），丢失的包通过 NACK（Negative Acknowledgment）请求重传。与 TCP 不同，SRT 的重传是选择性的，不会阻塞后续包的接收</li>
+<li><strong>低延迟</strong>：SRT 的延迟由 <code>latency</code> 参数控制（默认 120ms），接收端在这个时间窗口内等待丢包重传。超过这个时间的丢包会被跳过（视频可以容忍少量丢包，通过错误隐藏恢复）。这比 TCP 的重传超时（RTO，通常数百毫秒）快得多</li>
+<li><strong>加密</strong>：SRT 内置 AES-128/256 加密（CTR 模式），使用握手阶段协商的密钥。不需要额外的 TLS/DTLS 层</li>
+<li><strong>多路复用</strong>：SRT 支持在一个 UDP 端口上多路复用多个流（通过 Socket ID 区分），支持双向传输</li>
+<li><strong>拥塞控制</strong>：SRT 默认使用 LEDBAT（Low Extra Delay Background Transport）拥塞控制算法，目标是利用剩余带宽而不增加延迟。也可以配置为不进行拥塞控制（适合专用链路）</li>
+</ul>
+
+<h4 id="webrtc-protocol">WebRTC 协议原理</h4>
+
+<p>WebRTC（Web Real-Time Communication）是 Google 开源的实时通信技术，用于浏览器之间的音视频通信：</p>
+
+<ul>
+<li><strong>传输层</strong>：基于 UDP，使用 DTLS（Datagram Transport Layer Security）加密，SRTP（Secure Real-time Transport Protocol）传输音视频。ICE（Interactive Connectivity Establishment）用于 NAT 穿透（STUN/TURN）</li>
+<li><strong>媒体编码</strong>：视频支持 VP8、VP9、H.264、AV1；音频支持 Opus、G.711。使用 RTP（Real-time Transport Protocol）传输，RTCP（RTP Control Protocol）反馈网络状态（丢包率、延迟、抖动）</li>
+<li><strong>拥塞控制</strong>：WebRTC 使用 GCC（Google Congestion Control）算法，基于延迟梯度（delay gradient）和丢包率估计可用带宽，动态调整编码码率。目标是在低延迟和高画质之间取得平衡</li>
+<li><strong>抖动缓冲（Jitter Buffer）</strong>：接收端维护抖动缓冲区，平滑网络抖动，按时间戳排序后解码播放。缓冲区大小动态调整（延迟和流畅度的权衡）</li>
+<li><strong>信令</strong>：WebRTC 不定义信令协议，使用 SDP（Session Description Protocol）交换媒体能力，通过任意信令通道（WebSocket、HTTP 等）传输。Nginx RTMP 模块不原生支持 WebRTC，需要额外的网关（如 mediasoup、Janus、Pion）</li>
+</ul>
+
+<h4 id="protocol-comparison">协议对比与选型</h4>
+
+<table>
+<tr><th>维度</th><th>RTMP</th><th>SRT</th><th>WebRTC</th><th>HLS</th></tr>
+<tr><td>传输层</td><td>TCP</td><td>UDP + ARQ</td><td>UDP + SRTP</td><td>HTTP/TCP</td></tr>
+<tr><td>延迟</td><td>1-3s</td><td>0.1-1s</td><td>0.2-0.5s</td><td>15-30s（LL-HLS 2-3s）</td></tr>
+<tr><td>加密</td><td>RTMPS（TLS）/ RTMPE</td><td>内置 AES</td><td>DTLS-SRTP</td><td>HTTPS</td></tr>
+<tr><td>浏览器支持</td><td>需插件（Flash已死）</td><td>不支持（需网关）</td><td>原生支持</td><td>原生支持（Safari）/ hls.js（其他）</td></tr>
+<tr><td>丢包处理</td><td>TCP重传（队头阻塞）</td><td>选择性ARQ</td><td>选择性重传 + FEC</td><td>TCP重传</td></tr>
+<tr><td>适用场景</td><td>推流（OBS/FFmpeg）</td><td>贡献源（低延迟推流）</td><td>互动直播、视频会议</td><td>大规模分发、时移</td></tr>
+<tr><td>码率自适应</td><td>不支持</td><td>不支持（LEDBAT拥塞控制）</td><td>支持（GCC）</td><td>支持（多码率）</td></tr>
+</table>
+
+<p>典型架构：推流端使用 RTMP 或 SRT 推送到 Nginx，Nginx 转封装为 HLS 分发，互动场景使用 WebRTC 网关（如 mediasoup）实现低延迟双向通信。</p>
+
+<h3 id="rtmp-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>关键帧间隔过大导致首帧慢</strong>：新观众连接后需要等到下一个关键帧才能解码（GOP 缓存可以缓解，但如果 GOP 太长，缓存的 GOP 也会很大）。建议关键帧间隔（GOP）为 1-2 秒（帧率 30fps 时 30-60 帧），HLS 分片时长至少包含一个完整 GOP。OBS 中设置关键帧间隔为 2 秒，使用 CBR（恒定码率）而非 VBR</li>
+<li><strong>TCP 队头阻塞导致卡顿</strong>：RTMP 基于 TCP，网络丢包时 TCP 重传会阻塞后续所有数据（队头阻塞，Head-of-Line Blocking），导致音视频卡顿。在不稳定的网络环境（如 4G/5G、跨洋链路）中，建议使用 SRT（基于 UDP，选择性重传）替代 RTMP 推流。Nginx 可以通过 SRT 模块（如 nginx-srt-module）或外部网关（如 srt-live-server）接收 SRT 推流</li>
+<li><strong>HLS 分片不是关键帧边界</strong>：HLS 分片必须从关键帧开始，否则播放器无法从该分片开始解码（会花屏或等待下一个关键帧）。Nginx RTMP 模块默认按关键帧切割（<code>hls_fragment</code> 是目标时长，实际切割在最近的关键帧）。如果推流端关键帧间隔大于 hls_fragment，分片时长会超过目标值。确保推流端 GOP <= hls_fragment</li>
+<li><strong>内存泄漏与连接数限制</strong>：Nginx RTMP 模块每个连接占用一定内存（输入输出缓冲区、状态信息），大量并发连接可能导致内存耗尽。设置 <code>worker_connections</code>（Nginx 最大连接数）、<code>rtmp_auto_push</code>（多 worker 进程间流推送）、<code>rtmp_auto_push_reconnect</code>。监控 Nginx 的 worker 进程内存使用，必要时调整 <code>worker_rlimit_nofile</code>（文件描述符限制）</li>
+<li><strong>录制文件损坏</strong>：Nginx RTMP 模块的录制功能（<code>recorder</code>）在推流异常断开时可能导致录制文件不完整（FLV 文件头未正确写入）。使用 <code>record_all</code> 录制所有流，<code>record_suffix</code> 配置文件名后缀，<code>record_unique</code> 避免文件名冲突。录制完成后使用 FFmpeg 检查文件完整性（<code>ffmpeg -v error -i file.flv -f null -</code>），必要时转封装为 MP4（<code>ffmpeg -i input.flv -c copy output.mp4</code>）</li>
+<li><strong>鉴权与安全漏洞</strong>：RTMP 协议本身没有鉴权机制，任何人知道推流地址都可以推流。使用 <code>on_publish</code> 回调（HTTP 请求到业务服务器验证 token）、<code>on_play</code> 回调（播放鉴权）。推流地址中添加 token 参数（如 <code>rtmp://server/live/stream?token=xxx</code>），在 on_publish 回调中验证。限制推流 IP（<code>allow publish</code> / <code>deny publish</code>），使用 RTMPS（加密）防止中间人攻击</li>
+<li><strong>多 worker 进程流不可见</strong>：Nginx 默认多 worker 进程，每个 worker 独立处理连接。推流连接在 worker A，拉流连接在 worker B 时，worker B 看不到 worker A 的流。Nginx RTMP 模块通过 <code>rtmp_auto_push on</code> 解决：流数据在 worker 进程间通过 Unix socket 推送。确保启用 <code>rtmp_auto_push</code>，并配置 <code>rtmp_auto_push_reconnect 1s</code>（重连间隔）。注意：auto_push 会增加 CPU 和内存开销</li>
+<li><strong>音视频不同步</strong>：RTMP 传输中音视频有独立的时间戳（DTS/PTS），如果推流端时间戳不连续或基准不同，会导致音视频不同步。常见原因：推流端编码设置错误（音频采样率不匹配）、网络抖动导致时间戳错乱、转封装时时间戳处理错误。排查方法：使用 FFmpeg 探测流信息（<code>ffprobe -show_streams rtmp://...</code>），检查音频和视频的时间戳增量是否正常。使用 <code>sync</code> 选项（Nginx RTMP 模块）在转封装时重新对齐时间戳</li>
+</ol>
+
 <table>
 <tr><th>特性</th><th>RTMP</th><th>SRT</th><th>WebRTC</th></tr>
 <tr><td>延迟</td><td>2-5 秒</td><td>1-3 秒</td><td><1秒</td></tr>

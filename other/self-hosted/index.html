@@ -248,6 +248,124 @@ func main() {
 func main() {
     fmt.Println("hello, world")
 }</code></pre><h3 id="扫-扫">扫-扫</h3>
+<h3 id="selfhosted-architecture">自托管架构与基础设施深度解析</h3>
+
+<p>自托管（Self-hosted）是指在自己的硬件和网络上运行服务，而不是使用 SaaS（Software as a Service）。自托管的核心价值是<strong>数据主权、隐私控制、成本可控</strong>，但也带来了运维、安全、可用性的挑战。</p>
+
+<h4 id="selfhosted-hardware">硬件选型与规划</h4>
+
+<p>自托管的硬件选择取决于服务规模和性能需求：</p>
+
+<ul>
+<li><strong>家用/微型部署</strong>：树莓派（Raspberry Pi 4/5，ARM64，4-8GB RAM）、迷你主机（Intel NUC、Minisforum，x86_64，16-32GB RAM）。功耗低（5-30W），适合运行少量轻量服务（Nextcloud、Gitea、Home Assistant）</li>
+<li><strong>小型服务器</strong>：二手 Dell PowerEdge / HP ProLiant（E5 系列 CPU，32-128GB ECC RAM，2-4 个 3.5 寸硬盘位）。性价比高，适合中型部署。注意功耗（100-300W）和噪音（机房/独立空间）</li>
+<li><strong>NAS 设备</strong>：Synology / QNAP / TrueNAS（专用 NAS 操作系统，ZFS/Btrfs 文件系统，RAID 管理，Docker 支持）。适合以存储为核心的部署，同时运行容器化服务</li>
+<li><strong>云 VPS</strong>：虽然不是严格的"自托管"（硬件在云端），但 VPS 上自行部署服务也是自托管的一种形式。适合没有公网 IP 或不想维护硬件的用户。选择支持自定义 ISO 的 VPS（如 Hetzner、Vultr、DigitalOcean）</li>
+</ul>
+
+<p>关键硬件指标：</p>
+<ul>
+<li><strong>CPU</strong>：核心数比主频重要（容器化部署通常是多进程/多容器并发）。支持虚拟化（Intel VT-x / AMD-V）用于运行虚拟机</li>
+<li><strong>内存</strong>：ECC 内存（错误校验，适合 24/7 运行的服务器）。16GB 起步，32GB 舒适，64GB+ 适合重型部署（Elasticsearch、GitLab、CI/CD）</li>
+<li><strong>存储</strong>：SSD（系统和数据库，NVMe 最佳）+ HDD（大容量存储，媒体文件、备份）。RAID 配置：RAID 1（镜像，2 盘）、RAID 5（条带+校验，3 盘起）、RAID 6（双校验，4 盘起）、RAID 10（镜像+条带，4 盘起）。注意：RAID 不是备份！</li>
+<li><strong>网络</strong>：千兆以太网（Gigabit Ethernet）起步，2.5G/10G 适合大文件传输。支持 IPMI/iDRAC/iLO（远程管理，无需物理接触服务器）</li>
+</ul>
+
+<h4 id="selfhosted-network">网络架构与公网访问</h4>
+
+<p>自托管服务需要解决公网访问问题：</p>
+
+<ul>
+<li><strong>公网 IP + 端口转发</strong>：最直接的方式。路由器配置端口转发（Port Forwarding），将公网端口映射到内网服务器。需要公网 IP（IPv4 或 IPv6），国内家庭宽带通常没有公网 IPv4（需要联系运营商申请），IPv6 通常有公网地址</li>
+<li><strong>动态 DNS（DDNS）</strong>：家庭宽带公网 IP 通常是动态的（定期变化），使用 DDNS 服务（No-IP、DuckDNS、Cloudflare DDNS、阿里云 DDNS）将域名指向当前 IP。路由器或服务器上运行 DDNS 客户端，定期检测 IP 变化并更新 DNS</li>
+<li><strong>反向代理</strong>：Nginx / Caddy / Traefik 作为反向代理，统一入口，根据域名路由到不同服务。自动申请和续期 Let's Encrypt SSL 证书（Caddy 自动，Nginx 需要 certbot，Traefik 自动）。支持 HTTP/2、HTTP/3、压缩、缓存、访问控制</li>
+<li><strong>内网穿透</strong>：没有公网 IP 时使用内网穿透工具：frp（Fast Reverse Proxy，自建服务器）、Cloudflare Tunnel（免费，Cloudflare 网络）、Tailscale（WireGuard 基础的虚拟网络，NAT 穿透）、ZeroTier（类似 Tailscale）。Cloudflare Tunnel 和 Tailscale 是最推荐的方案（免费、安全、无需公网 IP）</li>
+<li><strong>VPN 访问</strong>：不暴露服务到公网，通过 VPN 访问内网服务。WireGuard（高性能、配置简单）、OpenVPN（兼容性好）、Tailscale（基于 WireGuard，零配置）。适合只有自己/小团队使用的场景，安全性最高</li>
+</ul>
+
+<h4 id="selfhosted-security">安全架构与最佳实践</h4>
+
+<p>自托管服务暴露到公网后，安全是首要考虑：</p>
+
+<ul>
+<li><strong>最小暴露原则</strong>：只暴露必须公网访问的服务（如博客、Nextcloud），管理后台、数据库、内部工具只允许内网/VPN 访问。使用反向代理的访问控制（IP 白名单、HTTP Basic Auth、OAuth 代理如 Authelia/Authentik）</li>
+<li><strong>系统安全</strong>：禁用 root 密码登录（使用 SSH 密钥）、禁用密码登录、更改默认 SSH 端口（减少暴力破解噪音，不是安全措施）、配置 fail2ban（自动封禁暴力破解 IP）、定期系统更新（unattended-upgrades 自动安装安全更新）、防火墙（ufw / firewalld / nftables，只开放必要端口）</li>
+<li><strong>容器安全</strong>：Docker 容器以非 root 用户运行（<code>USER</code> 指令）、使用官方镜像或可信来源、定期更新镜像（Watchtower 自动更新）、限制容器资源（CPU/内存限制）、使用只读文件系统（<code>--read-only</code>）、避免使用 <code>--privileged</code>、使用 Docker Bench for Security 扫描安全问题</li>
+<li><strong>数据安全</strong>：静态加密（磁盘加密 LUKS / 文件级加密）、传输加密（HTTPS / TLS）、数据库加密（透明数据加密 TDE）、备份加密（备份文件加密存储）、密钥管理（使用密码管理器如 Bitwarden/Vaultwarden，不要明文存储密码）</li>
+<li><strong>监控与告警</strong>：Uptime Kuma（服务可用性监控）、Prometheus + Grafana（系统指标监控）、Loki（日志聚合）、Netdata（实时监控）、告警通知（邮件、Telegram、Discord、Webhook）。监控是发现安全事件和故障的第一道防线</li>
+</ul>
+
+<h3 id="selfhosted-backup">备份策略与灾难恢复</h3>
+
+<h4 id="backup-321">3-2-1 备份原则</h4>
+
+<p>3-2-1 是备份的黄金法则：</p>
+<ul>
+<li><strong>3 份数据</strong>：原始数据 + 2 份备份（共 3 份）</li>
+<li><strong>2 种介质</strong>：至少 2 种不同的存储介质（如硬盘 + 云存储，或硬盘 + 磁带）</li>
+<li><strong>1 份异地</strong>：至少 1 份备份在异地（不同地理位置，防止火灾、盗窃、自然灾害等同时影响原始数据和本地备份）</li>
+</ul>
+
+<p>备份工具选择：</p>
+<ul>
+<li><strong>文件级备份</strong>：rsync（增量同步，适合文件）、restic（加密、增量、去重，支持多种后端）、BorgBackup（类似 restic，Python 编写）、Duplicati（云备份，加密压缩）</li>
+<li><strong>块级备份</strong>：dd（原始磁盘镜像）、LVM 快照（逻辑卷管理器快照）、ZFS 快照（CoW 文件系统快照，高效增量）、Btrfs 快照（类似 ZFS）</li>
+<li><strong>数据库备份</strong>：mysqldump / pg_dump（逻辑备份，SQL 文本）、Percona XtraBackup（MySQL 物理热备份）、pg_basebackup（PostgreSQL 物理备份）、数据库容器的 <code>docker exec</code> + dump</li>
+<li><strong>云备份后端</strong>：Backblaze B2（便宜，$5/TB/月）、AWS S3（标准存储贵，Glacier 便宜但检索慢）、Cloudflare R2（无出站流量费）、阿里云 OSS / 腾讯云 COS（国内访问快）</li>
+</ul>
+
+<h4 id="backup-verification">备份验证与恢复演练</h4>
+
+<p><strong>没有验证过的备份等于没有备份</strong>。备份验证包括：</p>
+<ul>
+<li><strong>完整性检查</strong>：备份文件的校验和（SHA256）、备份工具的内置验证（restic check、Borg check）、数据库备份的恢复测试（导入到临时实例验证）</li>
+<li><strong>恢复演练</strong>：定期（每季度/每半年）执行完整的恢复演练，从备份恢复到测试环境，验证数据完整性和应用可用性。记录恢复时间（RTO，Recovery Time Objective）和可接受的数据丢失量（RPO，Recovery Point Objective）</li>
+<li><strong>版本历史</strong>：保留多个历史版本（如每日备份保留 7 天，每周备份保留 4 周，每月备份保留 12 个月），防止误删除/勒索软件加密后无法恢复到干净版本。使用 Grandfather-Father-Son（GFS）轮换策略</li>
+<li><strong>不可变备份</strong>：使用对象存储的 Object Lock（S3）/ Object Retention（B2）功能，设置保留期，备份文件在保留期内不可删除/修改。防止勒索软件加密备份文件（这是勒索软件的常见攻击手段：先加密备份，再加密生产数据）</li>
+</ul>
+
+<h3 id="selfhosted-services">常见自托管服务深度解析</h3>
+
+<h4 id="selfhosted-git">代码托管：Gitea / Forgejo</h4>
+
+<ul>
+<li><strong>Gitea</strong>：轻量级 Git 托管平台，Go 编写，单二进制部署，资源占用低（512MB RAM 即可运行）。功能：Git 仓库管理、Issue/PR、Wiki、CI/CD（Gitea Actions）、包管理（Container/Composer/Npm/PyPI 等）、LDAP/OAuth 集成。适合个人和小团队</li>
+<li><strong>Forgejo</strong>：Gitea 的社区分叉（Fork），由 Codeberg 等社区维护，更注重社区治理和隐私。功能与 Gitea 基本一致，部分功能有差异（如 Forgejo 优先实现某些功能）</li>
+<li><strong>GitLab CE</strong>：功能最全的自托管 Git 平台，但资源占用高（建议 4 核 8GB RAM 起步）。功能：完整的 DevOps 平台（CI/CD、容器镜像仓库、Package Registry、Issue 管理、Wiki、Pages、Monitor、Secure）。适合中大型团队</li>
+<li><strong>存储优化</strong>：Git 仓库使用对象存储（S3 兼容）存储 LFS 对象和制品，减少本地磁盘占用。定期执行 <code>git gc</code> 清理不可达对象。使用仓库归档（archive）功能归档不再活跃的仓库</li>
+</ul>
+
+<h4 id="selfhosted-cloud">个人云：Nextcloud</h4>
+
+<ul>
+<li><strong>核心功能</strong>：文件同步与共享（类似 Dropbox/Google Drive）、日历（CalDAV）、联系人（CardDAV）、任务、笔记、书签、照片管理（ Memories 插件）、视频会议（Talk 插件，基于 WebRTC）、邮件（Mail 插件）</li>
+<li><strong>架构</strong>：PHP + MySQL/MariaDB/PostgreSQL + Redis（缓存/文件锁）。推荐使用 Docker 部署（官方镜像 + MariaDB + Redis + Cron）。性能优化：使用 Redis 做文件锁和缓存（避免数据库锁竞争）、配置 PHP OPcache、使用 APCu、大文件上传调整 PHP 配置（upload_max_filesize、post_max_size、max_execution_time）</li>
+<li><strong>存储后端</strong>：本地存储、对象存储（S3/Swift，通过 External Storage 插件）、WebDAV、SFTP。主存储推荐本地 SSD（性能好），冷数据使用对象存储（成本低）</li>
+<li><strong>安全</strong>：启用两步验证（TOTP/WebAuthn）、强制 HTTPS、配置速率限制（防暴力破解）、使用 Antivirus 插件（ClamAV 扫描上传文件）、定期安全扫描（Nextcloud Security Scan）</li>
+</ul>
+
+<h4 id="selfhosted-automation">家庭自动化：Home Assistant</h4>
+
+<ul>
+<li><strong>架构</strong>：Python 编写，事件驱动架构。核心组件：事件总线（Event Bus）、状态机（State Machine）、服务注册表（Service Registry）、集成（Integration，连接各种设备和服务）。支持 2000+ 集成（Zigbee、Z-Wave、MQTT、HomeKit、Google Assistant、Alexa 等）</li>
+<li><strong>自动化引擎</strong>：基于触发器（Trigger）+ 条件（Condition）+ 动作（Action）的自动化规则。支持模板（Jinja2 模板引擎）、脚本（Script）、场景（Scene）。高级自动化使用 Node-RED（可视化流程编排）或 AppDaemon（Python 脚本）</li>
+<li><strong>部署</strong>：推荐 Home Assistant OS（专用操作系统，基于 Buildroot，自动更新、Add-on 系统）或 Docker（Home Assistant Container，灵活但需要手动配置）。硬件：树莓派 4/5（推荐，低功耗）、x86 迷你主机（性能更强，可同时运行其他服务）</li>
+<li><strong>数据存储</strong>：SQLite（默认，适合小型部署）、MariaDB/PostgreSQL（推荐，适合大量历史数据）。长期数据使用 InfluxDB（时序数据库，适合传感器数据）+ Grafana（可视化）。Recorder 组件配置 include/exclude 减少不必要的数据记录</li>
+</ul>
+
+<h3 id="selfhosted-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>把 RAID 当作备份</strong>：RAID 只防止磁盘硬件故障，不防止误删除、勒索软件、文件系统损坏、火灾/盗窃。RAID 1 中一个文件被误删，两个盘都会删除（镜像同步）。必须遵循 3-2-1 备份原则，RAID 只是高可用的一部分，不是备份。定期验证备份可恢复</li>
+<li><strong>暴露管理后台到公网</strong>：数据库（MySQL/PostgreSQL）、Redis、管理面板（Portainer、phpMyAdmin）、SSH 等不应该直接暴露到公网。这些服务通常没有强认证或有已知漏洞，暴露后容易被攻击。使用 VPN（Tailscale/WireGuard）或 SSH 隧道访问管理服务。公网只暴露反向代理（80/443），由反向代理路由到内部服务</li>
+<li><strong>不更新系统和软件</strong>：自托管服务需要持续维护，不更新会积累安全漏洞。配置自动安全更新（unattended-upgrades）、容器自动更新（Watchtower，但生产环境建议手动更新，先测试）、定期检查 CVE（使用 Trivy 扫描容器镜像、Lynis 扫描系统安全）。关注所使用服务的安全公告邮件列表</li>
+<li><strong>单点故障（SPOF）</strong>：单台服务器运行所有服务，服务器硬件故障（电源、主板、硬盘）会导致所有服务不可用。高可用方案：多台服务器 + 负载均衡、数据库主从复制、文件存储分布式（MinIO 集群、GlusterFS）、UPS 不间断电源（防止断电导致文件系统损坏）。对于个人部署，至少要有快速恢复能力（备份 + 自动化部署脚本，新服务器 30 分钟内恢复）</li>
+<li><strong>不监控服务状态</strong>：服务挂了不知道，用户（家人/朋友）反馈才发现。部署监控：Uptime Kuma（HTTP/TCP/ICMP 监控，简单易用）、Prometheus + Grafana（系统指标，CPU/内存/磁盘/网络）、Netdata（实时监控，开箱即用）。配置告警（邮件/Telegram/Discord Webhook），服务异常时立即通知。监控磁盘使用率（超过 80% 告警，防止磁盘满导致数据库损坏）</li>
+<li><strong>密码管理混乱</strong>：自托管需要管理大量密码（数据库密码、服务管理员密码、API Key、SSH 密钥）。使用密码管理器：Bitwarden/Vaultwarden（自托管密码管理器）、Pass（Unix 密码管理器，基于 GPG + Git）。不要在配置文件中明文存储密码（使用环境变量、Docker secrets、sops 加密配置）。启用两步验证（2FA）保护重要账户</li>
+<li><strong>域名和 SSL 证书管理混乱</strong>：多个服务使用多个域名/子域名，证书过期导致服务不可访问。使用统一的反向代理（Caddy 自动 HTTPS，Traefik 自动证书），集中管理域名和证书。配置证书到期监控（Uptime Kuma 支持 SSL 证书到期监控，或使用 cert-manager）。域名注册商开启自动续费（避免域名过期被抢注）</li>
+<li><strong>过度复杂化（Over-engineering）</strong>：自托管容易陷入"为了技术而技术"，部署大量不必要的服务，使用过于复杂的架构（Kubernetes、服务网格、微服务），导致维护负担过重、故障排查困难。原则：KISS（Keep It Simple, Stupid），从简单的 Docker Compose 开始，只部署真正需要的服务，用 Ansible/Terraform 管理基础设施即代码（IaC），文档记录架构和运维流程（Runbook）</li>
+</ol>
+
 <hr>
 <ul>
 <li>技术博客</li>

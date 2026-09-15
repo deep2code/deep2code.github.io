@@ -555,6 +555,243 @@ timeline
 <h3 id="7-tools">7. 效率工具</h3>
 <h3 id="mac-2026-recommend">2026 推荐配置</h3>
 <h3 id="mac-features">macOS 26 新特性</h3>
+<h3 id="macos-architecture">macOS 系统架构深度解析</h3>
+
+<p>macOS（原 Mac OS X / OS X）是 Apple 开发的桌面操作系统，基于 Darwin 开源内核。理解 macOS 的架构，有助于优化开发环境、排查系统问题、发挥硬件性能。</p>
+
+<h4 id="darwin-xnu">Darwin 与 XNU 内核</h4>
+
+<p>macOS 的核心是 <strong>Darwin</strong>（开源操作系统），其内核是 <strong>XNU</strong>（X is Not Unix）：</p>
+
+<ul>
+<li><strong>XNU 架构</strong>：混合内核（Hybrid Kernel），结合了微内核（Mach）和宏内核（BSD）的设计：
+  <ul>
+  <li><strong>Mach 微内核</strong>：负责最底层的硬件抽象，包括进程/线程管理（task/thread）、虚拟内存（VM）、进程间通信（IPC，Mach Messages）、调度器、异常处理。Mach 的设计理念是最小化内核功能，大部分服务在用户态运行</li>
+  <li><strong>BSD 层</strong>：基于 FreeBSD 的 BSD 子系统，提供 POSIX API（文件系统、网络协议栈、Unix 进程模型、信号、权限）。BSD 层在 Mach 之上运行，作为 Mach 的一个"服务器"</li>
+  <li><strong>libkern</strong>：C++ 编写的内核库，提供驱动程序开发框架（I/O Kit，DriverKit）、内核对象管理（引用计数、元类）、原子操作、锁原语</li>
+  <li><strong>Platform Expert</strong>：平台相关代码，处理硬件启动（boot）、设备树（device tree）、电源管理、时钟</li>
+  </ul>
+</li>
+<li><strong>系统调用</strong>：macOS 有两类系统调用：
+  <ul>
+  <li><strong>Mach 陷阱（Mach Trap）</strong>：Mach 内核的原生调用，如 <code>mach_msg</code>（消息发送/接收）、<code>vm_allocate</code>（虚拟内存分配）、<code>thread_create</code>（线程创建）。Mach 调用使用 Mach 端口（Port）作为能力（Capability）标识</li>
+  <li><strong>BSD 系统调用</strong>：标准 POSIX 调用，如 <code>read</code>、<code>write</code>、<code>fork</code>、<code>open</code>。BSD 调用在 XNU 中通过 Mach 的异常机制或直接调用实现。开发者通常使用 BSD 系统调用（通过 libc 包装）</li>
+  </ul>
+</li>
+<li><strong>启动流程</strong>：
+  <ol>
+  <li><strong>Boot ROM / iBoot</strong>：Apple Silicon Mac 使用 iBoot（Apple 自研 bootloader），Intel Mac 使用 EFI。验证固件签名（Secure Boot），初始化硬件</li>
+  <li><strong>内核加载</strong>：iBoot 加载内核（/System/Library/Kernels/kernel）和内核扩展（kext），内核解压并初始化</li>
+  <li><strong>launchd</strong>：内核启动用户态第一个进程 <code>launchd</code>（PID 1），它是所有进程的祖先。launchd 管理系统守护进程（daemons）和代理（agents），通过 plist 配置文件（/System/Library/LaunchDaemons、/Library/LaunchDaemons、~/Library/LaunchAgents）定义服务</li>
+  <li><strong>系统服务</strong>：launchd 启动核心服务：WindowServer（图形窗口服务器）、loginwindow（登录窗口）、核心守护进程（syslogd、configd、mDNSResponder 等）</li>
+  <li><strong>用户登录</strong>：用户通过 loginwindow 登录，launchd 启动用户级代理（Agents），加载用户环境（shell、桌面环境 Finder/Dock/Menu Bar）</li>
+  </ol>
+</li>
+</ul>
+
+<h4 id="mac-filesystem">文件系统与存储架构</h4>
+
+<ul>
+<li><strong>APFS（Apple File System）</strong>：macOS 10.13+ 默认文件系统，替代 HFS+：
+  <ul>
+  <li><strong>Copy-on-Write（CoW）</strong>：写入数据时不覆盖原数据，而是写入新位置，更新元数据指针。保证文件系统一致性（崩溃时不会损坏元数据），支持高效快照（Snapshot）</li>
+  <li><strong>空间共享（Space Sharing）</strong>：APFS 容器（Container）内的多个卷（Volume）共享底层空闲空间，不需要预先分区。每个卷有自己的文件系统树，但共享存储空间</li>
+  <li><strong>快照（Snapshot）</strong>：只读的文件系统状态快照，用于 Time Machine 本地快照、系统更新回滚、文件版本恢复。快照是只读的，不占用额外空间（CoW，只有修改的数据才占用新空间）</li>
+  <li><strong>克隆（Clone）</strong>：文件/目录的即时复制，不占用额外空间（CoW，修改时才复制数据）。Finder 中复制文件默认使用克隆（同卷内）</li>
+  <li><strong>加密</strong>：原生支持全磁盘加密（FileVault），使用 AES-XTS 加密，密钥存储在 Secure Enclave（Apple Silicon）或 EFI（Intel）</li>
+  <li><strong>限制</strong>：不支持区分大小写（默认，可格式化时选择大小写敏感）、不支持文件系统级压缩（使用透明压缩，但兼容性有限）、最大文件大小 8 EB（2^63 字节）</li>
+  </ul>
+</li>
+<li><strong>系统卷与数据卷分离</strong>：macOS 10.15+（Catalina）将系统分为两个卷：
+  <ul>
+  <li><strong>系统卷（System Volume）</strong>：只读，包含操作系统文件（/System、/usr、/bin、/sbin）。系统更新时替换整个系统卷，保证系统完整性。SSV（Signed System Volume）签名验证防止篡改</li>
+  <li><strong>数据卷（Data Volume）</strong>：可读写，包含用户数据（/Users）、应用程序（/Applications）、可变系统数据（/var、/etc、/tmp 的符号链接指向数据卷）。通过 firmlinks（ firmlink，类似硬链接但跨卷）将系统卷和数据卷的目录合并</li>
+  </ul>
+</li>
+</ul>
+
+<h3 id="mac-dev-tools">开发工具链与包管理</h3>
+
+<h4 id="xcode-clt">Xcode 与 Command Line Tools</h4>
+
+<ul>
+<li><strong>Xcode</strong>：Apple 官方 IDE，包含完整的开发工具链：
+  <ul>
+  <li><strong>编译器</strong>：Clang（C/C++/Objective-C）、Swift 编译器（swiftc）、LLDB 调试器。Clang 基于 LLVM，支持 C17/C++20/Objective-C，诊断信息友好</li>
+  <li><strong>构建系统</strong>：Xcode Build System（新版基于 XCBuild，类似 Bazel 的构建系统）、xcodebuild（命令行构建工具）、Swift Package Manager（SPM，Swift 包管理）</li>
+  <li><strong>模拟器</strong>：iOS/iPadOS/watchOS/tvOS 模拟器，基于 macOS 的虚拟化（Intel Mac 使用 Rosetta 翻译，Apple Silicon Mac 原生运行 ARM 模拟器）</li>
+  <li><strong>Instruments</strong>：性能分析工具，基于 DTrace（动态追踪），支持 CPU、内存、磁盘、网络、GPU 等多维度分析。Time Profiler（CPU 采样）、Allocations（内存分配）、Leaks（内存泄漏）是最常用的工具</li>
+  <li><strong>Interface Builder</strong>：可视化 UI 设计工具，使用 Storyboard/XIB 文件描述界面</li>
+  </ul>
+</li>
+<li><strong>Command Line Tools</strong>：Xcode 的轻量替代品，只包含命令行开发工具（Clang、git、make、LLDB、SDK 头文件），不包含 Xcode IDE 和模拟器。安装：<code>xcode-select --install</code>。适合不需要 iOS/macOS 应用开发，只需要编译 C/C++/Python 等命令行工具的开发者。占用空间小（约 2GB，Xcode 约 30GB+）</li>
+<li><strong>SDK 与目标平台</strong>：Xcode 包含多个平台的 SDK（macOS、iOS、iPadOS、watchOS、tvOS、visionOS），每个 SDK 包含系统库、头文件、元数据。使用 <code>xcrun --sdk macosx --show-sdk-path</code> 查看 SDK 路径。交叉编译时指定 <code>-sdk</code> 和 <code>-arch</code>（x86_64/arm64）</li>
+</ul>
+
+<h4 id="homebrew-deep">Homebrew 包管理器深度解析</h4>
+
+<p>Homebrew 是 macOS 最流行的包管理器，"The missing package manager for macOS"：</p>
+
+<ul>
+<li><strong>架构</strong>：
+  <ul>
+  <li><strong>Formula（配方）</strong>：Ruby 编写的包定义文件，描述包的名称、版本、源码 URL、依赖、编译选项、安装步骤。存储在 Homebrew/homebrew-core（核心库）和第三方 tap（<code>brew tap</code>）</li>
+  <li><strong>Cask（酒桶）</strong>：GUI 应用的安装定义，用于安装 .app/.pkg 格式的应用（如 Google Chrome、VS Code、Docker）。Cask 从官方下载安装包，自动安装到 /Applications</li>
+  <li><strong>Bottle（瓶子）</strong>：预编译的二进制包，避免从源码编译（节省时间）。Bottle 是 .tar.gz 格式，包含编译好的文件。Homebrew 默认优先使用 Bottle，只有没有 Bottle 或指定 <code>--build-from-source</code> 时才从源码编译</li>
+  <li><strong>Keg（小桶）</strong>：包的安装目录，<code>/opt/homebrew/Cellar/&lt;name&gt;/&lt;version&gt;/</code>（Apple Silicon）或 <code>/usr/local/Cellar/</code>（Intel）。每个版本独立安装，支持多版本共存</li>
+  <li><strong>Prefix（前缀）</strong>：Homebrew 的根目录，Apple Silicon 是 <code>/opt/homebrew</code>，Intel 是 <code>/usr/local</code>。Cellar 中的文件通过符号链接（symlink）链接到 Prefix 的 bin、lib、include 等目录</li>
+  </ul>
+</li>
+<li><strong>安装路径差异</strong>：
+  <ul>
+  <li><strong>Apple Silicon（M1/M2/M3/M4）</strong>：<code>/opt/homebrew</code>。这是因为 macOS 的系统完整性保护（SIP）限制了 /usr/local 的某些操作，且 /opt/homebrew 是 ARM64 架构的标准路径</li>
+  <li><strong>Intel</strong>：<code>/usr/local</code>。传统的 Unix 软件安装路径</li>
+  <li><strong>影响</strong>：需要将 Homebrew 的 bin 目录加入 PATH（<code>/opt/homebrew/bin</code> 或 <code>/usr/local/bin</code>）。Shell 配置文件（~/.zshrc）中添加 <code>eval "$(/opt/homebrew/bin/brew shellenv)"</code> 自动配置环境变量</li>
+  </ul>
+</li>
+<li><strong>常用命令</strong>：
+  <ul>
+  <li><code>brew install &lt;package&gt;</code>：安装命令行工具（Formula）</li>
+  <li><code>brew install --cask &lt;app&gt;</code>：安装 GUI 应用（Cask）</li>
+  <li><code>brew update</code>：更新 Homebrew 自身和 Formula 列表（从 GitHub 拉取最新代码）</li>
+  <li><code>brew upgrade</code>：升级所有已安装的包到最新版本</li>
+  <li><code>brew list</code>：列出已安装的包</li>
+  <li><code>brew search &lt;keyword&gt;</code>：搜索包</li>
+  <li><code>brew info &lt;package&gt;</code>：查看包信息（版本、依赖、安装路径、注意事项）</li>
+  <li><code>brew cleanup</code>：清理旧版本和缓存（释放磁盘空间）</li>
+  <li><code>brew services list/start/stop/restart</code>：管理后台服务（如 mysql、nginx、postgresql）</li>
+  <li><code>brew doctor</code>：诊断 Homebrew 问题（检查权限、冲突、过时文件）</li>
+  </ul>
+</li>
+</ul>
+
+<h4 id="mac-package-managers">包管理器对比</h4>
+
+<table>
+<tr><th>维度</th><th>Homebrew</th><th>MacPorts</th><th>nix-darwin</th><th>Cond a</th></tr>
+<tr><td>语言</td><td>Ruby</td><td>Tcl</td><td>Nix</td><td>Python</td></tr>
+<tr><td>安装路径</td><td>/opt/homebrew (ARM) /usr/local (Intel)</td><td>/opt/local</td><td>/nix</td><td>~/miniconda3 或 /opt/conda</td></tr>
+<tr><td>包格式</td><td>Formula (源码) + Bottle (二进制)</td><td>Portfile (源码) + 预编译</td><td>Nix 表达式 + 二进制缓存</td><td>预编译二进制包</td></tr>
+<tr><td>依赖管理</td><td>运行时依赖 + 构建依赖</td><td>完整依赖树（包含私有依赖）</td><td>纯函数依赖，可复现</td><td>环境隔离，多版本共存</td></tr>
+<tr><td>GUI 应用</td><td>支持（Cask）</td><td>不支持</td><td>不支持</td><td>不支持</td></tr>
+<tr><td>多版本共存</td><td>支持（Cellar 多版本，但默认链接一个）</td><td>支持</td><td>完美支持（每代独立）</td><td>完美支持（conda env）</td></tr>
+<tr><td>可复现性</td><td>一般（Bottle 版本可能变化）</td><td>较好</td><td>优秀（纯函数，bit-for-bit 可复现）</td><td>较好（environment.yml）</td></tr>
+<tr><td>学习曲线</td><td>平缓</td><td>中等</td><td>陡峭（Nix 语言）</td><td>平缓（数据科学用户）</td></tr>
+<tr><td>适用场景</td><td>通用开发，最流行</td><td>需要完整依赖隔离，Unix 传统</td><td>需要可复现环境，声明式配置</td><td>Python/数据科学，多环境管理</td></tr>
+</table>
+
+<p>推荐：大多数开发者使用 Homebrew（生态最丰富，文档最全）。数据科学/AI 开发者额外使用 Conda（管理 Python 环境和数据科学库）。需要严格可复现环境的开发者使用 Nix（nix-darwin + home-manager）。</p>
+
+<h3 id="mac-terminal">终端与 Shell 环境深度配置</h3>
+
+<h4 id="iterm2-zsh">iTerm2 + zsh 配置</h4>
+
+<ul>
+<li><strong>iTerm2</strong>：macOS 最流行的终端模拟器，替代系统 Terminal：
+  <ul>
+  <li><strong>分屏（Split Panes）</strong>：水平/垂直分屏，快捷键 <code>Cmd+D</code>（垂直）、<code>Cmd+Shift+D</code>（水平）。支持快捷键在分屏间切换（<code>Cmd+[</code> / <code>Cmd+]</code>）</li>
+  <li><strong>热键窗口（Hotkey Window）</strong>：全局快捷键（如 <code>Cmd+~</code>）唤起/隐藏终端窗口，类似 Guake/Yakuake。在 Preferences → Keys → Hotkey 中配置</li>
+  <li><strong>搜索（Search）</strong>：<code>Cmd+F</code> 搜索终端输出，支持正则表达式、高亮所有匹配。搜索结果可以复制</li>
+  <li><strong>自动补全（Autocomplete）</strong>：输入时按 <code>Cmd+;</code> 显示历史命令自动补全，基于终端输出历史</li>
+  <li><strong>即时回放（Instant Replay）</strong>：<code>Cmd+Opt+B</code> 进入即时回放模式，可以查看终端输出历史（类似 DVR 回放），用左右箭头键回溯时间。适合查看已经滚动出屏幕的输出</li>
+  <li><strong>Shell 集成（Shell Integration）</strong>：安装 Shell Integration 脚本后，iTerm2 可以追踪命令执行（开始/结束/耗时）、当前目录、git 分支。支持命令历史标记（右侧蓝色箭头标记命令开始）、最近目录跳转（<code>Cmd+Shift+O</code>）</li>
+  <li><strong>配色方案</strong>：内置多种配色方案（Solarized、Dracula、One Dark 等），也可以从 iterm2colorschemes.com 下载更多。推荐使用深色主题（护眼，OLED 屏幕省电）</li>
+  </ul>
+</li>
+<li><strong>zsh（Z Shell）</strong>：macOS 10.15+（Catalina）默认 Shell，替代 bash：
+  <ul>
+  <li><strong>自动补全</strong>：zsh 的补全系统比 bash 强大得多，支持命令补全、选项补全、参数补全、路径补全（模糊匹配）。启用：<code>autoload -Uz compinit &amp;&amp; compinit</code></li>
+  <li><strong>通配符扩展（Globbing）</strong>：<code>**/*</code>（递归匹配）、<code>*.txt~*.bak</code>（排除匹配）、<code>*.(txt|md)</code>（多扩展名）、<code>*(.)</code>（只文件）、<code>*(/)</code>（只目录）</li>
+  <li><strong>主题与提示符</strong>：通过 <code>PROMPT</code>/<code>RPROMPT</code> 变量自定义提示符，支持颜色、git 分支、命令耗时、当前目录等。Oh My Zsh / Starship 提供丰富的主题</li>
+  <li><strong>历史记录</strong>：zsh 历史记录支持增量搜索（<code>Ctrl+R</code>）、历史子串搜索（输入部分命令后按上下箭头）、共享历史（多个终端共享历史记录）。配置：<code>HISTFILE=~/.zsh_history</code>、<code>HISTSIZE=10000</code>、<code>SAVEHIST=10000</code>、<code>setopt SHARE_HISTORY</code></li>
+  <li><strong>插件系统</strong>：Oh My Zsh 提供 300+ 插件（git、docker、kubectl、zsh-autosuggestions、zsh-syntax-highlighting 等）。zsh-autosuggestions（灰色提示历史命令，<code>→</code> 接受）和 zsh-syntax-highlighting（命令语法高亮，红色表示命令不存在）是最推荐的插件</li>
+  </ul>
+</li>
+<li><strong>Oh My Zsh</strong>：zsh 的配置管理框架，提供主题、插件、别名。安装：<code>sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"</code>。配置文件 ~/.zshrc，<code>ZSH_THEME="agnoster"</code> 设置主题，<code>plugins=(git docker kubectl zsh-autosuggestions zsh-syntax-highlighting)</code> 启用插件</li>
+<li><strong>Starship</strong>：跨 Shell 的提示符（Prompt），用 Rust 编写，超快、高度可配置。替代 Oh My Zsh 的主题功能，支持 bash/zsh/fish/powershell。配置文件 ~/.config/starship.toml，可以自定义每个模块（git、node、python、golang、kubernetes、aws 等）的显示条件和格式</li>
+</ul>
+
+<h4 id="mac-tmux">tmux 终端复用器</h4>
+
+<ul>
+<li><strong>核心概念</strong>：
+  <ul>
+  <li><strong>Session（会话）</strong>：tmux 的顶层单位，一个会话包含多个窗口。会话可以脱离（detach）终端后台运行，重新连接（attach）后恢复。SSH 断开后 tmux 会话继续运行，这是 tmux 最常用的场景</li>
+  <li><strong>Window（窗口）</strong>：会话中的标签页，类似浏览器标签。一个窗口包含多个面板</li>
+  <li><strong>Pane（面板）</strong>：窗口中的分屏，水平/垂直分割。每个面板运行一个独立的 Shell</li>
+  </ul>
+</li>
+<li><strong>常用快捷键</strong>（前缀键 <code>Ctrl+b</code>，然后按命令键）：
+  <ul>
+  <li><code>d</code>：detach 脱离会话（后台运行）</li>
+  <li><code>c</code>：新建窗口</li>
+  <li><code>n</code>/<code>p</code>：下一个/上一个窗口</li>
+  <li><code>0-9</code>：切换到指定编号窗口</li>
+  <li><code>%</code>：垂直分屏</li>
+  <li><code>"</code>：水平分屏</li>
+  <li><code>方向键</code>：切换面板</li>
+  <li><code>z</code>：当前面板最大化/恢复</li>
+  <li><code>,</code>：重命名窗口</li>
+  <li><code>?</code>：显示所有快捷键帮助</li>
+  <li><code>:</code>：进入 tmux 命令模式</li>
+  </ul>
+</li>
+<li><strong>配置优化</strong>（~/.tmux.conf）：
+  <ul>
+  <li>修改前缀键为 <code>Ctrl+a</code>（更接近 GNU Screen，左手小指+无名指）：<code>set -g prefix C-a</code>、<code>unbind C-b</code>、<code>bind C-a send-prefix</code></li>
+  <li>启用鼠标支持（点击切换面板、拖拽调整面板大小、滚轮滚动）：<code>set -g mouse on</code></li>
+  <li>面板分割快捷键更直观：<code>bind | split-window -h</code>、<code>bind - split-window -v</code></li>
+  <li>vi 模式复制：<code>setw -g mode-keys vi</code>（复制模式用 vi 键位导航）</li>
+  <li>状态栏美化：自定义状态栏颜色、显示时间、电池、网络等</li>
+  </ul>
+</li>
+</ul>
+
+<h3 id="mac-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>Rosetta 2 翻译导致的性能问题</strong>：Apple Silicon Mac（M1/M2/M3/M4）运行 x86_64 程序时通过 Rosetta 2 动态翻译，性能损失约 10-30%（计算密集型可能更多），且 Rosetta 进程占用额外内存。最佳实践：优先使用 ARM64 原生版本的软件（Homebrew 在 Apple Silicon 上默认安装 ARM64 版本）。检查应用架构：在"活动监视器"中查看"种类"列（Apple 芯片 = ARM64 原生，Intel = 需要 Rosetta）。终端中使用 <code>arch</code> 命令查看当前架构，<code>arch -x86_64 command</code> 强制以 x86_64 运行（仅在没有 ARM64 版本时使用）。Docker Desktop 在 Apple Silicon 上默认运行 ARM64 容器，运行 x86 容器需要指定 <code>--platform linux/amd64</code>（性能较差）</li>
+<li><strong>系统完整性保护（SIP）限制</strong>：macOS 的 SIP（System Integrity Protection）保护系统目录（/System、/usr、/bin、/sbin），即使 root 用户也不能修改。这会导致某些传统 Unix 软件无法安装到标准路径。最佳实践：使用 Homebrew（安装到 /opt/homebrew 或 /usr/local，不受 SIP 限制）。不要为了方便而禁用 SIP（会显著降低系统安全性，且 Apple Silicon Mac 禁用 SIP 需要进入恢复模式操作）。需要修改系统级配置时，使用 macOS 提供的官方方式（如 <code>sudo defaults write</code> 修改偏好设置，而非直接修改 plist 文件）</li>
+<li><strong>内存压力与 Swap 频繁写入</strong>：macOS 的内存管理采用"尽量使用内存"策略（文件缓存占用大量内存），内存不足时使用 Swap（交换分区，存储在 SSD 上）。频繁的 Swap 读写会加速 SSD 磨损（SSD 有写入寿命限制，TBW），且导致系统卡顿。最佳实践：监控内存压力（"活动监视器 → 内存 → 内存压力"图表，绿色=正常，黄色=压力，红色=严重）。关闭不需要的应用（特别是 Electron 应用如 Slack、VS Code、Chrome，内存占用大）。使用 <code>sudo purge</code> 清理文件缓存（临时释放内存，但 macOS 会自动管理，通常不需要手动）。购买大内存配置（16GB 起步，32GB 适合开发，64GB+ 适合重型任务如虚拟机、视频剪辑、大模型推理）。注意：Apple Silicon Mac 的内存是统一内存（Unified Memory），CPU/GPU/NPU 共享，无法后期升级（购买时决定）</li>
+<li><strong>磁盘空间不足与"其他"占用</strong>：macOS 的存储管理中"其他"（或"系统数据"）占用大量空间，通常是缓存、日志、临时文件、Xcode 模拟器、iOS 备份、Docker 镜像等。最佳实践：使用 <code>du -sh *</code> 或 OmniDiskSweeper/DaisyDisk 可视化磁盘占用，找到大文件。清理 Xcode 缓存：<code>rm -rf ~/Library/Developer/Xcode/DerivedData/*</code>（编译缓存，可安全删除）、<code>xcrun simctl delete unavailable</code>（删除不可用的模拟器）。清理 Homebrew 缓存：<code>brew cleanup --prune=all</code>。清理 Docker：<code>docker system prune -a --volumes</code>（删除未使用的镜像/容器/卷）。iOS 备份（~/Library/Application Support/MobileSync/Backup/）如果不需要可以删除。注意：不要手动删除 /System 或 /Library 下的不明文件，可能导致系统异常</li>
+<li><strong>开发环境隔离不足导致依赖冲突</strong>：在系统 Python/Ruby/Node 上直接安装包，不同项目的依赖版本冲突，且可能污染系统环境。最佳实践：使用版本管理工具：
+  <ul>
+  <li><strong>Python</strong>：pyenv（管理 Python 版本）+ venv（虚拟环境，Python 3.3+ 内置）或 conda（数据科学）</li>
+  <li><strong>Node.js</strong>：nvm（Node Version Manager）或 fnm（Fast Node Manager，Rust 编写，更快）或 Volta（版本管理+包管理器）</li>
+  <li><strong>Ruby</strong>：rbenv 或 rvm（但 macOS 自带 Ruby 是系统依赖，不要用 gem 安装到系统 Ruby）</li>
+  <li><strong>Go</strong>：goenv 或直接下载多版本（Go 版本管理简单，GOPATH/GOROOT 配置）</li>
+  <li><strong>Java</strong>：jEnv 或 SDKMAN（管理多版本 JDK）</li>
+  </ul>
+  使用 Docker 容器化开发环境（Dev Containers / VS Code Remote - Containers），每个项目独立环境，不污染宿主机
+</li>
+<li><strong>键盘快捷键与触摸板效率低</strong>：macOS 的键盘快捷键与 Windows/Linux 不同（Command 键代替 Ctrl），触摸板手势不熟悉会降低效率。最佳实践：
+  <ul>
+  <li><strong>Karabiner-Elements</strong>：强大的键盘自定义工具，可以修改键位映射（如 Caps Lock 映射为 Escape 或 Hyper 键）、复杂修改（条件映射、多层键位）、功能键调整。开发者常用：Caps Lock 同时作为 Escape（短按）和 Control（长按）</li>
+  <li><strong>Raycast / Alfred</strong>：启动器替代 Spotlight，支持应用启动、文件搜索、剪贴板历史、窗口管理、脚本执行、插件扩展。Raycast 是免费的现代选择，Alfred 是老牌工具（Powerpack 付费）</li>
+  <li><strong>触摸板手势</strong>：系统偏好设置 → 触摸板，启用所有手势：轻点来点按、辅助点按（双指）、查找（三指）、显示桌面（拇指+三指张开）、调度中心（三指上滑）、App Exposé（三指下滑）、全屏应用切换（三指左右滑动）、页面缩放（双指捏合）</li>
+  <li><strong>窗口管理</strong>：macOS 原生窗口管理较弱（没有 Windows 的 Aero Snap）。使用 Rectangle（免费，开源）或 Magnet（付费）实现快捷键窗口分屏（左半屏、右半屏、上半屏、下半屏、居中、全屏等）</li>
+  </ul>
+</li>
+<li><strong>安全与隐私设置不当</strong>：macOS 的安全机制（Gatekeeper、FileVault、防火墙、隐私权限）如果配置不当，会降低安全性或导致应用无法正常工作。最佳实践：
+  <ul>
+  <li><strong>FileVault</strong>：启用全磁盘加密（系统偏好设置 → 安全性与隐私 → FileVault），防止笔记本丢失后数据泄露。Apple Silicon Mac 的 FileVault 密钥存储在 Secure Enclave 中，性能影响极小</li>
+  <li><strong>Gatekeeper</strong>：默认只允许 App Store 和已认证开发者的应用。运行未认证应用时，右键 → 打开（而非双击），或在安全性与隐私中点击"仍要打开"。不要全局禁用 Gatekeeper（<code>sudo spctl --master-disable</code>），会降低安全性</li>
+  <li><strong>防火墙</strong>：启用防火墙（系统偏好设置 → 安全性与隐私 → 防火墙），阻止未经请求的传入连接。对于开发服务器（如 localhost:3000），本地访问不受影响，只有外部访问需要允许</li>
+  <li><strong>隐私权限</strong>：macOS 要求应用明确请求权限（摄像头、麦克风、屏幕录制、完全磁盘访问、辅助功能）。只授予可信应用必要的权限，定期检查（系统偏好设置 → 安全性与隐私 → 隐私），撤销不再需要的权限</li>
+  <li><strong>SSH 密钥</strong>：使用 ed25519 密钥（比 RSA 更短更安全），<code>ssh-keygen -t ed25519 -C "email@example.com"</code>。将私钥添加到 SSH Agent（<code>ssh-add --apple-use-keychain ~/.ssh/id_ed25519</code>，macOS 会存储到钥匙串）。配置 ~/.ssh/config 管理多个主机的密钥和别名</li>
+  </ul>
+</li>
+<li><strong>时间机器（Time Machine）备份不完整或不可用</strong>：Time Machine 是 macOS 内置备份工具，但默认只备份用户数据，且备份磁盘可能损坏或空间不足。最佳实践：
+  <ul>
+  <li><strong>备份目标</strong>：使用外置 SSD（比 HDD 快，更耐用）或 NAS（支持 Time Machine 的 NAS，如 Synology、QNAP、TrueNAS）。不要使用 Mac 内部磁盘作为备份目标（同一台机器故障会同时丢失原始数据和备份）</li>
+  <li><strong>备份频率</strong>：Time Machine 默认每小时备份一次（连接备份磁盘时）。保持备份磁盘持续连接（或定期连接），确保备份是最新的。笔记本用户可以使用 Time Capsule（已停产）或支持无线 Time Machine 的 NAS</li>
+  <li><strong>排除项</strong>：在 Time Machine 选项中排除不需要备份的大文件：<code>~/Library/Caches</code>（缓存）、<code>~/Downloads</code>（下载目录，通常可重新下载）、Docker 镜像（<code>~/Library/Containers/com.docker.docker</code>，可重新拉取）、虚拟机镜像（可重建）、node_modules（可 npm install 重建）。减少备份时间和磁盘占用</li>
+  <li><strong>备份验证</strong>：定期验证备份可恢复（按住 Option 点击菜单栏 Time Machine 图标 → "验证备份"）。不要只备份不验证，真正需要恢复时才发现备份损坏就晚了</li>
+  <li><strong>异地备份</strong>：遵循 3-2-1 原则，除了 Time Machine（本地备份），还要有一份异地备份（云备份如 Backblaze、iCloud Drive、Arq；或定期将备份磁盘带到其他地点）。防止火灾、盗窃、自然灾害同时丢失原始数据和本地备份</li>
+  </ul>
+</li>
+</ol>
+
                 <div class="page-nav">
 <a class="nav-prev" href="../flutter/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">Flutter</span></a>
 <a class="nav-next" href="../other/windows/index.html"><span class="nav-label">下一篇 →</span><span class="nav-title">Windows 开发环境更新（2024-2026）</span></a>
