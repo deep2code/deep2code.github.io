@@ -169,6 +169,195 @@ assert_eq!(s, "12345");</code></pre>
 <li><strong>整数位操作 API</strong>：<code>isolate_highest_one</code> / <code>isolate_lowest_one</code> / <code>highest_one</code> / <code>lowest_one</code> / <code>bit_width</code> 进入标准库（含 <code>NonZero</code> 系列）。</li>
 <li><strong>新增 <code>dead_code_pub_in_binary</code> lint</strong>：检测二进制 crate 中未使用的 pub 项，默认 allow，可作为代码质量治理选项。</li>
 </ul><h3 id="rust-ecosystem">Rust 生态系统（2026 年）</h3>
+
+<h3 id="rust-ownership-borrow">所有权与借用检查器深度解析</h3>
+
+<h4 id="ownership-rules">所有权三规则</h4>
+<pre><code class="language-rust">// 规则1：每个值有且只有一个所有者（owner）
+let s1 = String::from("hello");  // s1 是 "hello" 的所有者
+let s2 = s1;                      // 所有权移动（move），s1 不再有效
+// println!("{}", s1);            // ❌ 编译错误：value borrowed here after move
+
+// 规则2：所有者离开作用域时，值被自动释放（drop）
+{
+    let s = String::from("hello");
+    // 使用 s
+} // s 离开作用域，自动调用 drop(s)，内存释放
+
+// 规则3：一个值可以有多个不可变引用（&T），或一个可变引用（&mut T），不能同时有
+let mut s = String::from("hello");
+
+let r1 = &s;      // 不可变引用
+let r2 = &s;      // 另一个不可变引用（可以有多个）
+println!("{}, {}", r1, r2);  // ✅ 可以
+
+// let r3 = &mut s;  // ❌ 编译错误：cannot borrow `s` as mutable because it is also borrowed as immutable
+
+let r3 = &mut s;  // ✅ r1, r2 已经不再使用（NLL 非词法生命周期）
+r3.push_str(", world");
+println!("{}", r3);  // ✅</code></pre>
+
+<h4 id="borrow-checker">借用检查器（Borrow Checker）工作原理</h4>
+<pre><code class="language-text">借用检查器在编译时分析引用的生命周期，确保内存安全：
+
+  分析流程：
+  1. 构建控制流图（CFG）
+  2. 追踪每个引用的创建和最后使用位置
+  3. 检查引用规则：
+     - 不可变引用（&T）可以共存
+     - 可变引用（&mut T）必须独占
+     - 引用不能超过被引用值的生命周期
+  4. 使用 NLL（Non-Lexical Lifetimes）：
+     - 引用的生命周期到最后一次使用为止，不是到作用域结束
+     - 这使得更多代码可以通过编译
+
+  经典错误模式：
+  1. 悬垂引用（Dangling Reference）
+     fn dangle() -> &String {
+         let s = String::from("hello");
+         &s  // ❌ s 在函数结束时被释放，返回悬垂引用
+     }
+     
+  2. 同时可变和不可变引用
+     let mut v = vec![1, 2, 3];
+     let first = &v[0];     // 不可变引用
+     v.push(4);              // ❌ 可变借用，first 可能失效
+     
+  3. 迭代器失效
+     for item in &v {
+         v.push(*item);      // ❌ 迭代时修改集合
+     }
+
+  解决方法：
+  - 用生命周期标注（'a）告诉编译器引用的关系
+  - 用 clone() 避免借用
+  - 用 RefCell<T> 实现运行时借用检查（内部可变性）
+  - 用 Rc<T>/Arc<T> 实现多所有权</code></pre>
+
+<h4 id="lifetime-elision">生命周期标注与省略规则</h4>
+<pre><code class="language-rust">// 生命周期标注：告诉编译器引用之间的关系
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() { x } else { y }
+}
+// 'a 表示返回值的生命周期至少和 x, y 中较短的一样长
+
+// 生命周期省略规则（Elision Rules）：编译器自动推导
+// 规则1：每个引用参数有自己的生命周期
+fn first_word(s: &str) -> &str { ... }
+// 等价于 fn first_word<'a>(s: &'a str) -> &'a str
+
+// 规则2：如果只有一个输入引用，输出引用生命周期等于它
+fn split(s: &str) -> (&str, &str) { ... }
+
+// 规则3：如果有多个输入引用，且有 &self/&mut self，输出生命周期等于 self
+impl<'a> Config<'a> {
+    fn get(&self, key: &str) -> &str { ... }
+    // 等价于 fn get<'b>(&'a self, key: &'b str) -> &'a str
+}
+
+// 静态生命周期：'static，整个程序运行期间都有效
+let s: &'static str = "hello";  // 字符串字面量是 'static
+// 不要滥用 'static，通常意味着内存泄漏或全局变量</code></pre>
+
+<h4 id="rust-async-runtime">异步运行时原理（Tokio）</h4>
+<pre><code class="language-text">Rust 异步编程模型：async/await + Future trait + 运行时
+
+  Future trait（核心）：
+  pub trait Future {
+      type Output;
+      fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+  }
+  
+  enum Poll<T> {
+      Ready(T),     // 已完成，返回值
+      Pending,      // 未完成，注册 waker 等待唤醒
+  }
+
+  async fn 编译为状态机：
+  async fn fetch_url(url: &str) -> String {
+      let resp = http_get(url).await;  // 暂停点1
+      let body = resp.body().await;    // 暂停点2
+      body
+  }
+  
+  编译后等价于：
+  enum FetchUrlState {
+      Start(Url),
+      WaitingForHttp(HttpGetFuture),
+      WaitingForBody(BodyFuture),
+      Done,
+  }
+  // 每个 .await 是一个状态转换点，状态机实现 Future trait
+
+  Tokio 运行时架构：
+  ┌─────────────────────────────────────────┐
+  │  用户代码（async fn）                    │
+  ├─────────────────────────────────────────┤
+  │  Future 状态机（编译器生成）              │
+  ├─────────────────────────────────────────┤
+  │  Executor（执行器）                       │
+  │  - 多线程工作窃取（work-stealing）       │
+  │  - 任务队列（LIFO 本地 + FIFO 全局）     │
+  ├─────────────────────────────────────────┤
+  │  Reactor（反应器，IO 驱动）              │
+  │  - epoll (Linux) / kqueue (BSD)        │
+  │  - IOCP (Windows)                       │
+  │  - 注册 IO 事件，就绪时唤醒 waker        │
+  ├─────────────────────────────────────────┤
+  │  Time Driver（定时器驱动）               │
+  │  - 时间轮（Timing Wheel）               │
+  │  - 高效管理大量定时器                    │
+  └─────────────────────────────────────────┘
+
+  性能优势：
+  - 零成本抽象：async/await 编译为状态机，无运行时开销
+  - 无 GC：手动内存管理，无 GC 停顿
+  - 无栈协程：不需要为每个协程分配大栈（相比 Go goroutine）
+  - 多线程执行：工作窃取，充分利用多核
+  - IO 多路复用：epoll/kqueue，高并发连接</code></pre>
+
+<h4 id="zero-cost-abstraction">零成本抽象（Zero-Cost Abstractions）</h4>
+<pre><code class="language-rust">// 1. 泛型单态化（Monomorphization）
+// 泛型函数在编译时为每个具体类型生成一份代码
+fn largest<T: PartialOrd>(list: &[T]) -> &T { ... }
+
+// 调用 largest(&[1,2,3]) 和 largest(&["a","b"])
+// 编译后生成：
+// fn largest_i32(list: &[i32]) -> &i32 { ... }
+// fn largest_str(list: &[&str]) -> &str { ... }
+// 无运行时类型检查，性能等同于手写函数
+
+// 2. 迭代器内联（Iterator Inlining）
+let sum: i32 = (1..=1000)
+    .filter(|&x| x % 2 == 0)
+    .map(|x| x * x)
+    .sum();
+// 编译后完全内联，等价于手写循环，无虚函数调用，无堆分配
+
+// 3. 错误处理零开销
+fn parse(s: &str) -> Result<i32, ParseError> { ... }
+// Result<T, E> 是普通枚举，编译为标签联合，无异常处理开销
+// ? 操作符编译为早期返回，无栈展开开销
+
+// 4. 智能指针零开销
+let b = Box::new(42);     // 等价于 malloc，单一次堆分配
+let r = Rc::new(42);      // 引用计数，每次 clone 是原子操作
+// 没有继承，没有虚函数表（除非用 dyn Trait）
+
+// 5. unsafe 逃生门
+// 安全 Rust 有编译时检查，必要时用 unsafe 绕过
+// 但 unsafe 只在明确标记的块中，不影响其他代码的安全性</code></pre>
+
+<h4 id="rust-pitfalls">Rust 常见陷阱</h4>
+<ul>
+<li><strong>陷阱1：学习曲线陡峭</strong> → 借用检查器、生命周期、trait 对象需要时间理解</li>
+<li><strong>陷阱2：编译时间长</strong> → 泛型单态化导致编译慢，用 sccache 加速</li>
+<li><strong>陷阱3：dyn Trait vs impl Trait</strong> → dyn 有虚函数开销，impl 是静态分发，按需选择</li>
+<li><strong>陷阱4：unwrap() 滥用</strong> → 生产代码用 ? 或 match 处理错误，unwrap 只用于测试和确定不会错的情况</li>
+<li><strong>陷阱5：异步运行时不兼容</strong> → Tokio 和 async-std 的 API 不完全兼容，选一个统一使用</li>
+</ul>
+
+
 <table>
 <thead><tr><th>领域</th><th>推荐 crate</th><th>说明</th></tr></thead>
 <tbody>

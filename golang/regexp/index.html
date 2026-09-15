@@ -406,6 +406,118 @@ func parseHTML(htmlContent string) ([]string, error) {
 </ul>
 
 <h3 id="not-recommended">不推荐的做法</h3>
+
+<h3 id="regex-engine-internals">正则引擎原理：NFA vs DFA</h3>
+
+<h4 id="nfa-vs-dfa">两种正则引擎对比</h4>
+<pre><code class="language-text">NFA（非确定性有限自动机）：
+  - 逐个字符尝试，遇到分支时回溯（backtracking）
+  - 支持回溯引用（\1, \2）、lookahead、lookbehind
+  - 最坏时间复杂度：O(2^n)（灾难性回溯）
+  - 代表：PCRE、Python re、JavaScript、Java
+
+DFA（确定性有限自动机）：
+  - 预处理正则表达式，构建状态转移表
+  - 每个字符只处理一次，不回溯
+  - 不支持回溯引用、lookahead
+  - 最坏时间复杂度：O(n)（线性时间）
+  - 代表：RE2（Go）、Google RE2、Rust regex
+
+Go 的 regexp 包基于 RE2 引擎：
+  - 保证线性时间匹配，不会灾难性回溯
+  - 不支持回溯引用（\1）、lookahead（(?=)）、lookbehind（(?<=)）
+  - 需要这些功能时用其他库（如 dlclark/regexp2）</code></pre>
+
+<h4 id="re2-compile">RE2 编译过程</h4>
+<pre><code class="language-text">正则字符串 → 抽象语法树（AST）→ 自动机 → 匹配
+
+  1. 解析（Parse）
+     - 将正则字符串解析为 AST
+     - 验证语法正确性
+     - 限制复杂度（防止 ReDoS）
+
+  2. 简化（Simplify）
+     - 常量折叠：a{3} → aaa
+     - 消除空匹配：(a*)* → a*
+     - 合并字符类：[ab]|[cd] → [a-d]
+
+  3. 编译（Compile）
+     - AST → NFA（Thompson 构造法）
+     - NFA → DFA（子集构造法，懒计算）
+     - 生成匹配程序（字节码）
+
+  4. 匹配（Match）
+     - DFA 模拟：每个字符一次状态转移
+     - 或 NFA 模拟：并行跟踪所有可能状态
+     - 两种方式根据输入长度自动选择</code></pre>
+
+<h4 id="regex-performance">正则性能优化</h4>
+<pre><code class="language-go">// ❌ 错误：在循环中编译正则
+for _, s := range strings {
+    matched, _ := regexp.MatchString(`^\d{3}-\d{4}$`, s) // 每次都编译！
+}
+
+// ✅ 正确：预编译正则，包级变量
+var phoneRegex = regexp.MustCompile(`^\d{3}-\d{4}$`)
+
+func validatePhones(strings []string) {
+    for _, s := range strings {
+        matched := phoneRegex.MatchString(s) // 只匹配，不编译
+    }
+}
+
+// ✅ 更优：用 strings 包替代简单正则
+// 正则有启动开销，简单操作用 strings 更快
+func isPhone(s string) bool {
+    // 替代 ^\d{3}-\d{4}$
+    if len(s) != 8 || s[3] != '-' { return false }
+    for i, c := range s {
+        if i == 3 { continue }
+        if c < '0' || c > '9' { return false }
+    }
+    return true
+}
+
+// 性能对比（100万次匹配）：
+// - regexp.MatchString（循环编译）: 1200ms
+// - 预编译 regexp: 85ms
+// - 手写字符串检查: 12ms</code></pre>
+
+<h4 id="catastrophic-backtracking">灾难性回溯模式（RE2 免疫，但要了解）</h4>
+<pre><code class="language-text">经典灾难性回溯正则（在 PCRE/Python/JS 中会卡死）：
+
+  1. (a+)+$  匹配 "aaaaaaaaaaaaaaaaaaaa!"
+     - a+ 可以匹配任意数量的 a
+     - 外层 + 可以重复任意次
+     - 组合爆炸：2^(n-1) 种分割方式
+     - 100 个 a → 2^99 ≈ 6e29 次尝试
+
+  2. (a|a)*$  类似的组合爆炸
+
+  3. (.*){1,100}  贪婪匹配嵌套重复
+
+  4. ^(a+)+b  匹配 "aaaaaaaaaaaaaaaaaaaa"（没有 b）
+     - 所有分割方式都失败，回溯所有可能
+
+Go RE2 的保护：
+  - 不回溯，用 NFA 并行模拟
+  - 保证 O(n) 时间，n = 输入长度
+  - 代价：不支持回溯引用、lookahead
+
+  如果需要这些功能：
+  - github.com/dlclark/regexp2（支持回溯，但有 ReDoS 风险）
+  - 或用多个简单正则组合</code></pre>
+
+<h4 id="regex-pitfalls">Go regexp 常见陷阱</h4>
+<ul>
+<li><strong>陷阱1：MustCompile 在 init 中 panic</strong> → 确保正则正确，或用 Compile 处理错误</li>
+<li><strong>陷阱2：FindString vs FindStringSubmatch</strong> → 前者只返回匹配，后者返回捕获组，性能不同</li>
+<li><strong>陷阱3：ReplaceAllString 中的 $ 符号</strong> → $1 是反向引用，字面量 $ 要用 $$</li>
+<li><strong>陷阱4：元字符未转义</strong> → 用 regexp.QuoteMeta(s) 转义用户输入</li>
+<li><strong>陷阱5：用正则做简单字符串操作</strong> → strings.Contains/HasPrefix/Index 更快</li>
+</ul>
+
+
 <pre><code class="language-go">// 1. 在循环中编译正则
 // 不好
 for _, s := range items {

@@ -150,6 +150,184 @@ world greeter-world {
 </table>
 <div class="echart-container" id="echart-1" data-option="{&quot;type&quot;: &quot;radar&quot;, &quot;title&quot;: {&quot;text&quot;: &quot;WASM 运行时五维对比&quot;, &quot;subtext&quot;: &quot;WasmEdge / Wasmtime / Wasmer / WAMR / Browser&quot;}, &quot;indicators&quot;: [{&quot;name&quot;: &quot;轻量性&quot;, &quot;max&quot;: 100}, {&quot;name&quot;: &quot;AI 友好&quot;, &quot;max&quot;: 100}, {&quot;name&quot;: &quot;嵌入性&quot;, &quot;max&quot;: 100}, {&quot;name&quot;: &quot;WASI 支持&quot;, &quot;max&quot;: 100}, {&quot;name&quot;: &quot;语言生态&quot;, &quot;max&quot;: 100}], &quot;series&quot;: [{&quot;name&quot;: &quot;WasmEdge&quot;, &quot;value&quot;: [90, 95, 85, 90, 75]}, {&quot;name&quot;: &quot;Wasmtime&quot;, &quot;value&quot;: [75, 60, 90, 95, 85]}, {&quot;name&quot;: &quot;Wasmer&quot;, &quot;value&quot;: [70, 55, 85, 85, 90]}, {&quot;name&quot;: &quot;WAMR&quot;, &quot;value&quot;: [95, 70, 95, 80, 60]}, {&quot;name&quot;: &quot;Browser&quot;, &quot;value&quot;: [50, 40, 30, 60, 100]}]}"></div>
 <p>WASI 0.3 统一推进中，主流运行时均在其主线上跟进；浏览器侧仍是浏览器自有的沙箱，不直接用服务端 WASI。</p><h3 id="wasm-use-cases">Wasm 应用场景</h3>
+
+<h3 id="wasm-binary-format">Wasm 二进制格式深度解析</h3>
+
+<h4 id="wasm-module-structure">模块结构（Module Structure）</h4>
+<pre><code class="language-text">Wasm 二进制模块布局：
+
+  ┌─────────────────────────────────────────┐
+  │  Magic Number: \0asm (4 bytes)          │  0x00 0x61 0x73 0x6d
+  ├─────────────────────────────────────────┤
+  │  Version: 1 (4 bytes)                    │  0x01 0x00 0x00 0x00
+  ├─────────────────────────────────────────┤
+  │  Section 0: Custom (可选)                │  自定义段（名称、元数据）
+  ├─────────────────────────────────────────┤
+  │  Section 1: Type                         │  函数类型签名
+  ├─────────────────────────────────────────┤
+  │  Section 2: Import                       │  导入（函数、全局、内存、表）
+  ├─────────────────────────────────────────┤
+  │  Section 3: Function                     │  函数声明（类型索引）
+  ├─────────────────────────────────────────┤
+  │  Section 4: Table                        │  表（间接函数调用）
+  ├─────────────────────────────────────────┤
+  │  Section 5: Memory                       │  内存声明（页数）
+  ├─────────────────────────────────────────┤
+  │  Section 6: Global                       │  全局变量
+  ├─────────────────────────────────────────┤
+  │  Section 7: Export                       │  导出（函数、全局、内存、表）
+  ├─────────────────────────────────────────┤
+  │  Section 8: Start                        │  起始函数（模块加载时执行）
+  ├─────────────────────────────────────────┤
+  │  Section 9: Element                      │  表元素（函数引用）
+  ├─────────────────────────────────────────┤
+  │  Section 10: Code                        │  函数体（字节码）
+  ├─────────────────────────────────────────┤
+  │  Section 11: Data                        │  数据段（内存初始化）
+  ├─────────────────────────────────────────┤
+  │  Section 12: Data Count (可选)           │  数据段计数
+  └─────────────────────────────────────────┘
+
+  每个段的格式：
+  - Section ID (1 byte)
+  - Section Size (LEB128, 段内容大小)
+  - Section Content (具体内容)
+
+  LEB128 编码：
+  - 可变长度整数编码，每个字节 7 位有效数据
+  - 最高位表示是否还有后续字节
+  - 类似 UTF-8 的变长编码思想</code></pre>
+
+<h4 id="wasm-stack-machine">栈式虚拟机（Stack Machine）</h4>
+<pre><code class="language-text">Wasm 是基于栈的虚拟机，所有操作都在操作数栈上进行：
+
+  计算 (2 + 3) * 4 的字节码执行过程：
+
+  字节码：i32.const 2 | i32.const 3 | i32.add | i32.const 4 | i32.mul
+
+  执行步骤：
+  1. i32.const 2    栈: [2]
+  2. i32.const 3    栈: [2, 3]
+  3. i32.add        弹出 2, 3，压入 5    栈: [5]
+  4. i32.const 4    栈: [5, 4]
+  5. i32.mul        弹出 5, 4，压入 20   栈: [20]
+
+  优势：
+  - 指令紧凑（不需要显式寄存器编号）
+  - 验证简单（栈高度静态可验证）
+  - 编译到寄存器机器容易（SSA 构造）
+
+  Wasm 数据类型：
+  - i32: 32 位整数
+  - i64: 64 位整数
+  - f32: 32 位浮点数（IEEE 754）
+  - f64: 64 位浮点数（IEEE 754）
+  - v128: 128 位 SIMD 向量（128 位提案）
+  - funcref: 函数引用
+  - externref: 外部引用（宿主对象）</code></pre>
+
+<h4 id="wasm-validation">Wasm 验证机制（类型安全）</h4>
+<pre><code class="language-text">Wasm 模块在执行前必须通过验证，保证类型安全和内存安全：
+
+  验证内容：
+  1. 字节码结构验证
+     - 所有跳转目标在函数内
+     - 栈高度在所有路径上一致
+     - 没有访问不存在的局部变量
+     
+  2. 类型检查
+     - 函数调用参数类型匹配
+     - 操作数类型匹配指令要求
+     - 返回值类型匹配函数签名
+     
+  3. 线性内存安全
+     - 内存访问有边界检查（越界 trap）
+     - 不能访问其他模块的内存
+     - 内存大小不超过声明的最大值
+     
+  4. 控制流安全
+     - br/br_if 只能跳到外层块
+     - 不能跳到函数中间
+     - 调用栈深度有限制
+
+  验证是一次性的，验证通过后执行时不再检查
+  这使得 Wasm 可以快速 JIT 编译，且保证安全</code></pre>
+
+<h4 id="wasi-internals">WASI 系统调用原理</h4>
+<pre><code class="language-text">WASI（WebAssembly System Interface）：
+  Wasm 模块的标准系统调用接口，类似 OS 的 syscall
+
+  传统程序：
+    C 程序 → libc → OS syscall → 内核
+    
+  Wasm 程序：
+    Rust/C 程序 → wasi-libc → WASI 函数 → 宿主运行时 → OS syscall
+
+  WASI 核心 API（wasi_snapshot_preview1）：
+  - 进程：proc_exit, proc_raise
+  - 环境：environ_get, environ_sizes_get
+  - 文件：fd_open, fd_close, fd_read, fd_write, fd_seek
+  - 目录：path_open, path_create_directory, path_remove_directory
+  - 时钟：clock_time_get, clock_res_get
+  - 随机：random_get
+  - 网络：sock_accept, sock_recv, sock_send（WASI 0.2+）
+
+  能力安全（Capability-based Security）：
+  - Wasm 模块不能直接访问文件系统
+  - 必须由宿主显式授予目录访问权限
+  - 运行时：wasmtime --dir=/data app.wasm
+  - 这比传统 OS 的权限模型更安全（最小权限原则）
+
+  WASI 0.2（组件模型）：
+  - 支持异步（async）
+  - 支持资源类型（resources）
+  - 支持接口定义（wit）
+  - 支持组件组合（composition）</code></pre>
+
+<h4 id="wasm-performance">Wasm 性能分析</h4>
+<pre><code class="language-text">Wasm vs 原生 vs JavaScript 性能对比（计算密集型任务）：
+
+  ┌──────────────┬──────────┬──────────────────┐
+  │ 运行环境     │ 相对性能 │ 说明             │
+  ├──────────────┼──────────┼──────────────────┤
+  │ 原生 C/C++   │ 100%     │ 基准             │
+  │ Wasm (AOT)   │ 80-95%   │ 接近原生，少量开销 │
+  │ Wasm (JIT)   │ 70-90%   │ 启动后接近原生    │
+  │ Wasm (解释)  │ 10-30%   │ 慢速，用于调试    │
+  │ JavaScript   │ 50-80%   │ V8 JIT 优化后     │
+  └──────────────┴──────────┴──────────────────┘
+
+  Wasm 性能优势：
+  1. 加载快：二进制格式紧凑，比 JS 小 20-30%
+  2. 编译快：类型明确，JIT 编译比 JS 快 10-20x
+  3. 执行稳定：没有去优化（deoptimization），性能可预测
+  4. 内存连续：线性内存，缓存友好
+  5. SIMD：128 位向量指令，数值计算快 2-4x
+
+  Wasm 性能劣势：
+  1. 边界检查：内存访问有运行时边界检查（约 5% 开销）
+  2. 系统调用：WASI 调用比原生 syscall 多一层抽象
+  3. 垃圾回收：Wasm GC 提案尚未完全普及（2026年逐步支持）
+  4. 多线程：SharedArrayBuffer + Atomics，比原生线程复杂
+
+  优化技巧：
+  - 用 AOT 编译（wasmtime --opt=speed, wasmedge --enable-aot）
+  - 开启 SIMD（-msimd128）
+  - 开启 Bulk Memory（-mbulk-memory，memcpy/memset 加速）
+  - 用 wasm-opt 优化（Binaryen 工具链）
+  - 避免频繁的 Wasm ↔ 宿主调用（边界开销）</code></pre>
+
+<h4 id="wasm-security">Wasm 安全模型</h4>
+<ul>
+<li><strong>沙箱隔离</strong>：Wasm 模块运行在独立的线性内存中，不能访问宿主内存</li>
+<li><strong>类型安全</strong>：字节码验证保证类型正确，没有类型混淆</li>
+<li><strong>内存安全</strong>：所有内存访问有边界检查，越界触发 trap</li>
+<li><strong>控制流安全</strong>：只能跳到已知块，不能执行数据（无 ROP/JOP）</li>
+<li><strong>能力安全</strong>：WASI 采用能力模型，宿主显式授予资源访问权限</li>
+<li><strong>无系统调用</strong>：不能直接调用 OS syscall，必须通过 WASI 间接调用</li>
+</ul>
+
+
 <ul>
 <li><strong>边缘计算</strong>：Cloudflare Workers、Fastly Compute@Edge 用 Wasm；FaaS 边缘已是 Wasm 主场。</li>
 <li><strong>Serverless</strong>：轻量级冷启动（毫秒级），比容器快一个数量级；配合组件模型可声明化部署。</li>
