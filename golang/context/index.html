@@ -268,6 +268,173 @@ if err := g.Wait(); err != nil {
 <p>核心提醒：丢进 <code>g.Go</code> 的每个任务都得听 <code>ctx.Done()</code> 的话，否则"全量取消"就是句口号；<code>errgroup.WithContext</code> 产出的 ctx 只要察觉某个任务出错就自动取消，所有下游同步鸣金收兵。</p>
 
 <!-- 保留原始标题锚点 -->
+<h3 id="context-internals">底层实现：三种 Context 结构体</h3>
+
+<p>context 包的核心是三种结构体，分别实现值传递、取消传播和超时控制。</p>
+
+<h4 id="context-structs">结构体定义（src/context/context.go）</h4>
+<pre><code class="language-go">// 1. valueCtx：存储键值对，形成链表
+type valueCtx struct {
+    Context
+    key, val any
+}
+
+// 2. cancelCtx：支持取消，维护子节点集合
+type cancelCtx struct {
+    Context
+    mu       sync.Mutex            // 保护以下字段
+    done     chan struct{}         // 懒加载，首次取消时创建
+    children map[canceler]struct{} // 子取消节点集合
+    err      error                 // 取消原因
+}
+
+// 3. timerCtx：支持超时/截止时间
+type timerCtx struct {
+    cancelCtx
+    timer *time.Timer  // 定时器
+    deadline time.Time // 截止时间
+}</code></pre>
+
+<h4 id="context-cancel-propagation">取消传播机制源码分析</h4>
+<pre><code class="language-go">// cancelCtx 的 Cancel 方法
+func (c *cancelCtx) cancel(removeFromParent bool, err error) {
+    if err == nil {
+        panic("context: internal error: missing cancel error")
+    }
+    c.mu.Lock()
+    if c.err != nil {
+        c.mu.Unlock()
+        return // 已经被取消
+    }
+    c.err = err
+    
+    // 1. 关闭 done channel（通知所有监听者）
+    if c.done == nil {
+        c.done = closedchan // 复用已关闭的 channel
+    } else {
+        close(c.done)
+    }
+    
+    // 2. 递归取消所有子节点
+    for child := range c.children {
+        child.cancel(false, err)
+    }
+    c.children = nil
+    c.mu.Unlock()
+    
+    // 3. 从父节点的 children 集合中移除自己
+    if removeFromParent {
+        removeChild(c.Context, c)
+    }
+}
+
+// 关键：propagateCancel 在创建子 context 时建立父子关系
+func propagateCancel(parent Context, child canceler) {
+    done := parent.Done()
+    if done == nil {
+        return // 父节点不会被取消
+    }
+    
+    select {
+    case <-done:
+        // 父节点已经取消，立即取消子节点
+        child.cancel(false, parent.Err())
+        return
+    default:
+    }
+    
+    // 找到最近的 cancelCtx 祖先
+    if p, ok := parentCancelCtx(parent); ok {
+        p.mu.Lock()
+        if p.err != nil {
+            child.cancel(false, p.err)
+        } else {
+            // 将子节点加入父节点的 children 集合
+            if p.children == nil {
+                p.children = make(map[canceler]struct{})
+            }
+            p.children[child] = struct{}{}
+        }
+        p.mu.Unlock()
+    } else {
+        // 父节点是自定义 Context，启动 goroutine 监听
+        go func() {
+            select {
+            case <-parent.Done():
+                child.cancel(false, parent.Err())
+            case <-child.Done():
+            }
+        }()
+    }
+}</code></pre>
+
+<h4 id="context-value-lookup">Value 查找机制（链表遍历）</h4>
+<pre><code class="language-text">valueCtx 形成隐式链表：
+
+  context.Background()
+       │
+       ▼
+  valueCtx{key: "trace_id", val: "abc123"}
+       │
+       ▼
+  valueCtx{key: "user_id", val: 1001}
+       │
+       ▼
+  valueCtx{key: "request_id", val: "req-001"}
+
+查找过程（O(n) 线性遍历）：
+  c.Value("user_id")
+    → 当前节点 key="request_id" ≠ "user_id"，继续向上
+    → 父节点 key="user_id" == "user_id"，返回 val=1001
+
+注意事项：
+  1. key 应该是自定义类型（type traceIDKey struct{}），避免冲突
+  2. 不要用 context 传递请求参数（应该用函数参数）
+  3. Value 查找是 O(n)，层级过深会影响性能
+  4. context 是不可变的，WithValue 返回新节点</code></pre>
+
+<h4 id="context-memory-leak">内存泄漏陷阱与排查</h4>
+<div class="warning-box">
+<p><strong>最常见的 context 内存泄漏：</strong>创建了可取消的 context，但没有调用 CancelFunc。</p>
+</div>
+
+<pre><code class="language-go">// ❌ 错误：泄漏 goroutine 和 timer
+func handleRequest(req *http.Request) {
+    ctx, _ := context.WithTimeout(req.Context(), 5*time.Second)
+    go func() {
+        <-ctx.Done() // 定时器不会被释放，直到超时
+        fmt.Println("done")
+    }()
+}
+
+// ✅ 正确：defer cancel() 确保资源释放
+func handleRequest(req *http.Request) {
+    ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
+    defer cancel() // 函数返回时立即释放 timer 和 goroutine
+    
+    go func() {
+        <-ctx.Done()
+        fmt.Println("done")
+    }()
+}
+
+// 泄漏检测：用 goleak 库
+func TestMyFunction(t *testing.T) {
+    defer goleak.VerifyNone(t) // 检测 goroutine 泄漏
+    // ... 测试代码
+}</code></pre>
+
+<h4 id="context-performance">性能考量</h4>
+<table>
+<tr><th>操作</th><th>时间复杂度</th><th>说明</th></tr>
+<tr><td>WithValue</td><td>O(1)</td><td>创建新节点，指向父节点</td></tr>
+<tr><td>Value 查找</td><td>O(n)</td><td>n = context 链深度，通常很浅（&lt;10）</td></tr>
+<tr><td>WithCancel</td><td>O(1)</td><td>创建 cancelCtx，注册到父节点</td></tr>
+<tr><td>Cancel 传播</td><td>O(k)</td><td>k = 子节点数量，递归取消所有后代</td></tr>
+<tr><td>WithTimeout</td><td>O(1)</td><td>创建 timerCtx + time.AfterFunc</td></tr>
+<tr><td>Done channel</td><td>O(1)</td><td>关闭 channel 是 O(1)，但唤醒所有等待者</td></tr>
+</table>
+
 <h3 id="context-overview">Go Context</h3>
                 <div class="page-nav">
 <a class="nav-prev" href="../../golang/echo/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">Echo</span></a>
