@@ -322,6 +322,213 @@ brew install nginx
 docker run -d --name nginx -p 80:80 -p 443:443 -v ./nginx.conf:/etc/nginx/nginx.conf nginx:mainline</code></pre>
 <p>Docker 官方镜像的 <code>Nginx</code> 标签默认指向 mainline；<code>Nginx:stable</code> 是稳定线，按需选用。</p>
 <h3 id="nginx-install-http3">HTTP/3：源码编译的官方姿势</h3>
+
+<h3 id="nginx-compile-options">Nginx 编译选项深度解析</h3>
+
+<h4 id="configure-params">./configure 核心参数详解</h4>
+<pre><code class="language-bash"># 安装路径
+--prefix=/usr/local/nginx          # 安装根目录
+--sbin-path=sbin/nginx              # nginx 可执行文件路径
+--conf-path=conf/nginx.conf         # 配置文件路径
+--pid-path=logs/nginx.pid           # PID 文件路径
+--lock-path=logs/nginx.lock         # 锁文件路径
+--error-log-path=logs/error.log     # 错误日志路径
+--http-log-path=logs/access.log     # 访问日志路径
+
+# 用户/组
+--user=nginx                         # Worker 进程运行用户
+--group=nginx                        # Worker 进程运行组
+
+# 模块控制（--with-* 启用，--without-* 禁用）
+--with-http_ssl_module               # HTTPS（OpenSSL）
+--with-http_v2_module                # HTTP/2
+--with-http_v3_module                # HTTP/3（Nginx 1.25+，需 quiche）
+--with-http_realip_module            # 真实客户端 IP
+--with-http_addition_module          # 响应前后添加内容
+--with-http_sub_module               # 响应内容替换
+--with-http_dav_module               # WebDAV
+--with-http_flv_module               # FLV 流媒体
+--with-http_mp4_module               # MP4 流媒体
+--with-http_gunzip_module            # 解压 gzip 响应
+--with-http_gzip_static_module       # 预压缩文件（.gz）
+--with-http_random_index_module      # 随机索引页
+--with-http_secure_link_module       # 安全链接（防盗链）
+--with-http_degradation_module       # 降级模块
+--with-http_slice_module             # 切片模块
+--with-http_stub_status_module       # 状态页（/nginx_status）
+--with-http_auth_request_module      # 子请求认证
+--with-http_image_filter_module      # 图片处理（需 libgd）
+--with-http_geoip_module             # GeoIP（需 libmaxminddb）
+--with-http_perl_module              # Perl 模块
+--with-http_xslt_module              # XSLT（需 libxslt）
+
+# 邮件代理模块
+--with-mail                          # 邮件代理
+--with-mail_ssl_module               # 邮件 SSL/TLS
+
+# 流代理模块（TCP/UDP）
+--with-stream                        # 四层负载均衡
+--with-stream_ssl_module             # 流 SSL
+--with-stream_realip_module          # 流真实 IP
+--with-stream_geoip_module           # 流 GeoIP
+
+# 编译优化
+--with-cc-opt="-O2 -march=native"   # C 编译器优化选项
+--with-ld-opt="-Wl,-rpath,/usr/local/lib"  # 链接器选项
+--with-pcre                          # PCRE 正则库（rewrite 需要）
+--with-pcre-jit                      # PCRE JIT 编译（正则加速）
+--with-zlib=/path/to/zlib            # zlib 库路径（gzip 需要）
+--with-openssl=/path/to/openssl      # OpenSSL 源码路径
+
+# 调试
+--with-debug                         # 调试日志（debug_connection）
+--with-poll_module                   # poll 模块（默认不编译）
+--with-select_module                 # select 模块（默认不编译）</code></pre>
+
+<h4 id="nginx-module-system">模块系统：静态 vs 动态</h4>
+<pre><code class="language-text">Nginx 模块系统：
+
+  静态模块（默认）：
+  - 编译时链接到 nginx 二进制文件
+  - 优点：运行时无加载开销，性能略好
+  - 缺点：增删模块必须重新编译
+  - 用法：./configure --with-http_ssl_module
+
+  动态模块（Nginx 1.9.11+）：
+  - 编译为独立的 .so 文件
+  - 运行时通过 load_module 指令加载
+  - 优点：增删模块无需重新编译主程序
+  - 缺点：少量加载开销（可忽略）
+  - 用法：
+    ./configure --with-http_geoip_module=dynamic
+    配置文件：load_module modules/ngx_http_geoip_module.so;
+
+  第三方模块：
+  - 编译时通过 --add-module 加入
+  - 静态：--add-module=/path/to/module
+  - 动态：--add-dynamic-module=/path/to/module
+  
+  常用第三方模块：
+  - ngx_devel_kit（NDK）：开发工具包，很多模块依赖
+  - lua-nginx-module：Lua 脚本支持（OpenResty 核心）
+  - echo-nginx-module：echo/sleep 等调试指令
+  - headers-more-nginx-module：更灵活的响应头控制
+  - ngx_cache_purge：缓存清除
+  - nginx-rtmp-module：RTMP 流媒体
+  - nginx-upsync-module：动态 upstream（consul/etcd）</code></pre>
+
+<h4 id="compile-from-source">从源码编译完整流程</h4>
+<pre><code class="language-bash">#!/bin/bash
+# Nginx 从源码编译完整脚本
+
+set -e
+
+# 1. 安装编译依赖
+apt-get update
+apt-get install -y build-essential libpcre3 libpcre3-dev     zlib1g zlib1g-dev libssl-dev libgd-dev libxml2-dev     libxslt1-dev libgeoip-dev libmaxminddb-dev
+
+# 2. 下载源码
+NGINX_VERSION=1.26.2
+PCRE_VERSION=8.45
+ZLIB_VERSION=1.3.1
+OPENSSL_VERSION=3.0.13
+
+cd /usr/local/src
+wget https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz
+wget https://ftp.pcre.org/pub/pcre/pcre-${PCRE_VERSION}.tar.gz
+wget https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz
+wget https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
+
+tar xzf nginx-${NGINX_VERSION}.tar.gz
+tar xzf pcre-${PCRE_VERSION}.tar.gz
+tar xzf zlib-${ZLIB_VERSION}.tar.gz
+tar xzf openssl-${OPENSSL_VERSION}.tar.gz
+
+# 3. 下载第三方模块
+git clone https://github.com/vision5/ngx_devel_kit.git
+git clone https://github.com/openresty/lua-nginx-module.git
+git clone https://github.com/openresty/headers-more-nginx-module.git
+
+# 4. 配置编译选项
+cd nginx-${NGINX_VERSION}
+./configure     --prefix=/usr/local/nginx     --user=nginx --group=nginx     --with-pcre=../pcre-${PCRE_VERSION}     --with-pcre-jit     --with-zlib=../zlib-${ZLIB_VERSION}     --with-openssl=../openssl-${OPENSSL_VERSION}     --with-http_ssl_module     --with-http_v2_module     --with-http_realip_module     --with-http_gzip_static_module     --with-http_stub_status_module     --with-http_auth_request_module     --with-http_secure_link_module     --with-http_slice_module     --with-stream     --with-stream_ssl_module     --with-mail     --with-mail_ssl_module     --add-module=../ngx_devel_kit     --add-module=../lua-nginx-module     --add-module=../headers-more-nginx-module     --with-cc-opt="-O2 -march=native"
+
+# 5. 编译安装
+make -j$(nproc)   # 并行编译，利用所有 CPU 核心
+make install
+
+# 6. 创建用户和服务
+useradd -r -s /sbin/nologin nginx
+cat > /etc/systemd/system/nginx.service << 'EOF'
+[Unit]
+Description=Nginx Web Server
+After=network.target
+
+[Service]
+Type=forking
+PIDFile=/usr/local/nginx/logs/nginx.pid
+ExecStart=/usr/local/nginx/sbin/nginx
+ExecReload=/usr/local/nginx/sbin/nginx -s reload
+ExecStop=/usr/local/nginx/sbin/nginx -s quit
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable nginx
+systemctl start nginx
+
+# 7. 验证
+/usr/local/nginx/sbin/nginx -V  # 查看编译版本和模块
+curl -I http://localhost/</code></pre>
+
+<h4 id="compile-errors">常见编译错误与解决方案</h4>
+<table>
+<tr><th>错误信息</th><th>原因</th><th>解决方案</th></tr>
+<tr><td>PCRE library is required</td><td>缺少 PCRE 库</td><td>apt install libpcre3-dev 或 --with-pcre=源码路径</td></tr>
+<tr><td>zlib library is required</td><td>缺少 zlib 库</td><td>apt install zlib1g-dev 或 --with-zlib=源码路径</td></tr>
+<tr><td>OpenSSL library is required</td><td>缺少 OpenSSL 开发库</td><td>apt install libssl-dev 或 --with-openssl=源码路径</td></tr>
+<tr><td>GD library is required</td><td>缺少 libgd（image_filter 模块）</td><td>apt install libgd-dev 或移除 --with-http_image_filter_module</td></tr>
+<tr><td>XML2 library is required</td><td>缺少 libxml2（xslt 模块）</td><td>apt install libxml2-dev 或移除 --with-http_xslt_module</td></tr>
+<tr><td>GeoIP library is required</td><td>缺少 libgeoip</td><td>apt install libgeoip-dev 或移除 --with-http_geoip_module</td></tr>
+<tr><td>lua.h: No such file</td><td>lua-nginx-module 需要 LuaJIT</td><td>安装 LuaJIT 并设置 LUAJIT_INC/LUAJIT_LIB 环境变量</td></tr>
+<tr><td>undefined reference to SSL_CTX_set_keylog_callback</td><td>OpenSSL 版本过低</td><td>用 --with-openssl 指定较新版本的 OpenSSL 源码</td></tr>
+</table>
+
+<h4 id="version-strategy">版本选择策略</h4>
+<pre><code class="language-text">Nginx 版本分支：
+
+  Mainline（主线版）：
+  - 奇数版本号：1.25.x, 1.27.x
+  - 最新功能，活跃开发
+  - 可能有新 bug
+  - 适合：需要最新功能（如 HTTP/3）、测试环境
+  
+  Stable（稳定版）：
+  - 偶数版本号：1.24.x, 1.26.x
+  - 只修复关键 bug 和安全漏洞
+  - 生产环境推荐
+  - 适合：生产环境、稳定性优先
+  
+  旧版本维护：
+  - 1.22.x, 1.20.x 等旧稳定版
+  - 只修复安全漏洞
+  - 建议尽快升级到最新稳定版
+
+  版本号规则：
+  - 主版本号.次版本号.补丁号
+  - 次版本号奇数 = mainline，偶数 = stable
+  - 例如：1.26.2 = 主版本1，次版本26（稳定），补丁2
+
+  升级建议：
+  - 生产环境：跟随 stable 分支，定期升级补丁版本
+  - 大版本升级：先在测试环境验证，再灰度升级
+  - 回滚方案：保留旧版本二进制，配置文件备份
+  - 平滑升级：make upgrade（不中断服务的热升级）</code></pre>
+
+
 <p>官方 v3 模块（<code>ngx_http_v3_module</code>）是 OpenSSL 3.x + QUIC 的推荐路径；多数发行版包不含这个模块，要启用 HTTP/3 得自行从源码构建：</p>
 <pre><code class="language-bash"># 启用 HTTP/3 需要从源码编译（mainline 源码）
 ./configure --with-http_v3_module --with-http_ssl_module --with-debug

@@ -291,6 +291,218 @@ ngx_http_index_handler(ngx_http_request_t *r)
 </table>
 <p>同期还有一批外围增强：<code>$request_id</code> 改用 SipHash-2-4 生成提速、新增 <code>$ssl_sigalgs</code> 变量、Secure Link 哈希改成常量时间比较、Split Clients 范围边界计算修正、access log 的 request_length 格式修复。生产环境至少应该跟进到 1.31.2。</p>
 <h3 id="nginx-http-arch-note">架构边界与验证方法</h3>
+
+<h3 id="nginx-event-architecture">Nginx 事件驱动架构深度解析</h3>
+
+<h4 id="nginx-master-worker">Master-Worker 进程模型</h4>
+<pre><code class="language-text">Nginx 进程架构：
+
+  ┌─────────────────────────────────────────┐
+  │  Master Process（主进程，root 权限）      │
+  │  - 读取并验证配置文件                     │
+  │  - 创建 Worker 进程                      │
+  │  - 监听信号（reload、quit、reopen）      │
+  │  - 不处理请求，只管理 Worker              │
+  └──────────────┬──────────────────────────┘
+                 │ fork()
+    ┌────────────┼────────────┐
+    ▼            ▼            ▼
+  ┌──────┐   ┌──────┐   ┌──────┐
+  │Worker│   │Worker│   │Worker│   通常 = CPU 核心数
+  │  #1  │   │  #2  │   │  #3  │
+  └──────┘   └──────┘   └──────┘
+    │            │            │
+    ▼            ▼            ▼
+  监听 80/443 端口（SO_REUSEPORT，内核负载均衡）
+  每个 Worker 独立处理请求，无锁竞争
+
+  优势：
+  - 单 Worker 崩溃不影响其他 Worker（Master 自动重启）
+  - 热更新配置（reload）不中断服务
+  - 无共享状态，无需加锁，性能高</code></pre>
+
+<h4 id="nginx-event-loop">事件循环（Event Loop）原理</h4>
+<pre><code class="language-text">Nginx 是异步非阻塞事件驱动架构：
+
+  Worker 进程的主循环：
+  ┌─────────────────────────────────────────┐
+  │  while (running) {                       │
+  │      1. 处理定时器（超时检查）            │
+  │      2. epoll_wait() 等待事件            │
+  │      3. 处理就绪事件（accept/read/write）│
+  │      4. 处理 post事件（延迟执行）         │
+  │  }                                        │
+  └─────────────────────────────────────────┘
+
+  事件处理模型（按平台选择）：
+  - Linux: epoll（最高效，水平触发+边缘触发）
+  - BSD/macOS: kqueue
+  - Solaris: /dev/poll
+  - 通用: select/poll（兼容性好，性能差）
+
+  关键设计：
+  1. 非阻塞 IO：所有 socket 设置为 O_NONBLOCK
+  2. 单线程事件循环：一个 Worker 一个线程，无上下文切换
+  3. 定时器红黑树：高效管理超时事件（O(log n)）
+  4. 延迟事件队列：post_accept、post_read 等
+
+  为什么 Nginx 比 Apache 快？
+  - Apache prefork：每个请求一个进程/线程，并发数受限于进程数
+  - Nginx：单进程可处理数万并发连接（C10K 问题的经典解法）
+  - 内存占用：Nginx 10K 连接约 100MB，Apache 约 1GB</code></pre>
+
+<h4 id="nginx-request-phases">请求处理 11 个阶段</h4>
+<pre><code class="language-text">Nginx 将 HTTP 请求处理分为 11 个阶段，按顺序执行：
+
+  1. POST_READ（读取请求后）
+     - realip 模块：获取真实客户端 IP
+     
+  2. SERVER_REWRITE（Server 级重写）
+     - rewrite 指令（server 块中）
+     
+  3. FIND_CONFIG（查找 location）
+     - 根据 URI 匹配 location（精确匹配 > 前缀匹配 > 正则匹配）
+     
+  4. REWRITE（Location 级重写）
+     - rewrite 指令（location 块中）
+     
+  5. POST_REWRITE（重写后）
+     - 重写后重新查找 location
+     
+  6. PREACCESS（访问前）
+     - limit_req：限流
+     - limit_conn：限制连接数
+     
+  7. ACCESS（访问控制）
+     - auth_basic：基本认证
+     - auth_request：子请求认证
+     - allow/deny：IP 访问控制
+     
+  8. POST_ACCESS（访问后）
+     - satisfy 指令：满足所有认证还是任一
+     
+  9. PRECONTENT（内容前）
+     - try_files：尝试多个文件
+     - mirror：镜像请求
+     
+  10. CONTENT（生成内容）
+      - index：索引文件
+      - proxy_pass：反向代理
+      - fastcgi_pass：FastCGI
+      - root/alias：静态文件
+      
+  11. LOG（日志）
+      - access_log：访问日志
+      - log_not_found：404 日志开关
+
+  每个阶段可以注册多个 handler，按优先级执行
+  理解阶段有助于排查配置问题（如 rewrite 不生效、认证顺序错误）</code></pre>
+
+<h4 id="nginx-upstream">反向代理与负载均衡原理</h4>
+<pre><code class="language-text">Nginx 反向代理架构：
+
+  客户端 → Nginx → 后端服务器（upstream）
+
+  upstream 负载均衡算法：
+  1. round-robin（默认）：轮询，加权轮询
+     upstream backend {
+         server 10.0.0.1 weight=3;  # 3/5 请求
+         server 10.0.0.2 weight=2;  # 2/5 请求
+     }
+     
+  2. least_conn：最少连接数
+     upstream backend {
+         least_conn;
+         server 10.0.0.1;
+         server 10.0.0.2;
+     }
+     
+  3. ip_hash：按客户端 IP 哈希（会话保持）
+     upstream backend {
+         ip_hash;
+         server 10.0.0.1;
+         server 10.0.0.2;
+     }
+     
+  4. hash：自定义哈希键（如 $request_uri）
+     upstream backend {
+         hash $request_uri consistent;  # 一致性哈希
+         server 10.0.0.1;
+         server 10.0.0.2;
+     }
+     
+  5. random：随机（Nginx 1.15.1+）
+     upstream backend {
+         random two least_time=last_byte;
+         server 10.0.0.1;
+         server 10.0.0.2;
+     }
+
+  健康检查：
+  - max_fails：失败次数阈值（默认 1）
+  - fail_timeout：失败超时时间（默认 10s）
+  - 被动健康检查：根据实际请求判断后端状态
+  - 主动健康检查：Nginx Plus 商业版功能
+
+  连接池优化：
+  upstream backend {
+      server 10.0.0.1;
+      keepalive 32;  # 每个 Worker 保持 32 个长连接
+  }
+  location / {
+      proxy_pass http://backend;
+      proxy_http_version 1.1;
+      proxy_set_header Connection "";  # 必须，否则不复用连接
+  }</code></pre>
+
+<h4 id="nginx-performance-tuning">Nginx 性能调优关键参数</h4>
+<pre><code class="language-nginx"># 1. 进程与连接
+worker_processes auto;           # 自动等于 CPU 核心数
+worker_cpu_affinity auto;        # 绑定 CPU 核心，减少缓存失效
+worker_rlimit_nofile 65535;      # 单进程最大文件描述符数
+
+events {
+    worker_connections 10240;     # 单 Worker 最大并发连接数
+    use epoll;                    # 事件模型（Linux）
+    multi_accept on;              # 一次接受多个连接
+}
+
+# 2. HTTP 优化
+http {
+    sendfile on;                  # 零拷贝发送文件（sendfile syscall）
+    tcp_nopush on;                # 合并小包，减少 TCP 段数
+    tcp_nodelay on;               # 禁用 Nagle 算法，降低延迟
+    keepalive_timeout 65;         # 长连接超时
+    keepalive_requests 1000;      # 单连接最大请求数
+    
+    # 3. 压缩
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1k;
+    gzip_types text/plain text/css application/json application/javascript text/xml;
+    
+    # 4. 静态文件缓存
+    open_file_cache max=10000 inactive=60s;  # 文件描述符缓存
+    open_file_cache_valid 60s;
+    open_file_cache_min_uses 2;
+    
+    # 5. 客户端缓冲
+    client_body_buffer_size 16k;
+    client_header_buffer_size 4k;
+    large_client_header_buffers 4 16k;
+    
+    # 6. 代理缓冲
+    proxy_buffering on;
+    proxy_buffer_size 4k;
+    proxy_buffers 8 4k;
+    proxy_busy_buffers_size 8k;
+}
+
+# 性能公式：
+# 最大并发连接数 = worker_processes × worker_connections
+# 例如：8 × 10240 = 81920 并发连接</code></pre>
+
+
 <p>注意一个长期存在的边界：即使配了 <code>proxy_pass</code>，Nginx 向上游发起的仍然是 HTTP/1.1 或 HTTP/2——Nginx <b> 只支持终止客户端侧的 HTTP/3</b>，不支持以 HTTP/3 客户端身份访问上游。需要全链路 HTTP/3 时，应该在 Nginx 前面放 <b>Caddy 2.7+</b> 或 <b>Envoy 1.26+</b> 终结 QUIC，Nginx 专注静态资源、负载均衡和缓存。</p>
 <p>验证是不是真的走通 H3：</p>
 <ul>
