@@ -214,6 +214,124 @@ model = AutoModelForCausalLM.from_pretrained(
 <h3 id="fine-tuning-datasets">常用数据集格式</h3>
 <h3 id="fine-tuning-tools">微调工具链</h3>
 
+<h3 id="lora-math">LoRA 原理与数学推导</h3>
+
+<p>LoRA（Low-Rank Adaptation）是目前最主流的参数高效微调方法，通过低秩矩阵分解大幅减少可训练参数。</p>
+
+<h4 id="lora-principle">LoRA 核心思想</h4>
+<pre><code class="language-text">传统微调：更新整个权重矩阵 W (d × k)
+  W' = W + ΔW，ΔW 是完整的 d×k 矩阵
+  可训练参数量：d × k（例如 4096×4096 = 16.7M）
+
+LoRA：用两个低秩矩阵近似 ΔW
+  ΔW = B × A，其中 B (d × r)，A (r × k)
+  r << min(d, k)，通常 r=8~64
+  
+  W' = W + B × A
+  
+  可训练参数量：d × r + r × k = r × (d + k)
+  例如 r=8, d=k=4096：8 × 8192 = 65,536（减少 99.6%！）
+
+前向传播：
+  h = W' × x = (W + B × A) × x = W × x + B × (A × x)
+  推理时可以合并：W_merged = W + B × A，无额外延迟</code></pre>
+
+<h4 id="lora-which-layers">LoRA 应用哪些层</h4>
+<pre><code class="language-text">Transformer 中的线性层：
+  - Q, K, V, O 投影矩阵（注意力）
+  - FFN 的上投影和下投影
+  - LM Head（词表投影，通常不微调）
+
+常见配置：
+  - LLaMA 系列：只微调 Q, V（r=8~16）
+  - 更全面：Q, K, V, O, FFN 上/下投影（r=16~64）
+  - 全层 LoRA：所有线性层（r=8，参数量仍远小于全参数微调）
+
+经验：
+  - 注意力层的 Q, V 最重要（影响模型理解和生成）
+  - FFN 层影响知识存储，需要时再加
+  - r 不是越大越好，r=8 通常足够，r>64 收益递减</code></pre>
+
+<h4 id="qlora">QLoRA：量化 + LoRA</h4>
+<pre><code class="language-text">QLoRA = 4bit 量化基础模型 + LoRA 微调
+
+  显存对比（LLaMA-2 70B，batch size=1，序列长度=2048）：
+  ┌──────────────┬──────────┬──────────────────┐
+  │ 方法         │ 显存     │ 可训练参数       │
+  ├──────────────┼──────────┼──────────────────┤
+  │ 全参数 FP16  │ ~1.8TB   │ 70B              │
+  │ 全参数 INT8  │ ~900GB   │ 70B              │
+  │ LoRA FP16    │ ~160GB   │ 0.4M (r=8)      │
+  │ QLoRA 4bit   │ ~48GB    │ 0.4M (r=8)      │
+  └──────────────┴──────────┴──────────────────┘
+
+  QLoRA 关键技术：
+  1. 4bit NormalFloat (NF4) 量化
+     - 基于正态分布的最优量化，比标准 4bit 精度更高
+     - 分块量化（block size=64），减少量化误差
+     
+  2. 双重量化（Double Quantization）
+     - 量化常数本身也被量化，进一步节省显存
+     - 平均每个参数节省 0.37 bits
+     
+  3. 分页优化器（Paged Optimizers）
+     - 用 NVIDIA 统一内存，显存不足时自动 offload 到 CPU
+     - 防止 OOM，支持更大 batch size
+
+  结论：QLoRA 可以在单张 48GB 显卡上微调 70B 模型，
+  且效果接近全参数微调（MMLU 差距 < 1%）</code></pre>
+
+<h4 id="finetuning-hyperparams">微调超参调优指南</h4>
+<table>
+<tr><th>超参数</th><th>推荐值</th><th>说明</th></tr>
+<tr><td>学习率</td><td>1e-5 ~ 3e-4</td><td>LoRA 可用较大学习率（2e-4），全参数微调用较小（1e-5）</td></tr>
+<tr><td>Batch size</td><td>8~64</td><td>受显存限制，可用梯度累积模拟大 batch</td></tr>
+<tr><td>Epochs</td><td>2~3</td><td>超过 3 轮容易过拟合，数据量小时 1 轮即可</td></tr>
+<tr><td>Warmup</td><td>3%~5% steps</td><td>学习率预热，避免初期不稳定</td></tr>
+<tr><td>权重衰减</td><td>0.01~0.1</td><td>防止过拟合</td></tr>
+<tr><td>梯度裁剪</td><td>1.0</td><td>防止梯度爆炸</td></tr>
+<tr><td>LoRA rank</td><td>8~16</td><td>简单任务 8，复杂任务 16~32</td></tr>
+<tr><td>LoRA alpha</td><td>16~32</td><td>通常 alpha = 2 × rank，控制缩放比例</td></tr>
+<tr><td>LoRA dropout</td><td>0.05~0.1</td><td>防止过拟合</td></tr>
+</table>
+
+<h4 id="finetuning-pitfalls">微调常见陷阱</h4>
+<ul>
+<li><strong>陷阱1：灾难性遗忘（Catastrophic Forgetting）</strong>
+  <ul>
+  <li>微调后模型在通用任务上能力下降</li>
+  <li>原因：学习率过大、训练轮数过多、数据分布太窄</li>
+  <li>解决：用较小学习率、限制 epochs、混合通用数据、用 LoRA 而非全参数</li>
+  </ul>
+</li>
+<li><strong>陷阱2：数据污染（Data Contamination）</strong>
+  <ul>
+  <li>微调数据包含了评估集的答案，导致评估分数虚高</li>
+  <li>解决：微调前用 n-gram 去重，确保训练集和测试集无重叠</li>
+  </ul>
+</li>
+<li><strong>陷阱3：过拟合（Overfitting）</strong>
+  <ul>
+  <li>训练 loss 持续下降，但验证 loss 上升，模型记住训练数据而非学习规律</li>
+  <li>解决：早停（Early Stopping）、增加数据多样性、dropout、权重衰减</li>
+  </ul>
+</li>
+<li><strong>陷阱4：指令模板不匹配</strong>
+  <ul>
+  <li>微调时用的模板和推理时不一致，导致模型输出格式混乱</li>
+  <li>解决：固定模板，微调和推理用完全相同的 prompt 格式</li>
+  </ul>
+</li>
+<li><strong>陷阱5：只微调不评估</strong>
+  <ul>
+  <li>没有建立评估流水线，无法判断微调效果</li>
+  <li>解决：准备验证集，每个 epoch 后评估，监控关键指标</li>
+  </ul>
+</li>
+</ul>
+
+
+
 <!-- 保留原始代码块 (2个) -->
 <pre><code class="language-python">from peft import PromptEncoderConfig, get_peft_model
 

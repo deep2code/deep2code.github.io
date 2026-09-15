@@ -231,6 +231,201 @@ if len(b) == cap(b) {
 <p><strong>老手视角</strong>：<code>io.Reader</code> 的契约从来都是"能读多少算多少"——返回 <code>n &lt; len(p)</code> 而且 <code>err == nil</code> 是完全合法的，得循环读到吐，或者干脆上 <code>io.ReadFull</code>；反过来，哪怕返回 <code>n &gt; 0</code>，错误也可能同时在场，先看 <code>n</code> 再判 <code>err</code> 才不出错。<code>io.Copy</code> 自己就带 32KB 缓冲，还会探测对方有没有实现 <code>ReaderFrom</code> / <code>WriterTo</code> 这类接口，直接走零拷贝路径；搬数据这类粗活交给它，别自己写循环。</p>
 
 <!-- 保留原始标题锚点 -->
+<h3 id="io-interface-philosophy">io.Reader/io.Writer 接口设计哲学</h3>
+
+<p>Go 的 io 包是接口设计的典范，通过极小的接口实现极大的组合能力。</p>
+
+<h4 id="io-interface-def">核心接口定义</h4>
+<pre><code class="language-go">// src/io/io.go
+
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+
+type Writer interface {
+    Write(p []byte) (n int, err error)
+}
+
+type Closer interface {
+    Close() error
+}
+
+// 组合接口（通过嵌入实现）
+type ReadCloser interface {
+    Reader
+    Closer
+}
+type WriteCloser interface {
+    Writer
+    Closer
+}
+type ReadWriter interface {
+    Reader
+    Writer
+}
+type ReadWriteCloser interface {
+    Reader
+    Writer
+    Closer
+}
+
+// 设计哲学：
+// 1. 接口极小：Reader 只有 1 个方法，实现成本极低
+// 2. 组合优于继承：通过接口嵌入实现功能组合
+// 3. 面向接口编程：函数接收 Reader/Writer，不关心具体实现
+// 4. 错误约定：Read 返回 io.EOF 表示正常结束，不是错误</code></pre>
+
+<h4 id="io-contract">Read 方法的契约（容易踩坑）</h4>
+<pre><code class="language-go">// Read 的正确实现约定：
+func (r *MyReader) Read(p []byte) (n int, err error) {
+    // 1. 可以返回 n > 0 和 err == nil（正常读取）
+    // 2. 可以返回 n > 0 和 err == io.EOF（最后一次读取）
+    // 3. 可以返回 n == 0 和 err == io.EOF（已到末尾）
+    // 4. 不应该返回 n == 0 和 err == nil（调用者会无限循环）
+    
+    // 常见错误：数据读完时返回 0, nil
+    // 正确做法：返回实际读取的字节数，即使同时返回 EOF
+}
+
+// 调用者的正确写法：
+func readAll(r io.Reader) ([]byte, error) {
+    buf := make([]byte, 0, 1024)
+    tmp := make([]byte, 1024)
+    for {
+        n, err := r.Read(tmp)
+        if n > 0 {
+            buf = append(buf, tmp[:n]...)
+        }
+        if err != nil {
+            if err == io.EOF {
+                return buf, nil  // EOF 是正常结束，不是错误
+            }
+            return buf, err
+        }
+    }
+}
+
+// 短读（Short Read）：
+// Read 允许返回比 len(p) 少的字节，即使还有数据
+// 调用者必须循环读取，不能假设一次 Read 就能填满缓冲区
+// io.ReadFull 可以确保读满指定字节数</code></pre>
+
+<h4 id="io-decorator">装饰器模式：io 包的组合能力</h4>
+<pre><code class="language-text">io 包提供了大量装饰器，在不修改原 Reader/Writer 的情况下增强功能：
+
+  原始 Reader
+       │
+       ▼
+  ┌─────────────────────────────────────────┐
+  │ io.LimitReader(r, n)                     │  限制最多读取 n 字节
+  │ io.TeeReader(r, w)                       │  读取时同时写入 w（复制）
+  │ io.SectionReader(r, off, n)              │  读取指定区间
+  │ io.MultiReader(r1, r2, ...)              │  顺序连接多个 Reader
+  │ bufio.NewReader(r)                        │  增加缓冲
+  │ cipher.StreamReader(r, s)                 │  解密读取
+  │ compress/gzip.NewReader(r)                │  解压读取
+  │ tar.NewReader(r)                          │  解析 tar 格式
+  └─────────────────────────────────────────┘
+       │
+       ▼
+  增强后的 Reader（仍然是 io.Reader，可以继续装饰）
+
+  示例：从 gzip 压缩的加密文件中读取前 1024 字节
+  f, _ := os.Open("data.gz.enc")
+  defer f.Close()
+  
+  r := io.LimitReader(
+      gzip.NewReader(
+          cipher.StreamReader(
+              f, cipherStream,
+          ),
+      ),
+      1024,
+  )
+  // r 仍然是 io.Reader，可以传给任何接受 Reader 的函数</code></pre>
+
+<h4 id="bufio-internals">bufio 缓冲 IO 原理</h4>
+<pre><code class="language-go">// bufio.Reader 结构
+type Reader struct {
+    buf          []byte        // 缓冲区
+    rd           io.Reader     // 底层 Reader
+    r, w         int           // 读位置和写位置
+    err          error         // 延迟错误
+    lastByte     int           // 最后读取的字节（用于 UnreadByte）
+    lastRuneSize int           // 最后读取的 rune 大小
+}
+
+// Read 方法的工作流程：
+func (b *Reader) Read(p []byte) (n int, err error) {
+    // 1. 如果缓冲区有数据，直接从缓冲区拷贝
+    if b.r < b.w {
+        n = copy(p, b.buf[b.r:b.w])
+        b.r += n
+        return n, nil
+    }
+    
+    // 2. 缓冲区空了
+    //    如果请求的字节数 >= 缓冲区大小，直接读取到 p（绕过缓冲区）
+    if len(p) >= len(b.buf) {
+        return b.rd.Read(p)
+    }
+    
+    // 3. 否则先填满缓冲区，再从缓冲区拷贝
+    b.r = 0
+    b.w, b.err = b.rd.Read(b.buf)
+    if b.w == 0 {
+        return 0, b.err
+    }
+    n = copy(p, b.buf[0:b.w])
+    b.r = n
+    return n, nil
+}
+
+// 性能收益：
+// - 减少系统调用次数（每次 Read 不一定触发 syscall）
+// - 典型场景：4KB 缓冲区，1000 次 1 字节读取 → 1 次系统调用
+// - Peek/ReadByte/ReadString 等方法依赖缓冲实现</code></pre>
+
+<h4 id="zero-copy">零拷贝（Zero-Copy）技术</h4>
+<pre><code class="language-text">传统数据拷贝流程（4 次拷贝，4 次上下文切换）：
+
+  磁盘 → 内核缓冲区 → 用户缓冲区 → Socket 缓冲区 → 网卡
+    1️⃣ DMA      2️⃣ CPU      3️⃣ CPU      4️⃣ DMA
+    读          内核→用户    用户→内核    发送
+
+零拷贝方案（2 次拷贝，0 次 CPU 拷贝）：
+
+  方案1：sendfile（Linux 2.4+）
+  磁盘 → 内核缓冲区 → Socket 缓冲区 → 网卡
+    1️⃣ DMA      2️⃣ DMA（带 DMA Gather Copy）
+  
+  Go 中的实现：
+  - io.Copy 内部检测到 *os.File → *net.TCPConn 时自动用 sendfile
+  - syscall.Sendfile 直接调用
+  
+  方案2：splice（Linux 2.6+）
+  - 在两个文件描述符之间移动数据，不经过用户空间
+  - 支持管道（pipe）作为中间缓冲
+  
+  方案3：mmap
+  - 将文件映射到内存，直接操作内存地址
+  - 适合随机访问，不适合顺序大文件传输
+  - Go: syscall.Mmap, syscall.Munmap
+
+  性能对比（传输 1GB 文件）：
+  - 传统 read+write: ~500ms（4 次拷贝）
+  - sendfile: ~250ms（2 次拷贝）
+  - sendfile + DMA Gather: ~200ms（1 次拷贝）</code></pre>
+
+<h4 id="io-pitfalls">io 常见陷阱</h4>
+<ul>
+<li><strong>陷阱1：忘记 Close</strong> → 文件描述符泄漏，用 defer r.Close()</li>
+<li><strong>陷阱2：忽略 Read 返回的 n</strong> → 即使 err != nil 也可能有数据，必须先处理 n 再处理 err</li>
+<li><strong>陷阱3：假设一次 Read 填满缓冲区</strong> → 必须循环读取，或用 io.ReadFull</li>
+<li><strong>陷阱4：Write 短写</strong> → Write 也可能写不满，必须循环或用 io.WriteString（内部处理）</li>
+<li><strong>陷阱5：用 ioutil.ReadAll 读大文件</strong> → 内存爆炸，用流式处理或 bufio.Scanner</li>
+</ul>
+
 <h3 id="io-overview">Go io 包</h3>
 <h4 id="io-example">示例</h4>
 <h4 id="io-interfaces">核心接口</h4>
