@@ -181,6 +181,56 @@ sequenceDiagram
 </tbody>
 </table>
 <p>当前最新是 6.0.x（2026-08），<code>brew update</code> 就能跟上；5.x 用户可以平滑升级。</p><h3 id="brew-daily">日常使用 2026</h3>
+<h3 id="brew-architecture">Homebrew 架构深度解析</h3>
+
+<h4 id="brew-internals">Homebrew 内部原理</h4>
+
+<p>Homebrew 是 macOS（和 Linux）最流行的包管理器，理解其内部原理有助于排查问题和优化使用：</p>
+
+<ul>
+<li><strong>核心组件</strong>：
+  <ul>
+  <li><strong>brew（Ruby 脚本）</strong>：Homebrew 的主程序，是一个 Ruby 脚本（<code>/opt/homebrew/bin/brew</code>），解析命令行参数，调用对应的子命令。brew 本身是一个 shell 脚本包装器，设置环境变量后调用 Ruby</li>
+  <li><strong>Library/Homebrew</strong>：Homebrew 的 Ruby 代码库，包含：CLI 解析（cli.rb）、公式加载（formula.rb）、构建系统（build.rb）、下载（download.rb）、安装（install.rb）、依赖解析（dependency.rb）、升级（upgrade.rb）等核心逻辑</li>
+  <li><strong>Taps（仓库）</strong>：Formula 和 Cask 的定义仓库，默认是 <code>homebrew/core</code>（Formula）和 <code>homebrew/cask</code>（Cask）。Taps 是 Git 仓库，通过 <code>brew tap</code> 添加，存储在 <code>/opt/homebrew/Library/Taps/</code>。第三方 tap 可以添加自定义公式</li>
+  <li><strong>Formula（配方）</strong>：Ruby 类，继承自 <code>Formula</code>，定义包的名称、版本、源码 URL、依赖、编译选项、安装步骤（<code>install</code> 方法）。Formula 是 Ruby DSL，可以使用 Ruby 的所有特性（条件判断、循环、函数）</li>
+  <li><strong>Bottle（瓶子）</strong>：预编译的二进制包，是 .tar.gz 格式，包含编译好的文件。Bottle 由 Homebrew 核心团队在 CI（GitHub Actions）上编译，针对特定 macOS 版本和 CPU 架构。Bottle 的 URL 在 Formula 中定义（<code>bottle do</code> 块）。安装时优先使用 Bottle，只有没有 Bottle 或指定 <code>--build-from-source</code> 时才从源码编译</li>
+  </ul>
+</li>
+<li><strong>安装流程</strong>：
+  <ol>
+  <li><strong>依赖解析</strong>：递归解析 Formula 的依赖（<code>depends_on</code>），构建依赖图，按拓扑排序确定安装顺序。Homebrew 的依赖解析是纯函数式的，不依赖外部状态</li>
+  <li><strong>下载</strong>：下载源码包（.tar.gz/.zip/.tar.xz）或 Bottle（.tar.gz），存储到 <code>~/Library/Caches/Homebrew/</code>。下载支持缓存（相同 URL 不重复下载）、校验和验证（SHA256）、镜像（mirror，主 URL 失败时使用镜像）</li>
+  <li><strong>解压与构建</strong>：如果使用 Bottle，直接解压到临时目录。如果从源码编译，解压源码到临时目录（<code>/tmp/brew-xxx</code>），执行 Formula 的 <code>install</code> 方法（通常是 <code>system "./configure", "--prefix=..."; system "make"; system "make install"</code> 或 CMake/Meson 等构建系统）。构建环境是隔离的（设置 PATH、PKG_CONFIG_PATH、编译器标志等）</li>
+  <li><strong>安装到 Cellar</strong>：构建产物安装到 <code>/opt/homebrew/Cellar/&lt;name&gt;/&lt;version&gt;/</code>（Cellar 目录），每个版本独立。Cellar 目录包含 bin、lib、include、share、etc 等子目录</li>
+  <li><strong>链接到 Prefix</strong>：通过符号链接（symlink）将 Cellar 中的文件链接到 <code>/opt/homebrew/bin</code>、<code>/opt/homebrew/lib</code>、<code>/opt/homebrew/include</code> 等 Prefix 目录。<code>brew link</code> 创建链接，<code>brew unlink</code> 移除链接。同一时间只有一个版本被链接（默认最新版本），可以用 <code>brew switch</code> 切换版本</li>
+  <li><strong>清理</strong>：删除临时构建目录，旧版本可以用 <code>brew cleanup</code> 清理（删除旧版本和下载缓存）</li>
+  </ol>
+</li>
+<li><strong>依赖管理</strong>：Homebrew 的依赖分为：
+  <ul>
+  <li><strong>运行时依赖（depends_on）</strong>：包运行时需要的依赖，会被安装并链接。如 <code>depends_on "openssl@3"</code></li>
+  <li><strong>构建依赖（depends_on =&gt; :build）</strong>：只在编译时需要，运行时不需要。如 <code>depends_on "cmake" =&gt; :build</code>。Bottle 安装时不需要构建依赖</li>
+  <li><strong>测试依赖（depends_on =&gt; :test）</strong>：只在 <code>brew test</code> 时需要</li>
+  <li><strong>可选依赖（depends_on =&gt; :optional）</strong>：通过 <code>--with-xxx</code> 选项启用。Homebrew 核心仓库已弃用可选依赖（因为 Bottle 是固定配置，可选依赖会导致 Bottle 不匹配）</li>
+  <li><strong>推荐依赖（depends_on =&gt; :recommended）</strong>：默认启用，通过 <code>--without-xxx</code> 禁用。同样已被核心仓库弃用</li>
+  </ul>
+</li>
+</ul>
+
+<h3 id="brew-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>Apple Silicon 与 Intel 路径差异导致脚本失效</strong>：Homebrew 在 Apple Silicon（M1/M2/M3/M4）上安装到 <code>/opt/homebrew</code>，在 Intel 上安装到 <code>/usr/local</code>。硬编码路径的脚本（如 <code>/usr/local/bin/ffmpeg</code>）在 Apple Silicon 上会失败。解决：使用 <code>brew --prefix</code> 获取当前 Homebrew 前缀（<code>$(brew --prefix)/bin/ffmpeg</code>），或使用 <code>which ffmpeg</code> 查找路径。在 shell 配置中添加 <code>eval "$(/opt/homebrew/bin/brew shellenv)"</code>（Apple Silicon）或 <code>eval "$(/usr/local/bin/brew shellenv)"</code>（Intel），自动设置 PATH、MANPATH、INFOPATH。编写跨架构脚本时，检测架构（<code>uname -m</code>，arm64 或 x86_64）选择正确路径。注意：Rosetta 2 下运行的 x86_64 Homebrew 安装到 <code>/usr/local</code>，与原生 ARM64 Homebrew（<code>/opt/homebrew</code>）可以共存，但不建议同时使用（可能混淆）</li>
+<li><strong>权限问题导致 brew update/install 失败</strong>：Homebrew 要求 <code>/opt/homebrew</code>（或 <code>/usr/local</code>）目录及其子目录的所有者是当前用户（不是 root）。如果目录权限被破坏（如使用 sudo 运行 brew、手动修改权限、迁移用户账户），会导致 <code>brew update</code> 失败（Git 无法 pull）、<code>brew install</code> 失败（无法写入 Cellar）。解决：运行 <code>brew doctor</code> 诊断权限问题，按提示修复。通常需要 <code>sudo chown -R $(whoami) /opt/homebrew</code>（或 <code>/usr/local</code>）修复所有者。<strong>永远不要用 sudo 运行 brew</strong>（Homebrew 设计为不需要 root 权限，使用 sudo 会破坏权限并可能引入安全风险）。如果 brew 提示需要 sudo，说明权限已经被破坏，需要先修复权限。多用户共享一台 Mac 时，考虑使用管理员组（<code>admin</code>）并设置目录组权限（<code>chgrp -R admin /opt/homebrew; chmod -R g+w /opt/homebrew</code>），但 Homebrew 官方不推荐多用户共享</li>
+<li><strong>brew cleanup 误删仍在使用的旧版本</strong>：<code>brew cleanup</code> 会删除所有旧版本的 Formula（只保留最新版本）和下载缓存。如果某些软件依赖特定旧版本（如 Python 脚本依赖 python@3.9，而最新是 python@3.11），cleanup 后旧版本被删除，依赖会失效。解决：使用 <code>brew cleanup -n</code>（dry-run）先查看会删除什么，确认无误后再执行。使用 <code>brew pin &lt;formula&gt;</code> 固定特定版本（pin 后 cleanup 不会删除该版本），<code>brew unpin</code> 取消固定。对于需要多版本共存的场景（如 Python 3.9 和 3.11），使用版本化的 Formula（<code>python@3.9</code>、<code>python@3.11</code>），它们是独立的 Formula，不会互相覆盖。定期运行 cleanup（释放磁盘空间），但在关键环境（生产服务器、CI）中谨慎使用，先测试</li>
+<li><strong>从源码编译失败（build from source）</strong>：Homebrew 优先使用 Bottle（预编译二进制），但在某些情况下会从源码编译：没有对应 macOS 版本/架构的 Bottle、指定 <code>--build-from-source</code>、Formula 被修改（<code>brew edit</code>）。从源码编译可能失败，原因包括：Xcode Command Line Tools 未安装或版本过旧、依赖库版本不兼容、编译选项错误、网络问题导致依赖下载失败。解决：确保安装最新的 Xcode Command Line Tools（<code>xcode-select --install</code>，或 <code>sudo xcode-select --switch /Applications/Xcode.app</code> 如果安装了完整 Xcode）。优先使用 Bottle（不要随意使用 <code>--build-from-source</code>）。编译失败时查看完整日志（<code>brew install -v &lt;formula&gt;</code> 显示详细输出，日志存储在 <code>~/Library/Logs/Homebrew/</code>）。常见缺失依赖：<code>pkg-config</code>、<code>cmake</code>、<code>autoconf</code>、<code>automake</code>、<code>libtool</code>，可以先 <code>brew install</code> 这些构建工具。对于持续编译失败的 Formula，考虑使用替代包（如 <code>ffmpeg</code> 有多个 tap 版本）或使用 Docker/Linux 环境</li>
+<li><strong>Cask 应用更新与 App Store 冲突</strong>：Homebrew Cask 安装的 GUI 应用（<code>brew install --cask google-chrome</code>）和 App Store 安装的应用是独立的，可能同时存在两个版本（一个在 /Applications，一个也在 /Applications 但来源不同），导致混淆。Cask 应用的更新通过 <code>brew upgrade --cask</code>，而 App Store 应用通过 App Store 更新，两者不同步。解决：选择一种安装方式并保持一致（要么都用 Cask，要么都用 App Store，不要混用）。Cask 的优势：可以脚本化安装/更新、支持非 App Store 应用、统一管理。App Store 的优势：自动更新、沙盒安全、购买记录。对于需要自动更新的应用（如浏览器、编辑器），Cask 安装后应用自身也会提示更新（与 brew 管理的版本可能冲突），可以在应用设置中关闭自动更新，统一用 <code>brew upgrade --cask</code> 更新。使用 <code>brew list --cask</code> 查看已安装的 Cask 应用，<code>brew outdated --cask</code> 查看可更新的 Cask。注意：Cask 升级（<code>brew upgrade --cask</code>）默认会覆盖现有应用，即使应用正在运行（可能导致崩溃），升级前关闭相关应用</li>
+<li><strong>PATH 顺序错误导致使用了错误的命令版本</strong>：Homebrew 的 bin 目录（<code>/opt/homebrew/bin</code>）需要在 PATH 中优先于系统路径（<code>/usr/bin</code>、<code>/bin</code>），否则会使用系统自带的旧版本命令（如系统的 bash 3.2 而非 brew 安装的 bash 5.x，系统的 python 2.7 而非 brew 的 python 3.x）。解决：确保 shell 配置文件（~/.zshrc、~/.bashrc）中 Homebrew 的 bin 目录在 PATH 最前面。使用 <code>eval "$(brew shellenv)"</code> 自动设置（推荐，会处理 PATH、MANPATH、INFOPATH）。验证：<code>which bash</code> 应该返回 <code>/opt/homebrew/bin/bash</code>（而非 <code>/bin/bash</code>），<code>bash --version</code> 应该是 5.x。注意：<code>eval "$(brew shellenv)"</code> 应该放在 shell 配置文件的最前面（在其他 PATH 修改之前），确保 Homebrew 路径优先。某些 shell 框架（Oh My Zsh、Prezto）可能修改 PATH，确保它们不会将系统路径放在 Homebrew 前面。使用 <code>echo $PATH</code> 查看实际 PATH 顺序</li>
+<li><strong>brew update 慢或失败（网络问题）</strong>：<code>brew update</code> 需要从 GitHub 拉取 homebrew/core、homebrew/cask 等 tap 的 Git 更新，国内网络访问 GitHub 可能慢或失败（超时、连接重置）。解决：使用国内镜像源。中科大镜像：<code>git -C "$(brew --repo)" remote set-url origin https://mirrors.ustc.edu.cn/brew.git</code>，<code>git -C "$(brew --repo homebrew/core)" remote set-url origin https://mirrors.ustc.edu.cn/homebrew-core.git</code>，<code>git -C "$(brew --repo homebrew/cask)" remote set-url origin https://mirrors.ustc.edu.cn/homebrew-cask.git</code>。设置环境变量 <code>export HOMEBREW_BOTTLE_DOMAIN=https://mirrors.ustc.edu.cn/homebrew-bottles</code>（使用国内 Bottle 镜像，加速下载）。其他镜像：清华 TUNA（<code>https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git</code>）、阿里云。注意：切换镜像后，<code>brew update</code> 从镜像拉取，但镜像可能比官方滞后几小时到一天。如果需要最新版本，可以临时切回官方源。使用代理（<code>export ALL_PROXY=socks5://127.0.0.1:1080</code>）也是一种方式（如果有代理）。诊断网络问题：<code>brew update --verbose</code> 查看详细输出，<code>curl -v https://github.com</code> 测试 GitHub 连通性</li>
+<li><strong>卸载不彻底导致残留文件</strong>：<code>brew uninstall &lt;formula&gt;</code> 只删除 Cellar 中的文件和符号链接，但不会删除 Formula 安装时创建的配置文件（通常在 <code>~/.config/</code>、<code>~/Library/Application Support/</code>、<code>/opt/homebrew/etc/</code>）、数据文件（数据库、日志）、服务文件（<code>~/Library/LaunchAgents/</code>）。这些残留文件会占用磁盘空间，且重新安装时可能使用旧配置导致问题。解决：卸载前先停止服务（<code>brew services stop &lt;formula&gt;</code>）。使用 <code>brew uninstall --zap &lt;cask&gt;</code>（Cask 专用，--zap 会删除应用相关的配置和数据文件）。对于 Formula，手动查找并删除残留：配置文件在 <code>/opt/homebrew/etc/</code>（Homebrew 管理的配置）和用户目录（<code>~/.config/&lt;name&gt;</code>、<code>~/Library/Application Support/&lt;name&gt;</code>），数据文件在 <code>/opt/homebrew/var/</code>（数据库、日志），服务文件在 <code>~/Library/LaunchAgents/homebrew.mxcl.&lt;name&gt;.plist</code>。使用 <code>brew list &lt;formula&gt;</code> 查看 Formula 安装的文件列表（只包含 Cellar 中的文件，不包含用户配置）。对于重要数据（如数据库），卸载前先备份（<code>mysqldump</code>、<code>pg_dump</code>）。注意：<code>brew uninstall</code> 不会删除依赖（依赖可能被其他包使用），使用 <code>brew autoremove</code> 删除不再被任何包依赖的孤儿依赖</li>
+</ol>
+
 <p>Apple Silicon 安装前缀仍是 <code>/opt/homebrew</code>；macOS Intel 已进入弃用倒计时（官方博客公布了时间表，Intel Mac 用户建议规划迁移）。常用姿势：</p>
 <pre><code class="language-bash"># Apple Silicon (M1/M2/M3/M4)
 # Homebrew 安装在 /opt/homebrew

@@ -473,6 +473,61 @@ location /api {
 
 <!-- 保留原始标题锚点 -->
 <h3 id="nginx-use">Nginx 常用技巧</h3>
+<h3 id="nginx-use-deep">Nginx 常用技巧底层原理深度解析</h3>
+
+<h4 id="nginx-rewrite-deep">rewrite 与 location 匹配原理</h4>
+
+<p>Nginx 的 location 匹配和 rewrite 规则是配置中最容易出错的部分，理解其底层原理至关重要：</p>
+
+<ul>
+<li><strong>location 匹配优先级</strong>：Nginx 的 location 有四种修饰符，按优先级从高到低：
+  <ol>
+  <li><strong>=</strong>（精确匹配）：<code>location = /path</code>，请求路径必须完全等于 /path。优先级最高，匹配后立即停止搜索</li>
+  <li><strong>^~</strong>（前缀匹配，优先于正则）：<code>location ^~ /prefix/</code>，请求路径以 /prefix/ 开头。如果匹配，不再检查正则 location</li>
+  <li><strong>~</strong> / <strong>~*</strong>（正则匹配）：<code>~</code> 区分大小写，<code>~*</code> 不区分大小写。按配置文件中的顺序依次检查，第一个匹配的生效。注意：正则匹配的顺序很重要，更具体的正则应该放在前面</li>
+  <li><strong>无修饰符</strong>（前缀匹配）：<code>location /prefix/</code>，请求路径以 /prefix/ 开头。优先级最低，Nginx 选择最长匹配的前缀 location（不是配置顺序，是匹配长度）</li>
+  </ol>
+  匹配流程：先检查精确匹配（=）→ 再检查前缀匹配（^~ 和无修饰符，选最长）→ 如果前缀匹配是 ^~，停止；否则检查正则匹配（按顺序）→ 正则匹配成功用正则，否则用最长前缀匹配
+</li>
+<li><strong>rewrite 规则执行流程</strong>：<code>rewrite regex replacement [flag];</code> 在 server 或 location 块中执行，按配置顺序依次执行。rewrite 修改 URI 后，根据 flag 决定后续行为：
+  <ul>
+  <li><strong>last</strong>：停止当前 location 的 rewrite，用新 URI 重新搜索 location（相当于内部重定向，重新走 location 匹配流程）。注意：last 会导致重新匹配 location，如果新 URI 又匹配到同一个 location，可能导致无限循环（Nginx 限制 10 次后返回 500）</li>
+  <li><strong>break</strong>：停止当前 location 的 rewrite，继续在当前 location 中处理后续指令（不重新匹配 location）。常用于 proxy_pass 前的 URI 重写</li>
+  <li><strong>redirect</strong>：返回 302 临时重定向，replacement 必须以 http:// 或 https:// 开头（或使用变量）。客户端会重新请求新 URL</li>
+  <li><strong>permanent</strong>：返回 301 永久重定向，浏览器会缓存重定向结果</li>
+  </ul>
+  注意：rewrite 的 regex 是匹配完整的 URI（不含域名，含查询字符串？不，rewrite 默认不匹配查询字符串，查询字符串在 $args 变量中）。replacement 中可以使用变量（$1、$2 等捕获组）
+</li>
+<li><strong>try_files 原理</strong>：<code>try_files file1 file2 ... uri;</code> 或 <code>try_files file1 file2 ... =code;</code>。按顺序检查文件/目录是否存在，第一个存在的生效（内部重定向到该文件）。如果都不存在，fallback 到最后一个参数（uri 内部重定向，或 =code 返回状态码）。try_files 是静态站点和前端路由（SPA）的核心：<code>try_files $uri $uri/ /index.html;</code>（如果请求的文件不存在，返回 index.html，由前端路由处理）</li>
+</ul>
+
+<h4 id="nginx-proxy-pass-deep">proxy_pass 与反向代理原理</h4>
+
+<ul>
+<li><strong>proxy_pass URI 处理</strong>：<code>proxy_pass http://backend;</code>（无 URI）和 <code>proxy_pass http://backend/path/;</code>（有 URI）的行为不同：
+  <ul>
+  <li><strong>无 URI</strong>（proxy_pass 后只有主机和端口，没有路径）：Nginx 将完整的请求 URI 传递给后端。如 <code>location /api/ { proxy_pass http://backend; }</code>，请求 /api/users → 后端收到 /api/users</li>
+  <li><strong>有 URI</strong>（proxy_pass 后有路径）：Nginx 用 proxy_pass 的 URI 替换 location 匹配的前缀。如 <code>location /api/ { proxy_pass http://backend/v1/; }</code>，请求 /api/users → 后端收到 /v1/users（/api/ 被替换为 /v1/）</li>
+  </ul>
+  常见错误：location 是正则匹配（~ /api/(.*)）时，proxy_pass 不能有 URI（因为正则匹配没有固定前缀可替换），需要使用 rewrite 或变量构造 URI
+</li>
+<li><strong>代理缓冲区（Proxy Buffering）</strong>：Nginx 作为反向代理时，默认启用代理缓冲：Nginx 从后端读取响应，存储到缓冲区（<code>proxy_buffer_size</code>、<code>proxy_buffers</code>、<code>proxy_busy_buffers_size</code>），缓冲区满或后端响应完成后再发送给客户端。缓冲的好处：后端响应快但客户端慢时，Nginx 可以快速释放后端连接（后端不需要等待慢客户端），提高并发能力。坏处：增加延迟（需要等缓冲区满才发送）、内存占用（每个连接分配缓冲区）。对于流式响应（SSE、视频流、大文件下载），应该禁用缓冲（<code>proxy_buffering off;</code>），Nginx 直接将后端响应同步转发给客户端</li>
+<li><strong>WebSocket 代理</strong>：WebSocket 协议需要 HTTP 升级（Upgrade: websocket，Connection: Upgrade），Nginx 默认不转发这些头。需要配置：<code>proxy_http_version 1.1;</code>（HTTP/1.1 才支持 Upgrade）、<code>proxy_set_header Upgrade $http_upgrade;</code>、<code>proxy_set_header Connection "upgrade";</code>。同时设置较长的 <code>proxy_read_timeout</code>（WebSocket 是长连接，默认 60s 无数据会断开）</li>
+</ul>
+
+<h3 id="nginx-use-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>location 匹配顺序错误导致请求路由到错误的处理块</strong>：Nginx 的 location 匹配不是按配置顺序（正则除外），而是按优先级和匹配长度。常见错误：以为前缀匹配按配置顺序生效（实际是选最长匹配）、正则匹配顺序错误（更通用的正则放在前面导致更具体的正则永远不匹配）、^~ 和正则的优先级混淆。解决：理解 location 匹配优先级（= > ^~ > 正则 > 前缀）。使用 <code>nginx -T</code> 查看完整配置，用 <code>curl -v</code> 测试实际路由。正则 location 按从具体到通用的顺序排列。复杂路由使用精确匹配（=）避免歧义。使用 <code>location /</code> 作为兜底（所有未匹配的请求走这里）。文档注释每个 location 的用途和匹配规则</li>
+<li><strong>rewrite 无限循环导致 500 错误</strong>：rewrite 使用 <code>last</code> flag 时，会用新 URI 重新匹配 location，如果新 URI 又匹配到同一个 location（或另一个又 rewrite 回来的 location），会形成无限循环。Nginx 限制最多 10 次循环，超过后返回 500 Internal Server Error（错误日志中记录 "rewrite or internal redirection cycle"）。解决：使用 <code>break</code> 替代 <code>last</code>（如果不需要重新匹配 location）。确保 rewrite 后的 URI 不会再次匹配到同一个 rewrite 规则。使用 <code>if</code> 条件避免重复 rewrite（如 <code>if ($uri !~ ^/new/) { rewrite ^/old/(.*) /new/$1 last; }</code>）。测试 rewrite 规则（<code>curl -I</code> 查看重定向链，<code>curl -L --max-redirs 5</code> 限制重定向次数）。避免复杂的 rewrite 链，尽量用 location 匹配直接路由</li>
+<li><strong>proxy_pass URI 替换错误导致后端收到错误路径</strong>：proxy_pass 有 URI 和无 URI 的行为不同，配置错误会导致后端收到错误的请求路径（404 或路由错误）。常见错误：正则 location 中使用带 URI 的 proxy_pass（Nginx 会报错或行为异常）、location 末尾有 / 但 proxy_pass 末尾没有 /（或反之，导致路径拼接错误）。解决：明确 proxy_pass 是否需要 URI。无 URI 时传递完整请求路径，有 URI 时替换 location 前缀。正则 location 中使用 rewrite 构造 URI（<code>rewrite ^/api/(.*) /$1 break; proxy_pass http://backend;</code>）。注意末尾斜杠：<code>location /api { proxy_pass http://backend; }</code> 请求 /apixxx 也会匹配（因为前缀匹配不需要 / 分隔），建议 location 末尾加 /（<code>/api/</code>）。用 <code>curl -v</code> 测试，查看后端收到的实际请求路径（后端日志或 <code>proxy_set_header X-Request-URI $request_uri;</code>）</li>
+<li><strong>HTTPS 配置不完整导致降级或安全警告</strong>：HTTPS 配置常见问题：只配置了证书但没有中间证书（chain）导致某些客户端报"证书不受信任"、TLS 版本过低（支持 SSLv3/TLSv1.0 有安全漏洞）、密码套件（cipher suite）不安全、HSTS 未配置导致可被降级攻击、OCSP stapling 未配置导致 TLS 握手慢。解决：使用完整的证书链（fullchain.pem，包含服务器证书 + 中间证书，不要用 cert.pem 只有服务器证书）。配置 <code>ssl_protocols TLSv1.2 TLSv1.3;</code>（禁用 SSLv3/TLSv1.0/TLSv1.1）。使用安全的密码套件（<code>ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:...:!aNULL:!MD5;</code>）。启用 HSTS（<code>add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;</code>）。启用 OCSP stapling（<code>ssl_stapling on; ssl_stapling_verify on;</code>）。使用 SSL Labs Server Test（ssllabs.com/ssltest）评分，目标 A+。HTTP 强制跳转 HTTPS（<code>return 301 https://$host$request_uri;</code>）</li>
+<li><strong>gzip 压缩配置不当导致 CPU 过载或压缩无效</strong>：gzip 压缩可以减少传输大小（通常 60-80%），但配置不当会有问题：压缩级别过高（gzip_comp_level 9）导致 CPU 占用高（压缩时间长，收益递减，level 6 是性价比最优）、对已压缩的文件（图片、视频、zip）再次压缩（浪费 CPU，且压缩率为负）、未设置 Vary: Accept-Encoding 头导致 CDN/代理缓存错误（压缩版和未压缩版混淆）。解决：<code>gzip on; gzip_comp_level 6;</code>（level 6 是默认，性价比最优）。<code>gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml;</code>（只压缩文本类内容，不压缩图片/视频/二进制）。<code>gzip_min_length 1024;</code>（小于 1KB 的文件不压缩，压缩开销大于收益）。<code>gzip_vary on;</code>（添加 Vary: Accept-Encoding 头）。<code>gzip_proxied any;</code>（对代理请求也压缩）。使用 Brotli 压缩（<code>ngx_brotli</code> 模块）比 gzip 更高效（压缩率高 15-25%），但需要编译模块</li>
+<li><strong>静态资源缓存配置错误导致用户看到旧版本</strong>：静态资源（CSS、JS、图片）的缓存配置常见问题：缓存时间过长导致更新后用户看到旧版本（浏览器缓存未过期）、缓存时间过短导致重复请求（性能差）、HTML 也被缓存导致内容更新不及时、没有文件版本化（无法区分新旧版本）。解决：使用内容哈希命名（如 <code>app.abc123.js</code>，文件内容变化时哈希变化，URL 变化，自动绕过缓存）。静态资源（带哈希的 CSS/JS/图片）设置长缓存（<code>expires 1y; add_header Cache-Control "public, immutable";</code>，immutable 表示文件不会变，浏览器不需要重新验证）。HTML 设置短缓存或不缓存（<code>add_header Cache-Control "no-cache";</code>，no-cache 表示可以缓存但每次必须验证 ETag/Last-Modified，不是不缓存）。使用 <code>etag on;</code>（默认开启）和 <code>if_modified_since exact;</code> 支持条件请求（304 Not Modified）。更新静态资源时同时更新 HTML 中的引用路径（哈希变化），用户下次请求 HTML 时拿到新 URL。不要对 HTML 使用 <code>expires</code> 长缓存</li>
+<li><strong>worker 进程和连接数配置不当导致性能瓶颈</strong>：Nginx 的性能相关配置常见问题：<code>worker_processes</code> 设置为 1（无法利用多核）或 auto（auto 会检测 CPU 核心数，通常是最佳选择）、<code>worker_connections</code> 过低（默认 512，高并发场景不够）、<code>worker_rlimit_nofile</code> 未设置（文件描述符限制导致"too many open files"错误）、<code>keepalive_timeout</code> 过长（长连接占用资源）或过短（频繁建立连接）。解决：<code>worker_processes auto;</code>（自动匹配 CPU 核心数）。<code>worker_connections 65535;</code>（高并发场景，每个 worker 最大连接数）。<code>worker_rlimit_nofile 65535;</code>（每个 worker 的文件描述符限制，应该 >= worker_connections）。<code>keepalive_timeout 65;</code>（客户端长连接超时，65 秒是常见值，不要太长）。<code>keepalive_requests 1000;</code>（一个长连接最多处理的请求数，超过后关闭连接，防止单个连接占用过久）。<code>multi_accept on;</code>（worker 一次接受所有新连接，而非一次一个，提高吞吐）。使用 <code>nginx -V</code> 查看编译参数，确保支持 epoll（Linux）/kqueue（BSD）。监控 Nginx 的活跃连接数（<code>stub_status</code> 模块）和 worker 进程 CPU/内存使用</li>
+<li><strong>安全配置缺失导致服务器被攻击</strong>：Nginx 安全常见问题：暴露服务器版本号（<code>server_tokens on</code> 默认，响应头 Server: nginx/1.24.0，攻击者可以针对特定版本漏洞）、允许目录列表（<code>autoindex on</code>，暴露文件结构）、未限制请求体大小（导致 DoS，超大请求耗尽内存）、未限制请求速率（暴力破解、爬虫滥用）、敏感文件（.env、.git、备份文件）可被访问。解决：<code>server_tokens off;</code>（隐藏版本号，只显示 Server: nginx）。<code>autoindex off;</code>（默认关闭，不要开启）。<code>client_max_body_size 10m;</code>（限制请求体大小，根据需求调整）。使用 <code>limit_req_zone</code> + <code>limit_req</code> 限制请求速率（防暴力破解和爬虫，如 <code>limit_req zone=api burst=10 nodelay;</code>）。使用 <code>limit_conn_zone</code> + <code>limit_conn</code> 限制单 IP 连接数。禁止访问敏感文件：<code>location ~ /\. { deny all; return 404; }</code>（隐藏文件，如 .git、.env）、<code>location ~* \.(bak|old|sql|log)$ { deny all; }</code>（备份和日志文件）。安装 ModSecurity WAF（Web 应用防火墙）或 Nginx Plus 的 WAF 模块。定期更新 Nginx 版本（安全补丁）</li>
+</ol>
+
 <h4 id="cache">缓存配置</h4>
 <h4 id="nginx-2026">2026 技巧更新</h4>
 <h4 id="rate-limit">限流配置</h4>

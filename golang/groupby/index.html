@@ -152,6 +152,55 @@ func (s Items[T]) GroupBy[K comparable](keyFn func(T) K) map[K][]T {
 
 <!-- 保留原始标题锚点 -->
 <h3 id="groupby-overview">Go 泛型切片分组</h3>
+<h3 id="groupby-algorithm">切片分组算法底层原理深度解析</h3>
+
+<h4 id="groupby-implementation">泛型分组实现原理</h4>
+
+<p>切片分组（Group By）是将切片元素按某个键（key）分组为 map[key][]element 的操作。Go 1.18 泛型之前，分组需要为每种类型写重复代码或使用 interface{}（类型不安全、有装箱开销）。泛型之后可以写类型安全的通用分组函数：</p>
+
+<pre><code class="language-go">// 泛型分组函数
+func GroupBy[T any, K comparable](s []T, keyFunc func(T) K) map[K][]T {
+    m := make(map[K][]T)
+    for _, v := range s {
+        k := keyFunc(v)
+        m[k] = append(m[k], v)
+    }
+    return m
+}</code></pre>
+
+<p>底层实现分析：</p>
+
+<ul>
+<li><strong>map 分组</strong>：使用 Go 内置 map 作为分组容器，key 是分组键（必须 comparable），value 是元素切片。每次迭代：计算 key → 查找 map 中对应的切片 → append 元素 → 写回 map。时间复杂度 O(n)（n 为切片长度，假设 map 操作 O(1) 均摊），空间复杂度 O(n)（存储所有元素的引用/值）</li>
+<li><strong>append 的内存分配</strong>：<code>m[k] = append(m[k], v)</code> 每次 append 可能触发切片扩容（当容量不足时，分配新的底层数组，复制旧元素，容量翻倍）。对于每个分组的第一个元素，append 会分配一个小切片（通常容量 1），后续 append 逐步扩容。如果分组数量多但每个分组元素少，会有大量小内存分配。优化：预分配容量（如果知道分组大小）或使用 <code>make(map[K][]T, estimatedGroups)</code> 预分配 map 容量</li>
+<li><strong>keyFunc 的开销</strong>：每个元素调用一次 keyFunc，keyFunc 的性能直接影响分组速度。简单的 keyFunc（如返回结构体字段）可以被编译器内联，开销极小。复杂的 keyFunc（如字符串拼接、哈希计算）会成为瓶颈。优化：将 key 计算移到分组前（先计算所有元素的 key 并存入并行切片，再分组），或使用缓冲（如果 key 计算有重复）</li>
+<li><strong>与非泛型实现的性能对比</strong>：泛型分组（GCShape 实现）对于值类型（struct、int、string）没有装箱开销，性能与手写的非泛型分组一致。对于接口类型或指针类型，泛型也不需要额外装箱。这是泛型相比 interface{} 方案的主要优势：interface{} 方案需要将每个元素装箱（堆分配），分组后还需要类型断言拆箱，性能差且内存占用高</li>
+</ul>
+
+<h4 id="groupby-variants">分组变体与高级用法</h4>
+
+<ul>
+<li><strong>分组计数（GroupCount）</strong>：只需要每个分组的元素数量，不需要存储元素。使用 <code>map[K]int</code>，每次迭代 <code>m[k]++</code>。空间复杂度 O(g)（g 为分组数），比完整分组省内存。适用于统计频次场景</li>
+<li><strong>分组聚合（GroupAggregate）</strong>：分组后对每个分组执行聚合操作（求和、求平均、最大值、最小值），不存储完整元素列表。例如 <code>func GroupSum[T any, K comparable, N numeric](s []T, keyFunc func(T) K, valFunc func(T) N) map[K]N</code>。一次遍历完成分组+聚合，比先分组再聚合更高效（不需要存储元素列表）</li>
+<li><strong>分组去重（GroupUnique）</strong>：分组后每个分组只保留唯一元素（去重）。使用 <code>map[K]map[T]struct{}</code> 或先分组再对每个分组去重。注意：T 必须 comparable</li>
+<li><strong>多键分组（MultiKey GroupBy）</strong>：按多个字段组合分组。keyFunc 返回一个结构体（如 <code>type Key struct { Category string; Year int }</code>），结构体必须 comparable（所有字段 comparable）。Go 的 map 支持结构体作为 key（只要所有字段 comparable）。注意：不要用字符串拼接作为多键（可能有碰撞，如 "ab"+"c" == "a"+"bc"）</li>
+<li><strong>有序分组（Ordered GroupBy）</strong>：Go 的 map 遍历顺序是随机的（为了防止哈希碰撞攻击）。如果需要保持分组的出现顺序，使用切片存储有序的 key 列表：<code>keys := make([]K, 0); seen := make(map[K]bool)</code>，每次遇到新 key 时追加到 keys。遍历结果时按 keys 顺序遍历 map</li>
+<li><strong>流式分组（Streaming GroupBy）</strong>：对于大数据集（无法全部加载到内存），使用迭代器（Go 1.23 的 <code>iter.Seq</code>）或 channel 流式处理。但 map 分组本身需要存储所有结果，如果结果也无法放入内存，需要外部排序（external sort）后按顺序分组（类似 MapReduce 的 shuffle 阶段）</li>
+</ul>
+
+<h3 id="groupby-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>map 遍历顺序随机导致输出不确定</strong>：Go 的 map 遍历顺序是故意随机化的（从 Go 1.0 开始，运行时随机选择遍历起始桶，防止依赖 map 顺序的代码和哈希碰撞 DoS 攻击）。分组后直接遍历 map 输出，每次运行结果顺序不同，可能导致测试不稳定、输出不一致。解决：如果需要确定顺序，将 key 收集到切片中排序后再遍历（<code>keys := make([]K, 0, len(m)); for k := range m { keys = append(keys, k) }; sort.Slice(keys, ...)</code>）。或使用有序分组（记录 key 的首次出现顺序）。Go 1.23 的 <code>maps.Keys</code> 返回迭代器，顺序也是随机的</li>
+<li><strong>nil map 写入导致 panic</strong>：分组函数中如果忘记初始化 map（<code>var m map[K][]T</code> 是 nil map），写入 nil map 会 panic（<code>assignment to entry in nil map</code>）。这是 Go 初学者常见错误。解决：始终使用 <code>make(map[K][]T)</code> 初始化 map。封装分组函数时在函数内部初始化，调用方不需要关心。注意：读取 nil map 不会 panic（返回零值），只有写入会 panic</li>
+<li><strong>append 到 map 中的切片的内存别名问题</strong>：<code>m[k] = append(m[k], v)</code> 是安全的（append 返回新切片，赋值回 map），但如果先获取切片引用再 append（<code>slice := m[k]; slice = append(slice, v); // 忘记写回 m[k]</code>），会导致修改丢失。更危险的是，如果两个不同的 key 共享同一个底层数组（不太可能但在某些优化场景下），append 可能互相影响。解决：始终使用 <code>m[k] = append(m[k], v)</code> 一行写法。不要持有 map 中切片的长期引用（map 扩容时元素地址不变，但切片 append 后地址可能变）。如果需要修改 map 中的切片，先取出、修改、再写回</li>
+<li><strong>分组键（key）不可比较导致编译错误</strong>：map 的 key 必须是 comparable（可比较）类型。切片（slice）、map、function 不可比较，不能作为 map key。如果 keyFunc 返回这些类型，编译错误。解决：将不可比较类型转换为可比较类型：切片转为字符串（<code>string(slice)</code> 或 fmt.Sprintf）或数组（固定长度数组可比较）；map 转为排序后的键值对字符串；function 不适合作为 key（重新设计）。注意：数组（[N]T）是可比较的（如果 T 可比较），但切片（[]T）不可比较。结构体如果所有字段可比较，则结构体可比较</li>
+<li><strong>大切片分组导致内存占用过高</strong>：分组结果 <code>map[K][]T</code> 存储了所有元素的副本（如果 T 是值类型）或引用（如果 T 是指针）。对于大切片（百万级元素），分组结果可能占用大量内存（map 开销 + 切片开销 + 元素副本）。特别是值类型元素（如大 struct），每个元素被复制到分组切片中，内存翻倍。解决：使用指针分组（<code>[]*T</code>，分组存储指针，不复制元素）。或使用索引分组（<code>map[K][]int</code>，存储原始切片的索引，不复制元素）。或使用流式处理（不需要完整分组结果时，边分组边处理）。监控内存使用，必要时增加机器内存或使用外部存储（如 SQLite 分组）</li>
+<li><strong>keyFunc 有副作用或性能差导致分组慢</strong>：keyFunc 在分组时被调用 n 次（每个元素一次），如果 keyFunc 有副作用（修改全局状态、IO 操作）或性能差（字符串拼接、正则、网络请求），会导致分组非常慢且可能有竞态条件。解决：keyFunc 应该是纯函数（无副作用、无 IO、线程安全）。复杂的 key 计算应该在分组前完成（预计算所有 key，存入并行切片，分组时直接读取）。如果 key 计算昂贵且有重复，使用缓存（<code>map[T]K</code> 缓存已计算的 key，但 T 必须 comparable）。性能分析时关注 keyFunc 的耗时占比</li>
+<li><strong>泛型类型推断失败需要显式指定类型参数</strong>：调用泛型分组函数时，如果 keyFunc 的返回类型无法被编译器推断（如 keyFunc 是返回 interface{} 的函数、或多返回值函数），需要显式指定类型参数（<code>GroupBy[Item, string](items, keyFunc)</code>）。Go 1.18 的类型推断在某些场景下不够智能。解决：设计 keyFunc 时确保返回类型明确（不要返回 interface{}）。如果类型推断失败，显式指定所有类型参数。Go 1.21+ 的类型推断有所改进，但复杂场景仍可能失败。使用辅助函数帮助推断（如先定义 <code>keyFunc := func(item Item) string { return item.Category }</code>，类型明确）</li>
+<li><strong>重复造轮子：标准库已有分组功能</strong>：Go 1.21+ 的 <code>slices</code> 包没有直接的 GroupBy 函数（因为 Go 团队认为 GroupBy 的返回类型不够通用，且使用场景多样），但社区有成熟的泛型工具库（如 <code>github.com/samber/lo</code>，提供 <code>lo.GroupBy</code>、<code>lo.GroupBy[U]</code>、<code>lo.CountValues</code> 等）。不要自己重复实现分组函数（除非有特殊需求）。解决：使用 <code>samber/lo</code> 库（最流行的 Go 泛型工具库，类似 Lodash），或 <code>github.com/thoas/go-funk</code>（旧版，基于反射，性能差）。标准库的 <code>maps</code> 包提供 <code>Keys</code>、<code>Values</code>、<code>Clone</code>、<code>Copy</code>、<code>Equal</code> 等辅助函数，可以配合自定义分组使用。注意：引入第三方库时评估其维护状态和性能</li>
+</ol>
+
 <h4 id="groupby-example">示例</h4>
 <h4 id="groupby-2026">2026 状态</h4>
                 <div class="page-nav">

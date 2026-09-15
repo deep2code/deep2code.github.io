@@ -115,6 +115,75 @@ sequenceDiagram
 
 <!-- 保留原始标题锚点 -->
 <h3 id="gogit-overview">go-git 纯 Go Git 库</h3>
+<h3 id="gogit-architecture">go-git 纯 Go Git 库架构深度解析</h3>
+
+<h4 id="git-internals">Git 内部原理回顾</h4>
+
+<p>理解 go-git 需要先理解 Git 的内部数据模型：</p>
+
+<ul>
+<li><strong>对象数据库（Object Database）</strong>：Git 的核心是一个内容寻址（content-addressable）的对象数据库，存储在 <code>.git/objects/</code> 目录。四种对象类型：
+  <ul>
+  <li><strong>Blob（二进制大对象）</strong>：存储文件内容，不包含文件名。内容 = 文件原始字节。Hash = SHA-1("blob " + size + "\0" + content)</li>
+  <li><strong>Tree（树）</strong>：存储目录条目，每个条目包含：模式（100644 文件/100755 可执行/040000 目录/120000 符号链接/160000 子模块）、文件名、blob 或子 tree 的 hash。Tree 对应一个目录的快照</li>
+  <li><strong>Commit（提交）</strong>：存储提交信息，包含：tree hash（根目录树）、parent commit hash（0-N 个，初始提交无 parent，合并提交有 2 个）、author（作者+时间+时区）、committer（提交者+时间+时区）、commit message</li>
+  <li><strong>Tag（标签）</strong>：存储带注释的标签，包含：对象 hash、对象类型、标签名、tagger、消息。轻量标签只是 refs 指向 commit，不创建 tag 对象</li>
+  </ul>
+</li>
+<li><strong>引用（References）</strong>：存储在 <code>.git/refs/</code> 目录，是指向 commit hash 的命名指针。分支（refs/heads/）、标签（refs/tags/）、远程跟踪分支（refs/remotes/）。HEAD（.git/HEAD）是特殊引用，指向当前分支（如 <code>ref: refs/heads/main</code>）或直接指向 commit（detached HEAD 状态）</li>
+<li><strong>索引（Index / Staging Area）</strong>：存储在 <code>.git/index</code>，是一个二进制文件，记录工作目录中已暂存（staged）的文件状态。每个条目包含：文件路径、blob hash、文件元数据（mtime、size、mode）、冲突标记。索引是工作目录和对象数据库之间的暂存区，<code>git add</code> 将文件写入索引，<code>git commit</code> 将索引转为 tree 对象并创建 commit</li>
+<li><strong>Packfile（打包文件）</strong>：为了节省空间和提高传输效率，Git 将松散对象（loose objects，每个对象一个文件）打包为 packfile（.pack + .idx）。Packfile 使用 delta 压缩（相似对象存储为增量差异，如文件的不同版本）。<code>git gc</code> 执行打包和垃圾回收。go-git 支持读取和写入 packfile</li>
+</ul>
+
+<h4 id="gogit-implementation">go-git 实现架构</h4>
+
+<p>go-git（<code>github.com/go-git/go-git/v5</code>）是纯 Go 实现的 Git 库，不依赖系统 git 命令：</p>
+
+<ul>
+<li><strong>核心包结构</strong>：
+  <ul>
+  <li><code>go-git</code>：顶层包，提供 Repository、Worktree、Remote 等高级 API</li>
+  <li><code>plumbing</code>：底层 plumbing API，直接操作 Git 对象和引用。包含 <code>object</code>（Commit/Tree/Blob/Tag 对象）、<code>reference</code>（引用）、<code>format</code>（packfile、index 格式解析）、<code>transport</code>（网络传输协议）</li>
+  <li><code>storage</code>：存储后端接口，默认实现是文件系统存储（fs），也支持内存存储（memory，用于测试）。可以自定义存储后端（如数据库存储）</li>
+  <li><code>utils</code>：工具函数（ioutil、merkletrie 等）</li>
+  </ul>
+</li>
+<li><strong>对象解析</strong>：go-git 实现了完整的 Git 对象解析：读取松散对象（zlib 解压 + 解析头部）、读取 packfile（解析 .idx 索引查找偏移量、解压 delta、应用 delta 链重建对象）。Delta 应用是性能关键：packfile 中的对象可能以 delta（增量）形式存储，需要从基础对象开始逐步应用 delta 重建完整对象。go-git 使用 <code>plumbing/format/packfile</code> 包处理</li>
+<li><strong>引用操作</strong>：go-git 支持读取和写入引用（loose refs 和 packed-refs）。引用遍历（<code>References()</code>）、引用解析（<code>Reference(name)</code>）、符号引用解引用（<code>HEAD → refs/heads/main → commit hash</code>）。支持引用事务（reference transaction，原子更新多个引用）</li>
+<li><strong>网络协议</strong>：go-git 实现了 Git 的网络协议：
+  <ul>
+  <li><strong>智能 HTTP 协议</strong>：通过 HTTP 传输，使用 <code>/info/refs?service=git-upload-pack</code> 获取引用列表，POST 到 <code>/git-upload-pack</code> 发送 want/have 协商并接收 packfile。支持 GitHub、GitLab、Bitbucket 等</li>
+  <li><strong>SSH 协议</strong>：通过 SSH 执行远程 <code>git-upload-pack</code> / <code>git-receive-pack</code>。使用 <code>golang.org/x/crypto/ssh</code> 实现，支持密码、公钥、SSH Agent 认证</li>
+  <li><strong>Git 协议（git://）</strong>：原生 TCP 协议，端口 9418，无认证，主要用于只读公开仓库</li>
+  <li><strong>协议 v2</strong>：Git 2.18+ 引入的新协议，更高效的引用协商（支持 filter、ref-in-want），go-git 支持协议 v2</li>
+  </ul>
+</li>
+<li><strong>与 os/exec 调用 git 命令的对比</strong>：
+  <table>
+  <tr><th>维度</th><th>go-git（纯 Go）</th><th>os/exec 调用 git</th></tr>
+  <tr><td>依赖</td><td>无外部依赖，纯 Go 编译</td><td>需要系统安装 git</td></tr>
+  <tr><td>性能</td><td>对象操作快（内存中），但 packfile/clone 较慢（纯 Go 实现优化不如 C）</td><td>git 命令经过高度优化，clone/push 快</td></tr>
+  <tr><td>API 灵活性</td><td>可以直接操作 Git 对象，细粒度控制</td><td>只能通过命令行参数和输出解析，复杂操作需要多次调用</td></tr>
+  <tr><td>兼容性</td><td>实现了大部分 Git 功能，但某些边缘功能可能不支持（如某些钩子、子模块的高级用法）</td><td>100% 兼容 git 所有功能</td></tr>
+  <tr><td>部署</td><td>单二进制，跨平台，无需安装 git</td><td>需要目标系统安装 git，Windows 上需要 Git for Windows</td></tr>
+  <tr><td>适用场景</td><td>需要嵌入 Git 功能的应用（如 Git 托管平台、CI/CD 工具、代码分析工具）、无 git 环境的部署</td><td>脚本化操作、需要完整 git 功能、性能敏感的大规模 clone/push</td></tr>
+  </table>
+</li>
+</ul>
+
+<h3 id="gogit-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>go-git 不支持的 Git 功能导致操作失败</strong>：go-git 实现了 Git 的核心功能，但某些边缘功能可能不支持或有 bug：部分子模块操作、某些钩子（hooks）、Git LFS（需要额外库）、部分 rebase 操作、稀疏检出（sparse checkout）、部分协议 v2 的高级特性。解决：检查 go-git 的文档和 issue 列表，确认需要的功能是否支持。对于不支持的功能，混合使用 go-git 和 os/exec（go-git 做对象操作，git 命令做不支持的操作）。关注 go-git 的 release notes，及时升级到最新版本</li>
+<li><strong>大仓库 clone 性能差或内存溢出</strong>：go-git 的 clone 是纯 Go 实现，packfile 下载和 delta 应用的性能不如 C git，大仓库（如 Linux 内核、Chromium）clone 可能非常慢或内存溢出（go-git 会将 packfile 加载到内存处理）。解决：使用浅克隆（<code>CloneOptions{Depth: 1}</code>）只获取最近的提交，大幅减少数据量。使用 <code>SingleBranch: true</code> 只克隆一个分支。对于大仓库的完整克隆，使用 os/exec 调用 git 命令（性能更好）。设置 <code>MemoryPackingThreshold</code> 控制内存使用，超过阈值时使用临时文件</li>
+<li><strong>认证配置复杂导致 push/pull 失败</strong>：go-git 的认证需要通过 <code>transport.AuthMethod</code> 配置，不同协议（HTTP/SSH）的认证方式不同，配置错误会导致认证失败。HTTP 基本认证：<code>&amp;http.BasicAuth{Username: "user", Password: "token"}</code>（GitHub 使用 Personal Access Token 作为密码）。SSH 公钥认证：<code>&amp;ssh.PublicKeys{User: "git", Signer: signer}</code>（需要从 PEM 私钥解析 signer，<code>ssh.ParseRawPrivateKey</code>）。SSH Agent：<code>&amp;ssh.PublicKeysCallback{...}</code> 从 SSH Agent 获取密钥。解决：封装认证辅助函数，根据 URL 协议自动选择认证方式。使用 <code>ssh.NewSSHAgentAuth</code> 简化 SSH Agent 认证。注意：GitHub 已弃用密码认证，必须使用 token 或 SSH key</li>
+<li><strong>工作树（Worktree）操作与文件系统状态不一致</strong>：go-git 的 Worktree 操作（Add、Remove、Status）需要与文件系统交互，但 go-git 对文件系统的处理可能与 git 命令不一致：符号链接处理、文件权限（可执行位）、大小写不敏感的文件系统（macOS/Windows 默认）、.gitignore 规则的边缘情况。解决：对于需要精确匹配 git 行为的操作（如 status、diff），使用 os/exec 调用 git 命令。go-git 适合对象级操作（读取 commit、tree、blob，创建 commit）。在 Linux（大小写敏感）上测试，避免 macOS/Windows 的文件系统差异。使用 <code>worktree.Status()</code> 时注意其性能（需要遍历工作目录，大仓库慢）</li>
+<li><strong>并发操作导致存储损坏</strong>：go-git 的存储后端（文件系统存储）不是并发安全的，多个 goroutine 同时操作同一个 Repository（如同时 commit、fetch、checkout）可能导致引用文件损坏、对象丢失、索引文件不一致。Git 本身使用锁文件（.lock）机制保证原子性，但 go-git 的锁实现可能不完善。解决：使用互斥锁（sync.Mutex）保护 Repository 操作，同一时间只允许一个写操作。或为每个操作创建独立的 Repository 实例（但共享存储后端仍有竞争）。对于高并发场景（如 Git 托管平台），使用更成熟的方案（如 git 命令 + 文件锁，或 go-git 的内存存储 + 定期持久化）</li>
+<li><strong>引用更新不是原子的导致竞态条件</strong>：go-git 的引用更新（<code>r.Storer.SetReference</code>）默认不是原子的比较-交换（CAS），在并发场景下可能丢失更新（两个 goroutine 同时读取引用、修改、写回，后写覆盖先写）。Git 的引用更新应该是原子的（使用 .lock 文件 + rename）。解决：使用 <code>r.Storer.CheckAndSetReference</code>（如果存储后端支持）实现 CAS。或在应用层加锁。对于需要强一致性的场景（如 CI/CD 中的分支更新），使用 git 命令（<code>git update-ref</code> 是原子的）。注意：go-git 的文件系统存储在 v5 中改进了引用更新的原子性</li>
+<li><strong>错误处理不足导致静默失败</strong>：go-git 的某些操作在失败时可能返回 nil 错误但结果不正确（如 checkout 到不存在的分支、merge 冲突未处理）。特别是 <code>Worktree.Checkout</code> 在分支不存在时可能创建新分支（取决于选项），行为可能与预期不同。解决：检查所有 go-git 操作的返回错误。对于 checkout，显式指定 <code>Create: false</code>（不创建新分支）或 <code>Create: true</code>（创建新分支）。对于 merge，检查 <code>MergeOptions</code> 的返回和冲突状态。使用 <code>plumbing.ErrObjectNotFound</code> 等类型化错误判断特定错误。在关键操作后验证结果（如读取引用确认更新成功）</li>
+<li><strong>内存泄漏：对象缓存未清理</strong>：go-git 在读取对象时会缓存（特别是 packfile 中的对象，delta 应用后缓存），长时间运行的进程（如服务端持续读取 Git 对象）可能因为对象缓存增长导致内存泄漏。go-git 的缓存没有自动过期机制。解决：对于长时间运行的服务，定期创建新的 Repository 实例（释放旧实例的缓存），或使用内存存储（memory storage）并定期清理。监控进程内存使用。对于只需要读取少量对象的场景，读取后及时释放引用（将 Repository 变量置为 nil，触发 GC）。注意：go-git v5 的缓存实现比 v4 更高效，但仍需关注长期运行的内存使用</li>
+</ol>
+
 <h4 id="gogit-example">示例</h4>
 <h4 id="gogit-2026">2026 状态</h4>
 

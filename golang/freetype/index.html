@@ -117,6 +117,46 @@ graph LR
 
 <!-- 保留原始标题锚点 -->
 <h3 id="freetype-overview">Go FreeType 字体渲染</h3>
+<h3 id="freetype-architecture">FreeType 字体渲染架构深度解析</h3>
+
+<h4 id="freetype-rendering-pipeline">字体渲染流水线</h4>
+
+<p>字体渲染是将字体文件中的字形（Glyph）描述转换为屏幕像素的过程，FreeType 是最流行的开源字体渲染引擎：</p>
+
+<ol>
+<li><strong>字体文件解析</strong>：FreeType 支持多种字体格式：TrueType（.ttf，基于二次贝塞尔曲线轮廓）、OpenType（.otf，基于三次贝塞尔曲线/CFF 轮廓）、Type 1、CFF、WOFF/WOFF2（Web 字体，压缩封装）、PCF/FNT（位图字体）。字体文件包含：字形轮廓数据（glyf/CFF 表）、字符到字形的映射（cmap 表）、水平/垂直度量（hmtx/vmtx 表）、字距调整（kern/GPOS 表）、命名信息（name 表）</li>
+<li><strong>字形加载与缩放</strong>：根据字符码点（Unicode）通过 cmap 表查找字形索引（Glyph ID），加载字形轮廓。轮廓由贝塞尔曲线控制点描述，需要缩放到目标像素大小。缩放是仿射变换：<code>x' = x * scale + offset</code>，scale = 目标像素大小 / units_per_em（TrueType 通常 1000 或 2048）。注意：缩放使用 26.6 固定点数（16.16 在某些版本），避免浮点误差</li>
+<li><strong>网格拟合（Hinting）</strong>：字形轮廓缩放到像素网格后，需要对齐到像素网格以避免模糊。TrueType 字体包含字节码程序（TrueType Instructions），在缩放时执行，调整控制点位置以对齐网格。FreeType 的自动 hinter（Autohinter）在没有字节码时自动拟合。Hinting 是小字号（9-14px）渲染清晰的关键。注意：TrueType 字节码是一个虚拟机（有栈、寄存器、循环），执行字节码有安全风险（历史上有字体解析漏洞），FreeType 默认启用字节码执行</li>
+<li><strong>光栅化（Rasterization）</strong>：将拟合后的矢量轮廓转换为位图（像素覆盖率）。FreeType 使用扫描线算法（Scanline Rasterization）：对每条扫描线计算轮廓与扫描线的交点，填充交点之间的区域。抗锯齿（Anti-aliasing）使用灰度覆盖率（每个像素 0-255 的覆盖率值），而非二值（黑/白）。子像素渲染（Subpixel Rendering，如 ClearType）利用 LCD 屏幕的 RGB 子像素，水平分辨率提升 3 倍</li>
+<li><strong>布局与绘制</strong>：将光栅化的字形位图按基线（baseline）对齐绘制到目标表面。需要处理：字距调整（Kerning，特定字符对的间距调整，如 "To"、"AV"）、连字（Ligature，如 "fi"、"fl" 合并为一个字形）、复杂文本布局（阿拉伯文、印度文需要复杂整形，FreeType 本身不处理，需要 HarfBuzz 等布局引擎）</li>
+</ol>
+
+<h4 id="golang-freetype">Go FreeType 库实现</h4>
+
+<p>Go 的 FreeType 绑定（<code>github.com/golang/freetype</code>，已迁移到 <code>golang.org/x/image</code>）是纯 Go 实现的字体渲染：</p>
+
+<ul>
+<li><strong>truetype 包</strong>：<code>golang.org/x/image/font/truetype</code>（原 <code>github.com/golang/freetype/truetype</code>），纯 Go 实现的 TrueType 字体解析器和光栅化器。支持 TrueType（.ttf）和 OpenType with TrueType outlines，不支持 CFF 轮廓（.otf）。功能：字体加载（Parse）、字形缩放（NewFace）、光栅化（GlyphBounds、Glyph）、字距调整（Kern）</li>
+<li><strong>Face 接口</strong>：<code>golang.org/x/image/font</code> 定义了 <code>Face</code> 接口：<code>Close()</code>、<code>Metrics() Metrics</code>、<code>Glyph(dst *image.RGBA, dot fixed.Point26_6, r rune) (Glyph, error)</code>、<code>GlyphAdvance(r rune) fixed.Int26_6</code>、<code>Kern(r0, r1 rune) fixed.Int26_6</code>。这是 Go 图像库统一的字体接口，truetype、basicfont、opentype 都实现了此接口</li>
+<li><strong>fixed 包</strong>：<code>golang.org/x/image/math/fixed</code> 提供 26.6 固定点数（Int26_6，26 位整数 + 6 位小数，范围约 ±33554432，精度 1/64 像素）和点（Point26_6）。字体渲染使用固定点数而非浮点数，避免浮点误差和性能问题</li>
+<li><strong>op 包</strong>：<code>golang.org/x/image/font/opentype</code>（Go 1.19+ 新增实验包），支持 OpenType CFF 轮廓（.otf），基于 <code>github.com/benoitkugler/textlayout</code> 的移植。功能比 truetype 更全，支持 CFF、CFF2、变量字体（Variable Fonts）</li>
+</ul>
+
+<p>性能注意：Go 的 truetype 光栅化是纯 Go 实现，性能比 C 版 FreeType 慢约 2-5 倍。对于需要高性能字体渲染的场景（如游戏 UI、PDF 生成），可以使用 cgo 绑定 C FreeType（<code>github.com/haashemi/go-freetype</code>），或使用基于 HarfBuzz 的布局引擎。对于 Web 服务端渲染（如图片生成、验证码），纯 Go 实现足够且避免 cgo 部署复杂度。</p>
+
+<h3 id="freetype-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>不支持 .otf（CFF 轮廓）导致渲染失败</strong>：Go 的 truetype 包只支持 TrueType 轮廓（.ttf），不支持 OpenType CFF 轮廓（.otf）。加载 .otf 文件会返回错误或渲染异常。解决：使用 <code>golang.org/x/image/font/opentype</code> 包（支持 CFF），或将 .otf 转换为 .ttf（使用 fontTools 的 <code>otf2ttf</code>）。注意：很多 Web 字体（如 Google Fonts 的 Noto 系列）同时提供 .ttf 和 .otf，选择 .ttf 版本</li>
+<li><strong>中文字体文件过大导致内存占用高</strong>：中文字体（如思源黑体、微软雅黑）包含 2-7 万个字形，文件大小 5-20MB。加载整个字体会占用大量内存（字体数据 + 字形缓存）。解决：使用字体子集化（Subsetting），只包含需要的字符（使用 fontTools 的 <code>pyftsubset</code>，或 Go 的 <code>github.com/benoitkugler/textlayout/fonts/truetype</code> 子集化）。Web 场景使用 WOFF2 压缩（比 TTF 小 30-50%）。服务端渲染时按需加载字体，避免全局缓存所有字体</li>
+<li><strong>字形缓存缺失导致重复光栅化</strong>：每次调用 <code>Glyph()</code> 都会重新光栅化字形（轮廓缩放 + 扫描线填充），相同字符重复渲染会浪费 CPU。Go 的 truetype 包本身不做字形缓存。解决：实现字形缓存（map[rune]image.Image），缓存光栅化后的位图。注意缓存 key 需要包含字体大小（不同大小的字形位图不同）。使用 LRU 缓存限制内存占用（中文字体 2 万字形 × 16px ≈ 2万 × 256字节 = 5MB，可以全缓存）</li>
+<li><strong>固定点数精度导致渲染模糊</strong>：Go 使用 26.6 固定点数（精度 1/64 像素），在小字号（&lt;12px）时可能因为精度不足导致字形边缘模糊。解决：使用整数像素对齐（将 dot 的 Y 坐标取整到整数像素，<code>dot.Y = dot.Y &amp;^ 63</code>），避免亚像素定位。使用 hinting（Go truetype 的 <code>NewFace</code> 默认启用 hinting）。对于极小字号（&lt;10px），考虑使用位图字体（bitmap font）而非矢量字体</li>
+<li><strong>复杂文本布局（阿拉伯文/印地文）渲染错误</strong>：FreeType/Go truetype 只负责单个字形的光栅化，不负责文本布局（Text Shaping）。阿拉伯文需要字形变形（初始/中间/最终/孤立形式）、双向文本（Bidi）、连字；印地文需要辅音+元音组合、字形重排。直接逐个字符调用 Glyph 会渲染错误。解决：使用 HarfBuzz（C 库，cgo 绑定 <code>github.com/benoitkugler/textlayout/harfbuzz</code> 或纯 Go 移植 <code>github.com/benoitkugler/textlayout</code>）进行文本整形，得到字形序列和位置，再用 FreeType 光栅化。对于只需要中英文的场景，逐个字符渲染通常足够（中文不需要复杂布局）</li>
+<li><strong>字距调整（Kerning）被忽略</strong>：英文字体的 kerning 表定义了特定字符对（如 "To"、"AV"、"Ye"）的额外间距调整，忽略 kerning 会导致文本看起来不均匀（某些字符对间距过大）。解决：调用 <code>Face.Kern(r0, r1)</code> 获取字距，在计算下一个字符的 dot 位置时加上 kerning 值。注意：OpenType 字体的 kerning 可能在 GPOS 表中（不是传统 kern 表），Go truetype 包可能不支持 GPOS kerning，需要 opentype 包或 HarfBuzz</li>
+<li><strong>颜色字体（Emoji）渲染为黑白</strong>：现代字体包含彩色字形（Emoji、彩色图标），使用 CBDT/CBLC（位图彩色）、COLR/CPAL（矢量彩色）、SVG（SVG 彩色）表。Go truetype 包不支持彩色字体，Emoji 会渲染为黑白轮廓或方框。解决：使用支持彩色字体的库（如 <code>github.com/benoitkugler/textlayout</code> 支持 COLR/CPAL），或使用位图 emoji 字体（如 Apple Color Emoji 的 CBDT 格式，但 Go 不支持）。对于服务端渲染 emoji，考虑使用预渲染的 emoji 图片（如 Twemoji 的 PNG/SVG）</li>
+<li><strong>字体加载失败时静默使用默认字体</strong>：字体文件加载失败（文件不存在、格式错误、权限不足）时，如果代码静默回退到默认字体（如 basicfont），会导致渲染结果与预期不符且难以排查。解决：字体加载失败时返回明确错误，不要静默回退。使用 <code>truetype.Parse</code> 的返回值检查错误。在服务启动时预加载所有需要的字体，加载失败则启动失败（fail-fast），而不是运行时才发现</li>
+</ol>
+
 <h4 id="freetype-2026">2026 状态</h4>
 <h4 id="freetype-example">示例</h4>
 

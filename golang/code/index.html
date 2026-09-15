@@ -322,6 +322,48 @@ strings.TrimLeft(s, "ab")   // "Hello"   字符集合逐个吃
 strings.TrimPrefix(s, "aa") // "bHello"  整串匹配,只去一次
 strings.TrimPrefix(s, "ab") // "aabHello" 不匹配,原样返回</code></pre>
 <h3 id="profile">profile</h3>
+<h3 id="go-code-deep">Go 代码技巧底层原理深度解析</h3>
+
+<h4 id="go-profile-deep">pprof 性能分析底层原理</h4>
+
+<p>Go 的 pprof 是性能分析的核心工具，其底层基于采样（Sampling）和运行时追踪：</p>
+
+<ul>
+<li><strong>CPU Profiling</strong>：基于信号驱动的采样。Go 运行时每 10ms（默认，可通过 <code>runtime.SetCPUProfileRate</code> 调整）向当前进程发送 SIGPROF 信号，信号处理器记录当前 goroutine 的栈追踪（stack trace）。采样数据写入 profile buffer，最终生成 pprof 格式的 protobuf 文件。注意：CPU profiling 有采样开销（约 1-5%），且只能看到被采样到的函数，短函数可能被遗漏</li>
+<li><strong>Memory Profiling</strong>：基于内存分配采样。Go 运行时在堆分配时进行采样（默认每 512KB 采样一次，可通过 <code>runtime.MemProfileRate</code> 调整），记录分配位置（文件:行号）、分配大小、对象数量。内存 profile 有两种视图：alloc_space（累计分配空间，包含已释放的）和 inuse_space（当前正在使用的空间，不包含已释放的）。排查内存泄漏用 inuse_space，优化分配频率用 alloc_space</li>
+<li><strong>Goroutine Profiling</strong>：记录所有当前 goroutine 的栈追踪。用于排查 goroutine 泄漏（goroutine 数量持续增长）、死锁（所有 goroutine 都在等待）。注意：goroutine profile 是瞬时快照，不是采样</li>
+<li><strong>Block Profiling</strong>：记录 goroutine 阻塞在同步原语（channel、mutex、select）上的等待时间。默认关闭，需要通过 <code>runtime.SetBlockProfileRate(1)</code> 开启（参数为采样率，1 表示每次阻塞都记录，性能开销大）。用于排查锁竞争、channel 等待</li>
+<li><strong>Mutex Profiling</strong>：记录互斥锁（sync.Mutex/RWMutex）的竞争情况。默认关闭，通过 <code>runtime.SetMutexProfileFraction(1)</code> 开启。显示持有锁时间最长的函数调用栈。与 block profile 的区别：mutex profile 只关注锁，block profile 关注所有阻塞原语</li>
+</ul>
+
+<p>pprof 数据格式：Google 的 pprof 格式（protobuf 编码），包含 Sample（采样值）、Mapping（内存映射）、Location（代码位置）、Function（函数信息）。使用 <code>go tool pprof</code> 分析，支持 top（按耗时排序）、list（函数源码级耗时）、web（生成调用图 SVG）、flamegraph（火焰图，Go 1.11+ 内置）</p>
+
+<h4 id="go-string-trim-deep">strings.TrimLeft vs TrimPrefix 底层实现</h4>
+
+<p><code>strings.TrimLeft(s, cutset)</code> 和 <code>strings.TrimPrefix(s, prefix)</code> 的行为差异源于底层实现：</p>
+
+<ul>
+<li><strong>TrimLeft</strong>：从字符串左侧删除所有包含在 cutset 中的字符（连续删除）。底层实现：遍历字符串，对每个字符检查是否在 cutset 中（使用 Unicode 码点查询，cutset 被解析为字符集合），直到遇到不在 cutset 中的字符。时间复杂度 O(n*m)（n 为字符串长度，m 为 cutset 长度），但 Go 内部对 ASCII cutset 做了优化（使用 256 位位图）。注意：cutset 是字符集合，不是子串！<code>strings.TrimLeft("hello", "he")</code> 结果是 "llo"（删除了所有 h 和 e），不是 "llo"（删除 "he" 子串）</li>
+<li><strong>TrimPrefix</strong>：只删除字符串开头的 prefix 子串（只删除一次）。底层实现：检查 s 是否以 prefix 开头（<code>strings.HasPrefix</code>），如果是则返回 s[len(prefix):]，否则返回 s。时间复杂度 O(len(prefix))。注意：只删除一次，<code>strings.TrimPrefix("hehehello", "he")</code> 结果是 "hehello"（只删除了第一个 "he"）</li>
+<li><strong>TrimRight / TrimSuffix</strong>：同理，TrimRight 删除右侧所有在 cutset 中的字符，TrimSuffix 只删除结尾的 suffix 子串一次</li>
+<li><strong>Trim</strong>：同时删除左右两侧在 cutset 中的字符（相当于 TrimLeft + TrimRight）。最常用于去除空白字符：<code>strings.Trim(s, " \t\n\r")</code> 或 <code>strings.TrimSpace(s)</code>（TrimSpace 是专门优化的版本，处理所有 Unicode 空白字符）</li>
+</ul>
+
+<p>常见错误：用 TrimLeft 删除子串。例如想删除路径前缀 "/api/"，用 <code>strings.TrimLeft(path, "/api/")</code> 会错误地删除所有 /、a、p、i 字符。正确做法是 <code>strings.TrimPrefix(path, "/api/")</code>。</p>
+
+<h3 id="go-code-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>pprof CPU 采样遗漏短函数</strong>：CPU profiling 默认 10ms 采样间隔，执行时间远小于 10ms 的函数可能永远不会被采样到，导致 profile 中看不到这些函数。解决：使用 <code>runtime.SetCPUProfileRate(1000)</code> 提高采样率（1ms，开销增大），或使用 tracing（<code>runtime/trace</code>）替代 pprof（tracing 是事件驱动，不是采样，能捕获所有事件）。对于微基准测试，使用 <code>testing.B</code> 的基准测试而非 pprof</li>
+<li><strong>内存 profile 只显示采样分配</strong>：内存 profiling 默认每 512KB 采样一次，小对象的分配可能被遗漏，导致 alloc_space 显示的分配量远小于实际。解决：设置 <code>runtime.MemProfileRate = 1</code>（每次分配都采样，性能开销大，仅用于调试），或使用 <code>GODEBUG=allocfreetrace=1</code> 追踪所有分配。生产环境保持默认采样率，关注相对值而非绝对值</li>
+<li><strong>goroutine 泄漏排查困难</strong>：goroutine 泄漏（goroutine 创建后永远阻塞，无法退出）是 Go 程序最常见的内存泄漏原因。goroutine 本身占用约 2KB 栈（初始，可增长到 1GB），泄漏 10 万个 goroutine 就占用 200MB+。排查方法：使用 goroutine profile（<code>pprof.Lookup("goroutine")</code>）查看所有 goroutine 的栈追踪，找到大量相同栈的 goroutine（通常阻塞在 channel 接收/mutex 等待）。最佳实践：使用 <code>context.Context</code> 控制 goroutine 生命周期，创建 goroutine 时明确退出条件，使用 <code>errgroup</code> 管理 goroutine 组</li>
+<li><strong>defer 在循环中导致资源泄漏</strong>：在 for 循环中使用 defer 关闭文件/连接，defer 会在函数返回时才执行，而不是每次循环结束时执行，导致大量文件描述符/连接未释放。解决：在循环内部使用匿名函数包裹 defer（<code>func() { defer f.Close(); ... }()</code>），或手动在循环末尾调用 Close（不使用 defer）。对于需要批量处理的场景，使用工作池（worker pool）限制并发数</li>
+<li><strong>interface 比较导致 panic</strong>：两个 interface 值比较时，如果底层类型相同但不可比较（如 slice、map、function），会 panic（不是返回 false）。例如 <code>var a interface{} = []int{1}; var b interface{} = []int{2}; a == b</code> 会 panic。解决：比较 interface 前使用类型断言检查底层类型是否可比较，或使用 <code>reflect.DeepEqual</code>（但性能差，且对不可比较类型也能比较）。最佳实践：避免将不可比较类型存入 interface 后进行比较</li>
+<li><strong>for range 循环变量捕获错误</strong>：Go 1.22 之前，for range 循环中的循环变量在整个循环中是同一个变量（每次迭代复用），在 goroutine 中捕获循环变量会导致所有 goroutine 看到同一个值（通常是最后一个值）。Go 1.22+ 已修复（每次迭代创建新变量）。解决：升级到 Go 1.22+，或在循环内部创建局部变量（<code>for _, v := range list { v := v; go func() { use(v) }() }</code>）。注意：for 传统循环（<code>for i := 0; i &lt; n; i++</code>）在 Go 1.22 中也改为每次迭代新变量</li>
+<li><strong>空接口和类型断言性能开销</strong>：interface{}（空接口）在传递值时会发生装箱（boxing）：值被复制到堆上（如果逃逸），interface 存储类型指针和数据指针。频繁使用 interface{} 会导致大量内存分配和 GC 压力。类型断言（<code>v.(int)</code>）有运行时类型检查开销。解决：使用泛型（Go 1.18+）替代 interface{}，类型安全且无装箱开销。对于必须使用 interface{} 的场景，使用类型 switch（<code>switch v := x.(type)</code>）比连续类型断言更高效</li>
+<li><strong>init 函数执行顺序依赖</strong>：Go 的 init 函数执行顺序是：先按依赖顺序初始化导入的包（依赖图拓扑排序），同一包内按源文件名字典序执行 init，同一文件内按出现顺序执行。依赖 init 执行顺序是脆弱的（重命名文件、调整导入都会改变顺序）。解决：避免在 init 中执行复杂逻辑，init 只用于包级变量初始化和注册（如注册数据库驱动、HTTP handler）。需要显式初始化的逻辑，导出 Init() 函数由 main 调用。使用 <code>sync.Once</code> 保证初始化只执行一次</li>
+</ol>
+
 <pre><code class="language-golang">import (
   "github.com/pkg/profile"
   _ "net/http/pprof"

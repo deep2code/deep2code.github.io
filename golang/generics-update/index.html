@@ -453,6 +453,46 @@ ch2 := make(chan int)
 merged := FanIn(ch1, ch2)</code></pre>
 
 <h3 id="context-pattern">Context 模式</h3>
+<h3 id="go-generics-deep">Go 泛型实现原理深度解析（1.18-1.27）</h3>
+
+<h4 id="go-generics-implementation">泛型底层实现：GCShape 与字典传递</h4>
+
+<p>Go 1.18 引入泛型，其实现方式是 <strong>GCShape（GC Shape）单态化 + 字典传递</strong>，这是介于 C++ 模板全单态化和 Java 类型擦除之间的折中方案：</p>
+
+<ul>
+<li><strong>GCShape 分组</strong>：Go 不为每个具体类型生成一份泛型代码（不像 C++ 模板），而是将具有相同"GC Shape"的类型分组共享同一份代码。GC Shape 是指类型的内存布局对 GC 的影响：大小、指针位置（哪些字段是指针）。例如，int 和 uint 是同一个 GCShape（都是 8 字节无指针），*int 和 *string 是同一个 GCShape（都是 8 字节指针），但 int 和 string 不是同一个 GCShape（string 有指针字段）。这意味着泛型函数 <code>func Print[T any](x T)</code> 对于所有 int/uint/float64 等"8字节无指针"类型只生成一份代码</li>
+<li><strong>字典（Dictionary）传递</strong>：同一份 GCShape 代码需要区分不同类型的操作（如比较、哈希、调用方法），Go 通过传递类型字典（Dictionary）来实现。字典包含：类型的元数据（runtime._type）、方法表（接口方法的函数指针）、哈希函数、比较函数等。泛型函数在调用时，编译器自动传递字典参数（对程序员不可见）。例如 <code>func Equal[T comparable](a, b T) bool</code> 内部通过字典中的比较函数比较 a 和 b</li>
+<li><strong>与接口的区别</strong>：接口（interface）也是通过字典（itab）实现动态分发，但接口是在运行时装箱（boxing）——值被复制到堆上，接口存储类型指针和数据指针。泛型不需要装箱：值的类型在编译时已知（虽然代码共享），值可以直接在栈上传递。这是泛型比接口性能好的关键原因：无内存分配、无间接跳转</li>
+<li><strong>类型约束（Type Constraint）</strong>：泛型函数的类型参数必须满足约束（constraint），约束定义了类型必须支持的操作。Go 1.18 的约束是接口类型（任何接口都可以作为约束），Go 1.21 引入了 <code>cmp.Ordered</code> 等预声明约束。约束中的方法决定了泛型函数可以调用类型的哪些方法。编译器在实例化时检查类型是否满足约束</li>
+</ul>
+
+<p>性能特征：泛型函数的性能与非泛型函数接近（同 GCShape 内），因为没有装箱开销。但跨 GCShape 调用会有字典间接调用开销（类似接口方法调用）。对于数值类型（int、float 等），泛型代码可以被编译器内联和优化，性能与手写代码一致。</p>
+
+<h4 id="go-generics-evolution">泛型演进：1.18 到 1.27</h4>
+
+<ul>
+<li><strong>Go 1.18</strong>：泛型正式发布。支持类型参数（type parameters）、类型约束（type constraints）、泛型类型（generic types，如 <code>type Stack[T any]</code>）、泛型函数。引入 <code>any</code>（interface{} 的别名）、<code>comparable</code>（可比较类型约束）。不支持：泛型方法（方法不能有自己的类型参数）、类型参数的特化（不能为特定类型提供优化实现）</li>
+<li><strong>Go 1.19</strong>：泛型相关的小改进和 bug 修复。实验性支持 <code>golang.org/x/exp/constraints</code>（Ordered、Numeric 等约束，后来移到标准库）</li>
+<li><strong>Go 1.20</strong>：允许将切片转换为数组指针（<code>[:3]→[3]T</code> 的泛型友好写法）。<code>comparable</code> 约束的实现改进（接口类型也可以满足 comparable，如果其动态类型可比较）</li>
+<li><strong>Go 1.21</strong>：标准库引入泛型工具函数：<code>slices</code> 包（Sort、Search、Contains、Map、Filter、Reduce 等）、<code>maps</code> 包（Keys、Values、Clone、Copy、Equal 等）、<code>cmp</code> 包（Compare、Less、Ordered 约束）。这些是泛型在标准库的首次大规模应用</li>
+<li><strong>Go 1.22</strong>：for 循环变量语义改变（每次迭代新变量，与泛型无关但影响闭包捕获）。泛型类型的方法集改进</li>
+<li><strong>Go 1.23</strong>：迭代器（iter 包，<code>func(yield func(T) bool)</code> 类型），泛型函数可以返回迭代器。<code>slices.All</code>、<code>maps.Keys</code> 等返回迭代器。这是泛型与函数式编程风格的结合</li>
+<li><strong>Go 1.24-1.27</strong>：持续的泛型性能优化（GCShape 分组更精细、字典内联）、标准库更多泛型 API。可能的未来方向：泛型方法（目前不支持，是社区最期待的特性）、类型参数的类型推断改进</li>
+</ul>
+
+<h3 id="go-generics-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>泛型方法不支持导致设计受限</strong>：Go 不支持泛型方法（方法不能有自己的类型参数，如 <code>func (s *Store[T]) Get[U any](id int) U</code> 是非法的）。这是 Go 泛型最大的限制，影响了某些 API 设计（如类型安全的 ORM、依赖注入容器）。解决：将方法提升为函数（<code>func Get[U any](s *Store[T], id int) U</code>），或使用接口（方法返回 interface{}，调用方类型断言）。对于需要泛型方法的场景，考虑重新设计 API（使用泛型类型参数而非泛型方法）。关注 Go issue #49085（泛型方法提案）</li>
+<li><strong>GCShape 分组导致意外的性能特征</strong>：同一份泛型代码被不同 GCShape 的类型共享时，通过字典调用操作（比较、哈希）有间接调用开销，无法被编译器内联。例如 <code>func Max[T cmp.Ordered](a, b T) T</code> 对于 int 类型可以内联比较（同 GCShape 内编译器知道操作），但对于自定义类型（如 <code>type MyInt int</code>，虽然底层是 int，但 GCShape 相同，字典中方法不同）可能无法内联。解决：性能敏感的代码，为关键类型提供特化版本（非泛型函数），或使用 <code>//go:noinline</code> 分析。大多数场景下泛型性能足够，不需要过度优化</li>
+<li><strong>泛型类型的方法集与接口满足性</strong>：泛型类型（如 <code>type Set[T comparable] map[T]struct{}</code>）的方法集可能不满足预期的接口，因为方法的接收者是参数化类型。例如 <code>Set[T]</code> 的 <code>Contains(x T) bool</code> 方法无法满足 <code>interface{ Contains(any) bool }</code>（因为 T 不是 any）。解决：定义非泛型接口（方法参数使用 any），泛型类型实现该接口时在方法内部做类型断言。或使用泛型接口（Go 1.18 支持接口有类型参数，如 <code>type Container[T any] interface{ Contains(x T) bool }</code>），但泛型接口的使用场景有限</li>
+<li><strong>类型推断失败需要显式指定类型参数</strong>：Go 的类型推断在复杂场景下可能失败，需要显式指定类型参数（如 <code>Map[int, string](nums, strconv.Itoa)</code>）。常见失败场景：函数返回类型无法从参数推断（如 <code>func Zero[T any]() T</code>）、多个类型参数的推断互相依赖、回调函数的参数类型无法推断。解决：显式指定类型参数（Go 1.18 支持部分指定，未指定的由推断补全）。设计 API 时尽量让类型参数出现在函数参数中（便于推断），避免只出现在返回值中。使用辅助函数帮助推断</li>
+<li><strong>泛型与反射（reflect）的交互问题</strong>：泛型类型的运行时表示（reflect.Type）与非泛型类型不同。泛型类型的实例化（如 <code>Set[int]</code>）在运行时有独立的 reflect.Type，但类型参数信息（T=int）可以通过 <code>reflect.TypeOf(Set[int]{})</code> 获取。反射无法动态实例化泛型类型（如根据运行时类型创建 <code>Set[T]</code>）。解决：需要动态泛型实例化时，使用代码生成（go generate）或反射 + 接口（非泛型包装）。注意：<code>reflect.New</code> 可以创建泛型类型的实例（如果已有实例化后的 reflect.Type），但无法在运行时"创建"新的实例化</li>
+<li><strong>泛型递归类型导致编译缓慢或栈溢出</strong>：泛型类型的递归定义（如 <code>type Tree[T any] struct { Value T; Children []Tree[T] }</code>）是合法的，但深度嵌套的泛型递归类型可能导致编译缓慢（编译器需要展开类型）。更危险的是泛型函数的递归实例化（如 <code>func F[T any]() { F[[]T]() }</code>）会导致无限的类型实例化（编译器报错或崩溃）。解决：避免无意义的泛型递归实例化。递归数据结构使用指针（<code>Children []*Tree[T]</code>）而非值（避免无限大小的类型）。监控编译时间，泛型代码的编译时间通常比非泛型长</li>
+<li><strong>过度使用泛型导致代码可读性下降</strong>：泛型是强大的工具，但过度使用（如为简单函数添加类型参数、嵌套泛型类型、复杂的约束组合）会导致代码难以理解和维护。Go 的设计哲学是"简单优先"。解决：只在确实需要类型安全的抽象时使用泛型（如通用数据结构、通用算法）。简单的场景使用接口（interface{}）或具体类型。遵循"泛型用于算法和数据结构，接口用于行为多态"的原则。代码审查时关注泛型的必要性</li>
+<li><strong>标准库泛型 API 的兼容性陷阱</strong>：Go 1.21 引入的 <code>slices</code>、<code>maps</code>、<code>cmp</code> 包是泛型 API，但在 Go 1.21 之前的版本中不可用。如果项目需要支持旧版本 Go，不能直接使用这些包。解决：使用 <code>golang.org/x/exp/slices</code>（实验包，支持旧版本，但 API 可能变化），或自己实现简单版本。使用 <code>go.mod</code> 的 <code>go 1.21</code> 指令指定最低版本。注意：<code>slices.Sort</code> 要求元素满足 <code>cmp.Ordered</code>，自定义类型需要实现 <code>Less</code> 方法或使用 <code>slices.SortFunc</code>（自定义比较函数）</li>
+</ol>
+
 <pre><code class="language-go">// 泛型 Context Value
 func GetUser[T any](ctx context.Context, key string) (T, bool) {
     value := ctx.Value(key)

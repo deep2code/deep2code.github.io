@@ -202,6 +202,83 @@ print(result['items'])</code></pre>
 </ul>
 
 <h3 id="seo-tools">SEO 工具</h3>
+<h3 id="search-architecture">搜索引擎架构深度解析</h3>
+
+<h4 id="search-pipeline">搜索引擎核心流水线</h4>
+
+<p>搜索引擎（如 Elasticsearch、Lucene、Solr、Meilisearch、Typesense）的核心是将文档（Document）转换为可快速检索的索引，并根据用户查询返回最相关的结果。完整的搜索流水线包括：</p>
+
+<ol>
+<li><strong>文档采集（Crawling/Ingestion）</strong>：获取待索引的文档。对于站内搜索，数据源可能是数据库、API、文件系统、CMS；对于全网搜索，是网络爬虫（Spider/Crawler）抓取网页。采集阶段需要处理：增量更新（只索引新增/修改的文档）、删除检测（文档被删除时从索引中删除）、文档去重（相同内容的文档只索引一份）、速率限制（避免对源系统造成压力）</li>
+<li><strong>文本分析（Analysis）</strong>：将原始文本转换为索引单元（Term，词项）。文本分析是搜索质量的关键，包括：
+  <ul>
+  <li><strong>分词（Tokenization）</strong>：将文本切分为词（Token）。英文按空格/标点分词，中文需要专门的中文分词器（IK Analyzer、jieba、HanLP、SmartCN），因为中文没有空格分隔词。分词器的选择直接影响搜索结果（如"苹果手机"被分为"苹果"+"手机"还是"苹果手机"一个词）</li>
+  <li><strong>字符过滤（Character Filter）</strong>：预处理字符，如 HTML 标签去除（&lt;p&gt;hello&lt;/p&gt; → hello）、繁简转换（繁體 → 繁体）、全角半角转换（ＡＢＣ → ABC）、表情符号处理</li>
+  <li><strong>词干提取（Stemming）</strong>：将词还原为词干（词根），如 running → run、cats → cat、organized → organ。英文常用 Porter Stemmer、Snowball Stemmer。词干提取可以提高召回率（搜索 run 也能匹配 running）</li>
+  <li><strong>词形还原（Lemmatization）</strong>：比词干提取更准确，基于词典和词性将词还原为原型（lemma），如 better → good、was → be、mice → mouse。需要词性标注（POS Tagging）支持</li>
+  <li><strong>停用词过滤（Stop Words）</strong>：移除高频但无意义的词（the、a、is、的、了、是），减少索引体积、提高搜索效率。但停用词过滤在某些场景会有问题（如搜索"to be or not to be"，所有词都是停用词）</li>
+  <li><strong>同义词扩展（Synonym）</strong>：将词扩展为同义词（如"电脑"→"计算机"、"CPU"→"处理器"），提高召回率。同义词词典需要维护</li>
+  <li><strong>小写转换（Lowercase）</strong>：将所有词转为小写，实现大小写不敏感搜索（Hello 和 hello 匹配同一个词）</li>
+  </ul>
+</li>
+<li><strong>索引构建（Indexing）</strong>：将分析后的词项构建为倒排索引（Inverted Index）——搜索引擎的核心数据结构：
+  <ul>
+  <li><strong>倒排索引（Inverted Index）</strong>：从词项（Term）到包含该词的文档列表（Posting List）的映射。例如："apple" → [doc1, doc5, doc8]，"banana" → [doc2, doc5]。倒排索引使得"查找包含某个词的所有文档"非常快（O(1) 查找词，O(k) 遍历文档列表，k 是包含该词的文档数）</li>
+  <li><strong>Posting List（倒排表）</strong>：包含词的文档列表，通常还存储：词频（TF，Term Frequency，词在文档中出现的次数，用于相关性评分）、位置（Position，词在文档中的位置，用于短语搜索和邻近搜索）、偏移量（Offset，字符偏移，用于高亮）。Posting List 可以压缩存储（FOR、Frame of Reference、Roaring Bitmap 等压缩算法，减少内存和磁盘占用）</li>
+  <li><strong>正排索引（Forward Index）</strong>：从文档到词项的映射（文档包含哪些词），用于文档评分、聚类、分类。通常与倒排索引同时构建</li>
+  <li><strong>词典（Dictionary/Term Dictionary）</strong>：所有词项的集合，用于快速查找词项。通常使用 FST（Finite State Transducer，有限状态转换器）或哈希表存储，FST 可以压缩存储大量词项（Lucene 使用 FST）</li>
+  </ul>
+</li>
+<li><strong>查询处理（Query Processing）</strong>：用户输入查询后，搜索引擎：
+  <ul>
+  <li><strong>查询解析（Query Parsing）</strong>：解析查询语法（布尔操作 AND/OR/NOT、短语搜索"..."、字段限定 title:、范围查询 price:[10 TO 100]、通配符 app*、模糊搜索 roam~）。查询解析器将用户查询转换为查询对象（Query）</li>
+  <li><strong>查询重写（Query Rewriting）</strong>：对查询进行优化和扩展：同义词扩展、拼写纠正（Did you mean...）、查询建议（Autocomplete/Suggest）、布尔查询优化（重排子查询顺序，先执行最严格的子查询减少中间结果）</li>
+  <li><strong>检索（Retrieval）</strong>：从倒排索引中查找包含查询词的文档，合并多个词的文档列表（AND 取交集，OR 取并集）。使用跳表（Skip List）或位图（Bitmap）加速交集计算</li>
+  <li><strong>评分（Scoring/Ranking）</strong>：对检索到的文档计算相关性分数，按分数排序。经典评分算法是 TF-IDF 和 BM25（见下文）。现代搜索引擎还使用机器学习排序（Learning to Rank，LTR），结合数百个特征（文本相关性、点击率、新鲜度、权威性、用户个性化等）训练排序模型</li>
+  </ul>
+</li>
+<li><strong>结果返回（Response）</strong>：返回排序后的文档列表，包括：分页（From/Size 或 Search After）、高亮（Highlight，匹配词在文本中的位置高亮显示）、聚合（Aggregations，统计分析，如分面搜索 Facet、直方图、平均值）、建议（Suggest，拼写纠正建议、查询建议）</li>
+</ol>
+
+<h4 id="bm25-deep">BM25 相关性评分算法深度解析</h4>
+
+<p>BM25（Best Matching 25）是目前最主流的搜索引擎相关性评分算法（Elasticsearch、Lucene 默认使用 BM25），是 TF-IDF 的改进版本：</p>
+
+<p><strong>BM25 公式</strong>：对于查询 Q（包含词项 q1, q2, ..., qn），文档 D 的 BM25 分数为：</p>
+
+<p><code>score(D, Q) = Σ IDF(qi) * (f(qi, D) * (k1 + 1)) / (f(qi, D) + k1 * (1 - b + b * |D| / avgdl))</code></p>
+
+<p>其中：</p>
+<ul>
+<li><strong>f(qi, D)</strong>：词 qi 在文档 D 中的词频（Term Frequency）。词频越高，文档越相关（但边际收益递减）</li>
+<li><strong>|D|</strong>：文档 D 的长度（词数）。文档越长，包含某个词的概率越高（但可能是偶然包含，相关性降低）</li>
+<li><strong>avgdl</strong>：所有文档的平均长度。用于归一化文档长度的影响</li>
+<li><strong>IDF(qi)</strong>：逆文档频率（Inverse Document Frequency），衡量词 qi 的区分度。IDF = ln((N - n(qi) + 0.5) / (n(qi) + 0.5) + 1)，其中 N 是文档总数，n(qi) 是包含词 qi 的文档数。IDF 越高（词越罕见，出现在越少的文档中），该词的权重越大。例如"的"出现在几乎所有文档中，IDF 接近 0（几乎无区分度）；"Elasticsearch"出现在少数文档中，IDF 高（区分度高）</li>
+<li><strong>k1</strong>：词频饱和度参数，控制词频增加对分数的边际收益递减速度。k1 越小，词频增加到一定程度后分数增长越慢（词频的影响越小）。典型值 k1=1.2-2.0（Elasticsearch 默认 k1=1.2）</li>
+<li><strong>b</strong>：文档长度归一化参数，控制文档长度对分数的影响。b=0 表示不考虑文档长度（长文档和短文档同等对待），b=1 表示完全按文档长度归一化（长文档被惩罚更多）。典型值 b=0.75（Elasticsearch 默认 b=0.75）</li>
+</ul>
+
+<p><strong>BM25 与 TF-IDF 的区别</strong>：</p>
+<ul>
+<li>TF-IDF 的 TF 部分是线性的（词频越高分数线性增长），BM25 的 TF 部分有饱和度（词频增加到一定程度后分数增长放缓，因为一个词出现 100 次和出现 1000 次的相关性差异不大）</li>
+<li>TF-IDF 不考虑文档长度（长文档因为词多，TF 自然高，获得不公平的高分），BM25 通过文档长度归一化（|D| / avgdl）惩罚长文档（长文档需要更高的词频才能获得相同分数）</li>
+<li>BM25 的 IDF 公式略有不同（加入了平滑项 0.5，避免 IDF 为负数）</li>
+</ul>
+
+<p><strong>BM25 的局限性</strong>：BM25 只考虑词频和文档长度，不考虑词的位置（标题中的词比正文中的词更重要）、词的邻近度（查询词在文档中是否相邻）、语义相关性（"苹果手机"和"iPhone"语义相关但词不同，BM25 无法匹配）。现代搜索引擎在 BM25 基础上增加了：字段权重（标题字段权重高于正文字段）、邻近度评分（Phrase Match、Proximity Boost）、机器学习排序（Learning to Rank，结合多种特征）、语义搜索（向量检索/Embedding，通过词向量计算语义相似度）。</p>
+
+<h3 id="search-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>中文分词不当导致搜索结果差</strong>：中文搜索最大的挑战是分词（中文没有空格分隔词）。分词器选择不当或配置不当会导致：索引时分为"苹"+"果"+"手"+"机"（单字分词，搜索"苹果"能匹配但"苹果手机"匹配差，且索引体积大）、查询时分为"苹果手机"（一个词，索引时分为"苹果"+"手机"，查询无法匹配）、专有名词被错误切分（"王者荣耀"被分为"王者"+"荣耀"，搜索"王者荣耀"无法精确匹配）、新词/热词不在词典中（被切分为单字或错误词）。解决：选择合适的中文分词器：<strong>IK Analyzer</strong>（Elasticsearch 最常用的中文分词器，支持细粒度切分 ik_max_word 和智能切分 ik_smart，支持自定义词典扩展新词）、<strong>jieba</strong>（Python 生态最流行，支持精确模式/全模式/搜索引擎模式，支持自定义词典和新词识别）、<strong>HanLP</strong>（功能最全的中文 NLP 工具，支持分词、词性标注、命名实体识别、依存句法分析，有预训练模型）、<strong>SmartCN</strong>（Elasticsearch 内置的中文分词器，简单但功能有限）。索引和查询使用相同的分词器（或兼容的分词器），确保索引时的词和查询时的词一致。使用自定义词典扩展专有名词（品牌名、产品名、人名、地名、行业术语），定期更新词典（添加新词/热词）。对于精确匹配需求（如产品型号、SKU），使用 keyword 类型（不分词，完全匹配）或同时索引分词字段和 keyword 字段（multi-field，<code>"title": {"type": "text", "analyzer": "ik_max_word", "fields": {"keyword": {"type": "keyword"}}}</code>）。注意：ik_max_word（索引时用，最细粒度切分，尽可能多地切出词，提高召回）和 ik_smart（查询时用，智能切分，最粗粒度，提高精确匹配）是常见的组合（索引用 max_word，查询用 smart）</li>
+<li><strong>索引设计不当导致性能问题或搜索结果差</strong>：Elasticsearch 的索引设计（Mapping、分片、副本）是性能和搜索质量的基础。常见问题：所有字段都索引（包括不需要搜索的字段，浪费磁盘和内存）、字段类型错误（数字字段设为 text，导致范围查询慢；日期字段设为 text，无法按时间排序/过滤）、分片数设置不当（分片太少导致单分片过大，查询慢；分片太多导致集群元数据压力大、查询合并开销大）、副本数设置不当（无副本导致节点故障数据丢失；副本太多导致写入慢、存储成本高）。解决：设计合理的 Mapping：<strong>只索引需要搜索的字段</strong>（不需要搜索的字段设置 <code>"index": false</code>，只存储不索引，节省资源）；<strong>选择正确的字段类型</strong>（text 用于全文搜索，keyword 用于精确匹配/聚合/排序，integer/long/double 用于数字，date 用于日期，boolean 用于布尔，geo_point 用于地理位置）；<strong>使用 multi-field</strong>（一个字段同时索引为 text 和 keyword，如标题既需要全文搜索又需要精确匹配/聚合）；<strong>设置合适的 analyzer</strong>（不同字段使用不同分词器，如中文内容用 ik，英文内容用 standard）。分片设计：每个分片大小控制在 10-50GB（日志类 20-40GB，搜索类 10-30GB），分片数 = 预期数据量 / 30GB（向上取整），但不要超过每个节点 3 个分片。索引创建后分片数不可修改（只能 reindex），但可以使用 rollover（滚动索引）按时间/大小自动创建新索引（日志类场景）。副本数：生产环境至少 1 个副本（高可用），搜索性能要求高可以增加副本（读请求可以在副本上并行处理），写入密集场景副本数不要太多（每个副本都要执行写入，增加写入延迟）。注意：Elasticsearch 7.x 默认主分片数从 5 改为 1（对于小索引，1 个分片足够，避免过度分片）。使用 Index Lifecycle Management（ILM）管理索引生命周期（热温冷架构，hot 节点用于最新数据高性能搜索，warm 节点用于较旧数据，cold 节点用于归档数据，frozen 用于极少访问的数据）</li>
+<li><strong>深度分页（Deep Pagination）导致性能问题</strong>：Elasticsearch 的分页使用 from + size（如 from=10000, size=10，取第 10001-10010 条），但深度分页性能极差——因为 Elasticsearch 需要从每个分片获取 from+size 条数据（10010 条），然后在协调节点合并排序，最后丢弃前 from 条（10000 条），只返回 size 条（10 条）。from 越大，需要获取和排序的数据越多，内存和 CPU 开销越大。Elasticsearch 默认限制 from+size <= 10000（index.max_result_window），超过会报错。解决：使用 <strong>Search After</strong>（推荐）：使用上一页最后一条文档的排序值作为下一页的起点（<code>"search_after": [last_sort_value]</code>），每次只获取 size 条数据，不需要获取 from 条，性能恒定（与深度无关）。Search After 需要全局唯一的排序值（通常用 _id 或时间戳+_id 作为 tiebreaker），且不支持跳页（只能下一页/上一页，不能直接跳到第 N 页）。使用 <strong>Scroll API</strong>（适合批量导出，不适合实时用户分页）：创建一个快照游标，持续滚动获取数据，适合导出全量数据（如数据迁移、备份），但 Scroll 会占用集群资源（保存快照上下文），不适合用户交互分页。使用 <strong>PIT（Point in Time）</strong>（Elasticsearch 7.10+）：创建一个时间点快照，配合 Search After 实现一致的分页（数据在分页过程中变化时，PIT 保证看到的是创建 PIT 时的数据视图）。限制用户分页深度（如最多 100 页，超过提示"请缩小搜索范围"），大多数用户不会翻到很深的页。注意：from+size 适合浅分页（前 10 页），Search After 适合深分页和无限滚动（信息流），Scroll 适合批量导出</li>
+<li><strong>查询性能差导致搜索响应慢</strong>：Elasticsearch 查询性能问题常见原因：查询过于复杂（大量嵌套 bool 查询、script 查询、wildcard 前缀通配符）、聚合开销大（高基数字段的 terms 聚合、嵌套聚合）、缓存未命中（每次查询都重新计算）、集群资源不足（CPU/内存/磁盘 IO 瓶颈）、热点分片（某个分片数据量远大于其他分片，查询集中在热点分片）。解决：查询优化：<strong>避免 wildcard 前缀通配符</strong>（<code>"*apple"</code> 无法使用倒排索引，需要扫描所有词，性能极差），使用 ngram/edge_ngram 分词器实现前缀搜索（在索引时就生成 ngram 词，如"apple"生成"a","ap","app","appl","apple"，查询时精确匹配）；<strong>避免 script 评分/过滤</strong>（script 无法使用索引缓存，每次都执行脚本，性能差），将计算逻辑在索引时预处理（存入字段）；<strong>使用 filter 上下文而非 query 上下文</strong>（filter 不计算评分、可以被缓存，适合不需要评分的过滤条件，如日期范围、状态过滤；query 计算评分、不缓存，适合全文搜索）；<strong>优化 bool 查询顺序</strong>（最严格的过滤条件放前面，减少中间结果）。聚合优化：高基数字段（如用户 ID、订单号）的 terms 聚合开销大，使用 <code>"execution_hint": "map"</code> 或限制聚合数量（<code>"size": 10</code>）；避免深度嵌套聚合（嵌套层级越深，内存开销越大）；使用 composite 聚合分页获取大量聚合结果。缓存利用：Elasticsearch 有查询缓存（query cache，缓存 filter 结果）、请求缓存（request cache，缓存 size=0 的聚合请求）、分片查询缓存（shard request cache）。确保常用过滤查询使用 filter 上下文（可以被查询缓存）。监控缓存命中率（<code>_stats/query_cache</code>），命中率低说明查询条件变化大或 filter 使用不当。集群优化：确保分片均衡（使用分片分配感知，避免热点分片）；足够的内存（Elasticsearch 堆内存设置为机器内存的 50%，不超过 31GB，因为 JVM 指针压缩在 32GB 以下更高效；剩余内存给文件系统缓存，Lucene 依赖文件系统缓存提高性能）；使用 SSD（Elasticsearch 是 IO 密集型，SSD 比 HDD 快 10 倍以上）。注意：使用 <code>_profile</code> API 分析查询性能瓶颈（查看每个查询子句的耗时），针对性优化</li>
+<li><strong>数据一致性与实时性问题</strong>：Elasticsearch 是近实时（NRT，Near Real Time）搜索引擎，不是实时数据库。写入数据后，默认 1 秒后才能被搜索到（refresh 间隔，<code>index.refresh_interval</code> 默认 1s）。常见问题：写入后立即查询查不到数据（因为还没 refresh）、更新/删除操作有延迟（旧数据在 refresh 前仍可搜索到）、并发写入导致版本冲突（乐观并发控制）、与数据库同步时数据不一致（数据库已更新但 ES 还没更新，或 ES 更新失败）。解决：理解近实时特性：写入后需要 refresh 才能搜索，refresh 会打开新的 searcher（消耗资源），不要在每次写入后都强制 refresh（<code>?refresh=true</code>），会严重影响写入性能。如果需要写入后立即可见（如用户提交评论后立即看到），可以在写入后等待 refresh 间隔（1 秒），或对单条文档使用 <code>?refresh=wait_for</code>（等待下一次 refresh 完成后返回，不强制立即 refresh）。更新/删除：Elasticsearch 的更新是"标记旧文档为删除 + 索引新文档"（不是原地更新），删除是"标记删除"（不是立即删除，段合并时才真正删除）。因此更新/删除后，旧文档在 refresh 前仍可见，且标记删除的文档会占用空间（直到段合并）。使用版本控制（<code>if_seq_no</code> + <code>if_primary_term</code>，乐观并发控制）处理并发更新，避免丢失更新。与数据库同步：使用双写（应用同时写数据库和 ES，需要处理一致性问题，如 ES 写入失败需要重试或补偿）、消息队列异步同步（数据库写入后发消息到 Kafka/RabbitMQ，消费者异步写入 ES，最终一致性）、CDC（Change Data Capture，使用 Debezium/Canal 监听数据库 binlog，自动同步到 ES，最可靠的方案）。注意：Elasticsearch 不适合作为主数据存储（没有事务、没有外键、近实时），应该作为数据库的辅助搜索引擎（数据库是权威数据源，ES 是搜索副本）。数据同步需要监控同步延迟和失败（监控 ES 与数据库的数据差异、同步队列积压）</li>
+<li><strong>聚合（Aggregations）使用不当导致内存溢出或结果不准确</strong>：Elasticsearch 的聚合功能强大（分面搜索、统计分析、直方图、百分位），但使用不当会导致：高基数字段的 terms 聚合返回不完整的结果（terms 聚合默认只返回每个分片的前 size 个 term，然后合并，可能遗漏全局高频 term——因为某个 term 在每个分片都排第 11 名，但全局可能排前 10）、聚合内存溢出（大量桶的聚合，如按用户 ID 分桶，可能有数百万桶，耗尽内存）、百分位聚合不准确（percentiles 是近似算法，TDigest，不是精确值）、date_histogram 的时区问题（UTC  vs 本地时区，导致日期桶偏移）。解决：terms 聚合准确性：增加 <code>shard_size</code>（每个分片返回更多 term，默认是 size*1.5+10，增大 shard_size 提高准确性，但增加内存和网络开销），如果需要精确的所有 term，使用 <code>composite</code> 聚合（分页获取所有 term，适合导出），或对低基数字段使用 terms 聚合（高基数字段如用户 ID 不适合 terms 聚合）。聚合内存控制：限制聚合桶数量（<code>search.max_buckets</code> 默认 65535，超过会报错，防止内存溢出）；使用 <code>cardinality</code> 聚合（基数估算，HyperLogLog，近似算法，内存可控）替代 terms 聚合来统计唯一值数量；对大量数据的聚合，使用 rollup 索引（预聚合，将明细数据按时间/维度预聚合为汇总数据，查询时直接查汇总数据，性能提升 10-100 倍）。百分位聚合：理解 percentiles 是近似值（TDigest 算法，精度可配置，<code>compression</code> 参数控制精度和内存，默认 100，精度越高内存越大），如果需要精确百分位，需要自己计算（如将数据导出到 Spark/数据库计算），或使用 <code>percentile_ranks</code>。时区问题：date_histogram 使用 <code>"time_zone"</code> 参数指定时区（如 <code>"Asia/Shanghai"</code>），否则默认 UTC，导致按天聚合时北京时间的"2024-01-01 00:30"被归到 UTC 的"2023-12-31"桶。注意：聚合是在查询后对匹配的文档进行计算，聚合不影响返回的文档列表（size=0 时只返回聚合结果，不返回文档，性能更好）</li>
+<li><strong>集群运维不当导致数据丢失或服务不可用</strong>：Elasticsearch 集群运维常见问题：脑裂（Split Brain，网络分区导致多个 master 节点，数据不一致）、节点磁盘满（导致索引只读、写入失败）、JVM 内存溢出（OOM，节点崩溃）、段合并占用大量 IO（影响查询性能）、快照备份未配置或未验证（数据丢失无法恢复）、版本升级失败（跨大版本升级不兼容）。解决：集群配置：<strong>避免脑裂</strong>：master 节点数为奇数（3 或 5），设置 <code>discovery.zen.minimum_master_nodes</code>（ES 6.x，= master节点数/2 + 1，如 3 个 master 设为 2）或 <code>cluster.initial_master_nodes</code>（ES 7.x，初始 master 节点列表），确保网络分区时只有一个分区能选出 master。<strong>磁盘管理</strong>：监控磁盘使用率（<code>cluster.routing.allocation.disk.watermark.low: 85%</code> 开始迁移分片，<code>high: 90%</code> 只读，<code>flood_stage: 95%</code> 强制只读），磁盘使用率超过 80% 就应该扩容或清理。<strong>JVM 配置</strong>：堆内存设置为机器内存的 50%，不超过 31GB（超过 32GB JVM 禁用指针压缩，内存效率反而降低）；监控 JVM 堆使用率和 GC（长时间 Old GC 会导致节点无响应，STW）；避免大查询/大聚合导致 OOM（限制结果大小、聚合桶数）。<strong>段合并</strong>：Elasticsearch 后台自动进行段合并（将小 segment 合并为大 segment，清理标记删除的文档），段合并是 IO 密集型，可能影响查询性能。可以调整合并策略（<code>index.merge.policy</code>），但通常默认配置足够。大量写入后段合并会频繁进行，可以在低峰期执行 <code>_forcemerge</code>（强制合并，只对只读索引执行，不要对活跃写入的索引执行，会占用大量 IO）。<strong>备份与恢复</strong>：配置快照仓库（Snapshot Repository，支持 S3、HDFS、共享文件系统、阿里云 OSS 等），定期创建快照（<code>_snapshot/repo/snapshot_name</code>），快照是增量的（只备份变化的段）。定期测试恢复（从快照恢复到测试集群，验证数据完整性）——没有验证过的备份等于没有备份。<strong>版本升级</strong>：跨大版本升级（如 6.x → 7.x → 8.x）需要先检查兼容性（使用 <code>_upgrade</code> API 检查索引兼容性），可能需要 reindex（重建索引，因为旧版本的索引在新版本可能不兼容）。使用滚动升级（Rolling Upgrade，逐个节点升级，不中断服务），小版本升级（7.10 → 7.17）可以滚动升级，大版本升级（7.x → 8.x）可能需要全集群重启或 reindex。注意：生产环境升级前先在测试环境验证，阅读升级文档（Breaking Changes），备份数据</li>
+</ol>
+
 <ul>
 <li><strong>Google Search Console</strong>：搜索表现监控</li>
 <li><strong>Google Analytics</strong>：流量分析</li>

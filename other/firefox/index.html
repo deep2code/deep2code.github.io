@@ -274,6 +274,49 @@ F11                  # 全屏</code></pre>
 <p><strong>自定义搜索引擎</strong>：访问搜索引擎 → 右键搜索框 → 添加搜索引擎</p>
 
 <h3 id="bookmarks">书签管理</h3>
+<h3 id="firefox-architecture">Firefox 浏览器架构深度解析</h3>
+
+<h4 id="firefox-multi-process">多进程架构（Electrolysis）</h4>
+
+<p>Firefox 的现代架构是多进程的（Electrolysis，e10s），将浏览器分为多个独立进程：</p>
+
+<ul>
+<li><strong>主进程（Parent/Chrome Process）</strong>：浏览器的核心进程，负责：UI 界面（地址栏、标签页、菜单、工具栏）、标签页管理、窗口管理、偏好设置（about:config）、扩展管理、网络协议栈（HTTP/HTTPS、WebSocket、HTTP/3）、Cookie 和存储管理、安全策略（CSP、CORS、混合内容）。主进程运行在较高权限（可以访问文件系统、操作系统 API），但不直接渲染网页内容</li>
+<li><strong>内容进程（Content Process）</strong>：渲染网页内容的进程，每个内容进程处理一个或多个标签页（默认每个内容进程最多处理 8 个标签页，可通过 <code>dom.ipc.processCount</code> 调整）。内容进程运行在沙箱中（Sandbox），权限受限：不能直接访问文件系统、不能执行系统调用、不能访问其他进程的内存。内容进程负责：HTML 解析、CSS 解析、JavaScript 执行、布局（Layout）、绘制（Painting）、合成（Compositing）。内容进程通过 IPC（Inter-Process Communication，基于消息传递）与主进程通信（如网络请求、Cookie 访问、弹窗通知）</li>
+<li><strong>GPU 进程（GPU Process）</strong>：专门处理 GPU 相关操作的进程，负责：WebGL 渲染、WebGPU、硬件加速视频解码、2D 硬件加速绘制（Canvas）、合成（Compositing，将各层合成最终画面）。GPU 进程独立于内容进程，一个 GPU 进程服务所有内容进程。GPU 进程也运行在沙箱中（比内容进程权限稍高，可以访问 GPU 驱动）。GPU 进程崩溃时，Firefox 会尝试重启它（内容进程的渲染可能短暂中断，但不会丢失标签页）</li>
+<li><strong>扩展进程（Extension Process）</strong>：运行 WebExtensions 扩展的进程（Firefox 110+），将扩展从主进程中分离，提高稳定性和安全性。扩展进程运行在沙箱中，通过 WebExtensions API 与主进程通信。扩展崩溃不会导致主进程崩溃（之前扩展运行在主进程，扩展崩溃会导致整个浏览器崩溃）</li>
+<li><strong>数据存储进程（DataStorage Process）</strong>：处理 Cookie、本地存储（localStorage/sessionStorage）、IndexedDB 等数据的持久化，独立于主进程以提高响应性</li>
+</ul>
+
+<p>多进程架构的优势：稳定性（一个标签页崩溃不影响其他标签页和主进程）、安全性（内容进程沙箱隔离，恶意网页难以突破沙箱访问系统）、性能（多进程利用多核 CPU，内容进程并行渲染）。代价：内存占用增加（每个进程有独立的内存空间，共享数据需要 IPC 复制）、IPC 通信开销。</p>
+
+<h4 id="firefox-rendering-pipeline">渲染流水线（Rendering Pipeline）</h4>
+
+<p>Firefox 的渲染引擎（Gecko）将 HTML/CSS/JavaScript 转换为屏幕像素的流程：</p>
+
+<ol>
+<li><strong>网络加载</strong>：主进程的网络协议栈（Necko）下载 HTML、CSS、JS、图片等资源。支持 HTTP/1.1、HTTP/2、HTTP/3（QUIC），资源缓存（内存缓存 + 磁盘缓存），预加载（preconnect、prefetch、preload）。HTML 解析是流式的（边下载边解析），不需要等整个文件下载完</li>
+<li><strong>HTML 解析（Parsing）</strong>：HTML 解析器（html5ever，Rust 编写，基于 HTML5 规范）将 HTML 字节流解析为 DOM 树（Document Object Model）。HTML 解析是容错的（遇到错误标签时按规范修复，不会报错停止）。CSS 遇到 <code>&lt;link&gt;</code> 和 <code>&lt;style&gt;</code> 时开始解析，JavaScript 遇到 <code>&lt;script&gt;</code> 时默认阻塞解析（除非有 async/defer 属性）</li>
+<li><strong>CSS 解析与样式计算（Style Computation）</strong>：CSS 解析器（stylo，Rust 编写，基于 Servo 项目的样式系统）将 CSS 解析为 CSSOM，然后为每个 DOM 元素计算最终样式（匹配选择器、应用层叠规则、处理继承）。Stylo 是并行的（利用多核 CPU 并行计算多个元素的样式）。样式计算的结果是每个元素的计算样式（Computed Style，如 color: rgb(0, 0, 0)、font-size: 16px）</li>
+<li><strong>布局（Layout/Reflow）</strong>：布局引擎（layout，C++ 编写，正在逐步用 Rust 重写）计算每个元素的几何位置和大小（盒模型、浮动、定位、Flexbox、Grid）。布局是递归的（父元素的布局依赖子元素的大小，子元素的位置依赖父元素的大小）。布局是渲染流水线中最耗时的步骤之一，频繁触发布局（如在循环中读取 offsetWidth 再修改样式）会导致性能问题（布局抖动，Layout Thrashing）</li>
+<li><strong>绘制（Painting/Rasterization）</strong>：绘制引擎将布局后的元素转换为像素（填充颜色、绘制边框、渲染文字、绘制图片、应用阴影/圆角/渐变）。绘制可以是软件渲染（CPU）或硬件加速（GPU，WebRender）。WebRender 是 Firefox 的新一代合成器（Rust 编写，基于 Servo），使用 GPU 进行绘制和合成，大幅提高渲染性能和流畅度。WebRender 将页面分为多个显示列表（Display List），然后提交给 GPU 渲染</li>
+<li><strong>合成（Compositing）</strong>：合成器将多个图层（Layer）合成为最终画面。图层是为了优化性能：将页面分为多个独立图层（如固定定位元素、video、canvas、transform 元素），每个图层独立渲染，合成时只需要组合图层。当某个图层变化时，只需要重新渲染该图层（不需要重新渲染整个页面）。合成是在 GPU 进程中进行的（硬件加速）</li>
+<li><strong>显示（Display）</strong>：最终画面通过操作系统的窗口系统（macOS 的 Core Animation、Windows 的 DirectComposition、Linux 的 Wayland/X11）显示到屏幕。刷新率通常是 60Hz（每秒 60 帧，每帧 16.67ms），高刷新率屏幕支持 120Hz/144Hz。Firefox 支持垂直同步（VSync），避免画面撕裂</li>
+</ol>
+
+<h3 id="firefox-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>内存占用过高导致系统卡顿</strong>：Firefox 的多进程架构会增加内存占用（每个内容进程、GPU 进程、扩展进程都有独立内存），打开大量标签页时内存占用可能超过系统物理内存，导致频繁 Swap（磁盘交换）和系统卡顿。解决：使用标签页管理功能：<code>about:performance</code> 查看每个标签页的内存和 CPU 占用，关闭占用高的标签页；<code>about:unloads</code> 查看 Firefox 自动卸载标签页的优先级（Firefox 会在内存不足时自动卸载不活跃的标签页，释放内存，再次点击时重新加载）。调整内容进程数量：<code>about:config</code> 中 <code>dom.ipc.processCount</code>（默认 8，减少到 4 可以节省内存，但会降低隔离性和性能）。使用标签页休眠扩展（如 Auto Tab Discard）自动休眠不活跃的标签页。定期重启 Firefox（长时间运行会积累内存碎片，重启可以释放）。监控内存：<code>about:memory</code> 查看详细内存分布（按进程、按类别），可以手动触发 GC（垃圾回收）和 CC（周期回收）释放内存。对于 8GB 以下内存的机器，考虑使用 Firefox 的"低内存模式"（自动调整进程数和缓存大小）</li>
+<li><strong>扩展冲突导致浏览器崩溃或页面异常</strong>：Firefox 的扩展（WebExtensions）运行在独立进程中，但某些扩展（如广告拦截器、隐私保护扩展、脚本管理器）会注入内容脚本到页面，修改页面行为，可能与页面 JavaScript 冲突（导致页面功能异常、白屏、报错），或扩展之间冲突（两个广告拦截器同时运行导致重复过滤）。解决：排查扩展问题：使用 Firefox 安全模式（<code>about:support</code> → "以安全模式重新启动"，禁用所有扩展和自定义设置），如果安全模式下问题消失，说明是扩展或配置问题。逐个启用扩展，找到导致问题的扩展。使用 <code>about:addons</code> 管理扩展，禁用不需要的扩展（减少冲突和性能开销）。对于内容脚本冲突，可以在扩展设置中为特定网站禁用该扩展（如广告拦截器在某些网站上导致视频无法播放，将该网站加入白名单）。选择维护活跃、用户量大的扩展（如 uBlock Origin、Bitwarden），避免使用来源不明或长期不更新的扩展。注意：Firefox 110+ 扩展运行在独立进程，扩展崩溃不会导致主进程崩溃，但内容脚本仍可能影响页面</li>
+<li><strong>about:config 误修改导致浏览器异常</strong>：<code>about:config</code> 是 Firefox 的高级配置页面，包含数千个隐藏配置项（首选项，preferences）。误修改某些配置项（如安全相关、性能相关、实验性功能）可能导致浏览器不稳定、页面加载失败、安全漏洞。解决：修改 about:config 前了解配置项的含义（可以搜索 Mozilla 官方文档或 Bugzilla），不要随意修改不了解的配置。修改后如果出现问题，可以在 about:config 中右键选择"重置"恢复默认值（加粗的配置项表示已修改，非加粗是默认值）。使用 <code>about:support</code> 查看"重要的修改的首选项"列表，快速找到所有已修改的配置。对于性能优化，只修改经过验证的配置（如网络相关的 <code>network.http.speculative-parallel-limit</code>、缓存相关的 <code>browser.cache.disk.capacity</code>），不要盲目套用网上的"Firefox 优化指南"（很多指南已经过时或适用于旧版本）。注意：某些配置项是实验性功能（如 <code>dom.security.https_first</code>、<code>network.http.http3.enabled</code>），可能不稳定，修改前了解风险</li>
+<li><strong>缓存损坏导致页面加载异常</strong>：Firefox 的磁盘缓存（<code>~/.cache/mozilla/firefox/&lt;profile&gt;/cache2/</code>）和内存缓存存储已访问的网页资源（HTML、CSS、JS、图片），加速后续访问。但缓存可能损坏（如磁盘错误、浏览器异常关闭、缓存写入中断），导致页面加载异常（白屏、样式错乱、脚本错误、图片显示为乱码）。解决：清除缓存：<code>about:preferences#privacy</code> → "Cookie 和站点数据" → "清除数据"（选择"缓存的 Web 内容"），或 <code>about:cache</code> 查看缓存状态。如果清除缓存后问题解决，说明是缓存损坏。对于持续出现缓存问题，可以尝试新建配置文件（Profile）：<code>about:profiles</code> → "创建新配置文件"，将旧配置的书签、密码、扩展迁移到新配置（配置文件损坏是深层问题，新建配置文件可以彻底解决）。定期清理缓存（设置自动清理：<code>about:preferences#privacy</code> → "历史记录" → "使用自定义历史记录设置" → "关闭 Firefox 时清除历史记录"）。注意：清除缓存会导致所有网站需要重新加载（首次访问变慢），但不会删除书签、密码、Cookie（除非选择清除 Cookie）</li>
+<li><strong>配置文件（Profile）过大或损坏</strong>：Firefox 的所有用户数据（书签、密码、历史记录、扩展、配置、缓存）存储在配置文件目录（<code>~/.mozilla/firefox/&lt;profile&gt;/</code>）。长期使用后配置文件可能变得很大（数百 MB 到数 GB，主要是缓存、历史记录、扩展数据），或损坏（places.sqlite 书签数据库损坏、prefs.js 配置损坏），导致浏览器启动慢、崩溃、数据丢失。解决：定期备份配置文件：<code>about:profiles</code> 查看配置文件路径，手动复制整个目录备份，或使用 Firefox Sync（同步书签、密码、历史记录、扩展、标签页到 Mozilla 服务器，跨设备同步）。清理配置文件：<code>about:support</code> → "配置文件夹" → "打开文件夹"，查看大文件（如 <code>places.sqlite</code> 书签数据库、<code>webappsstore.sqlite</code> 本地存储、扩展数据目录）。使用 <code>about:preferences#privacy</code> 清理历史记录和数据。如果配置文件损坏且无法修复，新建配置文件并通过 Sync 或手动迁移恢复数据。注意：places.sqlite 是书签和历史记录数据库，如果损坏可以尝试 <code>places.sqlite</code> 修复（关闭 Firefox，备份后用 SQLite 工具修复：<code>sqlite3 places.sqlite ".recover" | sqlite3 places_new.sqlite</code>）。配置文件中的 <code>prefs.js</code> 存储 about:config 修改，如果损坏可以删除（Firefox 会重建默认配置，但会丢失所有 about:config 修改）</li>
+<li><strong>Firefox Sync 同步问题</strong>：Firefox Sync 可以同步书签、密码、历史记录、打开的标签页、扩展、配置到 Mozilla 服务器，跨设备同步。但 Sync 可能出现问题：同步失败（网络问题、服务器问题、账户验证失败）、同步冲突（多设备同时修改导致数据冲突）、同步不完整（某些数据未同步）。解决：检查 Sync 状态：<code>about:preferences#sync</code> 查看同步状态和最后同步时间，<code>about:sync-log</code> 查看同步日志（错误信息）。如果同步失败，尝试手动同步（"立即同步"按钮），或重新登录账户（断开连接后重新连接，会触发完整同步）。同步冲突：书签冲突时 Firefox 会创建重复书签（在书签名称后添加设备名），需要手动合并；密码冲突时保留两个版本（需要手动选择）。为减少冲突，避免在多设备上同时大量修改书签/密码。Sync 的数据是端到端加密的（E2EE，使用账户密码派生的密钥加密，Mozilla 无法读取），但账户密码是加密的关键——忘记密码无法恢复数据（Mozilla 也无法解密）。设置账户恢复密钥（Account Recovery Key）：<code>accounts.firefox.com/settings</code> → "账户恢复"，生成并安全保存恢复密钥（忘记密码时可以用恢复密钥解密数据）。注意：Sync 不是备份服务（服务器只保留最近的数据，删除本地数据后同步也会删除服务器数据），重要数据应该额外备份</li>
+<li><strong>容器标签页（Containers）使用不当导致登录状态混乱</strong>：Firefox 的容器标签页（Multi-Account Containers）允许将标签页隔离在不同的"容器"中，每个容器有独立的 Cookie、本地存储、缓存。可以用于：同时登录多个账户（如个人 Gmail 和工作 Gmail 在不同容器中）、隔离社交媒体跟踪（在"社交媒体"容器中打开社交网站，不跟踪其他容器）、临时会话（"临时容器"扩展，关闭标签页后自动删除数据）。但使用不当会导致：在错误的容器中打开链接（导致登录状态不对）、容器过多难以管理、忘记某个容器的登录状态。解决：规划容器用途，不要创建过多容器（建议 3-5 个：个人、工作、银行/财务、社交媒体、临时）。使用容器扩展（如 Firefox Multi-Account Containers、Temporary Containers）管理容器，设置"始终在指定容器中打开此网站"（自动将特定网站路由到指定容器，避免手动选择）。注意：容器只隔离 Cookie/存储，不隔离 IP 地址（所有容器共享同一个网络出口和 IP），也不隔离 DNS 请求（DNS 请求可能被 ISP 或 DNS 提供商看到）。如果需要更强的隐私隔离，使用独立的浏览器配置文件（Profile）或 Tor 浏览器。容器中的登录状态不会同步到其他容器（即使是同一个网站），这是容器的核心价值，但也意味着需要在每个容器中分别登录</li>
+<li><strong>Firefox 与 Chrome 的扩展兼容性问题</strong>：Firefox 支持 WebExtensions API（与 Chrome 扩展标准兼容），但不是 100% 兼容：某些 Chrome 扩展使用了 Chrome 特有的 API（如 <code>chrome.declarativeNetRequest</code> 的某些规则、<code>chrome.sidePanel</code>、<code>chrome.offscreen</code>），在 Firefox 上无法安装或功能不完整。Firefox 也有自己特有的 API（如 <code>browser.contextualIdentities</code> 容器 API、<code>browser.browserSettings</code>）。解决：安装扩展前检查兼容性：Firefox 附加组件商店（addons.mozilla.org）的扩展都是经过 Firefox 验证兼容的；Chrome 网上应用店的扩展不能直接安装到 Firefox（需要使用"Chrome Store Foxified"等转换工具，但不推荐，可能不稳定）。对于 Chrome 独有的扩展，寻找 Firefox 替代品（大多数流行扩展都有 Firefox 版本，如 uBlock Origin、Bitwarden、Tampermonkey、LastPass）。开发者在开发跨浏览器扩展时，使用 WebExtension API 的标准部分，避免使用浏览器特定 API，或使用 <code>browser.*</code>（Promise 风格，Firefox 标准）和 <code>chrome.*</code>（回调风格，Chrome 标准）的兼容层（如 webextension-polyfill）。注意：Firefox 正在逐步增加对 Chrome API 的兼容性（Manifest V3 支持、declarativeNetRequest 支持），但仍有差距，特别是 Manifest V3 的 Service Worker 后台脚本（Firefox 使用非持久化后台脚本，与 Chrome 的 Service Worker 有差异）</li>
+</ol>
+
 <ul>
 <li><strong>书签工具栏</strong>：Ctrl+Shift+B 显示</li>
 <li><strong>书签文件夹</strong>：整理分类</li>

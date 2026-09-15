@@ -319,6 +319,47 @@ func main() {
 
 <!-- 保留原始标题锚点 -->
 <h3 id="iris-overview">Iris Web 框架</h3>
+<h3 id="iris-architecture">Iris Web 框架架构深度解析</h3>
+
+<h4 id="iris-router">路由引擎与上下文</h4>
+
+<p>Iris 是 Go 生态中功能最全的 Web 框架之一，其核心是高性能路由引擎和丰富的上下文 API：</p>
+
+<ul>
+<li><strong>路由引擎</strong>：Iris 使用基于基数树（Radix Tree / Trie）的路由匹配，与 Gin 的 httprouter 类似。路由树按路径分段构建，每个节点存储路径段、参数（:param）、通配符（*wildcard）、处理函数。匹配时从根节点遍历，时间复杂度 O(k)（k 为路径段数），与路由数量无关。支持路由组（Party）、中间件、路由优先级（静态路径 > 参数路径 > 通配符路径）</li>
+<li><strong>Context（上下文）</strong>：Iris 的 Context 是每个请求的核心对象，封装了请求和响应。与 Gin 的 Context 不同，Iris 的 Context 是接口（iris.Context），可以被替换或包装。Context 提供：请求参数获取（URL 参数、查询参数、表单、JSON Body、XML、Protobuf）、响应写入（JSON、XML、HTML、文本、二进制、流式）、会话管理（Session）、Cookie、重定向、错误处理、视图渲染。Context 通过 sync.Pool 复用，减少内存分配</li>
+<li><strong>依赖注入（DI）</strong>：Iris 是 Go Web 框架中少有的内置依赖注入的框架。处理函数可以接受任意类型的参数（如结构体、接口、基本类型），Iris 的 DI 容器自动解析和注入。支持构造函数注入、字段注入、方法注入。DI 基于反射（reflect），有一定性能开销，但开发体验好。可以通过 <code>app.ConfigureContainer()</code> 启用 DI 模式</li>
+<li><strong>MVC 支持</strong>：Iris 内置 MVC 模式支持，可以将结构体注册为 Controller，结构体的方法（如 Get、Post、Put、Delete）自动映射为对应 HTTP 方法的处理函数。Controller 可以有依赖注入的字段（通过构造函数）。MVC 模式适合大型项目的结构化开发</li>
+</ul>
+
+<h4 id="iris-vs-gin-echo">Iris vs Gin vs Echo 深度对比</h4>
+
+<table>
+<tr><th>维度</th><th>Iris</th><th>Gin</th><th>Echo</th></tr>
+<tr><td>路由引擎</td><td>Radix Tree</td><td>Radix Tree (httprouter)</td><td>Radix Tree</td></tr>
+<tr><td>中间件</td><td>内置丰富（Logger、Recovery、CORS、JWT、Session 等）</td><td>内置基础（Logger、Recovery），丰富的第三方中间件</td><td>内置丰富（Logger、Recovery、CORS、JWT、Session 等）</td></tr>
+<tr><td>依赖注入</td><td>内置 DI 容器</td><td>不支持（手动传递）</td><td>不支持（手动传递）</td></tr>
+<tr><td>MVC 模式</td><td>内置支持</td><td>不支持（手动组织）</td><td>不支持（手动组织）</td></tr>
+<tr><td>性能</td><td>高（略低于 Gin，DI 有开销）</td><td>最高（极简设计，零分配路由）</td><td>高（接近 Gin）</td></tr>
+<tr><td>学习曲线</td><td>较陡（功能多，API 丰富）</td><td>平缓（API 简洁，文档丰富）</td><td>中等（API 设计优雅）</td></tr>
+<tr><td>社区活跃度</td><td>中等（单一维护者，更新频繁）</td><td>最高（广泛使用，社区庞大）</td><td>高（活跃维护）</td></tr>
+<tr><td>适用场景</td><td>企业级应用、需要 DI/MVC 的项目</td><td>API 服务、微服务、高性能场景</td><td>RESTful API、Web 应用</td></tr>
+<tr><td>版本稳定性</td><td>大版本变化较大（v11/v12）</td><td>稳定（v1 长期维护）</td><td>稳定（v4/v5）</td></tr>
+</table>
+
+<h3 id="iris-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>Iris 大版本升级不兼容导致迁移困难</strong>：Iris 的大版本（v10→v11→v12）之间有较多不兼容变更（API 重命名、中间件签名变化、配置结构调整），升级时需要大量修改。这是 Iris 被诟病的主要问题之一。解决：项目启动时选择稳定的 Iris 版本，锁定版本（go.mod 中指定精确版本），不要盲目升级。升级前阅读 CHANGELOG，在分支上测试。对于长期维护的项目，考虑使用更稳定的框架（Gin v1 已稳定多年）。关注 Iris 的 LTS 版本（如果有）</li>
+<li><strong>DI 模式的反射开销影响性能</strong>：Iris 的依赖注入基于反射（reflect），每次请求都需要通过反射调用处理函数、注入参数，有性能开销（比纯函数处理慢 20-50%）。在高并发 API 场景下，DI 开销可能成为瓶颈。解决：性能敏感的路由使用普通处理函数（<code>app.Get("/path", handler)</code>，handler 签名为 <code>func(iris.Context)</code>），不使用 DI。只有需要 DI 的路由（如 Controller、需要注入服务的处理函数）使用 DI 模式。基准测试（benchmark）对比 DI 和非 DI 的性能差异，根据场景选择。注意：Iris 的 DI 有缓存机制（反射结果缓存），首次调用慢，后续调用快</li>
+<li><strong>Context 接口被错误替换导致功能异常</strong>：Iris 的 Context 是接口，可以通过 <code>app.ContextPool</code> 或中间件替换为自定义 Context。但如果自定义 Context 没有正确实现所有接口方法（或嵌入的 Context 被覆盖），会导致某些功能异常（如 Session、视图渲染、参数获取）。解决：自定义 Context 时嵌入 <code>iris.Context</code>（组合而非重新实现），只覆盖需要修改的方法。<code>type MyContext struct { iris.Context }</code>。通过 <code>app.ContextPool = &amp;MyContextPool{}</code> 注册。充分测试自定义 Context 的所有功能。除非有特殊需求，不要替换 Context</li>
+<li><strong>Session 配置不当导致内存泄漏或数据丢失</strong>：Iris 的 Session 默认使用内存存储（基于 sync.Map），Session 数量多时内存占用高，且服务器重启后 Session 丢失。Session 的过期清理（GC）如果配置不当，可能导致过期 Session 未被清理（内存泄漏）。解决：生产环境使用 Redis 存储 Session（<code>sess.UseDatabase(redis)</code>），支持分布式部署和持久化。配置 Session 过期时间（<code>sess.Lifetime = 24 * time.Hour</code>）和清理间隔（<code>sess.GCduration = 10 * time.Minute</code>）。不要在 Session 中存储大对象（如完整用户对象），只存储用户 ID，需要时从数据库查询。监控 Session 数量和内存使用</li>
+<li><strong>视图渲染配置错误导致模板找不到</strong>：Iris 的视图渲染支持 HTML（html/template）、Django、Pug、Handlebars、Amber 等多种模板引擎。配置时需要指定模板目录、扩展名、重新加载策略。常见错误：模板路径错误（相对路径 vs 绝对路径）、生产环境未禁用 <code>Reload</code>（每次请求都重新加载模板，性能差）、模板继承语法错误（不同模板引擎的继承语法不同）。解决：使用绝对路径或相对于可执行文件的路径（<code>filepath.Abs</code>）。生产环境设置 <code>engine.Reload(false)</code>（只在启动时加载一次模板）。开发环境设置 <code>engine.Reload(true)</code>（修改模板后自动生效）。选择一种模板引擎并熟悉其语法，不要混用</li>
+<li><strong>中间件顺序错误导致功能异常</strong>：Iris 的中间件按注册顺序执行（请求时正向执行，响应时反向执行）。中间件顺序错误会导致功能异常：如 Logger 中间件在 Recovery 之后会导致 panic 时不记录日志；CORS 中间件在路由之后会导致 OPTIONS 请求不被处理；认证中间件在静态文件中间件之后会导致静态文件也需要认证。解决：遵循标准中间件顺序：Recovery（最外层，捕获 panic）→ Logger（记录请求）→ CORS（处理跨域）→ 认证/授权（验证身份）→ 路由处理。使用 <code>app.UseRouter()</code> 注册全局中间件（在路由匹配前执行），<code>app.Use()</code> 注册路由级中间件。文档记录中间件顺序和职责</li>
+<li><strong>文件上传大小限制未配置导致拒绝服务</strong>：Iris 默认的请求体大小限制可能较大（或无限制），如果不配置文件上传大小限制，攻击者可以上传超大文件导致内存耗尽或磁盘满（DoS 攻击）。解决：配置 <code>app.Run(iris.Addr(":8080"), iris.WithRequestBodySize(10&lt;&lt;20))</code>（限制请求体 10MB）。文件上传路由单独配置更小的限制（<code>app.Post("/upload", handler).SetMaxRequestBodySize(5&lt;&lt;20)</code>）。在处理函数中检查文件大小（<code>file.Size</code>），超过限制返回错误。将上传文件存储到独立磁盘或对象存储（S3），不要存储到系统盘。配置反向代理（Nginx）的 <code>client_max_body_size</code> 作为第一道防线</li>
+<li><strong>错误处理不统一导致信息泄露或用户体验差</strong>：Iris 的错误处理可以通过 <code>ctx.NotFound()</code>、<code>ctx.StatusCode()</code>、中间件等多种方式，但如果不统一，会导致：panic 时返回默认的 500 页面（暴露堆栈信息）、不同路由返回不同格式的错误（有的 JSON 有的 HTML）、错误日志不完整。解决：使用统一的错误处理中间件（Recovery 中间件捕获 panic，返回统一格式的 JSON 错误，记录完整堆栈到日志）。定义统一的错误响应格式（如 <code>{"code": 400, "message": "参数错误", "details": {...}}</code>）。使用 <code>app.OnErrorCode(iris.StatusNotFound, handler)</code> 注册统一的 404/500 处理函数。生产环境不返回堆栈信息给客户端（只记录到日志），返回通用错误信息（"服务器内部错误"）</li>
+</ol>
+
 <h4 id="iris-example">示例</h4>
 <h4 id="iris-2026">2026 状态</h4>
                 <div class="page-nav">
