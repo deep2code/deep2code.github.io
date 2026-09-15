@@ -933,13 +933,131 @@
         schedule();
     }
 
+    // === Lazy Load Charts (mermaid + echarts) ===
+    var mermaidLoaded = false;
+    var echartsLoaded = false;
+
+    function loadScript(src, callback) {
+        var script = document.createElement('script');
+        script.src = src;
+        script.onload = callback;
+        script.onerror = function () {
+            console.warn('Failed to load script:', src);
+        };
+        document.head.appendChild(script);
+    }
+
+    function renderMermaid() {
+        if (!window.mermaid) return;
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        window.mermaid.initialize({
+            startOnLoad: false,
+            theme: isDark ? 'dark' : 'default',
+            securityLevel: 'loose'
+        });
+        var blocks = document.querySelectorAll('#body-content div.mermaid');
+        var jobs = Array.prototype.map.call(blocks, function (div, i) {
+            var src = div.getAttribute('data-src') || div.textContent || '';
+            if (!src.trim()) return Promise.resolve();
+            var id = 'mmd-' + i + '-' + Math.random().toString(36).slice(2, 8);
+            return window.mermaid.render(id, src).then(function (res) {
+                div.innerHTML = res.svg;
+                if (res.bindFunctions) { res.bindFunctions(div); }
+                div.setAttribute('data-rendered', '1');
+            }).catch(function (err) {
+                div.innerHTML = '<pre class="mermaid-error">图表渲染失败：' + String(err && err.message || err) + '</pre>';
+                div.setAttribute('data-rendered', '0');
+            });
+        });
+        Promise.all(jobs).then(function () {
+            document.dispatchEvent(new CustomEvent('mermaid:rendered'));
+        });
+    }
+    window.__renderMermaid = renderMermaid;
+
+    function renderEcharts() {
+        if (!window.echarts || typeof window.buildEchartOption !== 'function') return;
+        var containers = document.querySelectorAll('#body-content .echart-container, #body-content .echart');
+        if (!containers.length) return;
+        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        containers.forEach(function (el) {
+            var optAttr = el.getAttribute('data-option') || el.textContent || '';
+            if (!optAttr.trim()) return;
+            try {
+                var opt = JSON.parse(optAttr);
+                var chart = window.echarts.init(el, isDark ? 'dark' : null, { renderer: 'canvas' });
+                var baseOpt = window.buildEchartOption(opt, isDark);
+                chart.setOption(baseOpt);
+                window.addEventListener('resize', function () { chart.resize(); });
+                el.setAttribute('data-rendered', '1');
+            } catch (e) {
+                el.innerHTML = '<pre class="echart-error">图表渲染失败：' + String(e && e.message || e) + '</pre>';
+                el.setAttribute('data-rendered', '0');
+            }
+        });
+    }
+
+    function initLazyCharts() {
+        var base = window.SITE_BASE || '';
+        var mermaidBlocks = document.querySelectorAll('#body-content div.mermaid');
+        var echartBlocks = document.querySelectorAll('#body-content .echart-container, #body-content .echart');
+
+        // Mermaid lazy load
+        if (mermaidBlocks.length > 0 && !mermaidLoaded) {
+            var loadMermaidNow = function () {
+                if (mermaidLoaded) return;
+                mermaidLoaded = true;
+                loadScript(base + 'vendor/mermaid.min.js', function () {
+                    renderMermaid();
+                });
+            };
+            if ('IntersectionObserver' in window) {
+                var mermaidObserver = new IntersectionObserver(function (entries) {
+                    entries.forEach(function (entry) {
+                        if (entry.isIntersecting) {
+                            loadMermaidNow();
+                            mermaidObserver.disconnect();
+                        }
+                    });
+                }, { rootMargin: '200px' });
+                mermaidBlocks.forEach(function (el) { mermaidObserver.observe(el); });
+            } else {
+                loadMermaidNow();
+            }
+        }
+
+        // ECharts lazy load
+        if (echartBlocks.length > 0 && !echartsLoaded) {
+            var loadEchartsNow = function () {
+                if (echartsLoaded) return;
+                echartsLoaded = true;
+                loadScript(base + 'vendor/echarts.min.js', function () {
+                    renderEcharts();
+                });
+            };
+            if ('IntersectionObserver' in window) {
+                var echartsObserver = new IntersectionObserver(function (entries) {
+                    entries.forEach(function (entry) {
+                        if (entry.isIntersecting) {
+                            loadEchartsNow();
+                            echartsObserver.disconnect();
+                        }
+                    });
+                }, { rootMargin: '200px' });
+                echartBlocks.forEach(function (el) { echartsObserver.observe(el); });
+            } else {
+                loadEchartsNow();
+            }
+        }
+    }
+
     // === Init all ===
     var INIT_FNS = [
         initTheme, initHeaderNav, initCodeCopy, initHighlight,
         initSearch, initBackToTop, initTimeline, initAiEra,
         initReadingProgress, initScrollReveal, // initAutoTOC,
         initHeadingAnchors, initSectionNumbers, initBentoExpand,
-        initCardClick, initArchCmd, initAiImpact
+        initCardClick, initArchCmd, initAiImpact, initLazyCharts
     ];
 
     function init() {
