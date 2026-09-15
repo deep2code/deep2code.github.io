@@ -270,6 +270,112 @@ command key value</code></pre><blockquote><p>对已存在的 key 的数字值进
 <hr>
 <p><img alt="内部图" src="memcache_slab.webp"/></p>
 <blockquote><p><em>Slab Allocator 解决了<strong>内存碎片</strong> 问题，但按固定大小分配内存块，会有一定的<strong>内存浪费</strong>（内部碎片）</em></p></blockquote>
+<h3 id="memcached-data-storage">数据存储与内存结构</h3>
+
+<p>Memcached 是纯内存键值存储，<strong>没有持久化</strong>，重启后数据全部丢失。它使用 Slab 分配器管理内存，通过哈希表和 LRU 链表实现高效查找和淘汰。</p>
+
+<h4 id="memcached-no-persistence">无持久化设计</h4>
+<ul>
+<li><strong>纯内存</strong>：所有数据存储在 RAM 中，进程退出即丢失</li>
+<li><strong>无磁盘 I/O</strong>：读写完全在内存中完成，延迟极低（亚毫秒级）</li>
+<li><strong>无快照</strong>：不提供 RDB/AOF 等持久化机制</li>
+<li><strong>适用场景</strong>：缓存、Session 存储、计数器等可丢失数据</li>
+<li><strong>配置文件</strong>：仅 memcached.conf（启动参数），不存储数据</li>
+</ul>
+
+<h4 id="memcached-slab">Slab 分配器</h4>
+<p>Memcached 将内存划分为不同大小的 Slab Class，每个 Class 管理固定大小的 Chunk，避免内存碎片。</p>
+<pre><code class="language-text">内存分配层级：
+
+  总内存（如 64MB）
+  │
+  ├── Slab Class 1: Chunk 大小 = 96 bytes
+  │   ├── Page 1 (1MB) → 10922 个 Chunk
+  │   ├── Page 2 (1MB) → 10922 个 Chunk
+  │   └── ...
+  │
+  ├── Slab Class 2: Chunk 大小 = 120 bytes (96 * 1.25)
+  │   ├── Page 1 (1MB) → 8738 个 Chunk
+  │   └── ...
+  │
+  ├── Slab Class 3: Chunk 大小 = 152 bytes (120 * 1.25)
+  │   └── ...
+  │
+  └── Slab Class N: Chunk 大小 = 1MB（最大）
+
+增长因子（growth factor）默认 1.25：
+  Class 1: 96 bytes
+  Class 2: 96 * 1.25 = 120 bytes
+  Class 3: 120 * 1.25 = 150 bytes
+  ...
+  每个 Item 选择 >= 实际大小的最小 Chunk（内部碎片）</code></pre>
+
+<h4 id="memcached-item">Item 数据结构</h4>
+<pre><code class="language-text">typedef struct _stritem {
+    struct _stritem *next;      // 哈希表冲突链 next
+    struct _stritem *prev;      // 哈希表冲突链 prev
+    struct _stritem *h_next;    // 哈希表桶链表 next
+    rel_time_t time;             // 最近访问时间（LRU）
+    rel_time_t exptime;          // 过期时间
+    int nbytes;                  // value 长度
+    unsigned short refcount;     // 引用计数
+    uint8_t nsuffix;             // flag+key 长度
+    uint8_t it_flags;            // Item 标志
+    uint8_t slabs_clsid;         // 所属 Slab Class
+    uint8_t nkey;                // key 长度
+    // 后面紧跟实际数据：
+    // [flag (2 bytes)] [key (nkey bytes)] [value (nbytes bytes)]
+} item;</code></pre>
+
+<h4 id="memcached-hashtable">哈希表（查找）</h4>
+<pre><code class="language-text">哈希表结构：
+  item **primary_hashtable;   // 主哈希表（桶数组）
+  item **old_hashtable;       // 旧哈希表（扩容时迁移）
+
+  桶数量：默认 16，动态扩容（2 的幂）
+  哈希函数：MurMurHash 3（非加密哈希，分布均匀）
+
+  查找流程：
+    1. hash(key) & (bucket_count - 1) → 桶索引
+    2. 遍历桶链表（h_next），比较 key
+    3. 找到返回 item，未找到返回 NULL
+
+  渐进式扩容：
+    - 当负载因子 > 1.5 时触发扩容
+    - 新表大小 = 旧表 * 2
+    - 每次操作迁移部分桶，避免一次性迁移阻塞</code></pre>
+
+<h4 id="memcached-lru">LRU 链表（淘汰）</h4>
+<pre><code class="language-text">每个 Slab Class 维护独立的 LRU 链表：
+
+  HOT_LRU（热数据）
+    ↓ 访问频繁，短期不被淘汰
+  WARM_LRU（温数据）
+    ↓ 访问中等
+  COLD_LRU（冷数据）
+    ↓ 访问最少，优先淘汰
+  TEMP_LRU（临时数据）
+    ↓ 不参与 LRU 排序（如 get 后立即删除）
+
+淘汰策略：
+  1. 新 Item 插入时，如果 Slab Class 没有空闲 Chunk
+  2. 从 COLD_LRU 尾部淘汰最久未访问的 Item
+  3. 如果 COLD_LRU 为空，尝试 WARM_LRU、HOT_LRU
+  4. 被淘汰的 Item 从哈希表中移除，Chunk 回收
+
+  LRU 爬虫（LRU Crawler）：
+  - 后台线程定期扫描 LRU 链表
+  - 清理已过期的 Item（惰性过期 + 主动过期结合）</code></pre>
+
+<h4 id="memcached-memory-reclaim">内存回收机制</h4>
+<ul>
+<li><strong>惰性过期</strong>：get 时检查 Item 是否过期，过期则删除并返回 NOT FOUND</li>
+<li><strong>LRU 淘汰</strong>：内存不足时淘汰最久未访问的 Item（即使未过期）</li>
+<li><strong>Slab 内回收</strong>：被淘汰/删除的 Item 的 Chunk 放回当前 Slab Class 的空闲链表</li>
+<li><strong>不跨 Slab 回收</strong>：一个 Slab Class 的空闲 Chunk 不能给其他 Class 使用（可能导致内存浪费）</li>
+<li><strong>内存不会归还 OS</strong>：一旦分配给某个 Slab Class，就不会释放回操作系统</li>
+</ul>
+
 <h3 id="通讯协议">通讯协议</h3>
 <hr>
 <ul>

@@ -386,6 +386,125 @@ appendfsync everysec  # everysec 推荐，性能与安全平衡
 aof-use-rdb-preamble yes
 </code></pre>
 
+<h3 id="redis-data-storage">数据文件存储与结构</h3>
+
+<p>Redis 是内存数据库，但通过 RDB 和 AOF 两种机制将数据持久化到磁盘。理解文件格式和内存数据结构是性能调优的基础。</p>
+
+<h4 id="redis-file-layout">持久化文件结构</h4>
+<pre><code class="language-bash">redis_data_dir/
+├── dump.rdb              # RDB 快照文件（二进制格式）
+├── appendonly.aof         # AOF 追加文件（文本格式，RESP 协议）
+├── redis.conf             # 配置文件
+├── nodes.conf             # 集群节点信息（集群模式）
+├── dump.rdb.backup        # 备份文件
+└── redis.log              # 日志文件</code></pre>
+
+<h4 id="redis-rdb-format">RDB 文件格式（二进制快照）</h4>
+<p>RDB 是某一时刻的内存数据快照，采用紧凑的二进制格式。</p>
+<pre><code class="language-text">┌──────────────────────────────────────────┐
+│  Magic Number: "REDIS" (5 bytes)         │
+├──────────────────────────────────────────┤
+│  Version: 4 bytes (如 0009)              │
+├──────────────────────────────────────────┤
+│  AUX 字段（可选）                          │
+│  - redis-ver: 版本号                      │
+│  - redis-bits: 32/64 位                  │
+│  - ctime: 创建时间                        │
+│  - used-mem: 已用内存                     │
+├──────────────────────────────────────────┤
+│  SELECTDB: 数据库编号                      │
+├──────────────────────────────────────────┤
+│  Key-Value 对（循环）                      │
+│  ┌────────────────────────────────────┐  │
+│  │  Value Type (1 byte)               │  │  0=string,1=list,2=set...
+│  │  Key (长度编码 + 字符串)            │  │
+│  │  Value (根据类型编码)               │  │
+│  │  - String: 长度 + 数据             │  │
+│  │  - List: 长度 + 逐个元素           │  │
+│  │  - Set: 长度 + 逐个元素            │  │
+│  │  - ZSet: 长度 + (元素+分数)        │  │
+│  │  - Hash: 长度 + (field+value)      │  │
+│  └────────────────────────────────────┘  │
+├──────────────────────────────────────────┤
+│  EOF: 0xFF (1 byte)                       │
+├──────────────────────────────────────────┤
+│  Checksum: CRC64 (8 bytes)                │
+└──────────────────────────────────────────┘</code></pre>
+
+<h4 id="redis-aof-format">AOF 文件格式（命令追加）</h4>
+<p>AOF 以 RESP 协议文本格式记录每条写命令，追加写入文件。</p>
+<pre><code class="language-bash">*3
+          # 3 个参数
+$3
+SET
+   # 命令 SET (3 字节)
+$5
+name
+  # key "name" (5 字节)
+$5
+Alice
+ # value "Alice" (5 字节)
+
+*2
+
+$3
+INCR
+
+$7
+counter
+</code></pre>
+
+<ul>
+<li><strong>always</strong>：每条命令都 fsync，最安全，性能最差</li>
+<li><strong>everysec</strong>：每秒 fsync（默认），最多丢 1 秒数据</li>
+<li><strong>no</strong>：由 OS 决定何时刷盘，性能最好，可能丢更多数据</li>
+<li><strong>AOF 重写</strong>：BGREWRITEAOF，压缩冗余命令，生成最小化 AOF</li>
+<li><strong>混合持久化</strong>（Redis 4.0+）：AOF 重写时前半段用 RDB 格式，后半段用 AOF 格式，兼顾加载速度和数据安全</li>
+</ul>
+
+<h4 id="redis-memory-structures">内存数据结构</h4>
+<p>Redis 每种数据类型底层使用多种编码结构，根据元素数量和大小自动转换。</p>
+<table>
+<tr><th>数据类型</th><th>底层编码结构</th><th>转换条件</th></tr>
+<tr><td>String</td><td>SDS（简单动态字符串）、int、embstr</td><td>整数用 int，短字符串用 embstr，长字符串用 raw</td></tr>
+<tr><td>List</td><td>quicklist（双向链表 + 压缩列表）</td><td>Redis 3.2+ 默认，替代 ziplist + linkedlist</td></tr>
+<tr><td>Hash</td><td>listpack（紧凑列表）、hashtable</td><td>元素少且值短用 listpack，否则用 hashtable</td></tr>
+<tr><td>Set</td><td>intset（整数集合）、hashtable</td><td>全是整数且数量少用 intset，否则用 hashtable</td></tr>
+<tr><td>ZSet</td><td>listpack + skiplist、hashtable + skiplist</td><td>元素少用 listpack，否则用 skiplist + hashtable</td></tr>
+</table>
+
+<h4 id="redis-sds">SDS（简单动态字符串）</h4>
+<pre><code class="language-text">struct sdshdr {
+    int len;       // 已使用长度
+    int free;      // 剩余空间
+    char buf[];    // 数据数组（以 \0 结尾）
+};
+// 优势：O(1) 获取长度、杜绝缓冲区溢出、减少修改时的内存重分配、二进制安全</code></pre>
+
+<h4 id="redis-dict">字典（哈希表）</h4>
+<pre><code class="language-text">typedef struct dict {
+    dictType *type;     // 类型特定函数
+    void *privdata;     // 私有数据
+    dictht ht[2];       // 两个哈希表（用于 rehash）
+    long rehashidx;     // rehash 进度，-1 表示未在 rehash
+} dict;
+
+typedef struct dictht {
+    dictEntry **table;  // 哈希表数组
+    unsigned long size; // 表大小
+    unsigned long sizemask; // 大小掩码 = size-1
+    unsigned long used; // 已有节点数
+} dictht;
+// 渐进式 rehash：在 ht[0] 和 ht[1] 之间逐步迁移，避免一次性 rehash 阻塞</code></pre>
+
+<h4 id="redis-skiplist">跳表（Skip List）</h4>
+<pre><code class="language-text">Level 3:  1 ──────────────────────────────────→ 100
+Level 2:  1 ───────────→ 30 ─────────────────→ 100
+Level 1:  1 ──→ 10 ──→ 30 ──→ 50 ──→ 70 ──→ 100
+Level 0:  1 → 5 → 10 → 20 → 30 → 40 → 50 → 60 → 70 → 80 → 90 → 100
+// ZSet 使用跳表实现有序集合，平均 O(log N) 查找，支持范围查询
+// 每个节点随机生成层数（1-32层），层高概率 1/4</code></pre>
+
 <h3 id="集群">7. 集群方案</h3>
 <hr>
 <div class="mermaid" data-src="flowchart TB
