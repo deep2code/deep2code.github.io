@@ -293,6 +293,21 @@ ngx_http_index_handler(ngx_http_request_t *r)
 <h3 id="nginx-http-arch-note">架构边界与验证方法</h3>
 
 <h3 id="nginx-event-architecture">Nginx 事件驱动架构深度解析</h3>
+<hr>
+
+<h3 id="nginx-http-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>worker_processes 设置不当</strong>：默认 <code>worker_processes 1</code>，无法利用多核 CPU，高并发时性能瓶颈。解决：<code>worker_processes auto;</code>（自动匹配 CPU 核心数）、<code>worker_cpu_affinity auto;</code>（CPU 亲和性，减少上下文切换）、<code>worker_rlimit_nofile 65535;</code>（增大文件描述符限制）。</li>
+<li><strong>keepalive_timeout 过长/过短</strong>：过长占用连接资源（攻击者保持大量连接耗尽资源），过短频繁 TCP 握手增加延迟。解决：合理设置 <code>keepalive_timeout 65;</code>（HTTP 持久连接超时）、<code>keepalive_requests 1000;</code>（一个连接最多请求数，防止单连接占用过久）、上游 keepalive（<code>keepalive 32;</code> 在 upstream 块中，复用到后端的连接）。</li>
+<li><strong>gzip 配置不当</strong>：未启用 gzip 导致传输体积大，或对图片/已压缩文件重复 gzip 浪费 CPU。解决：<code>gzip on;</code>、<code>gzip_types text/plain text/css application/json application/javascript text/xml application/xml;</code>（只压缩文本类）、<code>gzip_min_length 1024;</code>（小文件不压缩）、<code>gzip_vary on;</code>（正确处理 CDN 缓存）、考虑 brotli（压缩率比 gzip 高 15-20%）。</li>
+<li><strong>buffer 配置导致大响应失败</strong>：<code>proxy_buffer_size</code> 太小，上游响应头过大时报 <code>502 Bad Gateway</code> 或 <code>upstream sent too big header</code>。解决：<code>proxy_buffer_size 16k;</code>（响应头缓冲区）、<code>proxy_buffers 4 32k;</code>（响应体缓冲区数量和大小）、<code>proxy_busy_buffers_size 64k;</code>、大响应考虑 <code>proxy_buffering off;</code>（流式转发，不缓冲）。</li>
+<li><strong>HTTPS 配置不安全</strong>：使用过时的 TLS 协议（SSLv3/TLS1.0）、弱加密套件、HSTS 未启用，存在安全风险。解决：<code>ssl_protocols TLSv1.2 TLSv1.3;</code>（禁用旧协议）、使用强加密套件（ECDHE 系列，前向保密）、<code>add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;</code>（HSTS 强制 HTTPS）、OCSP Stapling（<code>ssl_stapling on;</code> 减少 TLS 握手延迟）、HTTP/2 优先（<code>http2 on;</code>）。</li>
+<li><strong>location 匹配顺序错误</strong>：不理解 Nginx location 匹配优先级（精确匹配 <code>=</code> &gt; 前缀匹配 <code>^~</code> &gt; 正则匹配 <code>~</code>/<code>~*</code> &gt; 普通前缀），导致请求落入错误的 location。解决：理解匹配优先级、用 <code>=</code> 精确匹配高频路径（如 <code>location = /favicon.ico</code>）、正则匹配注意顺序（第一个匹配胜出）、用 <code>nginx -T</code> 查看完整配置调试、<code>test_configuration</code> 工具验证。</li>
+<li><strong>未限制请求体大小导致 413</strong>：默认 <code>client_max_body_size 1m</code>，上传大文件时报 <code>413 Request Entity Too Large</code>。解决：根据需求设置 <code>client_max_body_size 50m;</code>（文件上传场景）、在特定 location 中设置（如 <code>location /upload { client_max_body_size 100m; }</code>）、配合后端上传大小限制、大文件用分片上传或对象存储直传。</li>
+<li><strong>日志配置影响性能</strong>：access_log 写入高频磁盘 IO，或日志格式缺少关键信息导致无法排查问题。解决：<code>access_log /var/log/nginx/access.log main buffer=32k flush=5s;</code>（缓冲写入，减少磁盘 IO）、静态资源关闭 access_log（<code>access_log off;</code> 在静态资源 location）、自定义 log_format 包含请求时间（<code>$request_time</code>）、上游响应时间（<code>$upstream_response_time</code>）、请求 ID（便于链路追踪）、日志轮转（logrotate）。</li>
+</ol>
+
 
 <h4 id="nginx-master-worker">Master-Worker 进程模型</h4>
 <pre><code class="language-text">Nginx 进程架构：

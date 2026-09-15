@@ -324,6 +324,21 @@ docker run -d --name nginx -p 80:80 -p 443:443 -v ./nginx.conf:/etc/nginx/nginx.
 <h3 id="nginx-install-http3">HTTP/3：源码编译的官方姿势</h3>
 
 <h3 id="nginx-compile-options">Nginx 编译选项深度解析</h3>
+<hr>
+
+<h3 id="nginx-install-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>使用系统包管理器安装过时版本</strong>：Ubuntu/Debian 默认源的 Nginx 版本老旧（如 1.18），缺少安全补丁和新特性（HTTP/3、新模块）。解决：使用 Nginx 官方 apt/yum 仓库（<code>nginx.org</code>）获取最新 mainline/stable、或源码编译指定版本、定期更新（<code>apt update &amp;&amp; apt upgrade nginx</code>）、关注 Nginx 安全公告（nginx.org/en/security_advisories.html）。</li>
+<li><strong>源码编译遗漏依赖</strong>：编译时缺少 PCRE/OpenSSL/zlib 等依赖，导致某些模块（rewrite、ssl、gzip）无法启用或编译失败。解决：安装编译依赖（<code>build-essential libpcre3 libpcre3-dev libssl-dev zlib1g-dev</code>）、<code>./configure</code> 时检查输出（确认需要的模块为 <code>yes</code>）、使用 <code>--with-cc-opt</code> 和 <code>--with-ld-opt</code> 指定依赖路径、编译前阅读官方 install 文档。</li>
+<li><strong>模块选择不当</strong>：编译时包含过多不需要的模块（增大二进制体积、增加攻击面），或遗漏关键模块（如 <code>http_ssl_module</code>、<code>http_v2_module</code>）。解决：按需启用模块（<code>--with-http_ssl_module --with-http_v2_module --with-http_gzip_static_module</code>）、不需要的模块显式禁用（<code>--without-http_autoindex_module</code>）、动态模块（<code>--with-http_xslt_module=dynamic</code>，运行时按需加载，减小核心体积）、第三方模块（如 <code>ngx_brotli</code>、<code>headers-more-nginx-module</code>）谨慎使用，确保来源可信。</li>
+<li><strong>升级时配置不兼容</strong>：跨大版本升级（如 1.18 → 1.26）时，某些指令行为变化或废弃，导致 <code>nginx -t</code> 失败或运行时异常。解决：升级前阅读 changelog（nginx.org/en/CHANGES）、<code>nginx -t</code> 测试配置、保留旧版本二进制（便于回滚）、先在测试环境验证、使用 <code>make upgrade</code>（平滑升级，不中断服务）、关注废弃指令（如 <code>ssl on;</code> 已废弃，用 <code>listen 443 ssl;</code>）。</li>
+<li><strong>平滑升级操作失误</strong>：Nginx 支持热升级（不中断服务），但操作步骤错误会导致服务中断或进程残留。解决：标准流程：<code>make upgrade</code>（自动执行）或手动：USR2（启动新 master）→ WINCH（旧 worker 优雅退出）→ 确认新进程正常 → QUIT（旧 master 退出）、升级后验证（<code>nginx -v</code>、<code>curl</code> 测试）、保留旧配置备份（<code>cp -r /etc/nginx /etc/nginx.bak</code>）、异常时回滚（给旧 master 发 HUP 重新加载旧配置，给新 master 发 QUIT）。</li>
+<li><strong>systemd 服务管理配置错误</strong>：源码编译安装后未配置 systemd service，或 service 文件中 PID 路径/启动命令错误，导致 <code>systemctl start nginx</code> 失败。解决：创建 <code>/lib/systemd/system/nginx.service</code>（参考官方提供的 service 文件）、<code>PIDFile</code> 与 <code>nginx.conf</code> 中 <code>pid</code> 一致、<code>ExecStartPre=/usr/sbin/nginx -t</code>（启动前测试配置）、<code>ExecReload=/usr/sbin/nginx -s reload</code>、<code>systemctl daemon-reload</code> 后启用、<code>systemctl enable nginx</code> 开机自启。</li>
+<li><strong>多版本/多实例冲突</strong>：系统中同时存在 apt 安装的 Nginx 和源码编译的 Nginx，端口冲突或配置文件混乱。解决：统一安装方式（要么全部 apt，要么全部源码）、多实例时使用不同 <code>--prefix</code>（<code>./configure --prefix=/opt/nginx-1.26</code>）、不同 <code>listen</code> 端口、不同 <code>pid</code> 和 <code>lock</code> 文件路径、使用 <code>nginx -p /path/to/prefix -c /path/to/nginx.conf</code> 指定实例。</li>
+<li><strong>编译优化未开启</strong>：默认编译未启用 CPU 指令集优化，性能未达最优。解决：<code>--with-cc-opt='-O2 -g -pipe -Wall -Wp,-D_FORTIFY_SOURCE=2 -fexceptions -fstack-protector-strong --param=ssp-buffer-size=4 -m64 -mtune=native'</code>（编译器优化）、<code>--with-ld-opt='-Wl,-z,relro -Wl,-z,now'</code>（链接器安全优化）、<code>-march=native</code>（利用当前 CPU 全部指令集，但二进制不可移植）、考虑使用 <code>--with-file-aio</code>（异步 IO，提升静态文件性能）、<code>--with-threads</code>（线程池，阻塞操作 offload）。</li>
+</ol>
+
 
 <h4 id="configure-params">./configure 核心参数详解</h4>
 <pre><code class="language-bash"># 安装路径

@@ -152,6 +152,21 @@ world greeter-world {
 <p>WASI 0.3 统一推进中，主流运行时均在其主线上跟进；浏览器侧仍是浏览器自有的沙箱，不直接用服务端 WASI。</p><h3 id="wasm-use-cases">Wasm 应用场景</h3>
 
 <h3 id="wasm-binary-format">Wasm 二进制格式深度解析</h3>
+<hr>
+
+<h3 id="wasm-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>JS-Wasm 边界 crossings 性能开销</strong>：JS 与 Wasm 之间频繁调用（每次调用有序列化/反序列化开销），导致性能反而比纯 JS 差。解决：减少边界 crossings（批量操作、一次传入大块数据、在 Wasm 内完成完整计算）、使用复杂类型时共享内存（<code>WebAssembly.Memory</code>，JS 直接读写 Wasm 内存，避免拷贝）、<code>wasm-bindgen</code>（Rust，自动生成绑定代码，优化边界调用）、基准测试对比纯 JS 实现（不是所有场景 Wasm 都快）。</li>
+<li><strong>内存管理不当导致泄漏/OOM</strong>：Wasm 线性内存手动管理（C/C++ 的 malloc/free、Rust 的所有权），JS 端持有 Wasm 对象引用但未释放，导致内存持续增长。解决：C/C++ 用 <code>malloc</code>/<code>free</code> 配对，导出 <code>free</code> 给 JS 调用、Rust 用 <code>#[wasm_bindgen]</code> 自动管理（但 JS 端仍需 <code>.free()</code> 手动释放大对象）、Wasm 实例销毁时内存自动释放（但长生命周期实例需主动管理）、监控 <code>instance.exports.memory.buffer.byteLength</code>、考虑 <code>wasm-opt -Os</code> 优化代码体积。</li>
+<li><strong>编译目标不支持导致运行失败</strong>：使用了 Wasm 不支持的特性（如 SIMD、线程、异常处理、GC），但未在编译时启用对应扩展，或目标浏览器不支持。解决：了解目标环境支持的 Wasm 扩展（SIMD、Threads/SharedArrayBuffer、Exception Handling、Tail Call、GC）、编译时显式启用（Rust <code>-C target-feature=+simd128</code>、Emscripten <code>-msimd128</code>）、提供 fallback（不支持 SIMD 时用标量版本）、特性检测（<code>WebAssembly.validate</code> 检测模块是否可在当前环境运行）、caniuse.com 查询浏览器支持。</li>
+<li><strong>Wasm 模块体积过大</strong>：编译出的 .wasm 文件几 MB，首屏加载慢（特别是移动端弱网）。解决：优化编译选项（Rust <code>wasm-opt -Oz</code>、Emscripten <code>-Os</code>、<code>-s AGGRESSIVE_VARIABLE_ELIMINATION=1</code>）、移除未使用代码（<code>--gc-sections</code>、Rust <code>wasm-snip</code> 移除 panic 处理等）、流式编译（<code>WebAssembly.instantiateStreaming</code>，边下载边编译，减少等待）、代码分割（多个小模块按需加载）、gzip/brotli 压缩传输（.wasm 压缩率高）、懒加载 Wasm（首屏不需要时动态 import）。</li>
+<li><strong>错误处理缺失导致调试困难</strong>：Wasm 中的 panic/异常在 JS 端只显示 <code>RuntimeError: unreachable</code> 或 <code>null function</code>，无法定位源码位置。解决：开发模式生成 source map（Rust <code>--profiling</code>、Emscripten <code>-g</code>）、<code>wasm2wat</code> 反汇编查看 Wasm 指令、Rust 用 <code>console_error_panic_hook</code>（panic 时输出可读错误到 console）、Emscripten <code>-s DEMANGLE_SUPPORT=1</code>（C++ 符号 demangle）、在 Wasm 代码中添加日志（通过 <code>console.log</code> 导入函数）、生产环境移除调试符号减小体积。</li>
+<li><strong>线程支持配置复杂</strong>：Wasm 线程（SharedArrayBuffer + Web Workers）需要特殊的 HTTP 头（<code>Cross-Origin-Opener-Policy: same-origin</code>、<code>Cross-Origin-Embedder-Policy: require-corp</code>），否则 <code>SharedArrayBuffer</code> 不可用。解决：服务器配置 COOP/COEP 头（<code>Cross-Origin-Opener-Policy: same-origin</code>、<code>Cross-Origin-Embedder-Policy: require-corp</code>）、跨域资源设置 <code>Cross-Origin-Resource-Policy: cross-origin</code> 或 CORS 头、Emscripten <code>-pthread</code> 启用线程、Rust <code>wasm-bindgen-rayon</code>（Rayon 并行化）、提供单线程 fallback（不支持 SharedArrayBuffer 时降级）、注意线程安全（Wasm 内存共享需原子操作和同步原语）。</li>
+<li><strong>文件系统/网络访问误解</strong>：Wasm 沙箱环境没有直接的文件系统和网络访问，初学者期望像原生程序一样 <code>fopen</code>/<code>socket</code>，导致运行失败。解决：理解 Wasm 安全模型（沙箱，只能通过导入函数与宿主交互）、文件系统用 Emscripten 的虚拟文件系统（<code>MEMFS</code> 内存文件系统、<code>IDBFS</code> IndexedDB 持久化、<code>NODEFS</code> Node.js 真实文件系统）、网络用 JS 的 <code>fetch</code>/<code>XMLHttpRequest</code>（Wasm 调用 JS 导入函数发起请求）、WASI（WebAssembly System Interface）提供标准化的系统接口（文件、网络、时钟），但浏览器环境支持有限（WASI Preview 2 逐步推进）、Node.js 环境可用 <code>wasi</code> 模块提供系统访问。</li>
+<li><strong>选型不当：为用 Wasm 而用 Wasm</strong>：不考虑实际需求，盲目将 JS 逻辑改写为 Wasm，结果开发复杂度增加但性能无提升甚至下降。解决：Wasm 适用场景：CPU 密集型计算（视频编解码、图像处理、密码学、物理模拟、科学计算）、移植现有 C/C++/Rust 代码库到 Web（如 FFmpeg、SQLite、AutoCAD、游戏引擎）、需要接近原生性能的库（如 PDF 渲染、代码编辑器语法高亮）。Wasm 不适用场景：DOM 操作（Wasm 不能直接操作 DOM，需通过 JS 绑定，开销大）、简单逻辑（纯 JS 足够，Wasm 增加复杂度）、IO 密集型（瓶颈在网络/磁盘，不在 CPU）、快速原型（Wasm 编译链复杂，开发迭代慢）。决策依据：先写纯 JS 实现，性能不达标时再考虑 Wasm，用基准测试（benchmark）验证 Wasm 确实带来性能提升。</li>
+</ol>
+
 
 <h4 id="wasm-module-structure">模块结构（Module Structure）</h4>
 <pre><code class="language-text">Wasm 二进制模块布局：
