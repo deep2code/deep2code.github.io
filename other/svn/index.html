@@ -258,6 +258,240 @@ git push -u origin --tags</code></pre>
 </ol>
 
 <h3 id="svn-ignore">忽略文件</h3>
+
+<h3 id="svn-architecture">SVN 架构与底层原理深度解析</h3>
+
+<h4 id="svn-arch">SVN 架构：Centralized Version Control</h4>
+<pre><code class="language-text">SVN（Subversion）是集中式版本控制系统：
+
+  ┌─────────────────────────────────────────────────┐
+  │  SVN Server（中央仓库）                           │
+  │  - 存储所有版本的完整历史                         │
+  │  - 单一权威来源（Single Source of Truth）         │
+  │  - 支持 file:// / http:// / https:// / svn://    │
+  └────────────────────┬────────────────────────────┘
+                       │ 网络协议（WebDAV/DeltaV）
+          ┌────────────┼────────────┐
+          ▼            ▼            ▼
+     ┌─────────┐ ┌─────────┐ ┌─────────┐
+     │Client A │ │Client B │ │Client C │  多个客户端
+     │Working  │ │Working  │ │Working  │  各自的工作副本
+     │Copy     │ │Copy     │ │Copy     │
+     └─────────┘ └─────────┘ └─────────┘
+
+  与 Git 的核心区别：
+  - SVN：集中式，只有服务器有完整历史，客户端只有当前版本
+  - Git：分布式，每个客户端都有完整历史，可以离线操作
+  
+  SVN 的优势：
+  - 简单易学，概念少（没有分支/合并的复杂性）
+  - 权限控制精细（可以按目录设置读写权限）
+  - 大文件支持好（二进制文件版本管理）
+  - 适合企业环境（中央管理，审计方便）</code></pre>
+
+<h4 id="svn-repository">SVN 仓库存储原理：FSFS vs BDB</h4>
+<pre><code class="language-text">SVN 仓库后端存储：
+
+  1. FSFS（Fast Secure File System）- 默认推荐
+     - 纯文件系统存储，不需要数据库
+     - 每个版本是一个文件（revs/0/1, revs/0/2...）
+     - 事务文件在 txns/ 目录，提交后移到 revs/
+     - 优点：安全（不会因崩溃损坏）、可移植、备份简单
+     - 缺点：大量小文件可能影响性能（可用 sharding 优化）
+     
+  2. BDB（Berkeley DB）- 已废弃
+     - 使用 Berkeley DB 数据库存储
+     - 优点：高性能（事务支持）
+     - 缺点：容易因崩溃损坏（需要 svnadmin recover）、不可移植
+     - SVN 1.8 后不再推荐
+
+  FSFS 目录结构：
+  repo/
+  ├── conf/           # 配置文件（svnserve.conf, passwd, authz）
+  ├── db/             # 版本数据库
+  │   ├── current     # 当前最新版本号
+  │   ├── revs/       # 版本文件（每个版本一个文件）
+  │   │   └── 0/
+  │   │       ├── 1   # 版本 1 的完整数据
+  │   │       └── 2   # 版本 2 的完整数据
+  │   ├── txns/       # 事务目录（提交中的临时文件）
+  │   ├── revprops/   # 版本属性（提交信息、作者、时间）
+  │   └── uuid        # 仓库唯一标识
+  ├── hooks/          # 钩子脚本（pre-commit, post-commit...）
+  ├── locks/          # 锁文件
+  └── format          # 仓库格式版本号
+
+  版本文件格式（FSFS）：
+  每个版本文件包含：
+  - 版本号、作者、日期、提交信息
+  - 变更的文件列表（路径、操作类型、内容差异）
+  - 文件内容（完整内容或与前一版本的差异）
+  
+  存储优化：
+  - 增量存储：只存储与前一版本的差异（delta）
+  - 跳过增量：定期存储完整内容（避免链式差异过长）
+  - 压缩：可选 zlib 压缩（--compatible-version 控制）</code></pre>
+
+<h4 id="svn-copy">SVN 廉价复制：分支与标签原理</h4>
+<pre><code class="language-text">SVN 的分支和标签本质是"廉价复制"（Cheap Copy）：
+
+  原理：
+  - svn copy 不是真正复制文件内容
+  - 只是在仓库中创建一个新的目录条目，指向原文件的同一版本
+  - 类似硬链接（hard link），不占用额外存储空间
+  - 只有当复制后的文件被修改时，才会存储新的内容（Copy-on-Write）
+
+  创建分支：
+  $ svn copy http://svn.example.com/repo/trunk \
+             http://svn.example.com/repo/branches/feature-x \
+             -m "Create feature-x branch"
+  
+  创建标签（发布版本）：
+  $ svn copy http://svn.example.com/repo/trunk \
+             http://svn.example.com/repo/tags/v1.0.0 \
+             -m "Release v1.0.0"
+
+  分支与标签的区别：
+  - 技术上完全相同（都是 svn copy）
+  - 约定上：tags 只读（不修改），branches 可修改
+  - 可以通过 authz 强制 tags 只读：
+    [repo:/tags]
+    * = r
+    @release-team = rw
+
+  合并（Merge）：
+  SVN 的合并比 Git 复杂，因为没有完整的分支历史：
+  
+  # 合并分支到主干
+  $ cd trunk
+  $ svn merge http://svn.example.com/repo/branches/feature-x
+  
+  # 合并特定版本范围
+  $ svn merge -r 100:200 http://svn.example.com/repo/branches/feature-x
+  
+  # 查看合并信息
+  $ svn mergeinfo http://svn.example.com/repo/branches/feature-x
+  
+  合并跟踪（Merge Tracking，SVN 1.5+）：
+  - svn:mergeinfo 属性记录已合并的版本
+  - 避免重复合并
+  - 合并时自动计算需要合并的版本范围</code></pre>
+
+<h4 id="svn-conflict">SVN 冲突解决与锁机制</h4>
+<pre><code class="language-text">SVN 冲突类型与解决：
+
+  1. 文本冲突（Text Conflict）
+     - 多人修改同一文件的同一行
+     - 更新时产生冲突，文件中插入冲突标记：
+       <<<<<<< .mine
+       你的修改
+       =======
+       服务器版本
+       >>>>>>> .r123
+     - 解决：手动编辑文件 → svn resolved → svn commit
+     
+  2. 树冲突（Tree Conflict，SVN 1.6+）
+     - 文件/目录被一方修改、另一方删除/重命名
+     - 类型：
+       - local edit, incoming delete（本地修改，远端删除）
+       - local delete, incoming edit（本地删除，远端修改）
+       - local add, incoming add（双方都添加同名文件）
+     - 解决：svn resolve --accept=working/theirs-conflict/base
+     
+  3. 属性冲突（Property Conflict）
+     - 双方修改同一属性（如 svn:keywords, svn:eol-style）
+     - 解决方式类似文本冲突
+
+  锁机制（Locking）：
+  适用于二进制文件（图片、文档），无法合并的场景：
+  
+  # 加锁（锁定文件，其他人不能提交）
+  $ svn lock design.psd -m "Editing design"
+  
+  # 查看锁
+  $ svn info design.psd | grep Lock
+  
+  # 解锁
+  $ svn unlock design.psd
+  
+  # 强制解锁（偷锁，需要权限）
+  $ svn unlock --force design.psd
+  
+  自动加锁（需要锁的文件）：
+  # 设置 svn:needs-lock 属性
+  $ svn propset svn:needs-lock '*' design.psd
+  # 这样文件在工作副本中是只读的，必须先 lock 才能编辑
+
+  冲突预防最佳实践：
+  1. 频繁更新（svn update），减少冲突概率
+  2. 小步提交，避免一次提交大量修改
+  3. 二进制文件使用锁机制
+  4. 分工明确，避免多人同时修改同一文件
+  5. 提交前先更新，确保基于最新版本</code></pre>
+
+<h4 id="svn-hooks">SVN 钩子脚本：自动化与质量控制</h4>
+<pre><code class="language-bash">#!/bin/bash
+# SVN 钩子脚本在仓库的 hooks/ 目录
+# 常用钩子：
+# - pre-commit：提交前执行（可以拒绝提交）
+# - post-commit：提交后执行（通知、CI 触发）
+# - pre-revprop-change：版本属性修改前
+# - post-revprop-change：版本属性修改后
+# - pre-lock：加锁前
+# - post-lock：加锁后
+# - pre-unlock：解锁前
+# - post-unlock：解锁后
+
+# ========== pre-commit 钩子：提交信息检查 ==========
+#!/bin/bash
+REPOS="$1"
+TXN="$2"
+
+# 检查提交信息不能为空
+SVNLOOK=/usr/bin/svnlook
+LOGMSG=$($SVNLOOK log -t "$TXN" "$REPOS" | grep "[a-zA-Z0-9]" | wc -c)
+if [ "$LOGMSG" -lt 10 ]; then
+    echo "提交信息不能为空，且至少 10 个字符" >&2
+    exit 1
+fi
+
+# 检查不能提交大文件（> 10MB）
+MAX_SIZE=10485760
+for FILE in $($SVNLOOK changed -t "$TXN" "$REPOS" | awk '{print $2}'); do
+    SIZE=$($SVNLOOK filesize -t "$TXN" "$REPOS" "$FILE" 2>/dev/null || echo 0)
+    if [ "$SIZE" -gt "$MAX_SIZE" ]; then
+        echo "文件 $FILE 大小超过 10MB 限制" >&2
+        exit 1
+    fi
+done
+
+exit 0
+
+# ========== post-commit 钩子：邮件通知 + CI 触发 ==========
+#!/bin/bash
+REPOS="$1"
+REV="$2"
+
+# 发送邮件通知
+/usr/bin/svnnotify --repos-path "$REPOS" --revision "$REV" \
+    --to dev-team@example.com --from svn@example.com \
+    --subject-prefix "[SVN Commit] " --smtp localhost &
+
+# 触发 CI 构建
+curl -s -X POST http://ci.example.com/job/my-project/build \
+    --user jenkins:apitoken \
+    --data-urlencode "SVN_REVISION=$REV" &
+
+exit 0
+
+# 钩子脚本注意事项：
+# 1. 必须有可执行权限（chmod +x）
+# 2. 文件名必须是 pre-commit（不是 pre-commit.tmpl）
+# 3. 输出到 stderr 的内容会显示给客户端
+# 4. exit 非 0 会拒绝提交（pre-commit）
+# 5. 钩子脚本运行在服务器端，性能要快（pre-commit 会阻塞提交）</code></pre>
+
+
 <pre><code class="language-bash"># 全局忽略
 # ~/.subversion/config
 global-ignores = *.o *.lo *.la *.al .libs *.so *.so.[0-9]* *.a *.pyc *.pyo __pycache__ .DS_Store

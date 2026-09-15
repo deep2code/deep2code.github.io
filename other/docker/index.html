@@ -531,6 +531,201 @@ ENTRYPOINT ["/app"]</code></pre>
 <h3 id="docker-version">2. 版本选择</h3>
 <h3 id="docker-install">1. 安装</h3>
 <h3 id="docker-network">5. 网络管理</h3>
+
+<h3 id="docker-architecture">Docker 架构与底层原理深度解析</h3>
+
+<h4 id="docker-arch">Docker 架构：Client-Server 模型</h4>
+<pre><code class="language-text">Docker 架构：
+
+  ┌─────────────────────────────────────────────────┐
+  │  Docker Client（docker CLI）                      │
+  │  docker run / docker build / docker pull         │
+  └────────────────────┬────────────────────────────┘
+                       │ REST API（UNIX Socket / TCP）
+  ┌────────────────────▼────────────────────────────┐
+  │  Docker Daemon（dockerd）                         │
+  │  - 管理镜像、容器、网络、卷                       │
+  │  - 接收 Client 请求并执行                         │
+  └──────┬──────────┬──────────┬────────────────────┘
+         │          │          │
+    ┌────▼───┐ ┌───▼────┐ ┌──▼─────────┐
+    │ containerd│ │ 镜像   │ │  网络      │
+    │ (容器运行时)│ │ 管理  │ │  管理      │
+    └────┬─────┘ └────────┘ └────────────┘
+         │
+    ┌────▼─────┐
+    │ runc      │  OCI 运行时规范实现
+    │ (底层运行)│  直接操作 Linux 内核
+    └───────────┘
+
+  关键组件：
+  1. docker CLI：命令行客户端，发送 REST 请求
+  2. dockerd：Docker 守护进程，管理所有 Docker 对象
+  3. containerd：容器运行时，管理容器生命周期
+  4. runc：OCI 运行时，创建和运行容器（直接调用内核）
+  5. shim：容器进程的父进程，即使 containerd 重启也不影响容器</code></pre>
+
+<h4 id="docker-namespaces">Linux Namespaces：容器隔离的核心</h4>
+<pre><code class="language-text">Docker 容器本质是一组 Linux Namespaces + Cgroups + Rootfs：
+
+  6 种 Namespaces：
+  ┌──────────────┬──────────────────────────────────┐
+  │ Namespace    │ 隔离内容                          │
+  ├──────────────┼──────────────────────────────────┤
+  │ PID          │ 进程 ID（容器内 PID 1 = 主进程）  │
+  │ Network      │ 网络设备、IP、端口、路由表         │
+  │ Mount        │ 文件系统挂载点（容器有独立根目录）  │
+  │ UTS          │ 主机名和域名（容器有独立 hostname）│
+  │ IPC          │ 进程间通信（共享内存、信号量）     │
+  │ User         │ 用户和组 ID（容器内 root ≠ 宿主机）│
+  └──────────────┴──────────────────────────────────┘
+
+  容器创建过程（runc 调用）：
+  1. clone() 系统调用，指定 CLONE_NEWPID | CLONE_NEWNET | ... 标志
+  2. 在新 Namespace 中 pivot_root() 切换根文件系统
+  3. 设置 Cgroups 限制资源
+  4. execve() 执行容器入口进程
+
+  示例：查看容器的 Namespaces
+  $ docker run -d --name test nginx
+  $ ls -la /proc/$(docker inspect -f '{{.State.Pid}}' test)/ns
+  lrwxrwxrwx 1 root root 0 Sep 15 10:00 ipc -> ipc:[4026532512]
+  lrwxrwxrwx 1 root root 0 Sep 15 10:00 mnt -> mnt:[4026532510]
+  lrwxrwxrwx 1 root root 0 Sep 15 10:00 net -> net:[4026532515]
+  lrwxrwxrwx 1 root root 0 Sep 15 10:00 pid -> pid:[4026532513]
+  lrwxrwxrwx 1 root root 0 Sep 15 10:00 user -> user:[4026531837]
+  lrwxrwxrwx 1 root root 0 Sep 15 10:00 uts -> uts:[4026532511]
+
+  注意：User Namespace 默认未启用（容器内 root = 宿主机 root）
+  启用 User Namespace 可以增强安全性，但会影响卷挂载</code></pre>
+
+<h4 id="docker-cgroups">Cgroups：资源限制与控制</h4>
+<pre><code class="language-text">Cgroups（Control Groups）限制容器的资源使用：
+
+  Cgroups v1 vs v2：
+  - v1：每个子系统独立（cpu、memory、blkio...），兼容性好
+  - v2：统一层次结构，更安全，现代系统默认（cgroup2fs）
+
+  常用资源限制：
+  # CPU 限制
+  docker run --cpus="1.5" --cpu-shares=512 --cpuset-cpus="0,1" image
+  - --cpus：最多使用 1.5 个 CPU 核心（CFS 带宽限制）
+  - --cpu-shares：相对权重（默认 1024，512 = 一半）
+  - --cpuset-cpus：绑定到 CPU 0 和 1
+
+  # 内存限制
+  docker run --memory="512m" --memory-swap="1g" --memory-reservation="256m" image
+  - --memory：最大内存 512MB（超过会被 OOM Kill）
+  - --memory-swap：内存+Swap 总和 1GB
+  - --memory-reservation：软限制 256MB（内存压力时回收）
+
+  # 磁盘 IO 限制
+  docker run --device-read-bps=/dev/sda:10mb --device-write-iops=/dev/sda:1000 image
+
+  # 查看容器 Cgroups
+  $ cat /sys/fs/cgroup/memory/docker/<container_id>/memory.limit_in_bytes
+  536870912  # 512MB
+
+  OOM 处理：
+  - 容器内存超过限制 → 内核 OOM Killer 杀掉容器内进程
+  - 默认杀掉内存占用最大的进程（通常是主进程 → 容器退出）
+  - --oom-kill-disable：禁用 OOM Kill（不推荐，可能导致系统不稳定）
+  - --oom-score-adj：调整 OOM 优先级（-1000 到 1000，越低越不容易被杀）</code></pre>
+
+<h4 id="docker-overlayfs">UnionFS 与 OverlayFS：镜像层原理</h4>
+<pre><code class="language-text">Docker 镜像使用 UnionFS（联合文件系统），实现层叠存储：
+
+  OverlayFS 结构（Docker 18.06+ 默认存储驱动）：
+  ┌─────────────────────────────────────┐
+  │  Container Layer（可写层）            │  upperdir
+  │  容器运行时的所有修改都写在这里        │
+  ├─────────────────────────────────────┤
+  │  Image Layer（只读层，可共享）         │  lowerdir（多个）
+  │  - 应用层（nginx, app code）         │
+  │  - 依赖层（libssl, libc）            │
+  │  - 基础层（alpine/debian rootfs）    │
+  └─────────────────────────────────────┘
+  │  merged（合并视图，容器看到的文件系统）│
+  └─────────────────────────────────────┘
+
+  关键特性：
+  1. Copy-on-Write（CoW）：修改文件时先复制到可写层
+  2. 层共享：多个容器共享相同的镜像层（节省磁盘和内存）
+  3. 快速启动：不需要复制整个文件系统，只需创建可写层
+
+  示例：查看容器的 OverlayFS 挂载
+  $ docker inspect -f '{{.GraphDriver.Data}}' container
+  map[
+    LowerDir: /var/lib/docker/overlay2/l/XXX:/var/lib/docker/overlay2/l/YYY
+    UpperDir: /var/lib/docker/overlay2/<id>/diff
+    WorkDir: /var/lib/docker/overlay2/<id>/work
+    MergedDir: /var/lib/docker/overlay2/<id>/merged
+  ]
+
+  Dockerfile 指令与层的关系：
+  - 每条 RUN/COPY/ADD 指令创建一个新层
+  - 层是只读的，构建后不可修改
+  - 优化：合并 RUN 指令减少层数，使用 .dockerignore 减少上下文
+
+  镜像大小优化：
+  1. 使用多阶段构建（multi-stage build）
+  2. 选择轻量基础镜像（alpine > slim > debian）
+  3. 合并 RUN 指令，清理缓存（apt-get clean && rm -rf /var/lib/apt/lists/*）
+  4. 使用 .dockerignore 排除不必要文件
+  5. 按变化频率排序指令（不常变的放前面，利用构建缓存）</code></pre>
+
+<h4 id="docker-network-deep">Docker 网络原理：bridge、veth、iptables</h4>
+<pre><code class="language-text">Docker 默认 bridge 网络原理：
+
+  宿主机网络命名空间              容器网络命名空间
+  ┌──────────────────┐          ┌──────────────────┐
+  │  eth0 (公网IP)    │          │  eth0 (172.17.0.2)│
+  │       │           │          │       │           │
+  │  docker0 (bridge) │          │  vethXXX (veth pair)
+  │  172.17.0.1/16   │◄────────►│       │           │
+  │       │           │  veth pair│      │           │
+  │  iptables NAT     │          │  路由表            │
+  │  MASQUERADE       │          │  default via      │
+  │  (容器出网)        │          │  172.17.0.1       │
+  └──────────────────┘          └──────────────────┘
+
+  关键组件：
+  1. docker0：Linux bridge（虚拟交换机），所有容器连接到这里
+  2. veth pair：虚拟网卡对，一端在容器，一端在 docker0
+  3. iptables NAT：MASQUERADE 规则让容器可以访问外网
+  4. 端口映射：DNAT 规则将宿主机端口转发到容器端口
+
+  网络模式：
+  - bridge（默认）：容器有独立网络命名空间，通过 docker0 通信
+  - host：容器共享宿主机网络命名空间（性能最好，但端口冲突）
+  - none：容器只有 loopback，无网络
+  - container：共享另一个容器的网络命名空间（sidecar 模式）
+  - custom bridge：用户自定义 bridge（支持 DNS 解析、更好隔离）
+
+  端口映射原理：
+  $ docker run -p 8080:80 nginx
+  # iptables 规则：
+  # -A DOCKER ! -i docker0 -p tcp -m tcp --dport 8080 -j DNAT --to-destination 172.17.0.2:80
+  # 流量路径：eth0:8080 → DNAT → 172.17.0.2:80 → docker0 → veth → 容器eth0
+
+  容器间通信：
+  - 同一 bridge：通过 docker0 直接通信（IP 或自定义 bridge 的 DNS 名称）
+  - 不同 bridge：需要通过路由或端口映射
+  - 最佳实践：使用自定义 bridge，通过容器名通信（内置 DNS）</code></pre>
+
+<h4 id="docker-best-practices">Docker 生产最佳实践与常见陷阱</h4>
+<ul>
+<li><strong>陷阱1：容器以 root 运行</strong> → Dockerfile 中使用 USER 指令，创建非 root 用户</li>
+<li><strong>陷阱2：镜像过大</strong> → 多阶段构建、alpine 基础镜像、合并 RUN、清理缓存</li>
+<li><strong>陷阱3：数据存在容器内</strong> → 使用 volume 或 bind mount 持久化数据，容器是临时的</li>
+<li><strong>陷阱4：每次部署用 latest 标签</strong> → 使用具体版本号（v1.2.3），latest 不可追溯</li>
+<li><strong>陷阱5：健康检查缺失</strong> → HEALTHCHECK 指令，K8s liveness/readiness probe</li>
+<li><strong>陷阱6：日志写到文件</strong> → 日志输出到 stdout/stderr，由 Docker 日志驱动收集</li>
+<li><strong>陷阱7：构建上下文过大</strong> → 使用 .dockerignore 排除 node_modules、.git、构建产物</li>
+<li><strong>陷阱8：特权容器 --privileged</strong> → 仅在必要时使用，优先用 --cap-add 添加特定能力</li>
+</ul>
+
+
                 <div class="page-nav">
 <a class="nav-prev" href="../../other/rpc/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">运行过程</span></a>
 <a class="nav-next" href="../../other/harbor/index.html"><span class="nav-label">下一篇 →</span><span class="nav-title">简介</span></a>

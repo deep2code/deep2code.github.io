@@ -316,6 +316,241 @@ just test
 just deploy</code></pre>
 
 <h3 id="taskfile">Taskfile - Task Runner</h3>
+
+<h3 id="make-internals">Make 底层原理与高级用法深度解析</h3>
+
+<h4 id="make-algorithm">Make 构建算法：依赖图与时间戳</h4>
+<pre><code class="language-text">Make 的核心是基于依赖图的增量构建：
+
+  构建算法：
+  1. 解析 Makefile，构建依赖图（DAG：有向无环图）
+  2. 从目标（target）开始，递归遍历依赖
+  3. 对每个目标，检查是否需要重建：
+     - 目标文件不存在 → 需要重建
+     - 任何依赖文件的修改时间 > 目标文件修改时间 → 需要重建
+     - 目标是 .PHONY（伪目标）→ 总是重建
+  4. 需要重建时，执行对应的命令
+  5. 按拓扑排序执行（依赖先于目标）
+
+  示例：
+  app: main.o utils.o
+      gcc -o app main.o utils.o
+  
+  main.o: main.c header.h
+      gcc -c main.c
+  
+  utils.o: utils.c header.h
+      gcc -c utils.c
+
+  依赖图：
+        app
+       /   \
+  main.o   utils.o
+    |  \    /  |
+    |   header.h |
+    |           |
+  main.c      utils.c
+
+  执行顺序（拓扑排序）：
+  1. gcc -c main.c    （如果 main.c 或 header.h 更新）
+  2. gcc -c utils.c   （如果 utils.c 或 header.h 更新）
+  3. gcc -o app ...   （如果 main.o 或 utils.o 更新）
+
+  时间戳比较的精度问题：
+  - Make 比较文件修改时间（mtime），精度到秒
+  - 如果文件在 1 秒内修改，可能判断错误（race condition）
+  - 解决方案：使用 .LOW_RESOLUTION_TIME 或 order-only prerequisites
+  - 现代构建系统（Ninja、Bazel）使用更精确的时间戳或内容哈希</code></pre>
+
+<h4 id="make-variables">Make 变量系统：递归展开 vs 立即展开</h4>
+<pre><code class="language-makefile"># Make 变量有两种赋值方式，行为完全不同：
+
+# 1. 递归展开变量（Recursively Expanded）= 延迟展开
+# 使用 = 定义，在使用时才展开（类似 C 宏）
+VAR_RECURSIVE = $(shell date)  # 每次使用都执行 date
+
+# 2. 立即展开变量（Simply Expanded）= 定义时展开
+# 使用 := 定义，在定义时就展开（类似变量赋值）
+VAR_SIMPLE := $(shell date)  # 只在定义时执行一次 date
+
+# 3. 条件赋值（Conditional）
+# 使用 ?= 定义，只有变量未定义时才赋值
+CC ?= gcc  # 如果 CC 未定义，则设为 gcc
+
+# 4. 追加赋值（Append）
+# 使用 += 定义，在变量末尾追加
+CFLAGS += -Wall  # 在 CFLAGS 末尾追加 -Wall
+
+# 关键区别示例：
+A = foo
+B = $(A) bar    # 递归展开，B 在使用时才展开
+A = baz          # 此时 B 的值会变成 "baz bar"
+
+C := foo
+D := $(C) bar   # 立即展开，D = "foo bar"
+C := baz         # D 仍然是 "foo bar"
+
+# 自动变量（Automatic Variables）：
+# $@  目标文件名
+# $<  第一个依赖文件名
+# $^  所有依赖文件名（去重）
+# $+  所有依赖文件名（不去重）
+# $*  目标文件名（不含后缀）
+# $(@D) 目标文件的目录部分
+# $(@F) 目标文件的文件名部分
+
+# 模式规则示例：
+%.o: %.c
+    $(CC) $(CFLAGS) -c $< -o $@
+# $< = %.c（源文件），$@ = %.o（目标文件）
+
+# 变量的来源优先级（从高到低）：
+# 1. 命令行参数：make CC=clang
+# 2. Makefile 中的 override 指令
+# 3. 环境变量（如果使用 -e 选项）
+# 4. Makefile 中的普通赋值
+# 5. 内置变量（CC、CFLAGS 等）</code></pre>
+
+<h4 id="make-functions">Make 函数与文本处理</h4>
+<pre><code class="language-makefile"># Make 提供丰富的内置函数，语法：$(function arguments)
+
+# 1. 文件名函数
+$(wildcard *.c)           # 匹配所有 .c 文件，返回列表
+$(dir src/foo.c)          # 提取目录：src/
+$(notdir src/foo.c)       # 提取文件名：foo.c
+$(suffix src/foo.c)       # 提取后缀：.c
+$(basename src/foo.c)     # 提取不含后缀：src/foo
+$(addsuffix .o, foo bar)  # 添加后缀：foo.o bar.o
+$(addprefix src/, foo bar) # 添加前缀：src/foo src/bar
+
+# 2. 文本处理函数
+$(subst .c,.o,$(SOURCES)) # 替换：.c → .o
+$(patsubst %.c,%.o,$(SRC)) # 模式替换：%.c → %.o
+$(strip $(VAR))            # 去除首尾空格，压缩中间空格
+$(findstring a,a b c)      # 查找字符串，找到返回 a，否则空
+$(filter %.c,$(FILES))     # 过滤：只保留匹配模式的
+$(filter-out %.c,$(FILES)) # 反过滤：排除匹配模式的
+$(sort foo bar foo)        # 排序并去重：bar foo
+$(word 2, foo bar baz)     # 取第 N 个单词：bar
+$(words foo bar baz)       # 单词数量：3
+$(wordlist 2,3, foo bar baz) # 取范围：bar baz
+
+# 3. 条件函数
+$(if $(VAR),true,false)     # 如果 VAR 非空，返回 true，否则 false
+$(and $(A),$(B))            # 逻辑与：都非空才返回最后一个
+$(or $(A),$(B))             # 逻辑或：返回第一个非空的
+
+# 4. 循环与 foreach
+$(foreach var,$(LIST),$(var).o)  # 对每个元素执行操作
+# 示例：SOURCES = a.c b.c → OBJECTS = a.o b.o
+OBJECTS = $(foreach src,$(SOURCES),$(src:.c=.o))
+
+# 5. Shell 函数（执行 shell 命令）
+$(shell ls *.c)              # 执行 ls，返回输出
+$(shell git rev-parse HEAD)  # 获取 git commit hash
+
+# 6. 调用自定义函数（call）
+# 定义函数：
+define my_func
+    echo "First: $(1), Second: $(2)"
+endef
+# 调用：
+$(call my_func,hello,world)  # $(1)=hello, $(2)=world
+
+# 实际示例：自动生成源文件列表
+SRCDIR = src
+SOURCES = $(wildcard $(SRCDIR)/*.c)
+OBJECTS = $(patsubst $(SRCDIR)/%.c,build/%.o,$(SOURCES))
+DEPS = $(OBJECTS:.o=.d)
+
+# 自动依赖生成（GCC -MMD）
+build/%.o: src/%.c
+    $(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(DEPS)  # 包含自动生成的依赖文件</code></pre>
+
+<h4 id="make-advanced">Make 高级特性：自动依赖、并行构建、VPATH</h4>
+<pre><code class="language-makefile"># 1. 自动依赖生成（Automatic Dependency Generation）
+# 问题：头文件依赖需要手动维护，容易遗漏
+# 解决方案：GCC/Clang 的 -MMD -MP 选项自动生成 .d 依赖文件
+
+CC = gcc
+CFLAGS = -Wall -Wextra -MMD -MP  # -MMD 生成依赖，-MP 处理删除的头文件
+
+build/%.o: src/%.c | build
+    $(CC) $(CFLAGS) -c $< -o $@
+
+# 包含所有依赖文件（- 表示不存在不报错）
+-include $(OBJECTS:.o=.d)
+
+# 2. 并行构建（Parallel Build）
+# make -j4  # 使用 4 个并行任务
+# make -j   # 使用所有 CPU 核心
+# 注意：并行构建要求依赖关系正确，否则可能 race condition
+
+# 3. VPATH：虚拟路径（搜索源文件）
+# 当源文件不在当前目录时，Make 会在 VPATH 中搜索
+VPATH = src:include:../common
+# 或者使用 vpath 指令（更精确）
+vpath %.c src
+vpath %.h include
+vpath %.c ../common
+
+# 4. Order-only Prerequisites（仅顺序依赖）
+# 普通依赖：时间戳更新就触发重建
+# Order-only：只保证执行顺序，不触发重建
+# 语法：target: normal-prereqs | order-only-prereqs
+
+build/%.o: src/%.c | build  # build 目录只创建一次，不触发重建
+    $(CC) $(CFLAGS) -c $< -o $@
+
+build:
+    mkdir -p build
+
+# 5. 双冒号规则（Double-Colon Rules）
+# 同一目标可以有多个独立的规则，每个都可能执行
+# 普通规则：同一目标只能有一个命令块
+# 双冒号：同一目标可以有多个命令块，按依赖分别执行
+
+report:: input1.txt
+    echo "Processing input1"
+    
+report:: input2.txt
+    echo "Processing input2"
+
+# 6. 包含其他 Makefile
+include config.mk  # 包含配置
+-include local.mk  # 可选包含（不存在不报错）
+
+# 7. 条件编译
+ifeq ($(DEBUG),1)
+    CFLAGS += -g -O0 -DDEBUG
+else
+    CFLAGS += -O2 -DNDEBUG
+endif
+
+ifdef COVERAGE
+    CFLAGS += --coverage
+    LDFLAGS += --coverage
+endif
+
+# 8. 导出变量给子 make
+export CC CFLAGS  # 子 make 可以使用这些变量
+unexport VAR      # 不导出某个变量</code></pre>
+
+<h4 id="make-pitfalls">Make 常见陷阱与最佳实践</h4>
+<ul>
+<li><strong>陷阱1：Tab vs 空格</strong> → Makefile 命令行必须以 Tab 开头，空格会报错 "missing separator"</li>
+<li><strong>陷阱2：递归展开变量的副作用</strong> → 用 = 定义的变量每次使用都展开，$(shell) 会重复执行；用 := 避免</li>
+<li><strong>陷阱3：依赖遗漏</strong> → 头文件变更不触发重建；用 -MMD -MP 自动生成依赖</li>
+<li><strong>陷阱4：.PHONY 缺失</strong> → clean、all 等伪目标如果不声明 .PHONY，当存在同名文件时不执行</li>
+<li><strong>陷阱5：并行构建 race</strong> → 依赖关系不正确时，-j 并行构建可能失败；确保所有依赖都声明</li>
+<li><strong>陷阱6：命令回显与静默</strong> → 命令前加 @ 不回显；全局用 make -s 静默；调试时用 make -n 只打印不执行</li>
+<li><strong>陷阱7：删除文件不重建</strong> → 删除目标文件后 make 会重建，但删除依赖文件可能报错；用 .DELETE_ON_ERROR 自动清理失败的目标</li>
+<li><strong>陷阱8：路径中的空格</strong> → Make 对路径中的空格处理很差；尽量避免路径中有空格</li>
+</ul>
+
+
 <pre><code class="language-yaml"># Taskfile.yml
 version: '3'
 

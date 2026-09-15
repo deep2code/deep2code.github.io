@@ -331,6 +331,267 @@ draft: false
 </ul>
 
 <h3 id="portability">可移植性</h3>
+
+<h3 id="markdown-internals">Markdown 底层原理与规范深度解析</h3>
+
+<h4 id="markdown-history">Markdown 发展史与规范分歧</h4>
+<pre><code class="language-text">Markdown 的历史与规范演进：
+
+  2004年：John Gruber 发布 Markdown
+  - 目标："易读易写"，纯文本格式
+  - 问题：规范不明确，实现不一致（"Markdown is not a spec"）
+  
+  2012年：CommonMark 项目启动
+  - 目标：制定明确的、可测试的 Markdown 规范
+  - 提供官方测试套件（600+ 测试用例）
+  - 参考实现：C、JavaScript、Ruby、Python
+  
+  2016年：GitHub Flavored Markdown (GFM)
+  - 基于 CommonMark，扩展 GitHub 特有功能
+  - 扩展：表格、任务列表、删除线、自动链接、代码块语言
+  
+  2017年：Markdown Extra（PHP 社区）
+  - 扩展：脚注、缩写、定义列表、表格、属性
+  
+  常见实现对比：
+  ┌──────────────┬──────────┬──────────────────────────────┐
+  │ 实现         │ 规范基础 │ 特点                          │
+  ├──────────────┼──────────┼──────────────────────────────┤
+  │ CommonMark   │ 官方规范 │ 严格、可测试、参考实现        │
+  │ GFM          │ CommonMark│ 表格、任务列表、删除线       │
+  │ Markdown.pl  │ 原始     │ Gruber 原版，行为不一致      │
+  │ Pandoc       │ 扩展     │ 最强大，支持多种输出格式     │
+  │ Python-Markdown│ 扩展    │ 插件架构，可扩展             │
+  │ marked       │ GFM      │ JavaScript，速度快            │
+  └──────────────┴──────────┴──────────────────────────────┘
+
+  规范分歧的典型问题：
+  1. 缩进代码块 vs 围栏代码块的优先级
+  2. 列表项中嵌套代码块需要多少缩进
+  3. 强调符号（*_）的嵌套规则
+  4. 空行是否需要分隔块级元素
+  5. HTML 块的识别规则
+  → CommonMark 通过精确的状态机和测试套件解决了这些问题</code></pre>
+
+<h4 id="markdown-parsing">Markdown 解析原理：块级 vs 行内</h4>
+<pre><code class="language-text">Markdown 解析分为两个阶段：
+
+  阶段1：块级解析（Block-level Parsing）
+  - 将文档分割为块级元素：段落、标题、列表、代码块、引用、表格
+  - 块级元素可以嵌套（列表项中包含段落、代码块等）
+  - 算法：逐行扫描，根据行首字符判断块类型
+  
+  块级元素类型：
+  1. ATX 标题：# ## ### ...
+  2. Setext 标题：下划线 === ---
+  3. 段落：连续的非空行
+  4. 无序列表：- * + 开头
+  5. 有序列表：数字. 开头
+  6. 引用块：> 开头
+  7. 围栏代码块：``` 或 ~~~
+  8. 缩进代码块：4 空格缩进
+  9. 水平线：--- *** ___
+  10. 表格（GFM）：| 分隔
+  11. HTML 块：< 开头的标签
+
+  阶段2：行内解析（Inline Parsing）
+  - 在块级元素的文本内容中解析行内元素
+  - 行内元素：强调、链接、图片、代码、行内 HTML
+  - 算法：优先匹配（先长后短，先特定后通用）
+  
+  行内元素类型：
+  1. 代码：`code`（反引号，优先级最高）
+  2. 图片：![alt](url)
+  3. 链接：[text](url) 或 [text][ref]
+  4. 强调：*italic* **bold** ***bold italic***
+  5. 删除线（GFM）：~~text~~
+  6. 行内 HTML：<tag>
+  7. 自动链接（GFM）：URL 自动转为链接
+  8. 转义：\* \` \[ 等
+
+  解析优先级（从高到低）：
+  1. 代码（反引号）- 不解析内部内容
+  2. HTML 标签 - 不解析标签内部
+  3. 图片和链接
+  4. 强调（* 和 _）
+  5. 自动链接
+  6. 文本
+
+  示例解析过程：
+  输入：**Hello** *world* `code`
+  
+  1. 先找代码：`code` → <code>code</code>
+  2. 再找强调：**Hello** → <strong>Hello</strong>
+  3. 再找强调：*world* → <em>world</em>
+  输出：<strong>Hello</strong> <em>world</em> <code>code</code></code></pre>
+
+<h4 id="markdown-ast">Markdown AST 与渲染流程</h4>
+<pre><code class="language-text">现代 Markdown 解析器通常生成 AST（抽象语法树）：
+
+  解析流程：
+  输入文本 → 词法分析（Tokenize）→ 语法分析（Parse）→ AST → 渲染（Render）→ HTML
+
+  AST 示例：
+  输入：
+  # Title
+  
+  Hello **world**
+  
+  - item 1
+  - item 2
+
+  AST（JSON 表示）：
+  {
+    "type": "document",
+    "children": [
+      {
+        "type": "heading",
+        "depth": 1,
+        "children": [{"type": "text", "value": "Title"}]
+      },
+      {
+        "type": "paragraph",
+        "children": [
+          {"type": "text", "value": "Hello "},
+          {"type": "strong", "children": [{"type": "text", "value": "world"}]}
+        ]
+      },
+      {
+        "type": "list",
+        "ordered": false,
+        "children": [
+          {"type": "listItem", "children": [
+            {"type": "paragraph", "children": [{"type": "text", "value": "item 1"}]}
+          ]},
+          {"type": "listItem", "children": [
+            {"type": "paragraph", "children": [{"type": "text", "value": "item 2"}]}
+          ]}
+        ]
+      }
+    ]
+  }
+
+  AST 的优势：
+  1. 可扩展：可以在 AST 上做自定义处理（语法高亮、目录生成）
+  2. 多输出：同一 AST 可以渲染为 HTML、PDF、Word、LaTeX
+  3. 可测试：AST 结构可以精确测试，不依赖 HTML 格式
+  4. 可优化：可以在 AST 上做优化（去除空白、合并节点）
+
+  常见 Markdown AST 工具：
+  - unified / remark：JavaScript 生态，插件化
+  - markdown-it：JavaScript，可扩展
+  - mistune：Python，速度快
+  - markdown-it-py：Python，markdown-it 的 Python 移植
+  - pulldown-cmark：Rust，CommonMark 兼容，速度极快</code></pre>
+
+<h4 id="markdown-extensions">Markdown 扩展语法与高级用法</h4>
+<pre><code class="language-markdown"><!-- 1. 表格（GFM / Markdown Extra） -->
+| 左对齐 | 居中 | 右对齐 |
+|:-------|:----:|-------:|
+| 内容   | 内容 | 内容   |
+
+<!-- 2. 任务列表（GFM） -->
+- [x] 已完成任务
+- [ ] 未完成任务
+- [ ] 另一个任务
+
+<!-- 3. 删除线（GFM） -->
+~~删除的文字~~
+
+<!-- 4. 脚注（Markdown Extra / Pandoc） -->
+这是一个脚注[^1]。
+
+[^1]: 这是脚注的内容。
+
+<!-- 5. 定义列表（Markdown Extra） -->
+术语1
+:   定义1
+
+术语2
+:   定义2a
+:   定义2b
+
+<!-- 6. 缩写（Markdown Extra） -->
+*[HTML]: Hyper Text Markup Language
+*[CSS]: Cascading Style Sheets
+
+后面提到 HTML 和 CSS 时会自动显示缩写提示。
+
+<!-- 7. 属性（Markdown Extra / Pandoc） -->
+标题 {#custom-id .class1 .class2 key=value}
+====
+
+段落 {.warning}
+
+<!-- 8. 数学公式（Pandoc / 很多平台支持） -->
+行内公式：$E = mc^2$
+
+块级公式：
+$$
+\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}
+$$
+
+<!-- 9. 图表（Mermaid，很多平台支持） -->
+```mermaid
+graph LR
+    A --> B
+    B --> C
+```
+
+<!-- 10. 目录（很多平台自动生成） -->
+[TOC]
+
+<!-- 11. 警告框（GitHub / GitBook 等） -->
+> [!NOTE]
+> 这是一个提示。
+
+> [!WARNING]
+> 这是一个警告。
+
+<!-- 12. 代码块信息字符串 -->
+```python title="example.py" linenums=1 hl_lines="2-3"
+def hello():
+    print("Hello")  # 高亮
+    return 0        # 高亮
+```</code></pre>
+
+<h4 id="markdown-security">Markdown 安全：XSS 防护与沙箱</h4>
+<pre><code class="language-text">Markdown 的安全风险与防护：
+
+  风险1：XSS（跨站脚本攻击）
+  - Markdown 允许行内 HTML，用户可以注入 <script>
+  - 示例：<script>alert('XSS')</script>
+  - <img src=x onerror=alert('XSS')>
+  - <a href="javascript:alert('XSS')">点击</a>
+  
+  防护措施：
+  1. 禁用原始 HTML（很多平台默认禁用）
+  2. 使用 HTML 净化器（DOMPurify、sanitize-html）
+  3. 过滤危险标签和属性（script、onerror、javascript:）
+  4. CSP（内容安全策略）限制脚本来源
+
+  风险2：点击劫持（Open Redirect）
+  - 链接可以指向恶意网站
+  - 防护：rel="noopener noreferrer" target="_blank"
+  - 链接前添加警告（外部链接提示）
+
+  风险3：资源耗尽（DoS）
+  - 深度嵌套的列表/引用可能导致解析器栈溢出
+  - 超长的行内代码可能导致正则回溯
+  - 防护：限制输入大小、限制嵌套深度、使用安全的解析器
+
+  风险4：信息泄露
+  - 图片链接可以追踪用户（像素追踪）
+  - 防护：代理图片资源（image proxy）、阻止外部图片
+
+  最佳实践：
+  1. 服务端渲染 Markdown，不要在客户端渲染用户输入
+  2. 使用经过安全审计的解析器（不要自己写正则解析）
+  3. 启用 CSP：default-src 'self'; script-src 'self'
+  4. 对用户输入的 Markdown 进行净化（sanitize）
+  5. 定期更新解析器库（修复已知漏洞）</code></pre>
+
+
 <ul>
 <li>避免依赖特定工具的扩展</li>
 <li>图片本地化或使用稳定 CDN</li>
