@@ -392,6 +392,100 @@ stateDiagram-v2
 <p><img alt="HTML渲染" src="HTML%E6%B8%B2%E6%9F%93.webp" title="HTML渲染"/>
 <img alt="内部架构" src="%E5%86%85%E9%83%A8%E6%9E%B6%E6%9E%84.webp" title="内部架构"/></p>
 <h3 id="优秀网站">优秀网站</h3>
+<h3 id="browser-rendering-architecture">浏览器渲染架构与关键路径</h3>
+
+<p>理解浏览器如何将 HTML/CSS/JS 转换为屏幕上的像素，是 Web 性能优化的基础。现代浏览器的渲染管线经历了多年演进，核心目标是<strong>在 16.7ms（60fps）内完成一帧的渲染</strong>。</p>
+
+<h4 id="rendering-pipeline">渲染流水线（Rendering Pipeline）</h4>
+
+<p>浏览器的渲染过程分为六个阶段：</p>
+
+<ol>
+<li><strong>HTML 解析（Parsing）</strong>：将 HTML 字节流转换为 DOM 树。解析器是增量式的，边接收边解析，遇到 <code>&lt;script&gt;</code> 会阻塞（除非有 async/defer）</li>
+<li><strong>CSS 解析（Style）</strong>：将 CSS 转换为 CSSOM（CSS Object Model）。CSS 解析不会阻塞 HTML 解析，但会阻塞渲染（因为需要 CSSOM 才能构建渲染树）</li>
+<li><strong>渲染树构建（Layout Tree）</strong>：将 DOM 和 CSSOM 合并为渲染树（Render Tree），只包含可见元素（<code>display:none</code> 的元素不在渲染树中）</li>
+<li><strong>布局（Layout/Reflow）</strong>：计算每个元素的几何位置和尺寸。从根节点开始递归计算，使用盒模型（Box Model）和包含块（Containing Block）规则</li>
+<li><strong>绘制（Paint）</strong>：将渲染树的每个节点绘制为像素。包括文字、颜色、边框、阴影、图片等。绘制是按层（Layer）进行的</li>
+<li><strong>合成（Composite）</strong>：将多个图层合并为最终屏幕图像。在 GPU 上执行，通过纹理映射（Texture Mapping）实现</li>
+</ol>
+
+<p>关键优化点：<strong>布局和绘制是最昂贵的阶段</strong>。现代浏览器通过分层（Layer Promotion）和 GPU 合成来避免重复布局/绘制。使用 <code>transform</code> 和 <code>opacity</code> 动画只会触发合成，不触发布局和绘制。</p>
+
+<h4 id="critical-rendering-path">关键渲染路径（Critical Rendering Path）</h4>
+
+<p>关键渲染路径是浏览器从接收 HTML 到首次渲染的完整路径。优化目标是<strong>缩短首次内容绘制（FCP）和最大内容绘制（LCP）的时间</strong>。</p>
+
+<p>关键资源：</p>
+<ul>
+<li><strong>HTML</strong>：阻塞解析，必须完全下载和解析</li>
+<li><strong>CSS</strong>：阻塞渲染，必须在首次绘制前加载完成（除非是 <code>media="print"</code> 等非匹配媒体）</li>
+<li><strong>同步 JS</strong>：阻塞 HTML 解析，因为 JS 可能修改 DOM</li>
+</ul>
+
+<p>优化策略：</p>
+<ul>
+<li>内联关键 CSS（Above-the-fold CSS），减少外部请求</li>
+<li>使用 <code>media</code> 属性标记非关键 CSS，实现条件加载</li>
+<li>JS 使用 <code>async</code>（异步下载，下载完立即执行）或 <code>defer</code>（异步下载，HTML 解析完后按顺序执行）</li>
+<li>预加载关键资源：<code>&lt;link rel="preload"&gt;</code>、<code>&lt;link rel="preconnect"&gt;</code>、<code>&lt;link rel="dns-prefetch"&gt;</code></li>
+</ul>
+
+<h4 id="v8-architecture">JavaScript 引擎：V8 架构深度解析</h4>
+
+<p>V8 是 Chrome 和 Node.js 使用的 JavaScript 引擎，其性能来自<strong>多层编译架构和高效的垃圾回收</strong>。</p>
+
+<p>V8 的执行流水线：</p>
+<ol>
+<li><strong>解析（Parser）</strong>：将 JS 源码解析为 AST（抽象语法树）。使用延迟解析（Lazy Parsing），只解析当前需要的函数，函数体在首次调用时才解析</li>
+<li><strong>Ignition 解释器</strong>：将 AST 编译为字节码（Bytecode），直接解释执行。字节码比机器码小 3-5 倍，减少内存占用</li>
+<li><strong>TurboFan 优化编译器</strong>：对热点函数（执行次数多的）进行 JIT 编译，生成优化的机器码。使用类型反馈（Type Feedback）假设变量类型，生成特化代码</li>
+<li><strong>去优化（Deoptimization）</strong>：如果类型假设失败（如变量类型改变），回退到解释器执行，重新收集类型信息</li>
+</ol>
+
+<p>性能建议：保持变量类型稳定（不要在运行时改变对象的 shape），避免在循环中创建函数，使用 <code>Array</code> 而不是 <code>arguments</code>，这些都能帮助 V8 生成更优的代码。</p>
+
+<h3 id="web-performance-metrics">性能指标与优化实战</h3>
+
+<h4 id="core-web-vitals">Core Web Vitals 深度解析</h4>
+
+<p>Google 定义的 Core Web Vitals 是衡量用户体验的核心指标：</p>
+
+<ul>
+<li><strong>LCP（Largest Contentful Paint）</strong>：最大内容绘制时间，衡量加载性能。目标 <code>&lt; 2.5s</code>。LCP 元素通常是图片、视频封面或大段文字。优化：优化服务器响应时间（TTFB）、预加载关键资源、优化图片（压缩、WebP/AVIF、响应式图片）、延迟加载非关键资源</li>
+<li><strong>INP（Interaction to Next Paint）</strong>：交互到下一次绘制的时间，衡量响应性。目标 <code>&lt; 200ms</code>。2024 年 3 月替代 FID。优化：拆分长任务（Long Task &gt; 50ms）、使用 <code>requestIdleCallback</code> 处理非紧急工作、避免主线程阻塞、使用 Web Worker 处理计算密集型任务</li>
+<li><strong>CLS（Cumulative Layout Shift）</strong>：累积布局偏移，衡量视觉稳定性。目标 <code>&lt; 0.1</code>。优化：为图片和视频设置 <code>width</code>/<code>height</code> 属性（或 aspect-ratio）、为广告和嵌入内容预留空间、避免在已有内容上方插入内容、使用 <code>font-display: swap</code> 避免 FOIT</li>
+</ul>
+
+<h4 id="network-optimization">网络协议与加载优化</h4>
+
+<p>现代 Web 的网络层经历了多次演进：</p>
+
+<ul>
+<li><strong>HTTP/1.1</strong>：文本协议，队头阻塞（Head-of-Line Blocking），同一域名最多 6 个并发连接。优化：域名分片（Sharding）、资源合并（Spriting、Concatenation）</li>
+<li><strong>HTTP/2</strong>：二进制协议，多路复用（Multiplexing），头部压缩（HPACK），服务器推送（Server Push，已废弃）。一个连接可以并行传输多个请求/响应</li>
+<li><strong>HTTP/3</strong>：基于 QUIC（UDP），解决 TCP 层的队头阻塞，支持 0-RTT 握手，连接迁移（网络切换不中断）。2024 年全球使用率超过 30%</li>
+</ul>
+
+<p>缓存策略：</p>
+<ul>
+<li><strong>强缓存</strong>：<code>Cache-Control: max-age=31536000, immutable</code>，浏览器直接使用本地缓存，不发请求。适用于带哈希文件名的静态资源</li>
+<li><strong>协商缓存</strong>：<code>ETag</code> / <code>Last-Modified</code>，浏览器发请求验证资源是否变化，未变化返回 304。适用于频繁更新的资源</li>
+<li><strong>Service Worker</strong>：可编程的缓存层，可以实现离线访问、缓存策略定制（Cache First、Network First、Stale-While-Revalidate）</li>
+</ul>
+
+<h3 id="web-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>布局抖动（Layout Thrashing）</strong>：在 JavaScript 中交替读取和写入 DOM（如循环中先读 <code>offsetWidth</code> 再修改样式），会强制浏览器多次同步布局。解决：先批量读取，再批量写入，或使用 <code>requestAnimationFrame</code></li>
+<li><strong>同步 XHR 阻塞</strong>：<code>XMLHttpRequest</code> 的同步模式会完全阻塞主线程，包括用户交互。永远使用异步请求，或使用 <code>fetch</code> API</li>
+<li><strong>图片未设置尺寸</strong>：图片加载前不知道尺寸，加载后会推开其他内容，导致 CLS。始终设置 <code>width</code> 和 <code>height</code>，或使用 CSS <code>aspect-ratio</code></li>
+<li><strong>第三方脚本阻塞</strong>：广告、分析、社交媒体等第三方脚本通常体积大且加载慢，会阻塞渲染。使用 <code>async</code>/<code>defer</code>，或延迟到交互后加载（如 <code>requestIdleCallback</code>）</li>
+<li><strong>过度使用 CSS 动画</strong>：动画 <code>width</code>、<code>height</code>、<code>top</code>、<code>left</code> 等属性会触发布局，性能差。只动画 <code>transform</code> 和 <code>opacity</code>，这两个属性只触发合成</li>
+<li><strong>内存泄漏</strong>：未移除的事件监听器、未清理的定时器、闭包引用的 DOM 元素、全局变量累积，都会导致内存泄漏。使用 <code>WeakMap</code>/<code>WeakSet</code>，在组件卸载时清理资源</li>
+<li><strong>事件委托误用</strong>：在 <code>document</code> 上绑定大量事件监听器，每次事件都要冒泡到顶层并执行匹配逻辑，影响性能。在最近的共同祖先上绑定，而不是 <code>document</code></li>
+<li><strong>忽略移动端性能</strong>：移动端 CPU 性能通常是桌面的 1/3 到 1/5，内存也更有限。在真实设备上测试（不是 Chrome DevTools 的模拟），控制 JS 体积（&lt; 150KB gzip），避免长时间运行的计算</li>
+</ol>
+
 <hr>
 <ul>
 <li><p><a href="https://nodejs.org/">Node.js-前端必备</a></p></li>

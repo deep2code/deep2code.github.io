@@ -343,6 +343,96 @@ export http_proxy=http://127.0.0.1:7890
 export https_proxy=http://127.0.0.1:7890</code></pre>
 
 <h3 id="cuda-wsl">WSL2 + CUDA</h3>
+<h3 id="wsl2-architecture">WSL2 架构与底层原理</h3>
+
+<p>WSL2（Windows Subsystem for Linux 2）是微软在 2019 年发布的 Linux 子系统，与 WSL1 的<strong>系统调用翻译</strong>不同，WSL2 使用<strong>轻量级虚拟机</strong>运行真实的 Linux 内核，提供完整的系统调用兼容性和接近原生的性能。</p>
+
+<h4 id="wsl2-architecture-deep">WSL2 架构深度解析</h4>
+
+<p>WSL2 的核心组件：</p>
+
+<ul>
+<li><strong>轻量级虚拟机（Lightweight VM）</strong>：基于 Hyper-V 技术，但不是完整的 Windows 虚拟机。启动时间约 2 秒，内存占用约 200MB（空闲时）。使用动态内存分配，Linux 进程需要多少就分配多少</li>
+<li><strong>Linux 内核</strong>：微软维护的定制 Linux 内核，基于主线内核，包含针对 WSL2 的优化（如 9P 文件系统、Hyper-V 集成服务、init 系统）。内核通过 Windows Update 更新，也可以自行编译替换</li>
+<li><strong>init 进程</strong>：WSL2 的 init 不是 systemd（默认），而是微软定制的轻量级 init，负责启动发行版、管理进程、与 Windows 通信。WSL 0.67+ 支持启用 systemd</li>
+<li><strong>9P 文件系统</strong>：Windows 文件系统（C:、D:）通过 9P 协议挂载到 Linux 的 /mnt/c、/mnt/d。这是跨文件系统性能差的根本原因——每次文件操作都要经过 9P 协议转换</li>
+<li><strong>互操作（Interop）</strong>：Linux 可以直接运行 Windows 可执行文件（如 <code>code .</code>、<code>explorer.exe .</code>），Windows 也可以运行 Linux 命令（<code>wsl ls -la</code>）。通过 <code>/mnt/c/Windows/System32</code> 在 PATH 中实现</li>
+</ul>
+
+<h4 id="wsl2-performance">性能特性与优化</h4>
+
+<p>WSL2 的性能表现：</p>
+
+<ul>
+<li><strong>Linux 文件系统（ext4）</strong>：在 WSL2 的虚拟磁盘（VHDX）中，性能接近原生 Linux，IO 操作比 WSL1 快 5-20 倍</li>
+<li><strong>Windows 文件系统（NTFS via 9P）</strong>：跨文件系统操作慢，尤其是大量小文件的操作（如 npm install、git status）。比原生慢 3-10 倍</li>
+<li><strong>网络</strong>：WSL2 使用 NAT 网络模式，Linux 有独立的 IP 地址。localhost 转发由 Windows 自动处理（WSL2 的 localhost 转发）。但某些场景（如 Docker 端口映射）需要额外配置</li>
+<li><strong>内存</strong>：WSL2 默认最多使用 50% 的系统内存（或 8GB，取较小值），不会自动释放。在 <code>%UserProfile%/.wslconfig</code> 中配置 <code>memory=4GB</code>、<code>processors=4</code> 限制资源</li>
+</ul>
+
+<p>最佳实践：<strong>项目代码放在 Linux 文件系统中</strong>（<code>~/projects/</code>），而不是 /mnt/c/。用 VS Code Remote - WSL 扩展编辑，用 Windows 浏览器访问 <code>localhost</code>。这样可以获得最佳性能。</p>
+
+<h4 id="wsl2-gpu-cuda">GPU 加速与 CUDA</h4>
+
+<p>WSL2 支持 GPU 直通（GPU Passthrough），可以在 Linux 中直接使用 NVIDIA GPU：</p>
+
+<ul>
+<li><strong>WSL2 的 CUDA</strong>：NVIDIA 提供了 WSL2 专用的 CUDA 驱动，不需要在 Linux 中安装驱动，驱动由 Windows 端提供。安装 <code>nvidia-cuda-toolkit</code> 即可使用 nvcc、nvidia-smi</li>
+<li><strong>Docker + GPU</strong>：在 WSL2 中运行 Docker Desktop 或原生 Docker，可以通过 <code>--gpus all</code> 将 GPU 暴露给容器。适合运行 PyTorch、TensorFlow 等深度学习框架</li>
+<li><strong>限制</strong>：WSL2 的 GPU 支持目前仅限 NVIDIA GPU，AMD 和 Intel 的 GPU 支持有限。不支持 GPU 热插拔，不支持 SLI/CrossFire</li>
+</ul>
+
+<h3 id="windows-dev-tools">开发工具链深度配置</h3>
+
+<h4 id="windows-package-managers">包管理器对比与选择</h4>
+
+<p>Windows 有多个包管理器，各有适用场景：</p>
+
+<ul>
+<li><strong>winget</strong>：微软官方包管理器，Windows 11 内置。使用 YAML 清单，支持安装、升级、卸载、导出。软件源是 winget 社区仓库和微软商店。适合安装桌面应用和开发工具</li>
+<li><strong>Chocolatey</strong>：最老牌的 Windows 包管理器，社区包数量最多（超过 9000 个）。使用 PowerShell 脚本安装，支持安装、升级、卸载。适合需要大量软件包的场景</li>
+<li><strong>Scoop</strong>：专注于命令行工具和开发者工具，安装到用户目录（不需要管理员权限），不污染系统 PATH。适合安装 CLI 工具、开发环境、便携式应用</li>
+<li><strong>选择建议</strong>：日常桌面应用用 winget，开发工具和 CLI 用 Scoop，特殊软件用 Chocolatey 补充。避免混用多个包管理器安装同一软件</li>
+</ul>
+
+<h4 id="windows-terminal">Windows Terminal 深度配置</h4>
+
+<p>Windows Terminal 是微软开发的现代终端，支持多标签、多面板、GPU 加速渲染、Unicode/Emoji 支持。</p>
+
+<p>关键配置项（settings.json）：</p>
+
+<ul>
+<li><strong>默认配置文件</strong>：<code>defaultProfile</code> 设置默认启动的 Shell（推荐 WSL2 Ubuntu 或 PowerShell 7）</li>
+<li><strong>外观</strong>：<code>fontFace</code>（推荐 Cascadia Code / FiraCode / JetBrains Mono，支持连字）、<code>fontSize</code>、<code>colorScheme</code>（内置多种主题，如 One Half Dark、Solarized Dark）</li>
+<li><strong>透明度</strong>：<code>opacity</code>（0-100）、<code>useAcrylic</code>（亚克力模糊效果，需要 Windows 10 1903+）</li>
+<li><strong>快捷键</strong>：<code>actions</code> 自定义快捷键，如 <code>splitPane</code>（分屏）、<code>newTab</code>（新标签）、<code>copy</code>/<code>paste</code>（复制粘贴）</li>
+<li><strong>启动目录</strong>：<code>startingDirectory</code> 设置启动时的工作目录。WSL2 配置文件需要用 <code>//wsl$/Ubuntu/home/username</code> 格式</li>
+</ul>
+
+<h4 id="vscode-remote-wsl">VS Code + WSL2 开发环境</h4>
+
+<p>VS Code Remote - WSL 是 Windows 上 Linux 开发的最佳实践：</p>
+
+<ul>
+<li><strong>架构</strong>：VS Code UI 运行在 Windows，VS Code Server 运行在 WSL2 Linux 中。扩展分为 UI 扩展（运行在 Windows 端）和 Workspace 扩展（运行在 Linux 端）</li>
+<li><strong>文件访问</strong>：在 WSL2 中打开项目（<code>code ~/projects/myapp</code>），文件操作在 Linux 文件系统中，性能好。VS Code 通过 VS Code Server 访问文件，不需要经过 9P</li>
+<li><strong>终端</strong>：VS Code 的集成终端自动使用 WSL2 的 Shell，可以直接运行 Linux 命令。端口自动转发，在 Windows 浏览器中访问 <code>localhost:3000</code> 即可</li>
+<li><strong>Git</strong>：在 WSL2 中使用 Linux 版 Git，与 Windows 端的 Git 配置分离。注意行尾符问题，在 <code>.gitattributes</code> 中设置 <code>* text=auto eol=lf</code></li>
+</ul>
+
+<h3 id="windows-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>项目放在 /mnt/c 导致性能差</strong>：这是 WSL2 最常见的性能问题。9P 文件系统的 IO 性能远低于 ext4。解决方案：项目放在 <code>~/projects/</code>，用 VS Code Remote - WSL 编辑，用 <code>explorer.exe .</code> 在 Windows 资源管理器中打开</li>
+<li><strong>WSL2 内存不释放</strong>：WSL2 的虚拟机会缓存文件系统页面，内存占用只增不减。在 <code>%UserProfile%/.wslconfig</code> 中设置 <code>memory=4GB</code> 限制上限，或运行 <code>wsl --shutdown</code> 释放</li>
+<li><strong>Git 行尾符混乱</strong>：Windows 和 Linux 的行尾符不同（CRLF vs LF），在 WSL2 中操作 Windows 文件可能导致行尾符混乱。在 <code>.gitattributes</code> 中明确指定，设置 <code>git config core.autocrlf false</code>（在 WSL2 中）</li>
+<li><strong>Docker Desktop 与 WSL2 集成问题</strong>：Docker Desktop 默认使用 WSL2 后端，但需要在设置中启用对应发行版的集成。否则在 WSL2 中运行 <code>docker</code> 命令会提示找不到。检查 <code>docker context ls</code> 和 Docker Desktop 设置</li>
+<li><strong>localhost 转发不工作</strong>：WSL2 的 localhost 转发依赖 Windows 的 wslhost 进程，如果被防火墙或 VPN 拦截会失效。尝试 <code>wsl --shutdown</code> 后重启，或直接用 WSL2 的 IP 地址访问（<code>ip addr show eth0</code>）</li>
+<li><strong>Windows 杀毒软件扫描 WSL2 文件</strong>：Windows Defender 会扫描 WSL2 的 VHDX 文件，导致 IO 性能下降。将 WSL2 的虚拟磁盘目录（<code>%LocalAppData%/Packages/CanonicalGroupLimited.../LocalState/</code>）添加到 Defender 排除列表</li>
+<li><strong>在 WSL2 中运行 GUI 应用的性能问题</strong>：WSLg（WSL2 的 GUI 支持）通过 RDP 协议渲染，性能不如原生 Windows 应用。对于需要高性能的 GUI 应用（如浏览器、IDE），建议使用 Windows 原生版本，通过 Remote 扩展连接 WSL2</li>
+<li><strong>多个 WSL2 发行版管理混乱</strong>：安装多个发行版（Ubuntu、Debian、Arch）后，容易混淆哪个是默认的。用 <code>wsl -l -v</code> 查看状态，<code>wsl --set-default Ubuntu</code> 设置默认，<code>wsl --export</code>/<code>--import</code> 备份和迁移发行版</li>
+</ol>
+
 <pre><code class="language-bash"># 在 WSL2 中安装 CUDA
 wsl
 

@@ -162,6 +162,88 @@ git init
 git submodule add https://github.com/adityatelange/hugo-PaperMod themes/PaperMod
 echo "theme = 'PaperMod'" >> hugo.toml
 hugo server -D</code></pre><h3 id="hugo-still-worth">静态站选型：Hugo 还值得用吗</h3>
+<h3 id="hugo-build-architecture">构建架构与渲染原理</h3>
+
+<p>Hugo 是用 Go 编写的静态网站生成器，其核心优势在于<strong>极快的构建速度</strong>。理解其内部架构有助于排查构建问题和优化性能。</p>
+
+<h4 id="hugo-build-pipeline">构建流水线</h4>
+
+<p>Hugo 的构建过程分为五个阶段：</p>
+
+<ol>
+<li><strong>配置加载</strong>：解析 config.toml/yaml/json，合并主题配置，建立站点级配置树</li>
+<li><strong>内容扫描</strong>：递归遍历 content/ 目录，解析 front matter（TOML/YAML/JSON），建立 Page 对象</li>
+<li><strong>模板编译</strong>：加载 layouts/ 目录的 Go 模板，解析模板继承（baseof.html）和 partial</li>
+<li><strong>页面渲染</strong>：对每个 Page 执行模板渲染，生成最终 HTML</li>
+<li><strong>资源处理</strong>：处理 assets/ 中的 CSS/JS/图片，执行管道（pipes）操作</li>
+</ol>
+
+<p>关键设计：Hugo 使用<strong>并发渲染</strong>，每个页面在独立的 goroutine 中渲染，通过 channel 收集结果。这就是为什么 Hugo 能在几秒内构建数千页站点的原因。</p>
+
+<h4 id="hugo-go-template">Go 模板引擎深度解析</h4>
+
+<p>Hugo 使用 Go 的 text/template 和 html/template 包。模板语法的核心概念：</p>
+
+<ul>
+<li><strong>动作（Action）</strong>：<code>{{ }}</code> 包裹的执行指令，包括变量赋值、条件、循环</li>
+<li><strong>管道（Pipeline）</strong>：<code>|</code> 连接多个函数，前一个的输出作为后一个的输入</li>
+<li><strong>上下文（Context/Dot）</strong>：<code>.</code> 表示当前作用域的根对象，在 range/with 中会改变</li>
+<li><strong>函数</strong>：Hugo 内置 200+ 函数，包括字符串处理、日期、数学、i18n 等</li>
+</ul>
+
+<p>常见陷阱：在 <code>{{ range }}</code> 循环内，<code>.</code> 指向当前迭代项，而不是页面。要访问页面变量需要用 <code>$.Page</code> 或在外层保存 <code>{{ $page := . }}</code>。</p>
+
+<h4 id="hugo-content-model">内容模型：Page、Section、Taxonomy</h4>
+
+<p>Hugo 的内容组织基于三个核心概念：</p>
+
+<ul>
+<li><strong>Page</strong>：单个内容页，对应 content/ 下的一个 .md 文件。包含 front matter（元数据）和正文</li>
+<li><strong>Section</strong>：内容分区，对应 content/ 下的子目录。每个 Section 有自己的 _index.md 和列表页</li>
+<li><strong>Taxonomy</strong>：分类系统，如 tags/categories。在 config 中定义，Hugo 自动生成分类列表页和标签页</li>
+</ul>
+
+<p>Page Bundle 是 Hugo 0.32 引入的重要特性：将页面资源（图片、附件）与 .md 文件放在同一目录，形成 <strong>Leaf Bundle</strong>（index.md）或 <strong>Branch Bundle</strong>（_index.md）。Bundle 内的资源可以通过 <code>.Resources</code> 访问，支持图片处理（缩放、裁剪、格式转换）。</p>
+
+<h3 id="hugo-performance">性能优化与构建加速</h3>
+
+<h4 id="hugo-build-cache">构建缓存机制</h4>
+
+<p>Hugo 维护多层缓存来加速增量构建：</p>
+
+<ul>
+<li><strong>文件缓存</strong>：_gen/ 目录存储编译后的资源（CSS、JS、图片处理结果）</li>
+<li><strong>内存缓存</strong>：运行时缓存模板解析结果、页面渲染结果</li>
+<li><strong>文件监听</strong>：hugo server 使用 fsnotify 监听文件变化，只重新渲染受影响的页面</li>
+</ul>
+
+<p>增量构建的关键：Hugo 追踪每个页面的依赖（模板、partial、数据文件），当依赖变化时精确失效相关页面。但如果修改了 baseof.html 等基础模板，会触发全站重新渲染。</p>
+
+<h4 id="hugo-asset-pipeline">资源管道（Asset Pipeline）</h4>
+
+<p>Hugo Pipes 是资源处理系统，支持：</p>
+
+<ul>
+<li><strong>CSS</strong>：Sass/SCSS 编译、PostCSS 处理、CSS 压缩、指纹（fingerprinting）</li>
+<li><strong>JS</strong>：ESBuild 打包、Babel 转译、JS 压缩、Source Map</li>
+<li><strong>图片</strong>：缩放（Resize/Fit/Fill）、格式转换（WebP/AVIF）、质量调整、响应式图片集</li>
+</ul>
+
+<p>性能建议：对图片使用 <code>.Resize</code> 生成多尺寸版本，配合 <code>&lt;picture&gt;</code> 元素实现响应式图片；对 CSS/JS 使用 <code>fingerprint</code> 实现长期缓存。</p>
+
+<h3 id="hugo-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>模板上下文丢失</strong>：在 partial 中 <code>.</code> 是传入的参数，不是 Page。需要显式传 <code>{{ partial "header.html" . }}</code> 或用 dict 传多个参数</li>
+<li><strong>front matter 日期格式</strong>：Hugo 支持多种日期格式，但推荐使用 RFC3339（<code>2026-01-15T10:30:00+08:00</code>），避免歧义</li>
+<li><strong>草稿和未来文章</strong>：<code>draft: true</code> 或日期在未来的文章默认不构建。用 <code>hugo -D</code> 构建草稿，<code>hugo -F</code> 构建未来文章</li>
+<li><strong>URL 大小写</strong>：Hugo 默认将 URL 转为小写。如果服务器区分大小写，可能导致 404。在 config 中设置 <code>disablePathToLower: true</code></li>
+<li><strong>主题覆盖顺序</strong>：项目 layouts/ 覆盖主题 layouts/，但 static/ 目录不会合并，项目中的同名文件会完全覆盖主题文件</li>
+<li><strong>短代码（Shortcode）中的 HTML</strong>：默认情况下，短代码输出的 HTML 不会被 Markdown 解析器转义。但如果短代码在 Markdown 中被缩进，可能被当作代码块</li>
+<li><strong>多语言站点的内容缺失</strong>：多语言模式下，如果某篇文章没有翻译版本，Hugo 默认不会生成该语言的页面。设置 <code>defaultContentLanguageInSubdir: true</code> 和 <code>missingTranslationPlaceholders</code> 可以帮助排查</li>
+<li><strong>构建环境差异</strong>：<code>hugo server</code> 和 <code>hugo</code> 的构建环境不同（development vs production）。某些功能（如 Google Analytics）只在 production 环境启用，用 <code>hugo server -e production</code> 测试</li>
+</ol>
+
 <p>2026 年的静态站生态已经分层，选型取决于站点形态：</p>
 <table>
 <thead><tr><th>需求</th><th>推荐</th><th>说明</th></tr></thead>
