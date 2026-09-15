@@ -306,6 +306,239 @@ switch (status) {
 <h3 id="flutter-widget">核心概念</h3>
 <h3 id="flutter-install">安装</h3>
 <h3 id="flutter-example">示例</h3>
+
+<h3 id="flutter-architecture">Flutter 架构与渲染原理深度解析</h3>
+
+<h4 id="flutter-arch-layers">Flutter 三层架构</h4>
+<pre><code class="language-text">Flutter 采用自底向上的三层架构：
+
+  ┌─────────────────────────────────────────────────┐
+  │  Framework 层（Dart）                             │
+  │  - Widget：UI 组件（不可变描述）                  │
+  │  - Element：Widget 的实例化（可变，管理生命周期） │
+  │  - RenderObject：布局与绘制（真正的 UI 树）       │
+  │  - Material/Cupertino：组件库                    │
+  ├─────────────────────────────────────────────────┤
+  │  Engine 层（C++）                                 │
+  │  - Skia/Impeller：2D 图形渲染引擎                │
+  │  - Dart VM：Dart 运行时（JIT/AOT）              │
+  │  - 文本渲染、图片解码、平台通道                   │
+  ├─────────────────────────────────────────────────┤
+  │  Embedder 层（平台特定）                          │
+  │  - Android：SurfaceTexture / NDK                 │
+  │  - iOS：CAEAGLLayer / Metal                      │
+  │  - Web：CanvasKit / HTML DOM                     │
+  │  - Desktop：OpenGL / Vulkan                      │
+  └─────────────────────────────────────────────────┘
+
+  关键设计：
+  1. 自绘引擎：Flutter 不使用原生组件，自己绘制所有 UI
+     - 优势：跨平台一致性、性能高、不受平台限制
+     - 劣势：包体积大、需要自己实现所有组件
+  2. Dart 语言：JIT（开发热重载）+ AOT（发布高性能）
+  3. 响应式框架：Widget 是不可变的，状态变化触发重建</code></pre>
+
+<h4 id="flutter-widget-tree">Widget、Element、RenderObject 三棵树</h4>
+<pre><code class="language-text">Flutter 的核心是三棵树的协作：
+
+  Widget 树（不可变，UI 描述）
+    ↓ inflate（实例化）
+  Element 树（可变，管理生命周期）
+    ↓ createRenderObject / updateRenderObject
+  RenderObject 树（真正的布局与绘制）
+
+  1. Widget（组件）
+     - 不可变的配置对象（immutable configuration）
+     - 只描述 UI 应该长什么样，不负责实际渲染
+     - 每次 build() 都会创建新的 Widget 对象
+     - 示例：Text('Hello')、Container(color: Colors.red)
+     
+  2. Element（元素）
+     - Widget 的实例化，挂载到树的特定位置
+     - 可变，管理 Widget 的生命周期
+     - 持有 parent、children、renderObject 引用
+     - 负责 Widget 的更新（diff 算法）
+     - 生命周期：inflate → mount → update → deactivate → unmount
+     
+  3. RenderObject（渲染对象）
+     - 真正负责布局（layout）和绘制（paint）
+     - 实现了 UI 的实际渲染逻辑
+     - 布局：Constraints 向下传递，Size 向上返回
+     - 绘制：paint() 方法调用 Canvas API
+
+  更新流程（setState 触发）：
+  1. markNeedsBuild()：标记 Element 为 dirty
+  2. 下一帧：buildScope() 重建 dirty Element
+  3. 新 Widget 与旧 Widget 对比（canUpdate）
+  4. 更新 Element 的配置（update）
+  5. RenderObject 标记需要重新布局/绘制
+  6. 下一帧：layout → paint → composite → 显示
+
+  性能优化关键：
+  - 避免在 build 中做耗时操作
+  - 拆分 Widget，减少重建范围
+  - 使用 const Widget（编译时常量，不重建）
+  - 使用 Key 控制 Element 的复用
+  - 列表使用 ListView.builder（懒加载）</code></pre>
+
+<h4 id="flutter-rendering-pipeline">渲染管线：布局、绘制、合成</h4>
+<pre><code class="language-text">Flutter 的渲染管线（Rendering Pipeline）：
+
+  每一帧（60fps = 16.67ms，120fps = 8.33ms）执行：
+
+  1. Animate（动画）
+     - 执行 AnimationController 的 tick
+     - 更新动画值
+     - 触发依赖动画的 Widget 重建
+     
+  2. Build（构建）
+     - 重建 dirty Element（setState 标记的）
+     - 生成新的 Widget 树
+     - 更新 Element 树
+     
+  3. Layout（布局）
+     - 从根节点开始，Constraints 向下传递
+     - 每个 RenderObject 计算自己的尺寸
+     - Size 向上返回
+     - 只有标记为 needsLayout 的节点重新布局
+     
+  4. Compositing Bits（合成位）
+     - 确定哪些节点需要合成层（Layer）
+     - 需要合成的情况：Opacity、Transform、Clip、RepaintBoundary
+     
+  5. Paint（绘制）
+     - 从根节点开始，按深度优先遍历
+     - 每个 RenderObject 调用 paint() 绘制到 Canvas
+     - 绘制到对应的 Layer 上
+     - 只有标记为 needsPaint 的节点重新绘制
+     
+  6. Composite（合成）
+     - 将所有 Layer 合成最终画面
+     - 发送到 GPU 渲染
+     - 显示到屏幕
+
+  布局原理（Box Constraints）：
+  - Constraints = {minWidth, maxWidth, minHeight, maxHeight}
+  - 父节点给子节点传递 Constraints
+  - 子节点在 Constraints 范围内选择自己的 Size
+  - 父节点根据子节点的 Size 确定自己的布局
+  
+  示例：
+  - 父节点：Constraints(0<=w<=300, 0<=h<=infinity)
+  - 子节点 Text('Hello')：选择 Size(100, 20)
+  - 父节点 Container：根据子节点 Size 确定自己的 Size(100, 20)
+
+  常见布局错误：
+  - "Horizontal viewport was given unbounded width"
+    → ListView 在水平方向需要有界宽度，用 Expanded 或 SizedBox 包裹
+  - "RenderFlex overflowed"
+    → Column/Row 子元素超出屏幕，用 Expanded、SingleChildScrollView 或 shrinkWrap
+  - "Incorrect use of ParentDataWidget"
+    → Expanded/Flexible 必须在 Row/Column/Flex 内使用</code></pre>
+
+<h4 id="flutter-state-management">状态管理深度解析</h4>
+<pre><code class="language-dart">// Flutter 状态管理方案对比：
+
+// 1. setState（内置，简单场景）
+// 优点：简单，不需要依赖
+// 缺点：状态只能在 Widget 树内传递，深层嵌套需要逐层传递
+// 适用：简单页面、局部状态
+class CounterPage extends StatefulWidget {
+  @override
+  _CounterPageState createState() => _CounterPageState();
+}
+class _CounterPageState extends State<CounterPage> {
+  int _count = 0;
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(child: Text('Count: $_count')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => setState(() => _count++),
+        child: Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+// 2. Provider（官方推荐，轻量）
+// 优点：简单、性能好（select 精确刷新）、官方推荐
+// 缺点：需要理解 ChangeNotifier、Consumer
+// 适用：中小应用
+class CounterModel extends ChangeNotifier {
+  int _count = 0;
+  int get count => _count;
+  void increment() {
+    _count++;
+    notifyListeners();  // 通知所有监听者
+  }
+}
+// 使用：
+ChangeNotifierProvider(
+  create: (_) => CounterModel(),
+  child: MyApp(),
+)
+// 读取：
+context.watch<CounterModel>().count  // 监听变化，自动重建
+context.read<CounterModel>().increment()  // 只读取，不监听
+
+// 3. Riverpod（Provider 的改进版，编译安全）
+// 优点：编译安全、不依赖 BuildContext、可测试、支持自动销毁
+// 缺点：概念稍多（Provider、ConsumerWidget、Ref）
+// 适用：中大型应用
+final counterProvider = StateProvider<int>((ref) => 0);
+class CounterPage extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(counterProvider);
+    return Scaffold(
+      body: Center(child: Text('Count: $count')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => ref.read(counterProvider.notifier).state++,
+        child: Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+// 4. Bloc（事件驱动，复杂业务）
+// 优点：可预测、可测试、适合复杂业务逻辑、时间旅行调试
+// 缺点：模板代码多、学习曲线陡
+// 适用：大型应用、复杂状态流
+// 事件 → Bloc → 状态
+abstract class CounterEvent {}
+class Increment extends CounterEvent {}
+class CounterBloc extends Bloc<CounterEvent, int> {
+  CounterBloc() : super(0) {
+    on<Increment>((event, emit) => emit(state + 1));
+  }
+}
+
+// 5. GetX（全能，简单快速）
+// 优点：简单、功能全（状态管理+路由+依赖注入）、性能好
+// 缺点：魔法多、不够规范、社区争议大
+// 适用：快速原型、个人项目
+
+// 选择建议：
+// - 简单页面：setState
+// - 中小应用：Provider 或 Riverpod
+// - 大型复杂应用：Riverpod 或 Bloc
+// - 快速原型：GetX
+// - 团队项目：优先 Riverpod（规范、可测试、编译安全）</code></pre>
+
+<h4 id="flutter-performance">Flutter 性能优化与常见陷阱</h4>
+<ul>
+<li><strong>陷阱1：build 中做耗时操作</strong> → build 方法必须纯函数，耗时操作放 initState/异步</li>
+<li><strong>陷阱2：整个页面 setState</strong> → 拆分 Widget，使用 ValueNotifier/Provider 精确刷新</li>
+<li><strong>陷阱3：列表不使用 builder</strong> → 长列表用 ListView.builder/GridView.builder 懒加载</li>
+<li><strong>陷阱4：频繁创建对象</strong> → 使用 const Widget、const 构造函数，减少 GC 压力</li>
+<li><strong>陷阱5：不使用 RepaintBoundary</strong> → 独立刷新的区域用 RepaintBoundary 隔离，减少重绘</li>
+<li><strong>陷阱6：图片不缓存/不压缩</strong> → 使用 cached_network_image、设置 cacheWidth/cacheHeight</li>
+<li><strong>陷阱7：Opacity 包裹大 Widget</strong> → Opacity 会强制重绘整个子树，用 AnimatedOpacity 或 FadeInImage</li>
+<li><strong>陷阱8：不释放控制器</strong> → TextEditingController、AnimationController、ScrollController 必须 dispose</li>
+</ul>
+
+
                 <div class="page-nav">
 <a class="nav-prev" href="../other/wasm/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">WebAssembly</span></a>
 <a class="nav-next" href="../mac/index.html"><span class="nav-label">下一篇 →</span><span class="nav-title">macOS</span></a>

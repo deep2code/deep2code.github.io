@@ -359,6 +359,242 @@ cd harbor
 ./install.sh --with-trivy --with-chartmuseum</code></pre>
 
 <h3 id="harbor-health">健康检查</h3>
+
+<h3 id="harbor-architecture">Harbor 架构与镜像仓库原理深度解析</h3>
+
+<h4 id="harbor-arch">Harbor 架构：企业级容器镜像仓库</h4>
+<pre><code class="language-text">Harbor 是 CNCF 毕业的企业级容器镜像仓库，架构如下：
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    客户端（Docker/K8s/CI）               │
+  └────────────────────────────┬────────────────────────────┘
+                               │ HTTPS（Docker Registry API v2）
+  ┌────────────────────────────▼────────────────────────────┐
+  │                    Nginx（反向代理 + TLS）                │
+  └──────┬──────────┬──────────┬──────────┬────────────────┘
+         │          │          │          │
+  ┌──────▼───┐ ┌───▼────┐ ┌──▼─────┐ ┌▼──────────┐
+  │ Portal   │ │ Core   │ │ Jobs  │ │ Registry  │
+  │ (UI)     │ │ (API)  │ │ Service│ │ (镜像存储) │
+  └──────┬───┘ └───┬────┘ └──┬─────┘ └─────┬─────┘
+         │          │          │               │
+  ┌──────▼──────────▼──────────▼───────────────▼─────┐
+  │              数据存储层                              │
+  │  - PostgreSQL（元数据：用户、项目、镜像标签）       │
+  │  - Redis（缓存、会话、任务队列）                    │
+  │  - 文件系统/S3（镜像层 blob 存储）                  │
+  │  - Trivy（镜像漏洞扫描）                            │
+  │  - Notary（镜像签名，内容信任）                     │
+  └─────────────────────────────────────────────────────┘
+
+  核心组件：
+  1. Portal：Web UI，Vue.js 实现
+  2. Core：核心服务，REST API，业务逻辑
+  3. Jobs Service：异步任务（镜像复制、垃圾回收、扫描）
+  4. Registry：Docker Registry v2，镜像存储和分发
+  5. PostgreSQL：元数据存储
+  6. Redis：缓存和任务队列
+  7. Trivy：镜像安全扫描
+  8. ChartMuseum：Helm Chart 仓库（可选）</code></pre>
+
+<h4 id="registry-v2">Docker Registry V2 API 与镜像存储格式</h4>
+<pre><code class="language-text">Docker Registry V2 API 是镜像仓库的标准协议：
+
+  核心 API：
+  1. 认证：GET /v2/ → 返回 401 + Www-Authenticate 头
+     - Bearer token 认证（JWT）
+     - 用户名密码 → 获取 token → 用 token 访问 API
+     
+  2. 镜像清单（Manifest）：
+     GET /v2/{name}/manifests/{reference}
+     - reference 可以是 tag 或 digest
+     - Manifest 类型：
+       - application/vnd.docker.distribution.manifest.v2+json
+       - application/vnd.oci.image.manifest.v1+json
+       - application/vnd.docker.distribution.manifest.list.v2+json（多架构）
+     
+  3. 镜像层（Blob）：
+     GET /v2/{name}/blobs/{digest}
+     - digest = sha256:xxx（内容寻址，内容相同则 digest 相同）
+     - 支持 Range 请求（断点续传）
+     
+  4. 上传镜像层：
+     POST /v2/{name}/blobs/uploads/ → 获取 upload UUID
+     PATCH /v2/{name}/blobs/uploads/{uuid} → 上传数据
+     PUT /v2/{name}/blobs/uploads/{uuid}?digest=sha256:xxx → 完成上传
+     
+  5. 标签列表：
+     GET /v2/{name}/tags/list
+     GET /v2/_catalog（仓库列表，需要管理员权限）
+
+  镜像存储格式（OCI Image Layout）：
+  repository/
+  ├── _manifests/          # 清单索引
+  │   └── revisions/
+  │       └── sha256:xxx/  # 每个 manifest 版本
+  │           └── link      # 指向 blobs 中的 manifest
+  ├── _layers/             # 层索引（已废弃，直接用 blobs）
+  └── _uploads/            # 上传中的临时文件
+  
+  blobs/
+  └── sha256/
+      ├── xx/              # 按 hash 前 2 位分目录
+      │   └── xxxx...      # blob 内容（镜像层 tar.gz 或 manifest json）
+      └── yy/
+          └── yyyy...
+
+  镜像层（Layer）格式：
+  - 每个层是一个 tar.gz 文件，包含文件系统的变更
+  - 层之间是增量的（基于 UnionFS，如 OverlayFS）
+  - 内容寻址：层的 digest = sha256(层内容)
+  - 共享层：多个镜像共享相同的层（只存一份）
+
+  Manifest 示例：
+  {
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+    "config": {
+      "mediaType": "application/vnd.docker.container.image.v1+json",
+      "size": 7023,
+      "digest": "sha256:b5b2b2c507a0944348e0303114d8d93aaaa081732b86451d9bce1f432a537bc"
+    },
+    "layers": [
+      {
+        "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+        "size": 32654,
+        "digest": "sha256:e692418e4cbaf95f8894599a0ac2531072fc9300a26359ab5d622a5e3d6b65e"
+      }
+    ]
+  }</code></pre>
+
+<h4 id="harbor-replication">Harbor 镜像复制与垃圾回收原理</h4>
+<pre><code class="language-text">Harbor 镜像复制（Replication）：
+
+  复制策略：
+  1. 基于推送（Push-based）：源 Harbor 推送到目标
+  2. 基于拉取（Pull-based）：目标 Harbor 从源拉取
+  3. 触发方式：
+     - 手动触发
+     - 定时触发（cron 表达式）
+     - 事件触发（镜像推送时自动复制）
+
+  复制过程：
+  1. 列出源仓库的镜像和标签
+  2. 对比目标仓库，找出需要复制的镜像
+  3. 逐个复制：
+     a. 获取源镜像的 Manifest
+     b. 检查目标是否已有该 Manifest（digest 对比）
+     c. 如果没有，复制所有层（blob）→ 复制 Manifest
+     d. 如果已有，跳过（内容寻址，digest 相同则内容相同）
+  4. 更新复制状态和日志
+
+  增量复制：
+  - 基于 digest 的内容寻址，相同内容只传一次
+  - 只复制新增或变更的镜像标签
+  - 复制速率控制（避免带宽占满）
+
+  Harbor 垃圾回收（Garbage Collection）：
+
+  问题：删除镜像标签后，镜像层（blob）可能仍然占用空间
+  - 多个标签可能共享同一个层
+  - 删除一个标签不能直接删除层（其他标签可能还在用）
+  
+  垃圾回收算法：
+  1. 标记阶段（Mark）：
+     - 遍历所有 Manifest（所有项目、所有标签）
+     - 收集所有被引用的 blob digest（包括 config 和 layers）
+     - 标记这些 blob 为"活跃"
+     
+  2. 清除阶段（Sweep）：
+     - 遍历所有 blob 文件
+     - 删除未被标记的 blob（无引用的孤儿层）
+     - 释放磁盘空间
+  
+  注意事项：
+  - 垃圾回收期间必须设置 Registry 为只读（避免新上传导致误删）
+  - 建议在低峰期执行
+  - 执行前备份重要数据
+  - 可以用 --dry-run 预览将删除的内容
+
+  存储优化：
+  1. 定期清理未使用的镜像标签（保留策略：保留最近 N 个）
+  2. 定期执行垃圾回收
+  3. 使用对象存储（S3/OSS）作为后端，弹性扩容
+  4. 镜像分层优化：基础层共享，减少重复存储</code></pre>
+
+<h4 id="harbor-security">Harbor 安全：漏洞扫描与内容信任</h4>
+<pre><code class="language-text">Harbor 安全机制：
+
+  1. 镜像漏洞扫描（Trivy）
+     - Trivy 是 Aqua Security 开源的漏洞扫描器
+     - 扫描内容：
+       - OS 包漏洞（Alpine、Debian、Ubuntu、CentOS...）
+       - 应用依赖漏洞（npm、pip、maven、gem...）
+       - 配置文件（Dockerfile 最佳实践检查）
+       - 敏感信息（密钥、密码、token）
+     - 漏洞数据库：
+       - 从 NVD、Alpine SecDB、Red Hat OVAL 等同步
+       - 定期更新（默认每 12 小时）
+     - 扫描流程：
+       1. 拉取镜像到本地
+       2. 解压镜像层
+       3. 检测 OS 类型和包管理器
+       4. 对比漏洞数据库
+       5. 生成扫描报告（Critical/High/Medium/Low）
+     - 自动扫描：
+       - 镜像推送时自动扫描
+       - 定时重新扫描（漏洞库更新后）
+     - 安全策略：
+       - 阻止高危漏洞镜像被拉取（Deployment Security）
+       - 只有通过扫描的镜像才能部署
+
+  2. 内容信任（Notary / Cosign）
+     - 目的：确保镜像未被篡改，来源可信
+     - Notary（Docker Content Trust）：
+       - 基于 TUF（The Update Framework）
+       - 离线密钥签名（root、targets、snapshot、timestamp）
+       - 客户端验证签名后才拉取
+     - Cosign（Sigstore）：
+       - 更现代的签名工具
+       - 支持 OCI 标准
+       - 与 KMS、HSM 集成
+       - 签名存储在 Registry 中（OCI artifact）
+     - 启用方式：
+       - Docker：DOCKER_CONTENT_TRUST=1
+       - Kubernetes：admission webhook 验证
+       - Harbor：项目级别启用内容信任
+
+  3. 访问控制（RBAC）
+     - 项目级权限：
+       - 项目管理员（Project Admin）：管理项目成员、配置
+       - 维护者（Maintainer）：推送/拉取镜像、管理标签
+       - 开发者（Developer）：推送/拉取镜像
+       - 访客（Guest）：只能拉取镜像
+       - 受限访客（Limited Guest）：只能拉取指定镜像
+     - 系统级权限：
+       - 系统管理员（SysAdmin）：全局管理
+       - 普通用户：创建项目、管理自己的项目
+     - LDAP/AD 集成：企业统一认证
+     - OIDC 集成：支持 SSO（Keycloak、Okta、Azure AD）
+
+  4. 审计日志
+     - 记录所有操作：登录、推送、拉取、删除、配置变更
+     - 支持导出和检索
+     - 合规要求（等保、SOC2）</code></pre>
+
+<h4 id="harbor-best-practices">Harbor 生产最佳实践与常见陷阱</h4>
+<ul>
+<li><strong>陷阱1：不配置 HTTPS</strong> → 生产环境必须启用 TLS，Docker 默认拒绝 HTTP 仓库（除非 insecure-registries）</li>
+<li><strong>陷阱2：用默认管理员密码</strong> → 首次登录立即修改 Harbor12345，启用强密码策略</li>
+<li><strong>陷阱3：不做镜像保留策略</strong> → 配置标签保留策略（保留最近 N 个），定期垃圾回收，避免磁盘占满</li>
+<li><strong>陷阱4：单节点部署</strong> → 生产用高可用部署（多节点 + 共享存储 + PG/Redis 主从）</li>
+<li><strong>陷阱5：不限制镜像大小</strong> → 配置项目级存储配额，避免单个项目占满整个仓库</li>
+<li><strong>陷阱6：公开项目过多</strong> → 默认私有项目，公开项目需审核，避免内部镜像泄露</li>
+<li><strong>陷阱7：不启用漏洞扫描</strong> → 启用自动扫描 + 部署安全策略，阻止高危镜像被拉取</li>
+<li><strong>陷阱8：垃圾回收时写入</strong> → GC 期间 Registry 只读，在低峰期执行，避免推送失败</li>
+</ul>
+
+
 <pre><code class="language-bash"># 检查 Harbor 状态
 docker-compose ps
 
