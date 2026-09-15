@@ -242,6 +242,58 @@ id_card = extract_field(result, '公民身份号码')</code></pre>
 </ul>
 
 <h3 id="document-ocr">文档数字化</h3>
+<h3 id="tesseract-architecture">Tesseract OCR 架构深度解析</h3>
+
+<h4 id="tesseract-pipeline">Tesseract 识别流水线</h4>
+
+<p>Tesseract 是目前最流行的开源 OCR（光学字符识别）引擎，由 HP 实验室开发，后由 Google 维护。理解其内部流水线有助于优化识别效果和排查问题：</p>
+
+<ol>
+<li><strong>图像输入与预处理（Image Input &amp; Preprocessing）</strong>：
+  <ul>
+  <li><strong>图像读取</strong>：Tesseract 支持多种图像格式（TIFF、PNG、JPEG、BMP、GIF、WebP 等），通过 Leptonica 库（C 语言图像处理库，Tesseract 的依赖）读取和处理图像。Tesseract 内部使用 8 位灰度图进行处理</li>
+  <li><strong>灰度化（Grayscale）</strong>：将彩色图像转换为灰度图（亮度信息），减少颜色干扰。灰度化公式：Y = 0.299R + 0.587G + 0.114B（人眼对绿色最敏感，对蓝色最不敏感）</li>
+  <li><strong>二值化（Binarization/Thresholding）</strong>：将灰度图转换为黑白二值图（像素值只有 0 黑和 255 白），分离文字（前景）和背景。Tesseract 使用 Otsu 算法（大津法，自动计算最优阈值，最大化类间方差）进行全局二值化，也支持自适应二值化（局部阈值，处理光照不均的图像）。二值化质量直接影响后续识别——阈值过高导致文字断裂，过低导致文字粘连和噪声</li>
+  <li><strong>去噪（Denoising）</strong>：移除图像中的噪声点（孤立的黑点、扫描噪点、JPEG 压缩伪影）。Tesseract 使用连通域分析（Connected Component Analysis）去除小的噪声连通域（面积小于阈值的黑点被移除）。也可以在预处理阶段使用中值滤波（Median Filter）、高斯模糊（Gaussian Blur）去噪</li>
+  <li><strong>倾斜校正（Skew Correction/Deskew）</strong>：检测并校正图像的倾斜角度（扫描的文档通常有轻微倾斜）。Tesseract 使用霍夫变换（Hough Transform）或投影轮廓（Projection Profile）检测倾斜角度，然后旋转图像校正。倾斜超过 5-10 度会显著降低识别率</li>
+  <li><strong>边缘检测与线条移除</strong>：检测图像中的表格线、边框线，必要时移除（线条可能干扰文字分割）。Tesseract 可以识别表格结构（Tesseract 4+ 支持表格识别）</li>
+  </ul>
+</li>
+<li><strong>版面分析（Layout Analysis）</strong>：
+  <ul>
+  <li><strong>连通域分析（Connected Components）</strong>：找出图像中所有连通的黑色区域（文字笔画、噪声、线条），每个连通域是一个候选字符或字符部件</li>
+  <li><strong>文本行检测（Text Line Detection）</strong>：将连通域分组为文本行。Tesseract 使用基于投影的方法（水平投影统计每行的黑点数量，峰值对应文本行）和基于连通域的方法（相邻连通域按位置和大小分组为行）。Tesseract 4+ 使用 LSTM 进行文本行检测和识别</li>
+  <li><strong>单词分割（Word Segmentation）</strong>：将文本行分割为单词（基于单词间的空格间距）。中文没有空格，Tesseract 对中文的单词分割是基于字符的（每个汉字是一个单元）</li>
+  <li><strong>区域分类（Region Classification）</strong>：将页面分为不同区域：文本块（Text Block）、图片（Image）、表格（Table）、标题（Heading）、列表（List）。Tesseract 使用递归的版面分析（先分大区域，再细分）。PSM（Page Segmentation Mode，页面分割模式）控制 Tesseract 的版面分析方式（如假设是单一文本块、单一文本行、单一字符、自动检测等）</li>
+  </ul>
+</li>
+<li><strong>字符识别（Character Recognition）</strong>：
+  <ul>
+  <li><strong>Tesseract 3.x 及更早（传统方法）</strong>：使用基于特征的分类器。每个字符提取特征（拓扑特征如孔洞数、端点、交叉点；几何特征如宽高比、重心；轮廓特征），然后用分类器（k-NN 最近邻、神经网络）识别。传统方法对清晰的印刷体效果好，但对复杂字体、低质量图像、手写体效果差</li>
+  <li><strong>Tesseract 4.x+（LSTM 深度学习）</strong>：Tesseract 4 引入了基于 LSTM（长短期记忆网络，一种循环神经网络 RNN）的识别引擎，大幅提高了识别率（特别是对复杂字体、多语言、低质量图像）。LSTM 直接输入文本行的图像特征（卷积特征），输出字符序列（不需要先分割单个字符，解决了字符分割的难题——这是 OCR 的核心难点，特别是中文和手写体）。Tesseract 4 的 LSTM 是一维序列模型（按列扫描文本行图像，输出字符序列），使用 CTC（Connectionist Temporal Classification）损失函数训练（解决输入序列和输出标签长度不对齐的问题）</li>
+  <li><strong>语言数据（Traineddata）</strong>：Tesseract 的识别模型存储在 .traineddata 文件中，每个语言一个文件（如 eng.traineddata 英文、chi_sim.traineddata 简体中文、chi_tra.traineddata 繁体中文）。traineddata 包含：LSTM 模型权重、字符集（unicharset，所有可识别字符）、字典（词频、常见词，用于后处理纠正）、配置参数。Tesseract 支持多语言同时识别（<code>-l chi_sim+eng</code> 同时识别中文和英文）</li>
+  </ul>
+</li>
+<li><strong>后处理（Post-processing）</strong>：
+  <ul>
+  <li><strong>语言模型纠正</strong>：使用字典和语言模型（n-gram 词频）纠正识别结果。例如识别出"hte"，字典中没有但"the"是常见词，且上下文匹配，则纠正为"the"。中文使用字符二元组（bigram）频率进行纠正</li>
+  <li><strong>置信度评估</strong>：Tesseract 为每个识别的字符和单词给出置信度（0-100，越高越可信）。低置信度的字符可以标记为可疑（如用波浪号 ~ 标记），供人工校对</li>
+  <li><strong>输出格式化</strong>：Tesseract 支持多种输出格式：纯文本（txt）、HOCR（HTML 格式，包含每个词的位置和置信度）、TSV（表格格式，包含位置信息）、PDF（可搜索的 PDF，文字层叠加在图像上）、ALTO XML（标准 OCR 格式）</li>
+  </ul>
+</li>
+</ol>
+
+<h3 id="tesseract-pitfalls">8大常见陷阱与最佳实践</h3>
+
+<ol>
+<li><strong>图像质量差导致识别率低</strong>：Tesseract 对图像质量敏感，低质量图像（模糊、低分辨率、光照不均、倾斜、噪声多、对比度低）会导致识别率大幅下降（可能从 99% 降到 50% 以下）。解决：图像预处理是提高 OCR 识别率的最有效手段（通常比调 Tesseract 参数更有效）。预处理步骤：<strong>提高分辨率</strong>：Tesseract 推荐文字高度 30-33 像素（对应 300 DPI 扫描的 10-12 号字），如果图像分辨率低（文字高度 &lt; 20 像素），先放大图像（使用 Lanczos 插值，不要用最近邻插值会产生锯齿）。<strong>二值化优化</strong>：光照不均的图像使用自适应二值化（如 OpenCV 的 adaptiveThreshold，局部阈值），而不是全局二值化（Otsu）。可以尝试不同的二值化方法和阈值，选择识别效果最好的。<strong>去噪</strong>：使用中值滤波（cv2.medianBlur）去除椒盐噪声，使用高斯模糊（cv2.GaussianBlur）去除高斯噪声，但模糊过度会导致文字边缘模糊反而降低识别率。<strong>倾斜校正</strong>：检测倾斜角度并旋转校正（使用 OpenCV 的 minAreaRect 或霍夫变换检测角度，warpAffine 旋转）。<strong>对比度增强</strong>：使用直方图均衡化（cv2.equalizeHist）或 CLAHE（限制对比度自适应直方图均衡化）增强文字和背景的对比度。<strong>去背景</strong>：复杂背景（如带纹理的纸张、水印、表格线）会干扰识别，先去除背景（使用背景减除、形态学操作去除线条）。注意：预处理是实验性的，不同图像需要不同的预处理组合，建议建立预处理流水线并测试多种组合，选择识别率最高的。可以使用 Tesseract 的 <code>--tessdata-dir</code> 和不同 PSM 模式测试</li>
+<li><strong>PSM（页面分割模式）选择错误导致识别失败</strong>：Tesseract 的 PSM（Page Segmentation Mode）决定了 Tesseract 如何分析版面和分割文本。PSM 选择错误会导致：整页文字只识别出一部分（PSM 假设是单一文本行但实际是多段落）、单个字符被拆成多个（PSM 假设是单词但实际是单个字符）、完全不识别（PSM 假设是稀疏文本但实际是密集文本）。解决：根据图像内容选择正确的 PSM 模式：<code>--psm 0</code>（仅方向和脚本检测，不识别）、<code>--psm 1</code>（自动版面分析，默认，适合普通文档）、<code>--psm 3</code>（全自动版面分析，但不假设文本方向，Tesseract 3 默认）、<code>--psm 4</code>（假设是一列可变大小的文本）、<code>--psm 5</code>（假设是一个统一的对齐块，垂直对齐）、<code>--psm 6</code>（假设是一个统一的文本块，适合单段落或截图中的文字块）、<code>--psm 7</code>（将图像视为单行文本，适合单行文字截图）、<code>--psm 8</code>（将图像视为单个单词，适合验证码或单词识别）、<code>--psm 9</code>（将图像视为单个单词，允许圆形/非标准形状）、<code>--psm 10</code>（将图像视为单个字符，适合单字符识别）、<code>--psm 11</code>（稀疏文本，尽可能多地找到文本，不按顺序，适合零散文字）、<code>--psm 12</code>（稀疏文本，带 OCR 信息）、<code>--psm 13</code>（原始行，不做版面分析，直接按行识别）。选择建议：普通文档用默认（PSM 1 或 3）；截图中的文字块用 PSM 6；单行文字用 PSM 7；单个字符用 PSM 10；文字零散分布用 PSM 11。注意：PSM 6（统一文本块）通常比默认 PSM 对截图和小区域的识别效果更好（因为不做复杂版面分析，直接将整个区域当作文本块）。如果默认模式识别效果差，尝试 PSM 6 或 7</li>
+<li><strong>中文识别率低或中文/英文混排识别错误</strong>：Tesseract 的中文识别（chi_sim）虽然支持，但识别率通常低于英文（因为中文字符集大、字形复杂、字体多样）。中英文混排时常见问题：英文字母被识别为中文字符（如 O 被识别为 0 或 〇，l 被识别为 1 或丨）、中文字符被拆成偏旁部首、中文标点识别错误、中文词语之间没有空格导致后处理困难。解决：<strong>使用最新的语言数据</strong>：Tesseract 4+ 的 LSTM 中文模型（chi_sim.traineddata）比 Tesseract 3 的传统模型识别率高很多。确保使用最新版本的 traineddata（从 GitHub/tesseract-ocr/tessdata_fast 或 tessdata_best 下载，tessdata_best 是最高精度模型，速度稍慢；tessdata_fast 是快速模型，精度稍低）。<strong>中英文混排</strong>：使用 <code>-l chi_sim+eng</code> 同时加载中文和英文模型（Tesseract 会自动判断字符属于哪种语言）。注意语言顺序（chi_sim+eng vs eng+chi_sim）可能影响结果，可以尝试两种顺序选择效果好的。对于以中文为主、夹杂少量英文的文档，chi_sim+eng 通常更好。<strong>自定义训练</strong>：如果识别的是特定领域（如发票、身份证、法律文书）或特定字体，可以用 Tesseract 的训练工具（tesstrain）微调 LSTM 模型，用自己的标注数据训练，识别率可以大幅提升（从 80% 提升到 98%+）。训练需要：准备训练图像和对应文本（ground truth）、使用 tesstrain 框架训练、生成新的 traineddata 文件。<strong>后处理纠正</strong>：根据业务规则纠正常见错误：如 O 和 0 的混淆（根据上下文，纯数字串中 O 应该是 0，英文单词中 0 应该是 O）、l 和 1 的混淆、中文标点和英文标点的混淆。使用正则表达式和字典进行后处理。注意：Tesseract 的中文识别不依赖分词（中文没有空格），LSTM 直接输出字符序列。中文识别的难点在于字符集大（6000+ 常用汉字）和字体多样，训练数据覆盖的字体越全，识别率越高</li>
+<li><strong>表格识别效果差</strong>：Tesseract 对纯文本识别效果好，但对表格的识别（保持行列结构）效果有限——表格线干扰文字分割、单元格内容对齐复杂、合并单元格处理困难。默认输出的文本会丢失表格结构（行列变成纯文本，难以解析）。解决：<strong>使用 Tesseract 的 TSV/HOCR 输出</strong>：TSV 格式包含每个词的位置坐标（left, top, width, height）和置信度，可以根据位置信息自己重建表格结构（按 y 坐标分行，按 x 坐标分列）。HOCR 是 HTML 格式，也包含位置信息。<strong>使用表格检测工具预处理</strong>：先用 OpenCV 检测表格线（形态学操作：水平核检测横线，垂直核检测竖线），找到单元格边界，然后将每个单元格的图像单独裁剪出来，用 Tesseract 识别（每个单元格用 PSM 6 或 7），最后按行列位置组装成表格。这种方法比直接识别整页表格效果好很多。<strong>使用专用表格识别工具</strong>：如 Camelot（PDF 表格提取）、Tabula（PDF 表格提取）、PaddleOCR（百度开源，内置表格识别模型，效果比 Tesseract 好）、AWS Textract（云服务，表格识别效果好）。对于复杂表格（合并单元格、跨页表格、嵌套表格），专用工具效果远好于 Tesseract。<strong>去除表格线后识别</strong>：如果只需要表格中的文字内容（不需要结构），可以先用形态学操作去除表格线（水平/垂直直线检测与移除），然后用 Tesseract 识别纯文本。注意：Tesseract 4+ 有一定的表格识别能力（可以检测表格区域），但输出格式中表格结构信息有限，通常需要自己后处理。对于高精度表格识别需求，建议使用 PaddleOCR 或商业 OCR 服务（百度 OCR、腾讯 OCR、阿里云 OCR、AWS Textract），它们有专门的表格识别模型和结构化输出（JSON 格式的行列数据）</li>
+<li><strong>批量处理时性能瓶颈</strong>：Tesseract 是 CPU 密集型任务（LSTM 推理消耗 CPU），批量处理大量图像时（如扫描文档数字化，数千/数万页）可能遇到性能瓶颈：单线程处理慢（Tesseract 默认单线程，处理一页 300 DPI 文档需要 1-5 秒）、内存占用高（大图像加载到内存）、错误处理不完善（某页识别失败导致整个批处理中断）。解决：<strong>并行处理</strong>：Tesseract 本身不支持多线程（单页识别是单线程的），但可以用多进程并行处理多页（如 Python 的 multiprocessing、GNU Parallel、xargs -P）。例如 8 核 CPU 可以同时处理 8 页，吞吐量提升 6-8 倍。注意控制并发数（不要超过 CPU 核心数，否则上下文切换开销大）。<strong>使用快速模型</strong>：tessdata_fast 模型比 tessdata_best 快 2-3 倍（精度稍低，通常可接受）。Tesseract 5 比 Tesseract 4 快（优化了 LSTM 推理）。<strong>图像优化</strong>：在保证识别率的前提下减小图像尺寸（如将 600 DPI 降到 300 DPI，处理时间减少 75%）。裁剪只识别需要的区域（ROI，Region of Interest），不要整页识别（如只识别发票的金额区域，裁剪后识别，速度快且干扰少）。<strong>预编译与缓存</strong>：Tesseract 初始化（加载 traineddata）有开销（几百毫秒），批量处理时保持 Tesseract 进程/实例复用（不要每页都启动新进程）。使用 pytesseract 或 tesserocr（Python 绑定，tesserocr 是 C++ API 的直接绑定，比 pytesseract（命令行包装）快，因为避免了进程启动开销）。<strong>错误处理与重试</strong>：批量处理时，每页单独 try-catch，记录失败的页面（保存到失败列表），处理完后重试失败的页面（可能是临时资源问题）。不要因为一页失败中断整个批处理。注意：Tesseract 的 LSTM 推理可以使用多线程吗？Tesseract 5 支持 <code>--oem 3</code>（默认，LSTM 引擎），但单页识别仍是单线程的。某些构建支持 OpenMP 多线程（需要编译时启用），但通常多进程并行更可靠</li>
+<li><strong>输出格式选择不当导致后续处理困难</strong>：Tesseract 支持多种输出格式（txt、hocr、tsv、pdf、alto），选择不当会导致：纯文本丢失位置信息（无法知道文字在页面中的位置，无法做版面还原或区域过滤）、HOCR/TSV 格式解析复杂、PDF 输出的文字层位置偏移（文字和图像不对齐）。解决：根据后续需求选择输出格式：<strong>纯文本（txt）</strong>：只需要文字内容，不需要位置信息时使用（如全文检索、文本分析）。最简单，但丢失所有格式和位置信息。<strong>TSV</strong>：需要位置信息时使用（如根据位置过滤特定区域、重建表格结构）。TSV 是制表符分隔的表格，列包括：level（页面/区块/段落/行/词）、page_num、block_num、par_num、line_num、word_num、left、top、width、height、conf（置信度）、text。每一行是一个词（或行/段落/页面，取决于 level）。TSV 易于用 Python pandas 解析。<strong>HOCR</strong>：HTML 格式的 OCR 输出，包含每个词的位置（bbox 属性）和置信度（x_wconf 属性）。HOCR 可以用浏览器打开查看（可视化识别结果），也可以用 BeautifulSoup/lxml 解析。HOCR 比 TSV 信息更丰富（包含版面结构层次），但解析稍复杂。<strong>PDF</strong>：生成可搜索的 PDF（文字层叠加在原始图像上，用户可以复制/搜索文字，但看到的是原始图像）。使用 <code>pdf</code> 输出格式。注意 PDF 输出需要原始图像（Tesseract 将图像和文字层合并），文字层的位置可能有轻微偏移（特别是倾斜校正后）。<strong>ALTO XML</strong>：标准的 OCR  XML 格式（ALTO = Analyzed Layout and Text Object），被很多数字图书馆和 OCR 工具支持，包含详细的版面结构和文字信息。适合需要与其他 OCR 系统交互的场景。注意：如果需要同时获得文字和位置，TSV 是最实用的（简单易解析）。如果需要可视化检查识别结果，HOCR 更方便（可以用 hocr-tools 或 hocr2pdf 等工具处理）。置信度（conf）字段很重要——可以过滤低置信度的词（如 conf &lt; 50），标记为需要人工校对</li>
+</ol>
+
 <ul>
 <li>书籍扫描 OCR</li>
 <li>合同扫描识别</li>
