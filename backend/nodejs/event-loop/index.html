@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>Node.js 事件循环 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="libuv 事件循环模型、事件队列、process.nextTick vs setImmediate、Worker Threads、异步IO底层原理，以及阻塞事件循环的常见坑。">
+    <meta name="keywords" content="Node.js,事件循环,event loop,libuv,process.nextTick,setImmediate,Worker Threads,异步IO,技术博客,程序员,踩坑,实践">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/backend/nodejs/event-loop/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="Node.js 事件循环 - 资深码农">
+    <meta property="og:description" content="libuv 事件循环模型、事件队列、process.nextTick vs setImmediate、Worker Threads、异步IO底层原理，以及阻塞事件循环的常见坑。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/backend/nodejs/event-loop/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Node.js 事件循环 - 资深码农">
+    <meta name="twitter:description" content="libuv 事件循环模型、事件队列、process.nextTick vs setImmediate、Worker Threads">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="Node.js">
+    <meta property="article:tag" content="后端与编程语言">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Node.js 事件循环","description":"libuv 事件循环模型、事件队列、process.nextTick vs setImmediate、Worker Threads、异步IO底层原理，以及阻塞事件循环的常见坑。","url":"https://www.yijunjun.asia/backend/nodejs/event-loop/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/backend/nodejs/event-loop/"},"articleSection":"后端与编程语言"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "后端与编程语言", "item": "https://www.yijunjun.asia/backend/"}, {"position": 3, "name": "Node.js 总览", "item": "https://www.yijunjun.asia/backend/nodejs/"}, {"position": 4, "name": "Node.js 事件循环", "item": "https://www.yijunjun.asia/backend/nodejs/event-loop/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "setTimeout(fn, 0) 和 setImmediate 哪个先执行？", "acceptedAnswer": {"@type": "Answer", "text": "在主模块里不一定，取决于机器负载。在 I/O 回调里 setImmediate 一定先。别在代码里依赖这个顺序，用 queueMicrotask() 或 process.nextTick 明确表达意图。"}}, {"@type": "Question", "name": "事件循环阻塞了，加机器有用吗？", "acceptedAnswer": {"@type": "Answer", "text": "没用。单进程的事件循环堵在一个核上，加机器只是多开几个进程。你要做的是找到阻塞点，把它改成异步，或者丢给 Worker Thread。"}}, {"@type": "Question", "name": "Node.js 24 的 event loop 有变化吗？", "acceptedAnswer": {"@type": "Answer", "text": "核心模型没变，但 V8 13.x 优化了 microtask 执行效率，WebSocket 事件处理从 poll 阶段独立出来了。整体逻辑一样，别被新特性吓到。"}}, {"@type": "Question", "name": "Worker Thread 和 cluster 有什么区别？", "acceptedAnswer": {"@type": "Answer", "text": "Worker 是单进程内的真线程，共享内存可以用 SharedArrayBuffer，适合 CPU 密集子任务。cluster 是多进程，每个进程独立 V8 实例，适合利用多核跑完整服务。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="./" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../backend/">后端</a><a href="../../../database/">数据库</a><a href="../../../ai/">AI</a><a href="../../../devops/">运维</a><a href="../../../frontend/">前端</a><a href="../../../tools/">工具</a><a href="../../../game/">游戏</a><a href="../../../os/">系统</a><a href="../../../other/">更多</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">后端与编程语言</a><span class="separator">/</span><a href="../index.html">Node.js 总览</a><span class="separator">/</span><span>Node.js 事件循环</span>
+</div>
+
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">Node.js 事件循环</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ Node.js 总览</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<h2>事件循环到底是什么</h2>
+<p>我见过太多 Node.js 开发者，写了两年 Express，说不清楚事件循环怎么转。这不怪他们——文档写得像论文，面试题又全是 <code>console.log</code> 顺序题。但事件循环是 Node.js 的命根子，你不搞懂它，线上一出"接口偶尔慢 3 秒"的问题，你只能干瞪眼。</p>
+<p>一句话说清：<strong>事件循环是一个 while(true) 循环，不断检查有没有事件要处理，有就跑回调，没有就去阻塞等</strong>。它由 libuv 实现，跑在主线程上。你写的所有 JS 代码都在这个循环里执行。</p>
+<div class="mermaid" data-src="flowchart TD
+    START['进入事件循环'] --> TIMERS['timers 阶段<br/>执行 setTimeout/setInterval 回调']
+    TIMERS --> PENDING['pending callbacks<br/>上一轮延迟的系统回调']
+    PENDING --> IDLE['idle/prepare<br/>libuv 内部用']
+    IDLE --> POLL['poll 阶段<br/>取新的 IO 事件，阻塞在这里']
+    POLL --> CHECK['check 阶段<br/>执行 setImmediate 回调']
+    CHECK --> CLOSE['close callbacks<br/>socket.on close 等']
+    CLOSE --> START
+    style TIMERS fill:#f59e0b,stroke:#fff,color:#fff
+    style POLL fill:#00add8,stroke:#fff,color:#fff
+    style CHECK fill:#10b981,stroke:#fff,color:#fff"></div>
+
+<h2>六个阶段，一个都不能少</h2>
+<p>很多人以为事件循环就是"先执行同步代码，再执行异步回调"。太粗糙了。每个阶段有自己的队列，一个阶段跑完所有回调才进下一个阶段。关键规则：<strong>每个阶段的队列清空了（或达到上限）才切换阶段</strong>。</p>
+<table>
+<thead><tr><th>阶段</th><th>处理什么</th><th>常用 API</th></tr></thead>
+<tbody>
+<tr><td>timers</td><td>到期的定时器回调</td><td>setTimeout, setInterval</td></tr>
+<tr><td>pending callbacks</td><td>上一轮延迟的系统级回调</td><td>TCP 错误等</td></tr>
+<tr><td>idle/prepare</td><td>libuv 内部用</td><td>—</td></tr>
+<tr><td>poll</td><td>新 IO 事件，会阻塞等</td><td>fs.readFile, 网络回调</td></tr>
+<tr><td>check</td><td>setImmediate 回调</td><td>setImmediate</td></tr>
+<tr><td>close callbacks</td><td>close 事件</td><td>socket.on('close')</td></tr>
+</tbody>
+</table>
+<p>重点说 poll 阶段。这是事件循环的"主战场"——如果 poll 队列空了，事件循环会<strong>阻塞在这里等新的 IO 事件</strong>。但如果有 setImmediate 注册了，它不会傻等，直接跳到 check 阶段。这就是为什么 setImmediate 比 setTimeout(fn, 0) 快——它跳过了 poll 的等待。</p>
+
+<h2>microtask 和 macrotask：两套队列</h2>
+<p>光知道六个阶段还不够。每个阶段之间，Node.js 会先把 <strong>microtask 队列</strong>全部清空，才进入下一个阶段。这就是为什么 <code>process.nextTick</code> 和 Promise.then 总是比 setTimeout 先跑。</p>
+<div class="mermaid" data-src="flowchart LR
+    SYNC['同步代码执行'] --> MICRO1['清空 nextTick 队列']
+    MICRO1 --> PROMISE1['清空 Promise 队列']
+    PROMISE1 --> MACRO1['执行一个 macrotask<br/>（一个阶段的回调）']
+    MACRO1 --> MICRO2['再次清空 nextTick 队列']
+    MICRO2 --> PROMISE2['再次清空 Promise 队列']
+    PROMISE2 --> MACRO2['下一个 macrotask']
+    style MICRO1 fill:#dc382d,stroke:#fff,color:#fff
+    style MICRO2 fill:#dc382d,stroke:#fff,color:#fff"></div>
+<p>看个实际的例子，你就明白执行顺序了：</p>
+<pre><code class="language-javascript">console.log('1: 同步代码')
+
+setTimeout(() => console.log('2: setTimeout'), 0)
+
+setImmediate(() => console.log('3: setImmediate'))
+
+Promise.resolve().then(() => console.log('4: Promise.then'))
+
+process.nextTick(() => console.log('5: nextTick'))
+
+console.log('6: 同步代码结束')
+
+// 输出顺序：1 → 6 → 5 → 4 → 2 → 3
+// 注意 2 和 3 的顺序不确定！
+// 在 I/O 回调里 setImmediate 一定比 setTimeout(fn,0) 快
+// 但在主模块里，取决于机器性能，可能反</code></pre>
+
+<h2>process.nextTick vs setImmediate</h2>
+<p>这是面试必考、线上必踩的坑。两个函数名字很像，行为完全不同。</p>
+<table>
+<thead><tr><th>对比</th><th>process.nextTick</th><th>setImmediate</th></tr></thead>
+<tbody>
+<tr><td>队列位置</td><td>当前阶段结束后立刻执行</td><td>check 阶段执行</td></tr>
+<tr><td>优先级</td><td>比 Promise 还高</td><td>比 I/O 回调晚</td></tr>
+<tr><td>会不会饿死 IO</td><td>会！递归调用直接卡死</td><td>不会</td></tr>
+<tr><td>典型用途</td><td>确保回调在同步代码后执行</td><td>把重活拆到下一轮循环</td></tr>
+</tbody>
+</table>
+<div class="callout callout-danger">
+<div class="callout-title">nextTick 递归能把事件循环卡死</div>
+我见过有人在 nextTick 回调里再调 nextTick，以为是"异步"。结果事件循环永远在清空 nextTick 队列，poll 阶段根本进不去，所有 IO 回调全部饿死。整个服务假死，CPU 100%。<strong>除非你确实需要最高优先级，否则用 queueMicrotask() 或 Promise.resolve().then()</strong>。
+</div>
+<pre><code class="language-javascript">// 危险：这会卡住事件循环
+function recursiveNextTick() {
+  process.nextTick(recursiveNextTick) // 永不结束
+}
+recursiveNextTick()
+
+// 安全：setImmediate 每轮循环才执行一次
+function safeDefer() {
+  setImmediate(safeDefer) // 每轮 event loop 跑一次，不会阻塞 IO
+}
+safeDefer()</code></pre>
+
+<h2>异步 IO 的底层：libuv 线程池</h2>
+<p>很多人以为 Node.js 的异步 IO 是内核原生的。一半对一半不对。网络 IO（TCP/UDP）确实走内核的 epoll/kqueue，真异步。但文件 IO、DNS 查询、加密计算这些，走的是 <strong>libuv 线程池</strong>——默认 4 个线程，你可以通过环境变量调大。</p>
+<div class="mermaid" data-src="flowchart TD
+    APP['你的 Node.js 代码'] --> CHECK_IO{什么操作?}
+    CHECK_IO -->|网络请求| NET['内核 epoll/kqueue<br/>真异步，不占线程']
+    CHECK_IO -->|文件读写| POOL['libuv 线程池<br/>默认 4 线程']
+    CHECK_IO -->|DNS 解析| POOL
+    CHECK_IO -->|crypto.pbkdf2| POOL
+    CHECK_IO -->|zlib 压缩| POOL
+    NET --> LOOP['事件循环回调']
+    POOL --> LOOP
+    style POOL fill:#f59e0b,stroke:#fff,color:#fff
+    style NET fill:#10b981,stroke:#fff,color:#fff"></div>
+<p>这就解释了一个经典现象：<strong>同时读 1000 个文件，Node.js 只能同时处理 4 个</strong>。不是 Node.js 慢，是你把活全压在 4 个线程上了。调大线程池：</p>
+<pre><code class="language-bash"># 在代码最开头设置，必须在任何 IO 调用之前
+export UV_THREADPOOL_SIZE=16
+
+// 或者代码里
+process.env.UV_THREADPOOL_SIZE = '16'</code></pre>
+<div class="callout callout-tip">
+<div class="callout-title">线程池不是越大越好</div>
+我调过 64，结果吞吐量不升反降。为什么？线程切换开销。磁盘 IO 密集型任务，线程数等于磁盘并发上限就够了。CPU 密集型的加密运算，线程数等于 CPU 核数最好。别盲目调大，压测说话。
+</div>
+
+<h2>Worker Threads：真·多线程</h2>
+<p>Node.js 10 引入 Worker Threads，12 之后稳定。它不是线程池，是<strong>真正的 V8 实例</strong>——每个 Worker 有自己的事件循环、自己的堆内存。适合跑 CPU 密集任务，不适合跑 IO（IO 有跨线程通信开销）。</p>
+<pre><code class="language-javascript">// worker.js —— 跑 CPU 密集任务
+const { parentPort } = require('worker_threads')
+
+parentPort.on('message, (data) => {
+  let result = 0
+  for (let i = 0; i &lt; data.iterations; i++) {
+    result += Math.sqrt(i)
+  }
+  parentPort.postMessage(result)
+})</code></pre>
+<pre><code class="language-javascript">// main.js —— 主线程
+const { Worker } = require('worker_threads')
+
+const worker = new Worker('./worker.js')
+
+worker.postMessage({ iterations: 10_000_000 })
+worker.on('message', (result) => {
+  console.log('结果:', result)
+})</code></pre>
+<p>Worker 之间通过 <code>postMessage</code> 通信，数据是<strong>结构化克隆</strong>——不是共享内存，是拷贝。所以传大对象性能很差。要共享内存用 <code>SharedArrayBuffer</code>，但那是另一套心智模型了。</p>
+
+<h2>阻塞事件循环的常见凶手</h2>
+<p>我线上出过三次"事件循环被阻塞"的事故，凶手全是下面这些：</p>
+<ol>
+<li><strong>同步 JSON.parse 大字符串</strong>：一个 50MB 的 JSON.parse，阻塞主线程 800ms。所有请求排队。</li>
+<li><strong>循环里做同步加密</strong>：<code>crypto.pbkdf2Sync</code> 在请求处理里调，每来一个请求就阻塞一下。</li>
+<li><strong>正则回溯爆炸</strong>：用户输入触发 Catastrophic Backtracking，CPU 100% 转不出来。</li>
+<li><strong>同步读大文件</strong>：<code>fs.readFileSync</code> 在启动时用没问题，在请求路径里用就是灾难。</li>
+<li><strong>监控上报忘了异步</strong>：循环里同步写日志，日志写到磁盘慢了，整个服务卡。</li>
+</ol>
+<div class="callout callout-danger">
+<div class="callout-title">怎么发现事件循环被阻塞</div>
+用 <code>perf_hooks</code> 监控事件循环延迟。正常应该 &lt;1ms。我在生产环境挂了个监控，超过 50ms 就报警，超过 200ms 直接 dump 堆快照。线上问题 90% 是同步代码阻塞，不是你想象的复杂原因。
+</div>
+<pre><code class="language-javascript">const { monitorEventLoopDelay } = require('perf_hooks')
+const h = monitorEventLoopDelay({ resolution: 20 })
+h.enable()
+
+setInterval(() => {
+  // p50 和 p99 延迟
+  console.log('p50:', h.percentile(50) / 1e6, 'ms')
+  console.log('p99:', h.percentile(99) / 1e6, 'ms')
+  if (h.percentile(99) / 1e6 > 200) {
+    console.warn('事件循环阻塞超过 200ms!')
+  }
+}, 5000)</code></pre>
+
+<h2>回调地狱：2026 年还有吗</h2>
+<p>基本没了。async/await 是 ES2017 的东西，现在谁还写嵌套回调？但有个变种还在——<strong>未捕获的 Promise rejection</strong>。你写了个 async 函数，里面 throw 了，没 catch，Node.js 24 直接崩进程。</p>
+<pre><code class="language-javascript">// 这样写，报错了你都不知道
+app.get('/user/:id', async (req, res) => {
+  const user = await db.find(req.params.id)
+  // 如果 db.find 抛错，Promise rejection 未捕获，进程退出
+  res.json(user)
+})
+
+// 正确做法：全局兜底
+process.on('unhandledRejection', (err) => {
+  console.error('未捕获 Promise 错误:', err)
+  // 别直接 exit，先记录再决定
+})</code></pre>
+
+<h2>FAQ</h2>
+<p><strong>Q：setTimeout(fn, 0) 和 setImmediate 哪个先执行？</strong><br/>在主模块里不一定，取决于机器负载。在 I/O 回调里 setImmediate 一定先。别在代码里依赖这个顺序，用 <code>queueMicrotask()</code> 或 <code>process.nextTick</code> 明确表达意图。</p>
+<p><strong>Q：事件循环阻塞了，加机器有用吗？</strong><br/>没用。单进程的事件循环堵在一个核上，加机器只是多开几个进程。你要做的是找到阻塞点，把它改成异步，或者丢给 Worker Thread。</p>
+<p><strong>Q：Node.js 24 的 event loop 有变化吗？</strong><br/>核心模型没变，但 V8 13.x 优化了 microtask 执行效率，WebSocket 事件处理从 poll 阶段独立出来了。整体逻辑一样，别被新特性吓到。</p>
+<p><strong>Q：Worker Thread 和 cluster 有什么区别？</strong><br/>Worker 是单进程内的真线程，共享内存可以用 SharedArrayBuffer，适合 CPU 密集子任务。cluster 是多进程，每个进程独立 V8 实例，适合利用多核跑完整服务。</p>
+
+<h2>我的结论</h2>
+<p>事件循环是 Node.js 设计哲学的浓缩——<strong>单线程、非阻塞、事件驱动</strong>。理解了六个阶段和 microtask 队列的关系，你就能解释 90% 的"为什么我的代码跑出来顺序不对"。</p>
+<p>生产环境我最在意的就两件事：别阻塞事件循环（用 monitorEventLoopDelay 监控），别让 nextTick 递归饿死 IO。剩下的，都是写业务逻辑的事。下一篇我们讲 NestJS——在这个事件循环之上，怎么把一个中大型项目的架构组织好。</p>
+
+
+
+
+                    </div>
+                </article>
+                <nav class="article-nav">
+                    <a class="nav-prev" href="../"><span class="nav-label">← 上一篇</span><span class="nav-title">Node.js 总览</span></a>
+                    <a class="nav-next" href="../nestjs-intro/"><span class="nav-label">下一篇 →</span><span class="nav-title">NestJS 架构入门</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · 后端与编程语言</h2><ul class="related-list"><li><a class="side-post" href="../">Node.js 总览</a></li><li><a class="side-post" href="../event-loop/">Node.js 事件循环</a></li><li><a class="side-post" href="../nestjs-intro/">NestJS 架构入门</a></li><li><a class="side-post" href="../typescript/">TypeScript 后端实践</a></li><li><a class="side-post" href="../framework-compare/">Express vs NestJS vs Fastify</a></li><li><a class="side-post" href="../performance/">Node.js 性能优化</a></li></ul></aside>
+
+                <div class="share-bar">
+                    <span class="share-label">分享：</span>
+                    <button class="share-btn" data-platform="copy" title="复制链接">🔗</button>
+                    <button class="share-btn" data-platform="twitter" title="分享到 X/Twitter">𝕏</button>
+                    <button class="share-btn" data-platform="weibo" title="分享到微博">📱</button>
+                    <button class="share-btn" data-platform="email" title="邮件分享">✉️</button>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+
+    <button class="back-to-top" title="回到顶部">↑</button>
+
+        <script defer src="../../../vendor/highlight.min.js"></script>
+
+    
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "nodejs";</script>
+    <script src="../../../js/main.js" defer></script>
+</body>
+</html>

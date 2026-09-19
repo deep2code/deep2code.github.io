@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>建表与数据导入 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="MergeTree 建表语句、ORDER BY / PARTITION BY / TTL、INSERT、CSV/JSON、Kafka Engine、S3 导入，以及批量插入最佳实践和表引擎选择指南。">
+    <meta name="keywords" content="ClickHouse,建表,数据导入,MergeTree,Kafka Engine,S3,批量插入,技术博客">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/database/clickhouse/table-import/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="建表与数据导入 - 资深码农">
+    <meta property="og:description" content="MergeTree 建表语句、ORDER BY / PARTITION BY / TTL、INSERT、CSV/JSON、Kafka Engine、S3 导入，以及批量插入最佳实践和表引擎选择指南。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/database/clickhouse/table-import/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="建表与数据导入 - 资深码农">
+    <meta name="twitter:description" content="MergeTree 建表语句、ORDER BY / PARTITION BY / TTL、批量插入最佳实践。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta name="article:author" content="资深码农">
+    <meta name="article:section" content="数据库与缓存">
+    <meta name="article:tag" content="ClickHouse,建表,数据导入">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"建表与数据导入","description":"MergeTree 建表语句、ORDER BY / PARTITION BY / TTL、INSERT、CSV/JSON、Kafka Engine、S3 导入，以及批量插入最佳实践和表引擎选择指南。","url":"https://www.yijunjun.asia/database/clickhouse/table-import/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/table-import/"},"articleSection":"数据库与缓存"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "ClickHouse 总览", "item": "https://www.yijunjun.asia/database/clickhouse/"}, {"position": 4, "name": "建表与数据导入", "item": "https://www.yijunjun.asia/database/clickhouse/table-import/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "插入数据后立刻查不到是为什么？", "acceptedAnswer": {"@type": "Answer", "text": "ClickHouse 插入后立即可查（不像 ES 要 refresh），但如果你用的是 ReplacingMergeTree 且还没 merge，重复 key 会看到多份。正常明细表插入后就能查。查不到先看 system.parts 里 part 是不是 Active。"}}, {"@type": "Question", "name": "怎么删掉旧数据？", "acceptedAnswer": {"@type": "Answer", "text": "首选 TTL 自动删。手动删用 ALTER TABLE ... DELETE WHERE ...，但这是 mutation，会重写数据，大表很慢。按分区删最快：ALTER TABLE ... DROP PARTITION '202608';，秒级完成。"}}, {"@type": "Question", "name": "导入时类型不匹配报错怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "ClickHouse 类型很严格。字符串里有空串、数字列里有非数字都会报错。用 FORMAT CSVWithNames 带表头对齐列序，或在 SELECT 里显式 CAST。脏数据先清洗再导，别指望它帮你容错。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../backend/">后端</a><a href="../../../database/">数据库</a><a href="../../../ai/">AI</a><a href="../../../devops/">运维</a><a href="../../../frontend/">前端</a><a href="../../../tools/">工具</a><a href="../../../game/">游戏</a><a href="../../../os/">系统</a><a href="../../../other/">更多</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">数据库与缓存</a><span class="separator">/</span><a href="../index.html">ClickHouse 总览</a><span class="separator">/</span><span>建表与数据导入</span>
+</div>
+
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">建表与数据导入</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ ClickHouse,建表,导入</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<h2>建表是 ClickHouse 最关键的一步</h2>
+<p>在 MySQL 里建表随手就能 <code>CREATE TABLE</code>，改起来也容易。但 ClickHouse 反过来——<strong>建表参数选错了，后面查询怎么调都救不回来</strong>。因为 ORDER BY 决定了数据物理排序，PARTITION BY 决定了数据怎么切分，这些建完之后再改代价极大（基本得重新导数据）。这篇把建表语句的每个子句讲清楚，再把生产上几种数据导入姿势过一遍。</p>
+
+<h2>一张标准的 MergeTree 表长什么样</h2>
+<p>先看一个我团队线上跑的日志明细表，这是最典型的形态：</p>
+<pre><code class="language-sql">CREATE TABLE event_log
+(
+    event_time DateTime64(3) CODEC(Delta, ZSTD(3)),
+    user_id     UInt64,
+    event_type  LowCardinality(String),
+    url         String CODEC(ZSTD(1)),
+    status_code UInt16,
+    latency_ms  UInt32,
+    city        LowCardinality(String)
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMMDD(event_time)
+ORDER BY (event_type, event_time)
+PRIMARY KEY (event_type)
+TTL event_time + INTERVAL 90 DAY DELETE
+SETTINGS index_granularity = 8192;</code></pre>
+<p>逐个子句拆：</p>
+<ul>
+<li><strong>ORDER BY (event_type, event_time)</strong>：part 内数据按这个排序，也是稀疏索引的依据。排在前面的字段过滤性越强，查询能跳过的数据越多。</li>
+<li><strong>PARTITION BY toYYYYMMDD(event_time)</strong>：按天分区。查询带时间范围时只扫相关分区。</li>
+<li><strong>PRIMARY KEY (event_type)</strong>：主键索引前缀，通常是 ORDER BY 的前几列。这里主键就是排序键第一列。</li>
+<li><strong>TTL ... DELETE</strong>：90 天自动删历史数据，不用你自己写清理任务。</li>
+<li><strong>CODEC(...)</strong>：列级压缩。时间戳用 Delta+ZSTD 效果最好；低基数字符串用 LowCardinality 类型本身就省空间。</li>
+</ul>
+<div class="callout callout-danger">
+<div class="callout-title">ORDER BY 选反了，查询直接废掉</div>
+<p>我见过一个事故：建表时 ORDER BY 写成了 (event_time, event_type)，以为时间在前面查时间快。结果业务查询 90% 是 <code>WHERE event_type = 'click'</code>，时间只是范围。因为排序键第一列是时间，按 event_type 过滤完全用不上主键索引，全表扫。后来只能重建表导数据。<strong>ORDER BY 第一列必须是你最高频过滤的等值条件列</strong>，时间放后面做范围。</p>
+</div>
+
+<h2>ORDER BY / PARTITION BY / TTL 怎么选</h2>
+<p>这三个子句是建表的灵魂，我总结个决策方法：</p>
+<table>
+<thead><tr><th>子句</th><th>决定什么</th><th>选择原则</th></tr></thead>
+<tbody>
+<tr><td>ORDER BY</td><td>part 内物理排序 + 主键索引</td><td>高频等值过滤列放前面，范围列放后面</td></tr>
+<tr><td>PARTITION BY</td><td>数据物理切分</td><td>按天/月，匹配你的查询时间范围</td></tr>
+<tr><td>PRIMARY KEY</td><td>稀疏索引前缀</td><td>通常 = ORDER BY 前缀，不必重复写</td></tr>
+<tr><td>TTL</td><td>数据生命周期</td><td>按时间自动删/聚合，别靠手动任务</td></tr>
+</tbody>
+</table>
+<p>一个常见误区：把所有过滤列都塞进 ORDER BY。没必要。排序键列越多，压缩率越差、写入越慢。ORDER BY 一般 2~4 列就够，剩下的过滤条件靠跳数索引（下一篇讲）或分区裁剪解决。</p>
+
+<h2>导入方式一：INSERT 批插</h2>
+<p>最基础的导入就是 <code>INSERT INTO ... VALUES</code>。但记住一条铁律：<strong>一定要批量插，千万别单条插</strong>。</p>
+<pre><code class="language-sql">-- 正确：一次插一批
+INSERT INTO event_log (event_time, user_id, event_type, url, status_code, latency_ms) VALUES
+    (now(), 1001, 'click', '/home', 200, 35),
+    (now(), 1002, 'view',  '/detail', 200, 42),
+    (now(), 1003, 'click', '/home', 200, 28);
+
+-- 错误：单条循环插，吞吐能差 100 倍
+INSERT INTO event_log (...) VALUES (...); -- 一行一次</code></pre>
+<p>原因上一篇讲过：每次 INSERT 都会生成一个不可变 part。你单条插一万行，就是一万个小 part，后台 merge 线程累死都追不上，查询时要合并上万个小文件，直接慢成狗。</p>
+<div class="mermaid" data-src="flowchart LR
+    I1['小 part 1'] --> MG['后台 merge 线程']
+    I2['小 part 2'] --> MG
+    I3['小 part 3'] --> MG
+    MG --> BIG['大 part 排序合并']
+    BIG --> READ['查询顺序扫描']
+    style MG fill:#f0682a,stroke:#fff,color:#fff"></div>
+<div class="callout callout-danger">
+<div class="callout-title">第二个大坑：小批量写入</div>
+<p>我有次接埋点，业务方按"每来一条事件就 INSERT 一次"接进来，单机写入 QPS 才 200，CPU 就跑满了——全是 merge 在疯狂合并小 part。改成攒够 1000~10000 行（或攒 1~2 秒）再批量插，同样的数据量，CPU 直接降到 5%。<strong>ClickHouse 的写入单位是"批"，不是"条"</strong>。</p>
+</div>
+
+<h2>导入方式二：CSV / JSON 文件</h2>
+<p>从文件导入是数据迁移和离线导入的常用姿势。clickhouse-client 直接读 stdin：</p>
+<pre><code class="language-bash"># CSV 导入
+clickhouse-client --query="INSERT INTO event_log FORMAT CSV" &lt; events.csv
+
+# JSONEachRow：每行一个 JSON 对象，最常用
+clickhouse-client --query="INSERT INTO event_log FORMAT JSONEachRow" &lt; events.jsonl
+
+# 带压缩的 CSV，导入大文件省带宽
+clickhouse-client --query="INSERT INTO event_log FORMAT CSV" &lt; events.csv.gz</code></pre>
+<p>反向导出也一样顺手：</p>
+<pre><code class="language-bash">clickhouse-client --query="SELECT * FROM event_log WHERE event_time &gt;= '2026-09-01' FORMAT JSONEachRow" &gt; out.jsonl</code></pre>
+<p>我个人最推荐 <code>JSONEachRow</code> 格式——每行独立 JSON，部分行出错不会影响整体，调试也方便。CSV 适合超大数据量的全量迁移，但要注意转义和表头。</p>
+
+<h2>导入方式三：Kafka Engine 流式接入</h2>
+<p>生产上最主流的实时导入是 Kafka。ClickHouse 有个 <code>Kafka</code> 表引擎，直接把 Kafka topic 当数据源，再用物化视图把数据灌进 MergeTree 表。</p>
+<div class="mermaid" data-src="flowchart LR
+    K['Kafka Topic'] --> KE['Kafka Engine 表']
+    KE --> MV['物化视图 INSERT 触发']
+    MV --> MT['MergeTree 明细表']
+    MT --> AGG['聚合查询']
+    style KE fill:#f0682a,stroke:#fff,color:#fff"></div>
+<pre><code class="language-sql">-- 1. 建 Kafka 引擎表（只消费，不存数据）
+CREATE TABLE kafka_events
+(
+    event_time DateTime64(3),
+    user_id    UInt64,
+    event_type LowCardinality(String),
+    url        String,
+    status_code UInt16
+) ENGINE = Kafka()
+SETTINGS
+    kafka_broker_list = 'kafka1:9092,kafka2:9092',
+    kafka_topic_list  = 'app_events',
+    kafka_group_name  = 'clickhouse_consumer',
+    kafka_format      = 'JSONEachRow',
+    kafka_num_consumers = 2;
+
+-- 2. 建真正的 MergeTree 表
+CREATE TABLE event_log
+(
+    event_time DateTime64(3),
+    user_id    UInt64,
+    event_type LowCardinality(String),
+    url        String,
+    status_code UInt16
+) ENGINE = MergeTree
+PARTITION BY toYYYYMMDD(event_time)
+ORDER BY (event_type, event_time);
+
+-- 3. 物化视图把 Kafka 表数据自动写进 MergeTree
+CREATE MATERIALIZED VIEW consumer_mv TO event_log AS
+SELECT event_time, user_id, event_type, url, status_code
+FROM kafka_events;</code></pre>
+<p>这套组合是 ClickHouse 实时入仓的标准架构：Kafka Engine 拉数据 → 物化视图做清洗/过滤/字段裁剪 → 落进 MergeTree 明细表。<code>kafka_num_consumers</code> 按消费并发调，Topic 分区多就调大。</p>
+
+<h2>导入方式四：S3 / 对象存储直接导入</h2>
+<p>数据在 S3（或兼容的 MinIO、OSS）上，不用先下载再上传，ClickHouse 能直接读：</p>
+<pre><code class="language-sql">-- 直接查 S3 上的 CSV
+SELECT count()
+FROM s3('https://my-bucket.s3.amazonaws.com/events/2026-09-*.csv.gz',
+        'CSV',
+        'event_time DateTime64(3), user_id UInt64, event_type String')
+WHERE event_time &gt;= '2026-09-01';
+
+-- 直接灌进 MergeTree 表
+INSERT INTO event_log
+SELECT * FROM s3('https://my-bucket.s3.amazonaws.com/events/2026-09-*.csv.gz',
+                 'CSV',
+                 'event_time DateTime64(3), user_id UInt64, event_type String, url String, status_code UInt16, latency_ms UInt32');</code></pre>
+<p>这招对历史数据回补、T+1 批量导入特别香——数据本来就在对象存储里，不用搬来搬去。我团队每天凌晨把前一天的离线数据从 Hive 导出到 S3，再用一条 <code>INSERT INTO ... SELECT FROM s3()</code> 补进 ClickHouse。</p>
+
+<h2>批量插入最佳实践</h2>
+<p>把散落的经验汇总成一张表，照着做不会错：</p>
+<table>
+<thead><tr><th>实践</th><th>怎么做</th><th>为什么</th></tr></thead>
+<tbody>
+<tr><td>攒批再插</td><td>每批 1万~10万行 或 5~15MB</td><td>避免小 part 打爆 merge</td></tr>
+<tr><td>单线程导入</td><td>大批量导入时别并发多路插</td><td>并发插会产生多个 part 互相 merge</td></tr>
+<tr><td>插入间隔 ≥ 1 秒</td><td>不要毫秒级连续小批插</td><td>给 merge 留喘气时间</td></tr>
+<tr><td>导入完 OPTIMIZE</td><td><code>OPTIMIZE TABLE xxx FINAL</code></td><td>强制合并小 part，查询更快</td></tr>
+<tr><td>关异步指标</td><td>导入大任务时</td><td>减少后台 IO 争抢</td></tr>
+</tbody>
+</table>
+
+<h2>表引擎选择指南</h2>
+<p>新人最大的困惑之一是"这么多表引擎我用哪个"。给你一张决策表：</p>
+<table>
+<thead><tr><th>你的需求</th><th>选这个引擎</th></tr></thead>
+<tbody>
+<tr><td>日志/埋点明细表，只追加</td><td>MergeTree</td></tr>
+<tr><td>维度表，按主键保留最新</td><td>ReplacingMergeTree</td></tr>
+<tr><td>明细上预聚合求和</td><td>SummingMergeTree</td></tr>
+<tr><td>物化视图聚合底表</td><td>AggregatingMergeTree</td></tr>
+<tr><td>消费 Kafka 流</td><td>Kafka 引擎 + 物化视图</td></tr>
+<tr><td>查其他节点的表</td><td>Distributed 引擎</td></tr>
+<tr><td>临时表/内存表</td><td>Memory / Buffer</td></tr>
+</tbody>
+</table>
+<p>记住一个原则：<strong>业务明细表一律 MergeTree 起步</strong>。只有当你明确需要去重、预聚合这些特性时，才换对应家族成员。别一上来就用 ReplacingMergeTree，大多数情况你不需要。</p>
+
+<h2>FAQ</h2>
+<p><strong>Q：插入数据后立刻查不到是为什么？</strong><br/>ClickHouse 插入后立即可查（不像 ES 要 refresh），但如果你用的是 ReplacingMergeTree 且还没 merge，重复 key 会看到多份。正常明细表插入后就能查。查不到先看 <code>system.parts</code> 里 part 是不是 Active。</p>
+<p><strong>Q：怎么删掉旧数据？</strong><br/>首选 TTL 自动删。手动删用 <code>ALTER TABLE ... DELETE WHERE ...</code>，但这是 mutation，会重写数据，大表很慢。按分区删最快：<code>ALTER TABLE ... DROP PARTITION '202608';</code>，秒级完成。</p>
+<p><strong>Q：导入时类型不匹配报错怎么办？</strong><br/>ClickHouse 类型很严格。字符串里有空串、数字列里有非数字都会报错。用 <code>FORMAT CSVWithNames</code> 带表头对齐列序，或在 SELECT 里显式 <code>CAST</code>。脏数据先清洗再导，别指望它帮你容错。</p>
+
+<h2>我的结论</h2>
+<p>建表和导入是 ClickHouse 工程里最容易"一次定终身"的环节。ORDER BY 决定排序和索引，PARTITION BY 决定裁剪粒度，TTL 决定数据生命周期——这三个建错了，后面怎么调优都救不回来。导入则记住一句话：<strong>批量、批量、还是批量</strong>，Kafka + 物化视图做实时流，S3 做离线回补，单条 INSERT 是万恶之源。下一篇我们聊查询怎么写、怎么调优，把这些数据真正用起来。</p>
+
+
+                    </div>
+                </article>
+                <nav class="article-nav">
+                    <a class="nav-prev" href="../architecture/"><span class="nav-label">← 上一篇</span><span class="nav-title">架构与核心特性</span></a>
+                    <a class="nav-next" href="../query-optimization/"><span class="nav-label">下一篇 →</span><span class="nav-title">查询优化与分区</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · ClickHouse</h2><ul class="related-list"><li><a class="side-post" href="../">ClickHouse 总览</a></li><li><a class="side-post" href="../architecture/">架构与核心特性</a></li><li><a class="side-post" href="./">建表与数据导入</a></li><li><a class="side-post" href="../query-optimization/">查询优化与分区</a></li><li><a class="side-post" href="../olap-practice/">OLAP 场景实战</a></li><li><a class="side-post" href="../compare/">vs Elasticsearch vs Doris</a></li></ul></aside>
+                <div class="share-bar">
+                    <span class="share-label">分享：</span>
+                    <button class="share-btn" data-platform="copy" title="复制链接">🔗</button>
+                    <button class="share-btn" data-platform="twitter" title="分享到 X/Twitter">𝕏</button>
+                    <button class="share-btn" data-platform="weibo" title="分享到微博">📱</button>
+                    <button class="share-btn" data-platform="email" title="邮件分享">✉️</button>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+
+    <button class="back-to-top" title="回到顶部">↑</button>
+
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "database";</script>
+    <script defer src="../../../js/main.js"></script>
+</body>
+</html>
