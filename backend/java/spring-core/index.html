@@ -94,29 +94,33 @@
 
 <h2>IoC 容器启动流程</h2>
 <p>你跑 <code>SpringApplication.run()</code>，背后干的事按顺序是这些：</p>
-<div class="mermaid" data-src="flowchart TD
-    START['main 入口'] --> SPRING['new SpringApplication 推断应用类型 准备环境']
-    SPRING --> REFRESH['refresh() 核心方法']
-    REFRESH --> BD['BeanDefinition 加载与注册']
-    BD --> INST['实例化 Bean 调用构造器']
-    INST --> POP['属性填充 依赖注入']
-    POP --> INIT['初始化 Aware/BeanPostProcessor/init-method']
-    INIT --> READY['容器就绪 回调 Runner']
+<div class="mermaid">
+flowchart TD
+    START[main 入口] --> SPRING[new SpringApplication 推断应用类型 准备环境]
+    SPRING --> REFRESH[refresh() 核心方法]
+    REFRESH --> BD[BeanDefinition 加载与注册]
+    BD --> INST[实例化 Bean 调用构造器]
+    INST --> POP[属性填充 依赖注入]
+    POP --> INIT[初始化 Aware/BeanPostProcessor/init-method]
+    INIT --> READY[容器就绪 回调 Runner]
     style REFRESH fill:#00add8,stroke:#fff,color:#fff
-    style INST fill:#f59e0b,stroke:#fff,color:#fff"></div>
+    style INST fill:#f59e0b,stroke:#fff,color:#fff
+</div>
 <p>关键在 <code>refresh()</code> 这个方法，它是 Spring 容器的"总开关"。其中最容易出问题的是<strong>实例化和依赖注入阶段</strong>——循环依赖、构造器注入死锁、AOP 代理时机，全在这一段。</p>
 
 <h2>Bean 生命周期：一次完整的旅程</h2>
 <p>一个 Bean 从 new 到销毁，经历这几步。我把它画成流程图，再对着源码讲：</p>
-<div class="mermaid" data-src="flowchart LR
-    INST['实例化 构造器'] --> POP['属性填充 @Autowired']
-    POP --> BEAN['BeanNameAware/BeanFactoryAware']
-    BEAN --> BPP1['BeanPostProcessor.before']
-    BPP1 --> INIT['@PostConstruct / InitializingBean / init-method']
-    INIT --> BPP2['BeanPostProcessor.after AOP 代理在这里生成']
-    BPP2 --> USE['Bean 就绪 业务使用']
-    USE --> DESTROY['@PreDestroy 销毁']
-    style BPP2 fill:#dc382d,stroke:#fff,color:#fff"></div>
+<div class="mermaid">
+flowchart LR
+    INST[实例化 构造器] --> POP[属性填充 @Autowired]
+    POP --> BEAN[BeanNameAware/BeanFactoryAware]
+    BEAN --> BPP1[BeanPostProcessor.before]
+    BPP1 --> INIT[@PostConstruct / InitializingBean / init-method]
+    INIT --> BPP2[BeanPostProcessor.after AOP 代理在这里生成]
+    BPP2 --> USE[Bean 就绪 业务使用]
+    USE --> DESTROY[@PreDestroy 销毁]
+    style BPP2 fill:#dc382d,stroke:#fff,color:#fff
+</div>
 <p>重点看红色那步：<strong>AOP 代理是在 BeanPostProcessor 的 after 阶段生成的</strong>。这就是为什么你在 <code>@PostConstruct</code> 里调 <code>this.xxx()</code>，AOP 切面不生效——那时候代理对象还没生成，你拿到的是原始 this。</p>
 <pre><code class="language-java">@Service
 public class OrderService {
@@ -219,15 +223,17 @@ public class MyServiceAutoConfiguration {
 
 <h2>循环依赖：三级缓存到底在干嘛</h2>
 <p>Spring 解决单例 set/字段注入的循环依赖，靠的是三级缓存。这个面试必考，线上也真会碰到。我把流程画出来：</p>
-<div class="mermaid" data-src="flowchart TD
-    A['A 实例化 构造器完成'] --> EARLY['提前暴露对象工厂 放进三级缓存']
-    EARLY --> INJ['A 注入 B 开始实例化 B']
-    INJ --> BEARLY['B 实例化 提前暴露']
-    BEARLY --> BINJ['B 注入 A 从三级缓存拿到 A 的早期引用']
-    BINJ --> BDONE['B 完成初始化']
-    BDONE --> ADONE['A 拿到 B 完成初始化']
+<div class="mermaid">
+flowchart TD
+    A[A 实例化 构造器完成] --> EARLY[提前暴露对象工厂 放进三级缓存]
+    EARLY --> INJ[A 注入 B 开始实例化 B]
+    INJ --> BEARLY[B 实例化 提前暴露]
+    BEARLY --> BINJ[B 注入 A 从三级缓存拿到 A 的早期引用]
+    BINJ --> BDONE[B 完成初始化]
+    BDONE --> ADONE[A 拿到 B 完成初始化]
     style EARLY fill:#00add8,stroke:#fff,color:#fff
-    style BINJ fill:#10b981,stroke:#fff,color:#fff"></div>
+    style BINJ fill:#10b981,stroke:#fff,color:#fff
+</div>
 <p>关键是<strong>三级缓存存的不是对象本身，是一个 ObjectFactory</strong>，它能在需要时生成 AOP 代理。这样 B 注入 A 时，拿到的就是 A 的早期代理对象，而不是原始对象。</p>
 <div class="callout callout-danger">
 <div class="callout-title">构造器循环依赖救不了</div>

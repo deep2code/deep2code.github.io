@@ -141,28 +141,21 @@ def dot(a, b):                           # 内积
 <li><strong>欧氏距离（L2）</strong>：真实物理距离，长度和方向都管。适合图像、特征空间这种向量模长本身有意义的场景。</li>
 <li><strong>内积（IP）</strong>：归一化向量上等价于余弦，未归一化时模长会参与。部分推荐系统用它。</li>
 </ul>
-<div class="mermaid" data-src="flowchart TD
-    A['选定度量'] --> B{'向量是否归一化?'}
-    B -->|是| C['余弦 == 内积，二选一即可']
-    B -->|否| D{'业务看什么?'}
-    D -->|语义方向| E['余弦相似度']
-    D -->|几何位置/图像| F['欧氏距离 L2']
-    D -->|推荐/打分| G['内积 IP']</div>
-<div class="callout callout-danger">
-<div class="callout-title">度量和索引必须对齐</div>
-pgvector 建索引时要指定 <code>vector_cosine_ops</code> / <code>vector_l2_ops</code>，和你查询用的度量不一致，索引根本不生效，会退化成全表扫。我踩过一次——建索引时偷懒用了默认 L2，查询用余弦，结果慢得要死还召回率低，排查了半天才发现是这个。
+<div class="mermaid">
+flowchart TD
+    A[选定度量] --> B{向量是否归一化?}
+    B -->|是| C[余弦 == 内积，二选一即可]
+    B -->|否| D{业务看什么?}
+    D -->|语义方向| E[余弦相似度]
+    D -->|几何位置/图像| F[欧氏距离 L2]
+    D -->|推荐/打分| G[内积 IP]
+</div> <div class="callout callout-danger"> <div class="callout-title">度量和索引必须对齐</div> pgvector 建索引时要指定 <code>vector_cosine_ops</code> / <code>vector_l2_ops</code>，和你查询用的度量不一致，索引根本不生效，会退化成全表扫。我踩过一次——建索引时偷懒用了默认 L2，查询用余弦，结果慢得要死还召回率低，排查了半天才发现是这个。 </div>  <p style="color:red;font-size:20px">测试段落：你能看到我吗？</p> <h2>ANN 近似最近邻：为什么不全表扫</h2> <p>假设库里有 1000 万条 1024 维向量。一次查询要和全部 1000 万条算距离，每次 1024 次乘法，那就是 100 亿次浮点运算——单机几百毫秒，并发直接崩。全表扫（精确最近邻 KNN）只适合小数据集做验证。</p> <p>ANN（Approximate Nearest Neighbor）的思路是<strong>牺牲一点点召回率，换数量级的速度</strong>。它不保证找到真正最近的，但找回来的候选里 95% 以上是对的，对 RAG 这种场景完全够用。下面这张图是整个流程：</p> <div class="mermaid">
+flowchart LR
+    Q[查询向量] --> IDX[ANN 索引粗排]
+    IDX --> CAND[候选 Top-N]
+    CAND --> RESCORE[精确距离重排]
+    RESCORE --> TOPK[最终 Top-K]
 </div>
-
-<h2>ANN 近似最近邻：为什么不全表扫</h2>
-<p>假设库里有 1000 万条 1024 维向量。一次查询要和全部 1000 万条算距离，每次 1024 次乘法，那就是 100 亿次浮点运算——单机几百毫秒，并发直接崩。全表扫（精确最近邻 KNN）只适合小数据集做验证。</p>
-<p>ANN（Approximate Nearest Neighbor）的思路是<strong>牺牲一点点召回率，换数量级的速度</strong>。它不保证找到真正最近的，但找回来的候选里 95% 以上是对的，对 RAG 这种场景完全够用。下面这张图是整个流程：</p>
-<div class="mermaid" data-src="flowchart LR
-    Q['查询向量'] --> IDX['ANN 索引粗排']
-    IDX --> CAND['候选 Top-N（N 远大于 K）']
-    CAND --> RESCORE['精确距离重排']
-    RESCORE --> TOPK['最终 Top-K']
-    style IDX fill:#00add8,stroke:#fff,color:#fff
-    style RESCORE fill:#f59e0b,stroke:#fff,color:#fff"></div>
 
 <h2>HNSW 和 IVF：两大索引原理</h2>
 <p>这两个是 2026 年你绕不开的索引结构，我用大白话讲：</p>

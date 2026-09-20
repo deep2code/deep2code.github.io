@@ -147,13 +147,15 @@ INSERT INTO event_log (event_time, user_id, event_type, url, status_code, latenc
 -- 错误：单条循环插，吞吐能差 100 倍
 INSERT INTO event_log (...) VALUES (...); -- 一行一次</code></pre>
 <p>原因上一篇讲过：每次 INSERT 都会生成一个不可变 part。你单条插一万行，就是一万个小 part，后台 merge 线程累死都追不上，查询时要合并上万个小文件，直接慢成狗。</p>
-<div class="mermaid" data-src="flowchart LR
-    I1['小 part 1'] --> MG['后台 merge 线程']
-    I2['小 part 2'] --> MG
-    I3['小 part 3'] --> MG
-    MG --> BIG['大 part 排序合并']
-    BIG --> READ['查询顺序扫描']
-    style MG fill:#f0682a,stroke:#fff,color:#fff"></div>
+<div class="mermaid">
+flowchart LR
+    I1[小 part 1] --> MG[后台 merge 线程]
+    I2[小 part 2] --> MG
+    I3[小 part 3] --> MG
+    MG --> BIG[大 part 排序合并]
+    BIG --> READ[查询顺序扫描]
+    style MG fill:#f0682a,stroke:#fff,color:#fff
+</div>
 <div class="callout callout-danger">
 <div class="callout-title">第二个大坑：小批量写入</div>
 <p>我有次接埋点，业务方按"每来一条事件就 INSERT 一次"接进来，单机写入 QPS 才 200，CPU 就跑满了——全是 merge 在疯狂合并小 part。改成攒够 1000~10000 行（或攒 1~2 秒）再批量插，同样的数据量，CPU 直接降到 5%。<strong>ClickHouse 的写入单位是"批"，不是"条"</strong>。</p>
@@ -175,12 +177,14 @@ clickhouse-client --query="INSERT INTO event_log FORMAT CSV" &lt; events.csv.gz<
 
 <h2>导入方式三：Kafka Engine 流式接入</h2>
 <p>生产上最主流的实时导入是 Kafka。ClickHouse 有个 <code>Kafka</code> 表引擎，直接把 Kafka topic 当数据源，再用物化视图把数据灌进 MergeTree 表。</p>
-<div class="mermaid" data-src="flowchart LR
-    K['Kafka Topic'] --> KE['Kafka Engine 表']
-    KE --> MV['物化视图 INSERT 触发']
-    MV --> MT['MergeTree 明细表']
-    MT --> AGG['聚合查询']
-    style KE fill:#f0682a,stroke:#fff,color:#fff"></div>
+<div class="mermaid">
+flowchart LR
+    K[Kafka Topic] --> KE[Kafka Engine 表]
+    KE --> MV[物化视图 INSERT 触发]
+    MV --> MT[MergeTree 明细表]
+    MT --> AGG[聚合查询]
+    style KE fill:#f0682a,stroke:#fff,color:#fff
+</div>
 <pre><code class="language-sql">-- 1. 建 Kafka 引擎表（只消费，不存数据）
 CREATE TABLE kafka_events
 (

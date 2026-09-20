@@ -101,17 +101,19 @@ WHERE event_time &gt;= '2026-09-15' AND event_time &lt; '2026-09-16'
   AND event_type = 'click'
 GROUP BY hour;</code></pre>
 <p>重点看几样东西：<code>ReadFromMergeTree</code> 节点里的 <code>Parts</code> 读了几个、<code>Granules</code> 跳过了多少。理想情况下，时间范围应该只命中当天那一个分区，granule 跳过率很高。如果 Parts 读了一堆、Granules 几乎没跳，说明你的过滤条件没走到索引或分区。</p>
-<div class="mermaid" data-src="flowchart TB
-    Q['SQL 查询'] --> EP['EXPLAIN 执行计划']
-    EP --> CHK1{'读了几个分区?'}
-    CHK1 -->|全部分区| FIX1['补时间 WHERE / 修 PARTITION BY']
-    CHK1 -->|只命中相关| CHK2{'主键/跳数索引用上了?'}
-    CHK2 -->|没用| FIX2['检查 ORDER BY 前缀 / 加跳数索引']
-    CHK2 -->|用上了| CHK3{'GROUP BY 落盘了吗?'}
-    CHK3 -->|落盘| FIX3['调大 max_bytes_before_external_group_by']
+<div class="mermaid">
+flowchart TB
+    Q[SQL 查询] --> EP[EXPLAIN 执行计划]
+    EP --> CHK1{读了几个分区?}
+    CHK1 -->|全部分区| FIX1[补时间 WHERE / 修 PARTITION BY]
+    CHK1 -->|只命中相关| CHK2{主键/跳数索引用上了?}
+    CHK2 -->|没用| FIX2[检查 ORDER BY 前缀 / 加跳数索引]
+    CHK2 -->|用上了| CHK3{GROUP BY 落盘了吗?}
+    CHK3 -->|落盘| FIX3[调大 max_bytes_before_external_group_by]
     style FIX1 fill:#dc382d,stroke:#fff,color:#fff
     style FIX2 fill:#dc382d,stroke:#fff,color:#fff
-    style FIX3 fill:#f59e0b,stroke:#fff,color:#fff"></div>
+    style FIX3 fill:#f59e0b,stroke:#fff,color:#fff
+</div>
 
 <h2>主键索引：稀疏索引怎么用</h2>
 <p>上一篇讲过，ClickHouse 的主键索引是<strong>稀疏</strong>的——每 8192 行（index_granularity）才记一条索引项。这意味着它不是精确找一行，而是"跳过一整块不相关的数据"。</p>
@@ -187,12 +189,14 @@ GROUP BY hour, pv
 ORDER BY hour;</code></pre>
 <p>注意 <code>uniqState</code> / <code>uniqMerge</code> 这对组合——聚合中间状态不直接存 UV 数字，而是存一个可合并的近似去重状态（HLL），查询时再 merge。这样不同批次的数据合并时 UV 依然准确。</p>
 
-<div class="mermaid" data-src="flowchart LR
-    INS['新数据 INSERT 明细表'] --> MV['物化视图触发']
-    MV --> AGG['按 hour+event_type 聚合']
-    AGG --> MT['预聚合表 SummingMergeTree']
-    Q['报表查询'] --> MT
-    style MV fill:#f0682a,stroke:#fff,color:#fff"></div>
+<div class="mermaid">
+flowchart LR
+    INS[新数据 INSERT 明细表] --> MV[物化视图触发]
+    MV --> AGG[按 hour+event_type 聚合]
+    AGG --> MT[预聚合表 SummingMergeTree]
+    Q[报表查询] --> MT
+    style MV fill:#f0682a,stroke:#fff,color:#fff
+</div>
 
 <h2>Projection：自动选最佳排序</h2>
 <p>24.x 之后 Projection（投影）是个很香的特性。它允许你对同一张明细表额外维护一个"按另一套 ORDER BY 排序的物理副本"，查询时优化器自动判断用哪个排序更快，对业务透明。</p>

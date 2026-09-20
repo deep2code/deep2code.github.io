@@ -91,42 +91,15 @@
 <h2>为什么先讲 pgvector</h2>
 <p>如果你的团队已经在用 PostgreSQL，pgvector 是我能想到的最快上手路径——不用引入新中间件、不用学新查询语言、不用多维护一套服务，向量就是一个普通列。我们公司第一个内部知识库就是这么跑起来的：业务数据和向量在同一个库，一个 SQL 全搞定。</p>
 <p>但 pgvector 不是万能的。它本质是个扩展，能力上限绑死在 PostgreSQL 上，数据量到千万级以上、QPS 上去之后会遇到天花板。这篇先把它讲透，什么时候该迁走，文末生产注意事项里说。</p>
-<div class="mermaid" data-src="flowchart LR
-    APP['应用服务'] --> SQL['一条 SQL']
-    SQL --> BTREE['B-tree: 按租户/权限过滤']
-    SQL --> HNSW['HNSW: 向量找最近邻']
-    BTREE --> OPT['优化器合并计划']
+<div class="mermaid">
+flowchart LR
+    APP[应用服务] --> SQL[一条 SQL]
+    SQL --> BTREE[B-tree: 按租户/权限过滤]
+    SQL --> HNSW[HNSW: 向量找最近邻]
+    BTREE --> OPT[优化器合并计划]
     HNSW --> OPT
-    OPT --> ROWS['返回带详情的 Top-K 行']">
-
-<h2>安装：三步搞定</h2>
-<p>2026 年主流云厂商（阿里云 RDS、AWS RDS、Supabase）都内置了 pgvector，直接 <code>CREATE EXTENSION</code> 就行。自己装的话：</p>
-<pre><code class="language-bash"># macOS 本地
-brew install pgvector
-
-# Ubuntu / Debian
-sudo apt-get install postgresql-16-pgvector
-
-# 进数据库启用扩展
-psql &gt; CREATE EXTENSION vector;
-psql &gt; SELECT extversion FROM pg_extension WHERE extname = 'vector';</code></pre>
-<p>装完确认版本——<code>0.7.x</code> 之后 HNSW 才成熟，<code>0.8+</code> 有了并发索引构建，老版本就别用了。</p>
-
-<h2>建表：vector 类型列</h2>
-<p>核心就一个 <code>vector(N)</code> 类型，N 是维度。<strong>必须在建表时指定固定维度</strong>，和你的 Embedding 模型对齐。我用 BGE-M3 的 1024 维举例：</p>
-<pre><code class="language-sql">CREATE TABLE documents (
-    id          BIGSERIAL PRIMARY KEY,
-    title       TEXT NOT NULL,
-    content     TEXT NOT NULL,
-    tenant_id   BIGINT NOT NULL,          -- 多租户隔离
-    created_at  TIMESTAMPTZ DEFAULT now(),
-    embedding   vector(1024) NOT NULL     -- 固定 1024 维
-);
-
--- 元数据过滤常用的组合，建个普通 B-tree
-CREATE INDEX idx_documents_tenant ON documents(tenant_id, created_at);</code></pre>
-<div class="callout callout-danger">
-<div class="callout-title">维度一旦定了就改不动</div>
+    OPT --> ROWS[返回带详情的 Top-K 行]
+</div>
 <code>vector(1024)</code> 是写死的。哪天你想从 1024 维换到 1536 维，得加新列、重新 Embedding、回填数据、再切流量。所以立项时把模型和维度定死，别留"以后再说"。我踩过一次，全量重建 800 万条数据花了一整晚。
 </div>
 
@@ -146,14 +119,16 @@ CREATE INDEX idx_documents_embedding_ivf
 SET ivfflat.probes = 10;      -- IVF 用
 SET hnsw.ef_search = 40;      -- HNSW 用</code></pre>
 <p>注意 <code>vector_cosine_ops</code>——这是余弦度量的索引算子。你用 L2 距离查询就得建 <code>vector_l2_ops</code>，用内积就 <code>vector_ip_ops</code>。三者必须和查询运算符一致：<code>&lt;=&gt;</code> 余弦、<code>&lt;-&gt;</code> L2、<code>&lt;#&gt;</code> 内积。</p>
-<div class="mermaid" data-src="flowchart TD
-    INS['插入文档'] --> BULK['批量灌入向量数据']
-    BULK --> BUILD['建 HNSW/IVFFlat 索引']
-    BUILD --> ANALYZE['ANALYZE documents']
-    ANALYZE --> QRY['查询: ORDER BY embedding &lt;=&gt; q LIMIT k']
-    QRY --> CHK{'EXPLAIN 是否走索引?'}
-    CHK -->|Seq Scan| FIX['数据太少或参数不对，先灌数据再看']
-    CHK -->|Index Scan| OK['正常召回']</div>
+<div class="mermaid">
+flowchart TD
+    INS[插入文档] --> BULK[批量灌入向量数据]
+    BULK --> BUILD[建 HNSW/IVFFlat 索引]
+    BUILD --> ANALYZE[ANALYZE documents]
+    ANALYZE --> QRY[查询: ORDER BY embedding &lt;=&gt; q LIMIT k]
+    QRY --> CHK{EXPLAIN 是否走索引?}
+    CHK -->|Seq Scan| FIX[数据太少或参数不对，先灌数据再看]
+    CHK -->|Index Scan| OK[正常召回]
+</div>
 
 <h2>Embedding 写入与检索</h2>
 <p>用 Python 把文本转成向量再写库，再做一次语义检索。我把 psycopg 异步写法也贴出来，这是生产常用姿势：</p>

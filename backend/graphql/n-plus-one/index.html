@@ -108,13 +108,15 @@
 <li>对每篇文章，<code>Post.author</code> resolver 单独跑一次 <code>db.users.findById(post.authorId)</code>（100 次 SQL）。</li>
 </ol>
 <p>1 + 100 = 101 次查询，这就是"N+1"——1 次主查询加 N 次关联查询。更糟的是这些查询是<strong>串行或半并行</strong>的，数据库连接池很快被占满。</p>
-<div class="mermaid" data-src="flowchart TD
-    Q['查询 posts.author'] --> S1['SQL 1: 查100篇文章']
-    S1 --> L1['SQL 2: 查作者1']
-    L1 --> L2['SQL 3: 查作者2']
-    L2 --> L3['... 共100次']
-    L3 --> LN['SQL 101: 查作者100']
-    style LN fill:#dc382d,stroke:#fff,color:#fff"></div>
+<div class="mermaid">
+flowchart TD
+    Q[查询 posts.author] --> S1[SQL 1: 查100篇文章]
+    S1 --> L1[SQL 2: 查作者1]
+    L1 --> L2[SQL 3: 查作者2]
+    L2 --> L3[... 共100次]
+    L3 --> LN[SQL 101: 查作者100]
+    style LN fill:#dc382d,stroke:#fff,color:#fff
+</div>
 
 <h2>DataLoader 怎么把 101 次变 2 次</h2>
 <p>DataLoader 的核心是 <strong>batch 函数</strong>：它在同一个 microtask 周期内把所有 <code>load(id)</code> 攒成一个数组，一次性交给你写的批量查询函数。关键是你要保证返回顺序和请求 id 顺序对齐：</p>
@@ -128,12 +130,14 @@ const userLoader = new DataLoader&lt;string, User&gt;(async (ids) =&gt; {
   return ids.map((id) =&gt; map.get(id) ?? new Error(`未找到 ${id}`));
 });</code></pre>
 <p>接上 DataLoader 后，同样的查询变成：1 次查文章 + 1 次批量查作者 = 2 次 SQL。</p>
-<div class="mermaid" data-src="flowchart TD
-    Q['查询 posts.author'] --> S1['SQL 1: 查100篇文章']
-    S1 --> BATCH['DataLoader 攒100个id']
-    BATCH --> S2['SQL 2: WHERE id IN (1..100)']
-    S2 --> DONE['按id回填 2次查询搞定']
-    style S2 fill:#10b981,stroke:#fff,color:#fff"></div>
+<div class="mermaid">
+flowchart TD
+    Q[查询 posts.author] --> S1[SQL 1: 查100篇文章]
+    S1 --> BATCH[DataLoader 攒100个id]
+    BATCH --> S2[SQL 2: WHERE id IN (1..100)]
+    S2 --> DONE[按id回填 2次查询搞定]
+    style S2 fill:#10b981,stroke:#fff,color:#fff
+</div>
 <div class="callout callout-danger">
 <div class="callout-title">DataLoader 实例必须每请求新建</div>
 这是我踩过最贵的坑。DataLoader 自带请求内缓存，如果你把它做成全局单例，A 用户请求缓存了 User:1，B 用户请求直接命中——权限隔离直接失效。正确做法：<code>context</code> 工厂里 <code>new DataLoader()</code>，请求结束随 context 一起 GC。

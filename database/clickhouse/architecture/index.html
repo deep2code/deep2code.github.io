@@ -108,37 +108,41 @@
 </table>
 <p>压缩这块得多说一句。同一列里放的都是同类型数据——比如一个 UInt64 的时间戳列，或者一串状态码字符串。重复值多、类型一致，通用压缩算法（LZ4、ZSTD）压起来效果极好。我实测日志数据原始 1TB，压完常常只剩 100~150GB。磁盘省了，更重要的是内存里能缓存更多数据。</p>
 
-<div class="mermaid" data-src="flowchart LR
+<div class="mermaid">
+flowchart LR
     subgraph 行存储
-        R1['row1: id=1 uid=100 t=10:00']
-        R2['row2: id=2 uid=101 t=10:01']
-        R3['row3: id=3 uid=100 t=10:02']
+        R1[row1: id=1 uid=100 t=10:00]
+        R2[row2: id=2 uid=101 t=10:01]
+        R3[row3: id=3 uid=100 t=10:02]
     end
     subgraph 列存储
-        C1['id 列: [1,2,3]']
-        C2['uid 列: [100,101,100]']
-        C3['t 列: [10:00,10:01,10:02]']
+        C1[id 列: [1,2,3]]
+        C2[uid 列: [100,101,100]]
+        C3[t 列: [10:00,10:01,10:02]]
     end
     style C1 fill:#f0682a,stroke:#fff,color:#fff
     style C2 fill:#f0682a,stroke:#fff,color:#fff
-    style C3 fill:#f0682a,stroke:#fff,color:#fff"></div>
+    style C3 fill:#f0682a,stroke:#fff,color:#fff
+</div>
 
 <h2>向量化执行引擎：一次喂饱 CPU</h2>
 <p>这是 ClickHouse 和传统数据库执行引擎最大的区别。MySQL 那种火山模型（Volcano）是一行一行地拉取、一行一行地算——每一行都要走一遍函数调用、类型分发，CPU 大部分时间花在"函数调用开销"上，真正算数的时间没多少。</p>
 <p>ClickHouse 用的是<strong>向量化执行</strong>：把一列切成一批一批的块（block，默认约 65536 行），整块整块地处理。一个加法函数不是"一个数加一个数"，而是"一整列加一整列"，底层可以用 SIMD 指令一次算 4~8 个值，循环开销被摊薄。</p>
-<div class="mermaid" data-src="flowchart TB
+<div class="mermaid">
+flowchart TB
     subgraph 火山模型
-        L1['取一行'] --> F1['函数调用']
-        F1 --> L2['取下一行']
-        L2 --> F2['函数调用']
-        F2 --> L3['...']
+        L1[取一行] --> F1[函数调用]
+        F1 --> L2[取下一行]
+        L2 --> F2[函数调用]
+        F2 --> L3[...]
     end
     subgraph 向量化模型
-        B1['取一批 65536 行'] --> V1['SIMD 批量计算']
-        V1 --> B2['取下一批']
-        B2 --> V2['SIMD 批量计算']
+        B1[取一批 65536 行] --> V1[SIMD 批量计算]
+        V1 --> B2[取下一批]
+        B2 --> V2[SIMD 批量计算]
     end
-    style V1 fill:#f0682a,stroke:#fff,color:#fff"></div>
+    style V1 fill:#f0682a,stroke:#fff,color:#fff
+</div>
 <p>配合列式存储，数据进 CPU L1/L2 缓存也是成块的，缓存命中率极高。这就是"批量处理 + CPU 缓存"为什么快的核心——不是单个运算变快，而是<strong>把能并行的都并行、能缓存的都缓存</strong>，硬件利用率拉满。</p>
 
 <h2>MergeTree 家族：ClickHouse 的灵魂</h2>
@@ -172,25 +176,27 @@
 <li><strong>分区</strong>：单机上的逻辑切割，通常按天或月。<code>PARTITION BY toYYYYMM(event_time)</code>。查询带时间条件时能只扫相关分区，跳过其他分区的数据。分区是"读优化"。</li>
 <li><strong>分片</strong>：把数据横向分布到多台机器上，每个分片存一部分数据，彼此独立。分片是"横向扩展"，靠分布式表（Distributed engine）路由查询。</li>
 </ul>
-<div class="mermaid" data-src="flowchart TB
+<div class="mermaid">
+flowchart TB
     subgraph 集群 3 分片各 2 副本
         subgraph Shard1
-            P1['分区 202609']
-            P2['分区 202608']
+            P1[分区 202609]
+            P2[分区 202608]
         end
         subgraph Shard2
-            Q1['分区 202609']
-            Q2['分区 202608']
+            Q1[分区 202609]
+            Q2[分区 202608]
         end
         subgraph Shard3
-            R1['分区 202609']
-            R2['分区 202608']
+            R1[分区 202609]
+            R2[分区 202608]
         end
     end
-    DIST['Distributed 分布式表'] --> Shard1
+    DIST[Distributed 分布式表] --> Shard1
     DIST --> Shard2
     DIST --> Shard3
-    style DIST fill:#f0682a,stroke:#fff,color:#fff"></div>
+    style DIST fill:#f0682a,stroke:#fff,color:#fff
+</div>
 <p>副本（Replica）是每个分片里的主备，靠 ZooKeeper / Keeper 同步 part。生产部署我一般建议 2 副本起步，3 节点奇数个便于故障切换。分区别拆太细——按天分区是甜点，按小时分区在数据量大时反而会产生太多小 part，拖慢 merge。</p>
 
 <h2>主从复制：怎么保证高可用</h2>

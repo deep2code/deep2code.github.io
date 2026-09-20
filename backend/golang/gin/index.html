@@ -92,13 +92,15 @@
                     <div class="article-content">
 <h2>Gin 为什么快</h2>
 <p>这篇讲两件事：<strong>中间件链路怎么跑</strong>（Abort/Next 靠 index 推进），和一份生产用过的 <strong>Memcached 页面缓存中间件</strong>。后半段讲 Gin 1.12 的版本线和生产踩坑。先看一个请求的完整生命周期：</p>
-<div class="mermaid" data-src="flowchart TD
-    REQ['HTTP 请求到达'] --> POOL['sync.Pool 取出 Context 并重置']
-    POOL --> TREE['Radix Tree 路由匹配']
-    TREE --> CHAIN['合并 全局+组+路由 handlers 链']
-    CHAIN --> RUN['c.Next 递增 index 逐个执行']
-    RUN --> RESP['ShouldBind 绑定 渲染响应']
-    RESP --> BACK['Context 重置 归还 Pool']"></div>
+<div class="mermaid">
+flowchart TD
+    REQ[HTTP 请求到达] --> POOL[sync.Pool 取出 Context 并重置]
+    POOL --> TREE[Radix Tree 路由匹配]
+    TREE --> CHAIN[合并 全局+组+路由 handlers 链]
+    CHAIN --> RUN[c.Next 递增 index 逐个执行]
+    RUN --> RESP[ShouldBind 绑定 渲染响应]
+    RESP --> BACK[Context 重置 归还 Pool]
+</div>
 
 <h2>Abort 和 Next 的源码真相</h2>
 <p>Gin 的中间件链不是黑盒洋葱模型，是一个由 <code>index</code> 驱动的切片遍历。看源码就明白了：</p>
@@ -117,14 +119,16 @@ func (c *Context) Next() {
     }
 }</code></pre>
 <p>两者协同关系：</p>
-<div class="mermaid" data-src="flowchart TD
-    S['c.Next 被调用'] --> INC['index 自增']
-    INC --> CHK{'index 小于 handlers 长度?'}
-    CHK -->|是| EXEC['执行 handlers index']
+<div class="mermaid">
+flowchart TD
+    S[c.Next 被调用] --> INC[index 自增]
+    INC --> CHK{index 小于 handlers 长度?}
+    CHK -->|是| EXEC[执行 handlers index]
     EXEC --> S
-    CHK -->|否| DONE['链自然走完']
-    AB['c.Abort 被调用'] --> SET['index 置为 MaxInt8 除以 2']
-    SET --> GATE['后续 Next 判断直接不成立']"></div>
+    CHK -->|否| DONE[链自然走完]
+    AB[c.Abort 被调用] --> SET[index 置为 MaxInt8 除以 2]
+    SET --> GATE[后续 Next 判断直接不成立]
+</div>
 <div class="callout callout-danger">
 <div class="callout-title">关键区别</div>
 <code>Abort</code> 只拦住后续 handler，当前函数仍会跑完——所以 Abort 之后必须手动 <code>return</code>，不然业务逻辑照跑不误。我见过权限校验 Abort 了但没 return，后面代码照样执行的事故。
@@ -132,13 +136,15 @@ func (c *Context) Next() {
 
 <h2>Memcached 页面缓存中间件</h2>
 <p>这份是"写入侧"缓存：只缓存响应体，不含响应头。命中后的读取由 Nginx memcached 模块完成。先看中间件在链路中的位置：</p>
-<div class="mermaid" data-src="flowchart LR
-    REQ['HTTP 请求'] --> MW1['Logger']
-    MW1 --> MW2['Recovery']
-    MW2 --> MW3['MemcacheWrap 包装 Writer']
-    MW3 --> H['业务 Handler']
-    H --> STORE['writeStore 写回 memcached']
-    STORE --> RSP['HTTP 响应']"></div>
+<div class="mermaid">
+flowchart LR
+    REQ[HTTP 请求] --> MW1[Logger]
+    MW1 --> MW2[Recovery]
+    MW2 --> MW3[MemcacheWrap 包装 Writer]
+    MW3 --> H[业务 Handler]
+    H --> STORE[writeStore 写回 memcached]
+    STORE --> RSP[HTTP 响应]
+</div>
 <p>核心是用一个 <code>middleResp</code> 包住 <code>gin.ResponseWriter</code>，一边往真实 Writer 写，一边把响应体抄进 buffer，handler 跑完再统一写回 memcached：</p>
 <pre><code class="language-golang">import (
     "bytes"

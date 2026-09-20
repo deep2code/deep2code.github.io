@@ -176,46 +176,50 @@ EXISTS</code></pre>
 <h2 id="architecture">多线程架构：为什么它能吃满多核</h2>
 <p>Redis 6.0 之前是单线程，多核 CPU 只用一个核。Memcached 从一开始就是多线程，这是它在某些场景下比 Redis 快的原因。</p>
 
-<div class="mermaid" data-src="flowchart TD
+<div class="mermaid">
+flowchart TD
     subgraph 主线程
-        MT['主线程<br/>accept 新连接']
+        MT[主线程<br/>accept 新连接]
     end
     subgraph 工作线程池
-        W1['Worker 1<br/>独立事件循环']
-        W2['Worker 2<br/>独立事件循环']
-        W3['Worker 3<br/>独立事件循环']
-        WN['Worker N<br/>独立事件循环']
+        W1[Worker 1<br/>独立事件循环]
+        W2[Worker 2<br/>独立事件循环]
+        W3[Worker 3<br/>独立事件循环]
+        WN[Worker N<br/>独立事件循环]
     end
     subgraph 共享数据
-        HT['全局哈希表<br/>分片锁']
-        LRU['LRU 队列<br/>按 Slab Class']
+        HT[全局哈希表<br/>分片锁]
+        LRU[LRU 队列<br/>按 Slab Class]
     end
-    CLI['客户端'] -->|新连接| MT
+    CLI[客户端] -->|新连接| MT
     MT -->|Pipe 分发 fd| W1
     MT -->|Pipe 分发 fd| W2
     MT -->|Pipe 分发 fd| W3
     W1 --> HT
     W2 --> LRU
-    style MT fill:#fedd00,stroke:#333"></div>
+    style MT fill:#fedd00,stroke:#333
+</div>
 
 <p>这个设计很妙：主线程只管 accept，接了新连接通过管道（Pipe）把 fd 扔给工作线程。每个工作线程有自己的 libevent 事件循环，互不干扰。全局数据结构用分片锁——每个 LRU 队列一把锁，不是一把全局大锁，并发性能就上去了。</p>
 
 <h2 id="slab">Slab 分配器：内存是怎么管的</h2>
 <p>Memcached 不用系统 malloc/free 管内存，自己搞了套 Slab Allocator。为啥？malloc 频繁分配释放会产生内存碎片，Memcached 把内存切成固定大小的块，从根上解决了碎片问题。</p>
 
-<div class="mermaid" data-src="flowchart TB
-    A['新数据来了'] --> B['算数据大小']
-    B --> C['找最小的<br/>能装下的 Slab Class']
-    C --> D{'有空闲 Chunk？'}
-    D -->|有| E['直接分配']
-    D -->|没有| F{'还有总内存？'}
-    F -->|有| G['申请新 Page<br/>切分 Chunk']
+<div class="mermaid">
+flowchart TB
+    A[新数据来了] --> B[算数据大小]
+    B --> C[找最小的<br/>能装下的 Slab Class]
+    C --> D{有空闲 Chunk？}
+    D -->|有| E[直接分配]
+    D -->|没有| F{还有总内存？}
+    F -->|有| G[申请新 Page<br/>切分 Chunk]
     G --> E
-    F -->|没有| H['从 LRU 尾部<br/>淘汰一个 Item']
+    F -->|没有| H[从 LRU 尾部<br/>淘汰一个 Item]
     H --> E
-    E --> I['插入哈希表<br/>移到 LRU 头部']
+    E --> I[插入哈希表<br/>移到 LRU 头部]
     style E fill:#c8e6c9
-    style H fill:#ffcdd2"></div>
+    style H fill:#ffcdd2
+</div>
 
 <p>具体怎么分的呢？内存先按 1MB 一页（Page）切，然后每个 Slab Class 管一种固定大小的 Chunk。默认增长因子 1.25：</p>
 

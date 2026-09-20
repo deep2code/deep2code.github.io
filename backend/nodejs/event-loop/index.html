@@ -93,17 +93,19 @@
 <h2>事件循环到底是什么</h2>
 <p>我见过太多 Node.js 开发者，写了两年 Express，说不清楚事件循环怎么转。这不怪他们——文档写得像论文，面试题又全是 <code>console.log</code> 顺序题。但事件循环是 Node.js 的命根子，你不搞懂它，线上一出"接口偶尔慢 3 秒"的问题，你只能干瞪眼。</p>
 <p>一句话说清：<strong>事件循环是一个 while(true) 循环，不断检查有没有事件要处理，有就跑回调，没有就去阻塞等</strong>。它由 libuv 实现，跑在主线程上。你写的所有 JS 代码都在这个循环里执行。</p>
-<div class="mermaid" data-src="flowchart TD
-    START['进入事件循环'] --> TIMERS['timers 阶段<br/>执行 setTimeout/setInterval 回调']
-    TIMERS --> PENDING['pending callbacks<br/>上一轮延迟的系统回调']
-    PENDING --> IDLE['idle/prepare<br/>libuv 内部用']
-    IDLE --> POLL['poll 阶段<br/>取新的 IO 事件，阻塞在这里']
-    POLL --> CHECK['check 阶段<br/>执行 setImmediate 回调']
-    CHECK --> CLOSE['close callbacks<br/>socket.on close 等']
+<div class="mermaid">
+flowchart TD
+    START[进入事件循环] --> TIMERS[timers 阶段<br/>执行 setTimeout/setInterval 回调]
+    TIMERS --> PENDING[pending callbacks<br/>上一轮延迟的系统回调]
+    PENDING --> IDLE[idle/prepare<br/>libuv 内部用]
+    IDLE --> POLL[poll 阶段<br/>取新的 IO 事件，阻塞在这里]
+    POLL --> CHECK[check 阶段<br/>执行 setImmediate 回调]
+    CHECK --> CLOSE[close callbacks<br/>socket.on close 等]
     CLOSE --> START
     style TIMERS fill:#f59e0b,stroke:#fff,color:#fff
     style POLL fill:#00add8,stroke:#fff,color:#fff
-    style CHECK fill:#10b981,stroke:#fff,color:#fff"></div>
+    style CHECK fill:#10b981,stroke:#fff,color:#fff
+</div>
 
 <h2>六个阶段，一个都不能少</h2>
 <p>很多人以为事件循环就是"先执行同步代码，再执行异步回调"。太粗糙了。每个阶段有自己的队列，一个阶段跑完所有回调才进下一个阶段。关键规则：<strong>每个阶段的队列清空了（或达到上限）才切换阶段</strong>。</p>
@@ -122,15 +124,17 @@
 
 <h2>microtask 和 macrotask：两套队列</h2>
 <p>光知道六个阶段还不够。每个阶段之间，Node.js 会先把 <strong>microtask 队列</strong>全部清空，才进入下一个阶段。这就是为什么 <code>process.nextTick</code> 和 Promise.then 总是比 setTimeout 先跑。</p>
-<div class="mermaid" data-src="flowchart LR
-    SYNC['同步代码执行'] --> MICRO1['清空 nextTick 队列']
-    MICRO1 --> PROMISE1['清空 Promise 队列']
-    PROMISE1 --> MACRO1['执行一个 macrotask<br/>（一个阶段的回调）']
-    MACRO1 --> MICRO2['再次清空 nextTick 队列']
-    MICRO2 --> PROMISE2['再次清空 Promise 队列']
-    PROMISE2 --> MACRO2['下一个 macrotask']
+<div class="mermaid">
+flowchart LR
+    SYNC[同步代码执行] --> MICRO1[清空 nextTick 队列]
+    MICRO1 --> PROMISE1[清空 Promise 队列]
+    PROMISE1 --> MACRO1[执行一个 macrotask<br/>（一个阶段的回调）]
+    MACRO1 --> MICRO2[再次清空 nextTick 队列]
+    MICRO2 --> PROMISE2[再次清空 Promise 队列]
+    PROMISE2 --> MACRO2[下一个 macrotask]
     style MICRO1 fill:#dc382d,stroke:#fff,color:#fff
-    style MICRO2 fill:#dc382d,stroke:#fff,color:#fff"></div>
+    style MICRO2 fill:#dc382d,stroke:#fff,color:#fff
+</div>
 <p>看个实际的例子，你就明白执行顺序了：</p>
 <pre><code class="language-javascript">console.log('1: 同步代码')
 
@@ -178,17 +182,19 @@ safeDefer()</code></pre>
 
 <h2>异步 IO 的底层：libuv 线程池</h2>
 <p>很多人以为 Node.js 的异步 IO 是内核原生的。一半对一半不对。网络 IO（TCP/UDP）确实走内核的 epoll/kqueue，真异步。但文件 IO、DNS 查询、加密计算这些，走的是 <strong>libuv 线程池</strong>——默认 4 个线程，你可以通过环境变量调大。</p>
-<div class="mermaid" data-src="flowchart TD
-    APP['你的 Node.js 代码'] --> CHECK_IO{什么操作?}
-    CHECK_IO -->|网络请求| NET['内核 epoll/kqueue<br/>真异步，不占线程']
-    CHECK_IO -->|文件读写| POOL['libuv 线程池<br/>默认 4 线程']
+<div class="mermaid">
+flowchart TD
+    APP[你的 Node.js 代码] --> CHECK_IO{什么操作?}
+    CHECK_IO -->|网络请求| NET[内核 epoll/kqueue<br/>真异步，不占线程]
+    CHECK_IO -->|文件读写| POOL[libuv 线程池<br/>默认 4 线程]
     CHECK_IO -->|DNS 解析| POOL
     CHECK_IO -->|crypto.pbkdf2| POOL
     CHECK_IO -->|zlib 压缩| POOL
-    NET --> LOOP['事件循环回调']
+    NET --> LOOP[事件循环回调]
     POOL --> LOOP
     style POOL fill:#f59e0b,stroke:#fff,color:#fff
-    style NET fill:#10b981,stroke:#fff,color:#fff"></div>
+    style NET fill:#10b981,stroke:#fff,color:#fff
+</div>
 <p>这就解释了一个经典现象：<strong>同时读 1000 个文件，Node.js 只能同时处理 4 个</strong>。不是 Node.js 慢，是你把活全压在 4 个线程上了。调大线程池：</p>
 <pre><code class="language-bash"># 在代码最开头设置，必须在任何 IO 调用之前
 export UV_THREADPOOL_SIZE=16
