@@ -890,7 +890,13 @@
         });
         var blocks = document.querySelectorAll('#body-content div.mermaid');
         var jobs = Array.prototype.map.call(blocks, function (div, i) {
-            var src = div.getAttribute('data-src') || div.textContent || '';
+            // 读取源代码：优先 data-src，否则从内容中提取（排除按钮等非代码元素）
+            var src = div.getAttribute('data-src');
+            if (!src) {
+                var clone = div.cloneNode(true);
+                clone.querySelectorAll('button, .mermaid-error, svg').forEach(function (el) { el.remove(); });
+                src = clone.textContent || '';
+            }
             if (!src.trim()) return Promise.resolve();
             var id = 'mmd-' + i + '-' + Math.random().toString(36).slice(2, 8);
             return window.mermaid.render(id, src).then(function (res) {
