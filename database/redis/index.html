@@ -83,389 +83,159 @@
             <main id="body-content">
 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Redis</h1>
+                        <h1 class="article-title">Redis 实战：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Redis</span>
+                            <span class="meta-item">🏷️ Redis 入门</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p style="background:#f0f9ff;padding:16px;border-radius:8px;border-left:4px solid #0ea5e9;margin:16px 0;">💡 你做了个商品详情页，每次打开都要查数据库，1000个用户同时刷新，数据库直接被打挂了。你想：能不能把热点数据存起来，不用每次都查数据库？</p>
 
-<h2 id="overview">你什么时候会需要 Redis？</h2>
-<p>你做了个商品详情页，每次打开都要查数据库，1000个用户同时刷新，数据库直接被打挂了。你想：能不能把热点数据存起来，不用每次都查数据库？</p>
+<p>你写了个商品详情页，每次打开都要查数据库，1000个用户同时刷新，数据库直接被打挂了。你想：能不能把热点数据存起来，不用每次都查数据库？</p>
 <p>或者：你想做个网站排行榜，每秒钟要更新 100 次排名，用数据库锁来做？估计库早就死了。</p>
-<p>这些问题，Redis 都能解决。它不只是缓存，是个高性能数据结构服务器。2026 年主流版本是 <strong>Redis 8.x</strong>，比 6.x 性能提升 30%+，还在 5.x 的该升级了。</p>
+<p>这些问题，Redis 全能解决。这篇不讲理论，就讲你真的会遇到的问题，以及怎么用 Redis 解决。</p>
 
-<h2 id="install">装一个跑起来</h2>
-<p>macOS 上最省事，Homebrew 一行命令：</p>
-<pre><code class="language-sh">brew install redis
-brew services start redis</code></pre>
-
-<p>Linux 生产环境我一般源码编译，可控性强：</p>
-<pre><code class="language-sh">wget https://download.redis.io/redis-stable.tar.gz
-tar -xzvf redis-stable.tar.gz
-cd redis-stable
-make && make install</code></pre>
-
-<p>本地调试用 Docker 最快：</p>
-<pre><code class="language-sh">docker run -d --name redis -p 6379:6379 redis:8.10</code></pre>
-
-<h2 id="version">版本怎么选</h2>
-<p>我知道很多公司还在 6.x，甚至 5.x。说句实在话，6.x 已经进入维护模式了，新功能基本不加了。如果你要做新项目，直接上 8.x。如果是老系统，7.x 是个稳妥的选择。</p>
-
-<table>
-<thead><tr><th>版本</th><th>状态</th><th>我评价</th></tr></thead>
-<tbody>
-<tr><td>Redis 8.x</td><td>最新稳定</td><td>新项目首选，性能提升明显</td></tr>
-<tr><td>Redis 7.x</td><td>稳定</td><td>老系统升级的好选择</td></tr>
-<tr><td>Redis 6.x</td><td>维护中</td><td>别再用了，ACL 是唯一亮点</td></tr>
-<tr><td>Redis Stack 7.x</td><td>稳定</td><td>需要搜索/JSON/图数据库时考虑</td></tr>
-</tbody>
-</table>
-
-<h2 id="cli">redis-cli：最常用的工具</h2>
-<p>别看 redis-cli 简单，里面有些小技巧我用了好多年才摸透。</p>
-
-<pre><code class="language-sh"># 交互式终端，Tab 补全很好用
-redis-cli
-
-# 管道喂数据
-redis-cli -x set mypasswd < /etc/passwd
-
-# 循环执行，配 -i 间隔
-redis-cli -r 100 -i 1 info | grep used_memory_human
-
-# 安全扫描，不会阻塞
-redis-cli --scan --pattern 'user:*'
-
-# 远程连接
-redis-cli -h 192.168.1.100 -p 6379 -a mypassword
-
-# 选数据库
-redis-cli -n 1</code></pre>
-
-<div class="callout callout-warning">
-<div class="callout-title">千万别在生产用 KEYS *</div>
-<p>我见过有人在生产环境敲了个 <code>KEYS *</code>，直接把 Redis 打挂了——它要遍历所有 key，O（n）复杂度，Redis 单线程的，一个命令堵在那，后面全排队。生产环境用 <code>--scan</code>，增量遍历不阻塞。</p>
-</div>
-
-<p>可视化工具我推荐 <strong>RedisInsight</strong>，官方出的，免费，比那些收费的客户端好用。浏览器插件也有，日常看看 key、改改 TTL 够了。</p>
-
-<h2 id="types">五种基本数据类型</h2>
-<p>Redis 五种基本类型，每种都有它最适合的场景。我一个个说，顺便讲讲什么时候用什么。</p>
-
-<div class="echart-container" id="redis-types-radar" style="height: 380px; margin: 20px 0;"></div>
-
-<h3 id="type-string">String：最常用，也最容易被低估</h3>
-<pre><code class="language-sh"># 基础操作
-SET key value
-GET key
-MSET key1 value1 key2 value2
-
-# 计数器，INCR 是原子的
-SET count 10
-INCR count        # 11
-INCRBY count 5   # 16
-
-# 过期时间
-SETEX key 60 value
-SET key value EX 60
-
-# 原子设置
-SETNX key value   # 不存在才设，分布式锁就是用这个</code></pre>
-
-<p>String 不只是存字符串，还能当计数器用。我做过一个全站 PV 统计，就是用 <code>INCR page:pv:2026-09-18</code>，QPS 两万多毫无压力。</p>
-
-<h3 id="type-hash">Hash：存对象最方便</h3>
-<pre><code class="language-sh">HSET user:1 name "Alice" age "25"
-HGET user:1 name
-HGETALL user:1
-HINCRBY user:1 age 1</code></pre>
-
-<p>存用户信息这种半结构化数据，Hash 比把整个 JSON 塞 String 里强——你可以单独改某个字段，不用读出来改完再写回去。</p>
-
-<h3 id="type-list">List：做简单消息队列</h3>
-<pre><code class="language-sh">LPUSH mylist "a" "b" "c"
-RPOP mylist
-LRANGE mylist 0 -1
-# 阻塞弹出，消息队列
-BLPOP mylist 0</code></pre>
-
-<p>List 做简单队列还行，但我不推荐在生产环境用它做正经消息队列。它没有 ACK 机制，消费者挂了消息就丢了。正经的还是用 Stream 或者 Kafka。</p>
-
-<h3 id="type-set">Set：去重和交并差</h3>
-<pre><code class="language-sh">SADD tags "python" "redis" "golang"
-SISMEMBER tags "python"    # 判断存在
-SINTER set1 set2           # 交集
-SUNION set1 set2           # 并集</code></pre>
-
-<p>共同好友、共同标签这种场景，Set 的交并差操作特别方便，一行命令搞定。</p>
-
-<h3 id="type-zset">ZSet：排行榜的神器</h3>
-<pre><code class="language-sh">ZADD leaderboard 100 "Alice"
-ZADD leaderboard 200 "Bob"
-ZREVRANGE leaderboard 0 -1 WITHSCORES  # 降序
-ZRANK leaderboard "Alice"               # 查排名</code></pre>
-
-<p>ZSet 是我最喜欢的类型。游戏排行榜、文章热度榜、订单按金额排序，全靠它。底层用跳表实现，范围查询 O（log n），性能没话说。</p>
-
-<h3 id="type-stream">Stream：正经消息队列</h3>
-<pre><code class="language-sh">XADD mystream * msg "hello"
-XRANGE mystream - + COUNT 10
-# 消费者组
-XGROUP CREATE mystream mygroup 0
-XREADGROUP GROUP mygroup c1 STREAMS mystream >
-XACK mystream mygroup message-id</code></pre>
-
-<p>Stream 是 Redis 5.0 加的，有消费者组、ACK、pending 队列，终于能当正经消息队列用了。我在一些中小项目里直接用 Stream 替代了 RabbitMQ，省了一个中间件。</p>
-
-<h2 id="persistence">持久化：RDB 和 AOF 怎么选</h2>
-<p>Redis 是内存数据库，但你不能假设它重启了数据就没了。持久化有两种方式，各有取舍。</p>
-
-<div class="echart-container" id="redis-persistence-compare" style="height: 320px; margin: 20px 0;"></div>
-
-<div class="mermaid">
-flowchart TB
-    A[持久化方式] --> B[RDB 快照]
-    A --> C[AOF 日志]
-    A --> D[混合模式]
-    B --> B1[某时刻全量快照]
-    B --> B2[恢复快但可能丢数据]
-    C --> C1[记录每条写命令]
-    C --> C2[数据安全但文件大]
-    D --> D1[前半段 RDB + 后半段 AOF]
-    D --> D2[兼顾速度和安全]
-    style D fill:#c8e6c9
-</div>
-
-<table>
-<thead><tr><th>方式</th><th>原理</th><th>恢复速度</th><th>数据安全</th><th>我的建议</th></tr></thead>
-<tbody>
-<tr><td>RDB</td><td>定时全量快照</td><td>快</td><td>可能丢最后一次快照后的数据</td><td>做备份用</td></tr>
-<tr><td>AOF everysec</td><td>每秒刷盘</td><td>较慢</td><td>最多丢 1 秒</td><td>生产推荐</td></tr>
-<tr><td>混合模式</td><td>RDB 全量 + AOF 增量</td><td>快</td><td>最多丢 1 秒</td><td>8.x 默认，最佳</td></tr>
-</tbody>
-</table>
-
-<p>配置就是这几行：</p>
-<pre><code class="language-bash"># RDB 快照规则
-save 900 1      # 900 秒内 1 个 key 变了就存
-save 300 10     # 300 秒内 10 个 key
-save 60 10000   # 60 秒内 10000 个 key
-
-# AOF
-appendonly yes
-appendfsync everysec
-
-# 混合持久化（4.0+ 默认开）
-aof-use-rdb-preamble yes</code></pre>
+<!-- 场景1：数据库扛不住了 -->
+<h2 id="problem1">场景一：数据库被热点数据打挂了</h2>
 
 <div class="callout callout-info">
-<div class="callout-title">fork 阻塞的坑</div>
-<p>RDB 和 AOF 重写都要 fork 子进程。fork 这个操作，在小内存实例上毫秒级就完了，但在 32GB 内存的实例上，光复制页表就要一两百毫秒——这期间 Redis 是阻塞的，所有命令排队。我之前一个 20GB 的 Redis 实例，BGSAVE 的时候监控告警延迟飙到 200ms，就是这个原因。后来把实例拆小，问题解决。</p>
+<div class="callout-title">你遇到的问题</div>
+<p>你做了个电商网站，首页有 100 个热门商品，每个用户打开首页都要查一次数据库。大促的时候，1 万人同时打开，数据库每秒要处理 1 万次查询，CPU 直接 100%，页面开始超时。</p>
 </div>
 
-<h2 id="structure">底层数据结构：Redis 为什么快</h2>
-<p>很多人以为 Redis 快就是因为数据在内存里。不全是。Java 的 HashMap 也在内存里，但性能差远了。Redis 快的关键在于它给每种数据类型设计了多种底层编码，根据数据量自动选最优的。</p>
+<p><strong>Redis 怎么解决？</strong>把热点商品数据提前存到 Redis 里，用户访问的时候直接从 Redis 读，不用查数据库。Redis 是内存数据库，每秒能扛 10 万次以上的读取，比 MySQL 快 100 倍。</p>
+
+<pre><code class="language-python"># 伪代码：商品详情页查询
+def get_product(product_id):
+    # 先查 Redis
+    product = redis.get(f'product:{product_id}')
+    if product:
+        return product  # 直接返回，不用查数据库
+    
+    # Redis 没有，再查数据库
+    product = db.query('SELECT * FROM products WHERE id = ?', product_id)
+    
+    # 查到了，写到 Redis，下次就不用查数据库了
+    redis.setex(f'product:{product_id}', 3600, product)  # 缓存1小时
+    return product</code></pre>
+
+<p>这就是最常用的<strong>缓存模式</strong>：先查缓存，缓存没有再查数据库，查到了再写回缓存。这样 99% 的请求都直接打在 Redis 上，数据库压力瞬间小了 100 倍。</p>
+
+<!-- 场景2：排行榜怎么弄 -->
+<h2 id="problem2">场景二：你想做个实时排行榜，数据库扛不住</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你做了个短视频网站，要做一个"今日最热视频榜"，每秒钟有几千个点赞。你用 MySQL 来存点赞数，每次点赞都要 UPDATE 一下，还要 ORDER BY 排序取前 100 名。数据库锁都快打坏了。</p>
+</div>
+
+<p><strong>Redis 怎么解决？</strong>用 Redis 的 Sorted Set（有序集合），天然就是为排行榜设计的。每个视频是一个成员，点赞数是分数，自动按分数排序。</p>
+
+<pre><code class="language-bash"># 用户给视频123点了个赞
+ZINCRBY top_videos 1 video:123
+
+# 用户又点了一个
+ZINCRBY top_videos 1 video:123
+
+# 取前100名最热视频
+ZREVRANGE top_videos 0 99 WITHSCORES</code></pre>
 
 <table>
-<thead><tr><th>类型</th><th>小数据时用啥</th><th>大数据时用啥</th><th>什么时候切换</th></tr></thead>
+<thead><tr><th>Redis 数据结构</th><th>什么时候用</th></tr></thead>
 <tbody>
-<tr><td>String</td><td>int / embstr</td><td>raw（SDS）</td><td>短字符串用 embstr，长了用 raw</td></tr>
-<tr><td>Hash</td><td>listpack（紧凑列表）</td><td>hashtable</td><td>元素超过 128 个或值超过 64 字节</td></tr>
-<tr><td>Set</td><td>intset（整数集合）</td><td>hashtable</td><td>不全是整数或数量太多</td></tr>
-<tr><td>ZSet</td><td>listpack</td><td>skiplist + hashtable</td><td>元素超过 128 个</td></tr>
-<tr><td>List</td><td>quicklist</td><td>quicklist</td><td>3.2 以后统一用 quicklist</td></tr>
+<tr><td>String</td><td>缓存单个值：用户信息、商品信息、配置项</td></tr>
+<tr><td>Hash</td><td>缓存对象：一个商品的多个字段，不用整个存</td></tr>
+<tr><td>List</td><td>消息队列：先进先出，简单的任务队列</td></tr>
+<tr><td>Set</td><td>去重：标签、共同好友、抽奖去重</td></tr>
+<tr><td>Sorted Set</td><td>排行榜：点赞榜、销量榜、按分数排序</td></tr>
 </tbody>
 </table>
 
-<h3 id="sds">SDS：Redis 的字符串</h3>
-<p>Redis 不用 C 字符串，自己搞了个 SDS（Simple Dynamic String）。为啥？C 字符串拿长度要 O（n）遍历，SDS 存了个 <code>len</code> 字段，STRLEN 直接 O（1）。而且 SDS 记录了已分配空间，修改字符串不用每次都重新分配内存。</p>
+<!-- 场景3：接口被刷爆了 -->
+<h2 id="problem3">场景三：你的接口被恶意刷，服务器扛不住</h2>
 
-<h3 id="dict">字典和渐进式 rehash</h3>
-<p>Redis 的哈希表扩容不是一次性搬完的。它同时维护两个哈希表 ht[0] 和 ht[1]，rehash 的时候每次操作顺便搬几个桶过去，叫<strong>渐进式 rehash</strong>。这个设计很妙——不用一次性阻塞搬几百万个 key，而是分散到平时的请求里慢慢搬。代价是查询的时候得先查 ht[0] 再查 ht[1]，稍微慢一点。</p>
-
-<h3 id="skiplist">跳表：ZSet 为啥用它不用红黑树</h3>
-<p>很多人问 ZSet 为什么用跳表而不是红黑树。Redis 作者 antirez 自己说过：跳表实现简单、范围查询方便、并发友好。红黑树做范围查询要从最小节点中序遍历，跳表直接顺着上层指针跳，快得多。</p>
-
-<h2 id="cluster">集群方案</h2>
-<p>单节点扛不住了怎么办？有几条路，我帮你理清楚。</p>
-
-<div class="mermaid">
-flowchart TB
-    A[Redis 分布式方案] --> B[主从 + 哨兵]
-    A --> C[Redis Cluster]
-    A --> D[代理分片]
-    B --> B1[读写分离]
-    B --> B2[手动分 key]
-    C --> C1[官方原生]
-    C --> C2[16384 槽位自动分片]
-    D --> D1[Twemproxy]
-    D --> D2[Codis]
-    style C fill:#c8e6c9
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你做了个登录接口，有人写脚本一秒钟发 1000 次请求试密码，你的服务器 CPU 直接跑满，正常用户都登录不了。你想限制每个 IP 每分钟最多试 5 次。</p>
 </div>
 
-<p><strong>主从 + 哨兵</strong>：适合数据量不大、只需要读写分离的场景。主节点写，从节点读，哨兵监控主节点挂了自动切换。问题是你得自己想办法把数据分到多个主节点上。</p>
+<p><strong>Redis 怎么解决？</strong>用 Redis 的计数器 + 过期时间，完美实现限流。</p>
 
-<p><strong>Redis Cluster</strong>：官方原生方案，16384 个哈希槽，key 通过 <code>CRC16(key) mod 16384</code> 落到某个槽，槽分布在不同节点上。至少 6 个节点（3 主 3 从）才能跑起来：</p>
+<pre><code class="language-python"># 伪代码：登录限流
+def login(ip):
+    key = f'login_attempt:{ip}'
+    
+    # 这个IP已经试了几次了？
+    attempts = redis.get(key)
+    if attempts and int(attempts) >= 5:
+        return '尝试次数太多，请10分钟后再试'
+    
+    # 次数加1，第一次的话设置10分钟过期
+    redis.incr(key)
+    redis.expire(key, 600)
+    
+    # 正常登录逻辑
+    return do_login()</code></pre>
 
-<pre><code class="language-sh"># 创建集群
-redis-cli --cluster create \
-  127.0.0.1:7001 127.0.0.1:7002 127.0.0.1:7003 \
-  127.0.0.1:7004 127.0.0.1:7005 127.0.0.1:7006 \
-  --cluster-replicas 1</code></pre>
+<p>现在一个 IP 一分钟最多试 5 次，多了就直接拒绝。用 Nginx 也能做限流，但 Redis 更灵活，你可以按用户 ID、按接口、按各种维度来限。</p>
 
-<div class="callout callout-warning">
-<div class="callout-title">Cluster 不支持跨槽多 key</div>
-<p>这是我踩过的大坑。Cluster 模式下，<code>MGET</code>、<code>RENAME</code>、事务、Lua 脚本里操作多个 key，如果这些 key 不在同一个槽，直接报错 <code>CROSSSLOT</code>。解决办法是用 Hash Tag：<code>{user:1001}:profile</code> 和 <code>{user:1001}:orders</code>，大括号里的内容参与哈希计算，强制落到同一个槽。</p>
+<!-- 场景4：分布式锁 -->
+<h2 id="problem4">场景四：多台服务器同时处理同一个任务，重复执行了</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你用了 3 台服务器跑定时任务，每天凌晨 2 点要发一次系统通知。结果 3 台服务器同时跑了这个任务，用户收到了 3 条通知。你想：能不能让这个任务同一时间只有一台服务器在跑？</p>
 </div>
 
-<h2 id="python">Python 客户端怎么用</h2>
-<p>Python 生态用 <code>redis-py</code> 就够了，别折腾别的。</p>
+<p><strong>Redis 怎么解决？</strong>用 Redis 的分布式锁，保证同一时间只有一个进程能拿到锁，执行任务。</p>
 
-<pre><code class="language-python">import redis
+<pre><code class="language-python"># 伪代码：分布式锁
+def send_daily_notification():
+    # 尝试加锁，锁10分钟自动过期
+    lock_key = 'lock:daily_notification'
+    locked = redis.set(lock_key, '1', nx=True, ex=600)
+    
+    if not locked:
+        return '已经有别的服务器在跑了，我退出'
+    
+    try:
+        # 正常发通知逻辑
+        do_send_notification()
+    finally:
+        # 执行完释放锁
+        redis.delete(lock_key)</code></pre>
 
-r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+<p>现在 3 台服务器同时启动任务，只有一台能拿到锁，其他的直接退出。用户只会收到 1 条通知。</p>
 
-r.set('name', 'Alice')
-r.get('name')
-r.hset('user:1', 'name', 'Alice')
-r.zadd('leaderboard', {'Alice': 100, 'Bob': 200})</code></pre>
+<!-- 场景5：缓存雪崩 -->
+<h2 id="problem5">场景五：缓存全挂了，数据库直接被打垮</h2>
 
-<p>生产环境一定要用连接池，别每次请求都新建连接：</p>
-<pre><code class="language-python">from redis import ConnectionPool, Redis
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你给所有缓存都设了 1 小时过期，结果整点的时候，所有缓存同时过期了，瞬间所有请求都打到数据库上，数据库直接挂了。</p>
+</div>
 
-pool = ConnectionPool(host='localhost', port=6379, max_connections=50)
-r = Redis(connection_pool=pool)</code></pre>
+<p><strong>怎么解决？</strong>不要用固定的过期时间，加一个随机数，让过期时间分散开。</p>
 
-<p>批量操作用 pipeline，把多个命令打包一次发出去，省网络往返：</p>
-<pre><code class="language-python">pipe = r.pipeline()
-pipe.set('key1', 'value1')
-pipe.incr('counter')
-pipe.get('key1')
-results = pipe.execute()  # 一次执行完</code></pre>
+<pre><code class="language-python"># 不要这样：所有缓存都1小时后同时过期
+redis.setex(key, 3600, value)
 
-<h2 id="patterns">几个经典应用场景</h2>
+# 要这样：过期时间加随机数，1小时左右，有的早有的晚
+redis.setex(key, 3600 + random.randint(0, 300), value)</code></pre>
 
-<h3 id="cache-pattern">缓存：最经典的用法</h3>
-<pre><code class="language-python">def get_user(user_id):
-    cache_key = f'user:{user_id}'
-    cached = r.get(cache_key)
-    if cached:
-        return json.loads(cached)
-    user = db.query(f'SELECT * FROM users WHERE id = {user_id}')
-    if user:
-        r.setex(cache_key, 3600, json.dumps(user))
-    return user</code></pre>
-
-<p>缓存更新的策略我一般选<strong>删除缓存而不是更新缓存</strong>。更新数据库之后直接 <code>DEL</code> 掉缓存，下次读的时候再重建。比更新缓存安全——两个并发写更新缓存容易不一致。</p>
-
-<h3 id="distributed-lock">分布式锁</h3>
-<pre><code class="language-python">def acquire_lock(lock_name, timeout=10):
-    return r.set(f'lock:{lock_name}', '1', nx=True, ex=timeout)
-
-def release_lock(lock_name):
-    r.delete(f'lock:{lock_name}')</code></pre>
-
-<p>注意这个释放锁的写法有问题——如果你拿到锁之后业务执行时间超过了 timeout，锁自动过期了，另一个人拿到了锁，这时候你释放锁就把别人的锁删了。生产环境要用 Lua 脚本做"判断是自己的锁才删"：</p>
-<pre><code class="language-python"># 释放锁的 Lua 脚本，原子判断
-UNLOCK_LUA = """
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-else
-    return 0
-end
-"""
-# 加锁时存一个唯一 token，释放时验证
-token = str(uuid.uuid4())
-r.set(f'lock:{name}', token, nx=True, ex=10)
-r.eval(UNLOCK_LUA, 1, f'lock:{name}', token)</code></pre>
-
-<h3 id="counter">UV 统计和排行榜</h3>
-<pre><code class="language-python"># UV 用 HyperLogLog，不占空间
-r.pfadd(f'uv:page:{date}', user_id)
-r.pfcount(f'uv:page:{date}')
-
-# 排行榜用 ZSet
-r.zadd('leaderboard', {user_id: score})
-r.zrevrange('leaderboard', 0, 99, withscores=True)</code></pre>
-
-<h2 id="eviction">内存淘汰策略</h2>
-<p>Redis 内存写满了怎么办？这时候 <code>maxmemory-policy</code> 就起作用了。我列一下，生产环境最常用的就两个：</p>
-
-<table>
-<thead><tr><th>策略</th><th>行为</th><th>什么时候用</th></tr></thead>
-<tbody>
-<tr><td>noeviction</td><td>不淘汰，写命令报错</td><td>当作数据库用，不能丢数据</td></tr>
-<tr><td>allkeys-lru</td><td>所有 key 里淘汰最久没用的</td><td><strong>纯缓存场景，最推荐</strong></td></tr>
-<tr><td>volatile-lru</td><td>只在设了 TTL 的 key 里淘汰</td><td>部分数据要永久保留</td></tr>
-<tr><td>allkeys-lfu</td><td>淘汰最不常用的（4.0+）</td><td>热点数据明显的场景</td></tr>
-</tbody>
-</table>
+<p>这样缓存就不会在同一时间集中过期，请求不会瞬间全部打到数据库上。</p>
 
 <div class="callout callout-tip">
-<div class="callout-title">近似 LRU</div>
-<p>Redis 的 LRU 不是严格的双向链表实现。它每个 key 记录一个 24 位的时间戳，淘汰的时候随机抽 5 个 key（<code>maxmemory-samples</code>），把最老的删掉。不是精确 LRU，但够用了，而且内存开销极小。</p>
-</div>
-
-<h2 id="pitfalls">我踩过的八个坑</h2>
-<ol>
-<li><strong>Big Key</strong>：一个 String 塞了 5MB 的 JSON，删除的时候 Redis 直接阻塞了 200ms。大 key 要用 <code>UNLINK</code> 异步删，别用 <code>DEL</code>。用 <code>redis-cli --bigkeys</code> 定期扫</li>
-<li><strong>热 Key</strong>：秒杀商品的 key 打在单个节点上，CPU 100%。解决：本地缓存挡一层、或者把热 key 复制多份随机读</li>
-<li><strong>缓存穿透</strong>：有人故意查不存在的用户 ID，每次都打到数据库。用布隆过滤器挡，或者缓存空值（TTL 设短点，60 秒）</li>
-<li><strong>缓存击穿</strong>：热点 key 过期的那一瞬间，几千个请求同时打到数据库。用互斥锁重建缓存，或者逻辑过期（不设 TTL，值里存过期时间，异步更新）</li>
-<li><strong>缓存雪崩</strong>：几百个 key 同一秒过期。TTL 加随机偏移，比如 <code>3600 + random(0, 300)</code>，别让它们同时死</li>
-<li><strong>事务不回滚</strong>：Redis 的 MULTI/EXEC 不是真事务，中间命令失败了不会回滚。要原子性用 Lua 脚本</li>
-<li><strong>内存碎片</strong>：<code>mem_fragmentation_ratio</code> 超过 1.5 就该整理了。4.0+ 开 <code>activedefrag yes</code> 自动整理</li>
-<li><strong>主从全量同步风暴</strong>：从节点重启的时候，如果积压缓冲区不够大，会触发全量 RDB 同步。把 <code>repl-backlog-size</code> 调到 256MB，从节点分批重启</li>
-</ol>
-
-<h2 id="version-2026">2026 年 Redis 生态在干啥</h2>
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>Redis 8.x</strong>：2025 年发布，吞吐量比 6.x 提升 30% 以上，内存效率也优化了</li>
-<li><strong>Redis Stack</strong>：加了搜索、JSON、图数据库、向量搜索。做 RAG 的时候有人直接拿 Redis Stack 当向量库用</li>
-<li><strong>Functions</strong>：7.4 以后推出，替代老的 Lua 脚本，性能更好，支持跨版本持久化</li>
-<li><strong>AI 结合</strong>：Redis Stack 7.5 开始探索向量搜索和 AI 应用集成，做语义缓存、会话记忆</li>
+<li><strong>不要把 Redis 当数据库用：</strong>Redis 是缓存，不是持久化数据库，重启可能丢数据。重要数据还是要存 MySQL。</li>
+<li><strong>不要存大 Key：</strong>一个 Key 存 1MB 以上就会变慢，拆成多个小 Key。</li>
+<li><strong>一定要设过期时间：</strong>不设过期时间，内存迟早被占满，Redis 直接挂。</li>
+<li><strong>缓存穿透：</strong>如果查一个不存在的 Key，每次都打到数据库，要把空结果也缓存一下。</li>
 </ul>
-
-<h2 id="faq">FAQ</h2>
-
-<h3>Redis 和 Memcached 到底选哪个？</h3>
-<p>这个问题我被问烂了。简单说：<strong>多线程纯缓存选 Memcached，数据结构丰富选 Redis</strong>。Memcached 是多线程，CPU 核心利用好，但只能存 String，没有持久化，没有集群。Redis 单线程（6.0 后网络 IO 多线程了），但数据结构丰富、有持久化、有集群。现在新项目我基本都选 Redis，Memcached 除了一些老系统维护，新项目很少用了。</p>
-
-<h3>Redis 单线程为什么还这么快？</h3>
-<p>三个原因：纯内存操作、IO 多路复用（epoll）、数据结构高效。单线程避免了锁竞争和上下文切换，反而成了优势。6.0 以后网络 IO 改成多线程了，但命令执行还是单线程，所以不用操心并发安全。</p>
-
-<h3>缓存穿透、击穿、雪崩有啥区别？</h3>
-<table>
-<thead><tr><th>问题</th><th>现象</th><th>解决办法</th></tr></thead>
-<tbody>
-<tr><td>穿透</td><td>查不存在的数据，缓存挡不住，每次打 DB</td><td>布隆过滤器 / 缓存空值</td></tr>
-<tr><td>击穿</td><td>热点 key 过期瞬间，大量请求打 DB</td><td>互斥锁 / 逻辑过期</td></tr>
-<tr><td>雪崩</td><td>大量 key 同时过期</td><td>TTL 加随机 / 多级缓存</td></tr>
-</tbody>
-</table>
-
-<h3>Redis 持久化会不会影响性能？</h3>
-<p>会，但影响可控。BGSAVE fork 子进程的时候有短暂阻塞，大内存实例尤其明显。AOF everysec 的刷盘在磁盘 IO 高的时候会有延迟。我一般建议：实例内存别超过 10GB，fork 开销就很小了；关掉 THP（透明大页），那个会让 fork 变慢。</p>
-
-<h3>Redis Cluster 和 Codis 选哪个？</h3>
-<p>Codis 是豌豆荚出的代理分片方案，现在基本没人维护了。新项目直接上 Redis Cluster，官方原生支持，客户端都适配了。Codis 只在一些老系统里还能见到。</p>
-
-<h2 id="checklist">给个清单</h2>
-<table>
-<thead><tr><th>✅ 这么做</th><th>❌ 别这么做</th></tr></thead>
-<tbody>
-<tr><td>大 key 用 UNLINK 异步删</td><td>DEL 一个 10MB 的 key 阻塞 Redis</td></tr>
-<tr><td>生产用 --scan 遍历</td><td>KEYS * 全表扫</td></tr>
-<tr><td>缓存场景用 allkeys-lru</td><td>用默认的 noeviction 写满了报错</td></tr>
-<tr><td>释放锁用 Lua 验证 token</td><td>直接 DEL 不知道是不是自己的锁</td></tr>
-<tr><td>TTL 加随机偏移</td><td>几百个 key 同一秒过期</td></tr>
-<tr><td>实例内存控制在 10GB 以内</td><td>一个实例塞 64GB，fork 阻塞</td></tr>
-</tbody>
-</table>
 </div>
+
+                    </div>
                 </article>
 <nav class="article-nav">
 <a class="nav-prev" href="../mysql/"><span class="nav-label">← 上一篇</span><span class="nav-title">MySQL</span></a>

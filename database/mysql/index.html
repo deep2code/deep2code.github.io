@@ -82,367 +82,120 @@
             <main id="body-content">
 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">MySQL</h1>
+                        <h1 class="article-title">MySQL 实战：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ MySQL</span>
+                            <span class="meta-item">🏷️ MySQL 入门</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p style="background:#f0f9ff;padding:16px;border-radius:8px;border-left:4px solid #0ea5e9;margin:16px 0;">💡 你做了个用户系统，有 10 万条数据，查询越来越慢，打开一个页面要等 3 秒。你想加个索引，但加了索引之后写数据又变慢了。</p>
 
-<h2 id="overview">你什么时候会需要 MySQL？</h2>
-<p>你做了个用户系统，有 10 万条数据，查询越来越慢，打开一个页面要等 3 秒。你想加个索引，但加了索引之后写数据又变慢了。</p>
-<p>或者：你凌晨 3 点被电话叫醒，数据库磁盘满了，服务直接挂了。你还不知道怎么查慢 SQL。</p>
-<p>这些都是每个后端开发者迟早会遇到的问题。这篇文章把我这些年踩过的坑、调过的参、排过的障，捋一遍。8.4 LTS 是生产首选，5.7 已经 EOL 好几年了。</p>
+<p>你做了个用户系统，有 10 万条数据，查询越来越慢，打开一个页面要等 3 秒。你想加个索引，但又不知道怎么加才对。</p>
+<p>或者：你凌晨 3 点被电话叫醒，说数据库磁盘满了，服务直接挂了。你还不知道怎么查慢 SQL。</p>
+<p>这些都是每个后端开发者迟早会遇到的问题。这篇不讲理论，就讲你真的会踩的坑，以及怎么优化。</p>
 
-<h2 id="version">版本怎么选</h2>
-<p>先说结论：<strong>生产环境直接上 8.4 LTS</strong>，别犹豫。8.0 还能撑几年但已经过了主要开发期，9.0 是创新版别在生产用。5.7？2023 年就 EOL 了，还在跑的赶紧规划升级。</p>
-
-<table>
-<thead><tr><th>版本</th><th>状态</th><th>我的建议</th></tr></thead>
-<tbody>
-<tr><td>MySQL 8.4 LTS</td><td>最新 LTS，支持到 2031</td><td>新项目首选，性能比 5.7 快 2-3 倍</td></tr>
-<tr><td>MySQL 8.0</td><td>LTS，支持到 2028</td><td>老系统稳定运行中，不急着升</td></tr>
-<tr><td>MySQL 9.0</td><td>创新版</td><td>有向量支持但还在实验阶段，别上生产</td></tr>
-<tr><td>MySQL 5.7</td><td>已 EOL</td><td>没安全更新了，赶紧迁</td></tr>
-</tbody>
-</table>
-
-<h2 id="install">装一个</h2>
-<p>macOS 上 Homebrew 最省事：</p>
-<pre><code class="language-bash">brew install mysql@8.4
-brew services start mysql@8.4
-mysql_secure_installation  # 安全初始化，必跑</code></pre>
-
-<p>Docker 本地开发最快：</p>
-<pre><code class="language-bash">docker run --name mysql8 \
-  -e MYSQL_ROOT_PASSWORD=your_password \
-  -p 3306:3306 \
-  -v mysql_data:/var/lib/mysql \
-  -d mysql:8.4</code></pre>
-
-<h2 id="basic">基本操作速查</h2>
-<pre><code class="language-sql">CREATE DATABASE mydb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
-CREATE TABLE users (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(50) NOT NULL,
-    email VARCHAR(100) UNIQUE NOT NULL,
-    age INT DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_email (email)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-INSERT INTO users (name, email, age) VALUES ('Alice', 'a@x.com', 25);
-SELECT * FROM users WHERE age > 20 ORDER BY created_at DESC LIMIT 10;</code></pre>
-
-<div class="callout callout-warning">
-<div class="callout-title">字符集一定要用 utf8mb4</div>
-<p>老项目里用 utf8（其实是 utf8mb3）的我见太多了，存个 emoji 直接报错。8.0 默认就是 utf8mb4 了，但如果你从老库迁过来，记得检查：<code>SHOW VARIABLES LIKE 'character_set_database';</code>，不是 utf8mb4 的话赶紧改。</p>
-</div>
-
-<h2 id="innodb">InnoDB：MySQL 的心脏</h2>
-<p>8.0 以后 MyISAM 基本可以当历史了，所有表都用 InnoDB。InnoDB 为什么快？它的内存结构和磁盘设计是关键。</p>
-
-<div class="mermaid">
-flowchart TB
-    subgraph 内存
-        BP[Buffer Pool<br/>缓存数据页和索引页]
-        CB[Change Buffer<br/>二级索引写缓冲]
-        LB[Log Buffer<br/>Redo Log 缓冲]
-    end
-    subgraph 磁盘
-        RL[Redo Log<br/>崩溃恢复]
-        UL[Undo Log<br/>回滚和 MVCC]
-        IB[.ibd 表空间文件]
-    end
-    BP -->|刷脏页| IB
-    LB -->|刷盘| RL
-    style BP fill:#fedd00,stroke:#333
-</div>
-
-<h3 id="buffer-pool">Buffer Pool：最重要的配置</h3>
-<p>InnoDB 所有数据读写都走 Buffer Pool。它够大，热点数据就在内存里，查询直接命中；它太小，每次都要读磁盘，慢得像蜗牛。</p>
-
-<p>我的经验法则：<strong>Buffer Pool 设成物理内存的 50%-70%</strong>，剩下的留给操作系统和连接栈。一台 32GB 内存的机器，给 Buffer Pool 20GB 左右合适。命中率应该在 99% 以上，低于这个数就得查原因了。</p>
-
-<div class="echart-container" id="buffer-pool-gauge" style="height: 260px; margin: 20px 0;"></div>
-
-<pre><code class="language-bash"># my.cnf 核心配置
-innodb_buffer_pool_size = 20G
-innodb_buffer_pool_instances = 8  # 大内存分多个实例减少锁竞争
-innodb_log_file_size = 2G
-innodb_flush_log_at_trx_commit = 1  # 1 最安全，0/2 可能丢数据
-innodb_flush_method = O_DIRECT  # 跳过 OS 缓存，避免双缓存
-innodb_file_per_table = 1  # 每表独立 .ibd 文件</code></pre>
-
-<h3 id="three-logs">三种日志：Redo、Undo、Binlog</h3>
-<p>这三个日志搞清楚了，MySQL 的崩溃恢复和主从复制就明白了。</p>
-
-<table>
-<thead><tr><th>日志</th><th>记什么</th><th>干什么用</th><th>谁产生的</th></tr></thead>
-<tbody>
-<tr><td>Redo Log</td><td>页的物理修改</td><td>崩溃恢复，保证已提交数据不丢</td><td>InnoDB 引擎层</td></tr>
-<tr><td>Undo Log</td><td>修改前的旧值</td><td>事务回滚 + MVCC 一致性读</td><td>InnoDB 引擎层</td></tr>
-<tr><td>Binlog</td><td>逻辑 SQL 语句</td><td>主从复制 + 时间点恢复</td><td>MySQL Server 层</td></tr>
-</tbody>
-</table>
-
-<p>Redo Log 是循环写的，文件就那么几个，写满了就触发 Checkpoint 把脏页刷到磁盘。我之前遇到过 Redo Log 设太小（默认 48MB），高并发写入时频繁触发 Checkpoint，性能直接腰斩。后来调到 2GB，抖动没了。</p>
-
-<h2 id="index">索引：MySQL 最该懂的东西</h2>
-<p>我面试候选人必问索引。答不上来 B+ 树怎么工作的、最左前缀原则是什么的，基本上技术深度就不够。</p>
-
-<h3 id="bplus-tree">B+ 树到底长什么样</h3>
-<div class="mermaid">
-flowchart TB
-    Root[根节点<br/>存主键 + 页号] --> P1[内部节点 1]
-    Root --> P2[内部节点 2]
-    P1 --> L1[叶子页 1<br/>完整行数据]
-    P1 --> L2[叶子页 2<br/>完整行数据]
-    P2 --> L3[叶子页 3<br/>完整行数据]
-    P2 --> L4[叶子页 4<br/>完整行数据]
-    L1 -.->|双向链表| L2
-    L2 -.->|双向链表| L3
-    style Root fill:#fedd00,stroke:#333
-    style L1 fill:#c8e6c9
-    style L2 fill:#c8e6c9
-    style L3 fill:#c8e6c9
-    style L4 fill:#c8e6c9
-</div>
-
-<p>InnoDB 的索引是 B+ 树，跟 B 树的区别：<strong>非叶子节点只存键值和指针，不存数据；所有数据都在叶子节点；叶子节点之间用双向链表连起来</strong>。范围查询为什么快？因为找到起点之后顺着链表往后扫就行，不用回到根节点重新查。</p>
-
-<h3 id="clustered-secondary">聚簇索引 vs 二级索引</h3>
-<ul>
-<li><strong>聚簇索引（主键索引）</strong>：叶子节点直接存整行数据。一张表只有一个，数据本身就是按主键排序存储的</li>
-<li><strong>二级索引</strong>：叶子节点存的是索引列的值 + 主键值。查到主键之后还要再去聚簇索引查一次完整行——这叫<strong>回表</strong></li>
-<li><strong>覆盖索引</strong>：如果查询要的列都在二级索引里，就不用回表了。这是最重要的优化手段之一</li>
-</ul>
-
-<h3 id="leftmost">最左前缀原则</h3>
-<p>复合索引 <code>(a, b, c)</code> 相当于建了 <code>(a)</code>、<code>(a,b)</code>、<code>(a,b,c)</code> 三个索引。但如果你 <code>WHERE b=1</code> 或者 <code>WHERE c=1</code>，这个索引用不上——因为查询条件没从最左边的列开始。</p>
-
-<div class="callout callout-tip">
-<div class="callout-title">EXPLAIN 是你的好朋友</div>
-<p>SQL 慢了别急着改，先 <code>EXPLAIN</code> 一下。看 <code>type</code> 列：<code>const</code> > <code>eq_ref</code> > <code>ref</code> > <code>range</code> > <code>index</code> > <code>ALL</code>。出现 <code>ALL</code> 就是全表扫描，必须优化。8.0 还有 <code>EXPLAIN ANALYZE</code>，直接显示实际执行时间，比 EXPLAIN 的预估靠谱多了。</p>
-</div>
-
-<h3 id="index-fail">索引失效的常见场景</h3>
-<ol>
-<li><strong>对索引列用函数</strong>：<code>WHERE YEAR(create_time) = 2026</code> 会让索引失效。改成 <code>WHERE create_time >= '2026-01-01' AND create_time < '2027-01-01'</code></li>
-<li><strong>隐式类型转换</strong>：字符串列用数字查 <code>WHERE phone = 13800138000</code>（phone 是 VARCHAR），MySQL 会把它转成数字比较，索引就废了</li>
-<li><strong>LIKE 左模糊</strong>：<code>WHERE name LIKE '%zhang'</code> 用不上索引。右模糊 <code>'zhang%'</code> 可以</li>
-<li><strong>OR 连接非索引列</strong>：OR 两边只要有一个没索引，整个查询就不走索引了</li>
-</ol>
-
-<h2 id="transaction">事务与隔离级别</h2>
-<p>MySQL 默认隔离级别是 <strong>REPEATABLE READ（可重复读）</strong>，这跟 Oracle、PostgreSQL 默认的 READ COMMITTED 不一样。很多人不知道这个差异，出了问题都找不到原因。</p>
-
-<table>
-<thead><tr><th>隔离级别</th><th>脏读</th><th>不可重复读</th><th>幻读</th><th>谁默认用</th></tr></thead>
-<tbody>
-<tr><td>READ UNCOMMITTED</td><td>可能</td><td>可能</td><td>可能</td><td>没人用</td></tr>
-<tr><td>READ COMMITTED</td><td>不可能</td><td>可能</td><td>可能</td><td>Oracle / PG</td></tr>
-<tr><td>REPEATABLE READ</td><td>不可能</td><td>不可能</td><td>基本解决</td><td><strong>MySQL 默认</strong></td></tr>
-<tr><td>SERIALIZABLE</td><td>不可能</td><td>不可能</td><td>不可能</td><td>没人用</td></tr>
-</tbody>
-</table>
+<!-- 场景1：查询越来越慢 -->
+<h2 id="problem1">场景一：数据量一大，查询就越来越慢</h2>
 
 <div class="callout callout-info">
-<div class="callout-title">2026 年我的建议：改成 READ COMMITTED</div>
-<p>说真的，我现在做的新项目都把隔离级别设成 READ COMMITTED。为啥？因为 REPEATABLE READ 下有间隙锁（Gap Lock），高并发插入的时候间隙锁冲突会导致死锁。我在一个秒杀系统里被间隙锁坑过——两个事务同时往一个范围插入记录，互相等间隙锁，直接死锁了。改成 READ COMMITTED 之后，间隙锁自动关闭，死锁问题消失，性能还涨了。</p>
+<div class="callout-title">你遇到的问题</div>
+<p>你的网站从 1 万用户涨到了 100 万用户，数据库里的订单表有 500 万条数据。原来打开订单列表只要 0.1 秒，现在要 3 秒。用户都开始投诉了。</p>
 </div>
 
-<h3 id="mvcc">MVCC 怎么实现的</h3>
-<p>InnoDB 怎么做到"读写不阻塞"的？答案是 MVCC（多版本并发控制）。每行数据后面藏了两个隐藏列：<code>trx_id</code>（最后修改它的事务 ID）和 <code>roll_ptr</code>（指向 Undo Log 里的旧版本）。</p>
+<p><strong>MySQL 怎么解决？</strong>加索引。但索引不是随便加的，加错了反而更慢。</p>
 
-<p>事务开始的时候生成一个 Read View（一致性视图），里面记录了当前活跃的事务列表。查询一行数据的时候，顺着 roll_ptr 往前找版本链，找到第一个在 Read View 看来"可见"的版本返回。这就是为什么 RR 级别下同一个事务里两次查询结果一致——因为 Read View 没变。</p>
+<pre><code class="language-sql"># 查看慢查询：这条 SQL 为什么这么慢？
+EXPLAIN SELECT * FROM orders 
+WHERE user_id = 123 AND status = 'paid' 
+ORDER BY create_time DESC LIMIT 10;</code></pre>
 
-<h2 id="lock">锁：间隙锁是坑最多的地方</h2>
-<p>InnoDB 的行锁不是只锁那一行，默认是 Next-Key Lock——记录本身加上它前面的间隙一起锁。这是为了防止幻读。</p>
+<p>EXPLAIN 会告诉你 MySQL 是怎么执行这条 SQL 的，type 列如果是 ALL 就是全表扫描，必须加索引。</p>
 
+<pre><code class="language-sql"># 给常用查询加联合索引
+ALTER TABLE orders ADD INDEX idx_user_status_time (user_id, status, create_time);</code></pre>
+
+<table>
+<thead><tr><th>什么时候加索引</th><th>为什么</th></tr></thead>
+<tbody>
+<tr><td>WHERE 条件里的字段</td><td>过滤条件，不用全表扫</td></tr>
+<tr><td>JOIN 关联的字段</td><td>关联的时候更快</td></tr>
+<tr><td>ORDER BY 排序的字段</td><td>不用临时排序</td></tr>
+<tr><td>不要加太多索引</td><td>写数据的时候要同步更新索引，写会变慢</td></tr>
+</tbody>
+</table>
+
+<!-- 场景2：凌晨3点被电话叫醒 -->
+<h2 id="problem2">场景二：凌晨 3 点被电话叫醒，说数据库挂了</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你正在睡觉，突然接到运维电话："数据库磁盘满了，服务全部挂了！"你爬起来看，发现 binlog 日志占了 100G，磁盘都红了。</p>
+</div>
+
+<p><strong>怎么解决？</strong>首先清理一下无用的日志，然后配置自动清理。</p>
+
+<pre><code class="language-sql"># 查看 binlog 大小
+SHOW BINARY LOGS;
+
+# 自动清理：只保留7天的binlog
+SET GLOBAL binlog_expire_logs_seconds = 604800;</code></pre>
+
+<p>还有，慢查询一定要开，不然你都不知道哪条 SQL 有问题。</p>
+
+<pre><code class="language-sql"># 开启慢查询日志，超过1秒的SQL记录下来
+SET GLOBAL slow_query_log = ON;
+SET GLOBAL long_query_time = 1;</code></pre>
+
+<!-- 场景3：深分页越翻越慢 -->
+<h2 id="problem3">场景三：翻到第 100 页的时候，慢得像蜗牛</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你做了个文章列表，每页 20 条。用户翻到第 100 页的时候，打开要等 5 秒。SQL 是这样的：<code>SELECT * FROM articles ORDER BY id DESC LIMIT 2000, 20</code>。</p>
+</div>
+
+<p><strong>为什么这么慢？</strong>MySQL 要先扫描前 2000 条，然后丢掉，只取最后 20 条。翻得越深，要扫描的越多。</p>
+
+<p><strong>怎么优化？</strong>用"上次最后一条的 ID"来翻页，而不是 OFFSET。</p>
+
+<pre><code class="language-sql"># 不要这样：深分页很慢
+SELECT * FROM articles ORDER BY id DESC LIMIT 2000, 20;
+
+# 要这样：记住上次最后一条的ID，下一次从这里开始
+SELECT * FROM articles 
+WHERE id < 10000 
+ORDER BY id DESC LIMIT 20;</code></pre>
+
+<p>这样不管翻到第几页，都是直接定位到那一页，速度都一样快。</p>
+
+<!-- 场景4：并发写数据，数据重复了 -->
+<h2 id="problem4">场景四：并发下单，同一个用户下了 2 个重复订单</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>用户点了一次下单，结果网络卡了，他又点了一次。结果数据库里多了 2 个一模一样的订单。你想：怎么防止重复提交？</p>
+</div>
+
+<p><strong>怎么解决？</strong>加唯一索引，数据库层面帮你挡住重复数据。</p>
+
+<pre><code class="language-sql"># 给订单号加唯一索引
+ALTER TABLE orders ADD UNIQUE INDEX uk_order_no (order_no);
+
+# 插入的时候如果重复，数据库直接报错，不用你自己判断</code></pre>
+
+<p>不要靠代码逻辑去判断"有没有这个订单"，并发的时候两个请求同时进来，都查了一遍发现没有，然后都插入了。唯一索引是数据库层面的，绝对不会重复。</p>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>记录锁</strong>：锁单行。<code>WHERE id = 10 FOR UPDATE</code></li>
-<li><strong>间隙锁</strong>：锁两个记录之间的间隙，不让人插入。只在 RR 级别下有</li>
-<li><strong>Next-Key Lock</strong>：记录锁 + 间隙锁，左开右闭</li>
+<li><strong>不要用 SELECT *：</strong>需要哪几个字段就查哪几个，查多余的字段浪费内存和带宽。</li>
+<li><strong>索引不是越多越好：</strong>写数据的时候要更新所有索引，加太多索引写会很慢。</li>
+<li><strong>不要在索引字段上用函数：</strong><code>WHERE DATE(create_time) = '2024-01-01'</code> 这样索引就失效了。</li>
+<li><strong>大表不要直接 ALTER：</strong>几百万条数据的表，直接加索引会锁表，要用 online DDL 或者 pt-online-schema-change。</li>
 </ul>
-
-<div class="callout callout-danger">
-<div class="callout-title">间隙锁导致的死锁案例</div>
-<p>我之前在订单表上遇到过：两个事务同时执行 <code>UPDATE ... WHERE status = 'pending' AND amount > 100</code>，范围查询加了 Next-Key Lock。事务 A 锁了 (100, 200] 这个区间，事务 B 锁了 (200, 300]，然后 A 想插入一条 amount=250 的记录要等 B 释放间隙，B 想插入 amount=150 的要等 A 释放间隙——经典死锁。</p>
-<p>InnoDB 检测到后回滚了一个事务。解法要么降到 RC 级别关掉间隙锁，要么业务上避免在范围查询后插入。</p>
 </div>
 
-<h2 id="optimize">性能优化实战</h2>
-
-<h3 id="slow-query">先开慢查询日志</h3>
-<p>很多人上来就优化 SQL，但连哪条 SQL 慢都不知道。第一步永远是开慢查询日志：</p>
-<pre><code class="language-sql">SET GLOBAL slow_query_log = 'ON';
-SET GLOBAL long_query_time = 1;  -- 超过 1 秒的都记下来
-
--- 看看最慢的几条
-SELECT start_time, query_time, sql_text
-FROM mysql.slow_log
-ORDER BY query_time DESC LIMIT 10;</code></pre>
-
-<h3 id="pagination">深分页怎么优化</h3>
-<p>这是我被问最多的优化题。<code>LIMIT 1000000, 10</code> 为什么慢？因为 MySQL 要扫描前 100 万行再扔掉，只返回 10 条。</p>
-
-<p>慢的写法：</p>
-<pre><code class="language-sql">SELECT * FROM orders ORDER BY id LIMIT 1000000, 10;</code></pre>
-
-<p>快的写法——先找到上次最大的 ID，再往后翻：</p>
-<pre><code class="language-sql">SELECT * FROM orders WHERE id > 1000000 ORDER BY id LIMIT 10;</code></pre>
-
-<p>这个优化我实测过，从 2.3 秒降到 0.03 秒。前提是有自增主键或者有序的排序字段。</p>
-
-<div class="echart-container" id="pagination-compare" style="height: 280px; margin: 20px 0;"></div>
-
-<h3 id="batch-insert">批量插入</h3>
-<pre><code class="language-sql">-- 慢：一条一条插
-INSERT INTO users (name) VALUES ('A');
-INSERT INTO users (name) VALUES ('B');
-
--- 快：一次插 1000 条
-INSERT INTO users (name) VALUES ('A'), ('B'), ('C'), ...;</code></pre>
-
-<p>批量插入比单条快 10 倍以上。原因是减少了网络往返和事务提交次数。导入数据的时候我一般每批 500-1000 条，太大了 undo log 会膨胀。</p>
-
-<h2 id="replication">主从复制</h2>
-<p>MySQL 的高可用基本都是基于主从复制。原理很简单：主库写 Binlog，从库 IO 线程拉 Binlog 写到 Relay Log，SQL 线程重放 Relay Log。</p>
-
-<div class="mermaid">
-sequenceDiagram
-    participant M as 主库
-    participant IOT as 从库 IO 线程
-    participant SL as Relay Log
-    participant SQT as 从库 SQL 线程
-    participant S as 从库
-    M->>M: 写入 binlog
-    M->>IOT: 推送 binlog
-    IOT->>SL: 写入 relay log
-    SL->>SQT: 读取并执行
-    SQT->>S: 重放数据
-    Note over S: 读请求走从库
-</div>
-
-<p>主从延迟是最常见的问题。大事务跑 10 分钟，从库也要花 10 分钟才能追上。监控用 <code>Seconds_Behind_Master</code>，但这个值不太准——它只看 SQL 线程是不是追得上 IO 线程。要精确测量主从延迟用 <code>pt-heartbeat</code>。</p>
-
-<h2 id="ha">高可用方案对比</h2>
-<table>
-<thead><tr><th>方案</th><th>自动切换</th><th>复杂度</th><th>我推荐场景</th></tr></thead>
-<tbody>
-<tr><td>主从 + MHA</td><td>✅</td><td>中</td><td>传统一主多从</td></tr>
-<tr><td>Group Replication</td><td>✅</td><td>中</td><td>MySQL 原生，3 节点起步</td></tr>
-<tr><td>Orchestrator</td><td>✅</td><td>高</td><td>大规模拓扑管理</td></tr>
-<tr><td>云 RDS</td><td>✅</td><td>低</td><td>不想自己运维</td></tr>
-</tbody>
-</table>
-
-<h2 id="backup">备份：mysqldump 和 xtrabackup</h2>
-<p>备份这个事，没做过的人觉得简单，真出一次数据丢失事故你就知道重要了。</p>
-
-<p>小库用 mysqldump 就够了，逻辑备份，可以看可以改：</p>
-<pre><code class="language-bash">mysqldump -u root -p --single-transaction \
-  --master-data=2 --routines --triggers \
-  mydb > mydb_backup.sql</code></pre>
-
-<p>大库（100GB 以上）用 mysqldump 太慢了，导出可能要几小时。这时候用 Percona 的 xtrabackup，物理备份，快而且不锁表：</p>
-<pre><code class="language-bash">xtrabackup --backup --target-dir=/backup/full --user=root
-xtrabackup --prepare --target-dir=/backup/full
-xtrabackup --copy-back --target-dir=/backup/full</code></pre>
-
-<div class="callout callout-warning">
-<div class="callout-title">备份了不等于能恢复</div>
-<p>我见过太多团队只做备份不做恢复演练。备份文件存了半年，真要恢复的时候发现文件损坏、版本不兼容、或者根本不知道怎么恢复。我的习惯是每季度做一次恢复演练，恢复到测试库，跑一遍数据校验。</p>
-</div>
-
-<h2 id="mysql8">8.0 以后的好用新特性</h2>
-<p>很多人还停留在 5.7 的写法，其实 8.0 加了不少好东西：</p>
-
-<p><strong>窗口函数</strong>——以前要写一大堆子查询的排名，现在一行搞定：</p>
-<pre><code class="language-sql">SELECT name, department, salary,
-    AVG(salary) OVER (PARTITION BY department) as dept_avg,
-    RANK() OVER (PARTITION BY department ORDER BY salary DESC) as dept_rank
-FROM employees;</code></pre>
-
-<p><strong>CTE 递归查询</strong>——查树形结构不用写存储过程了：</p>
-<pre><code class="language-sql">WITH RECURSIVE tree AS (
-    SELECT id, name, parent_id FROM categories WHERE id = 1
-    UNION ALL
-    SELECT c.id, c.name, c.parent_id FROM categories c
-    JOIN tree ON c.parent_id = tree.id
-)
-SELECT * FROM tree;</code></pre>
-
-<p><strong>隐藏索引</strong>——想试试删一个索引会不会影响性能，先设成 INVISIBLE，优化器就不考虑它了，确认没问题再 DROP：</p>
-<pre><code class="language-sql">ALTER TABLE users ALTER INDEX idx_name INVISIBLE;
--- 观察一段时间，没问题就真删了
-DROP INDEX idx_name ON users;</code></pre>
-
-<h2 id="vector">MySQL 9.0 的向量支持</h2>
-<p>9.0 开始加了向量类型，实验性的。做 RAG 的人不用再纠结用不用专门的向量库了——如果数据量不大，直接在 MySQL 里做向量搜索也行：</p>
-<pre><code class="language-sql">CREATE TABLE documents (
-    id INT PRIMARY KEY,
-    content TEXT,
-    embedding VECTOR(768)
-);
-
-CREATE VECTOR INDEX idx_vec ON documents(embedding)
-USING IVFFLAT WITH (lists = 100);
-
-SELECT id, content, vector_distance(embedding, '[0.1, 0.2, ...]') AS distance
-FROM documents ORDER BY distance LIMIT 5;</code></pre>
-
-<p>但说实话，这个还是实验阶段，性能跟专门的向量库（Milvus、Qdrant）比还差得远。生产级 RAG 还是用专用方案，MySQL 向量就是玩玩。</p>
-
-<h2 id="pitfalls">我踩过的八个大坑</h2>
-<ol>
-<li><strong>索引失效</strong>：对索引列用了函数或者隐式类型转换，EXPLAIN 一看 type 是 ALL，全表扫描。学会看执行计划是基本功</li>
-<li><strong>大事务</strong>：一个事务里做了十万条 UPDATE，Undo Log 膨胀了好几个 G，Purge 线程跟不上，整个实例慢得要死。大操作分批提交</li>
-<li><strong>Redo Log 太小</strong>：默认 48MB，高并发下频繁刷脏页，性能抖动。调到 1-2GB 立刻好转</li>
-<li><strong>Buffer Pool 命中率低</strong>：跑了个全表扫描，把热点数据全挤出去了。监控命中率，低于 99% 查原因</li>
-<li><strong>间隙锁死锁</strong>：前面说过了，范围查询 + 并发插入 = 死锁。降隔离级别或者改业务逻辑</li>
-<li><strong>连接数耗尽</strong>：应用没配连接池，每个请求新建连接，max_connections=151 很快就满了。用 HikariCP 连接池</li>
-<li><strong>主从延迟没监控</strong>：从库延迟了 30 秒才发现，用户刚下完单去查订单查不到，以为数据丢了。监控 Seconds_Behind_Master 设告警</li>
-<li><strong>没做恢复演练</strong>：备份是做了，但从来没真恢复过。真出事的时候备份文件是坏的</li>
-</ol>
-
-<h2 id="faq">FAQ</h2>
-
-<h3>MySQL 8.0 和 5.7 差在哪？</h3>
-<p>差挺多的。8.0 有窗口函数、CTE、降序索引、隐藏索引、原子 DDL（之前 DDL 中途崩溃表就坏了）、性能提升 2-3 倍。5.7 已经 EOL 了，别新项目用。</p>
-
-<h3>自增主键和 UUID 哪个好？</h3>
-<p>自增主键。UUID 太坑了——InnoDB 是聚簇索引，主键是顺序插入的，UUID 是随机的，每次插入都要找位置，导致页分裂频繁，写入性能差一大截。而且 UUID 占 36 字节，自增 BIGINT 才 8 字节，二级索引还会存主键，空间浪费也大。除非你需要分布式全局 ID，否则老实自增。</p>
-
-<h3>count(*) 为什么慢？</h3>
-<p>InnoDB 不知道自己有多少行，因为 MVCC 的存在，每个事务看到的行数不一样。所以 <code>count(*)</code> 要一行一行数。MyISAM 快是因为它有个计数器，但 MyISAM 不支持事务。要快速 count 用 <code>EXPLAIN</code> 估算，或者单独维护一个计数表。</p>
-
-<h3>分库分表什么时候该做？</h3>
-<p>别一开始就分。单表数据量在千万级以内，有合适的索引，MySQL 完全扛得住。真正需要分库分表的信号：单表超过 5000 万行、写入 QPS 超过 5000、单机磁盘快满了。工具用 ShardingSphere 或者 Vitess，别自己写。</p>
-
-<h3>MySQL 和 PostgreSQL 怎么选？</h3>
-<p>互联网公司大部分用 MySQL，生态成熟、运维资料多、云服务都支持。PostgreSQL 在复杂查询、JSON 支持、地理空间数据上更强。我个人的经验：业务系统用 MySQL，数据分析和复杂查询用 PG。两个都用也不冲突，MySQL 存业务数据，PG 做分析仓库。</p>
-
-<h2 id="checklist">来个清单</h2>
-<table>
-<thead><tr><th>✅ 应该这么做</th><th>❌ 别这么干</th></tr></thead>
-<tbody>
-<tr><td>字符集用 utf8mb4</td><td>老项目用 utf8mb3 存 emoji 报错</td></tr>
-<tr><td>自增 BIGINT 主键</td><td>UUID 做主键导致页分裂</td></tr>
-<tr><td>Buffer Pool 设内存 50-70%</td><td>设 30% 导致命中率低</td></tr>
-<tr><td>开慢查询日志，定期分析</td><td>不知道哪条 SQL 慢</td></tr>
-<tr><td>深分页用 WHERE id > last_id</td><td>LIMIT 100000, 10 硬查</td></tr>
-<tr><td>批量 INSERT，每批 500-1000</td><td>一条一条插</td></tr>
-<tr><td>定期做恢复演练</td><td>只备份不恢复</td></tr>
-<tr><td>隔离级别根据场景选</td><td>不管业务场景用默认 RR</td></tr>
-</tbody>
-</table>
-</div>
+                    </div>
                 </article>
 <nav class="article-nav">
 <span></span>
