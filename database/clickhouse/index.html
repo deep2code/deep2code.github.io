@@ -82,113 +82,75 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">ClickHouse 总览</h1>
+                        <h1 class="article-title">ClickHouse 入门：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ ClickHouse,OLAP</span>
+                            <span class="meta-item">🏷️ ClickHouse 入门</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>我为什么写这一系列</h2>
-<p>2026 年了，数据栈里有个角色越来越绕不开：OLAP 分析引擎。业务数据库（MySQL/PG）扛点查和事务还行，可一旦你想"按天统计过去一年的 PV/UV"、"把三亿条日志按状态码聚合出报表"，关系型数据库就开始哆嗦。</p>
-<p>我第一次在生产上用 ClickHouse 是接一个日志分析需求。之前我们用 Elasticsearch 扛日志，聚合查询一上去堆就告警；换了 ClickHouse 之后，同样的查询从 8 秒降到 300 毫秒，磁盘占用还少了六成。但踩的坑也不少：第一次写入用单条 INSERT 把集群写崩了，第一次建表忘了分区结果 <code>ALTER DELETE</code> 跑了一整晚。这一系列就是把这些年攒下来的架构、建表、优化、实战和选型经验整理成一份能照着走的地图。</p>
 
-<h2>一句话说清 ClickHouse 是什么</h2>
-<p>ClickHouse 是一个<strong>列式存储的 OLAP 数据库管理系统</strong>，2016 年开源，最初出自 Yandex（俄罗斯那个搜索引擎公司）。它不是万能数据库——没有完整的事务支持、不擅长单行更新和点查、Join 能力弱于 MySQL。但在它的主场<strong>大批量数据分析（OLAP）</strong>上，它是开源里性能最猛的那一档。</p>
-<p>核心卖点就三句话：</p>
-<ul>
-<li><strong>列式存储 + 高压缩比</strong>：同列同类数据放一起，压缩率轻松到 10:1，磁盘和内存带宽都省下来。</li>
-<li><strong>向量化执行引擎</strong>：一次处理一整列的数据块，吃满 CPU 缓存和 SIMD，而不是一行一行地磨。</li>
-<li><strong>单表查询极快</strong>：主键索引 + 稀疏跳过索引 + 分区裁剪，亿级数据聚合经常亚秒返回。</li>
-</ul>
+<p>你要做数据分析：统计网站 PV、UV、用户行为报表，数据量很大，MySQL 跑个聚合查询要几分钟，太慢了。</p>
+<p>这篇不讲理论，就讲你真的会遇到的问题，以及 ClickHouse 怎么帮你解决。</p>
 
-<div class="mermaid">
-flowchart LR
-    subgraph 写入侧
-        APP[业务服务/埋点] --> KAFKA[Kafka]
-        LOG[应用日志] --> KAFKA
-    end
-    KAFKA --> CH[ClickHouse 集群]
-    subgraph ClickHouse
-        CH --> AGG[实时聚合查询]
-        CH --> MV[物化视图预聚合]
-        CH --> REP[主从复制]
-    end
-    AGG --> BI[报表/大屏/告警]
-    MV --> BI
-    style CH fill:#f0682a,stroke:#fff,color:#fff
+<!-- 场景1：MySQL做数据分析太慢 -->
+<h2 id="problem1">场景一：MySQL 做数据分析，查一次要几分钟</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的网站每天有 1000 万条访问记录，存在 MySQL 里。你要统计今天每个页面的 PV，写个 <code>GROUP BY page</code> 的查询，结果查了 5 分钟还没出来。业务方要数据报表，等得不耐烦了。</p>
 </div>
 
-<h2>它在数据栈里站哪个位置</h2>
-<p>很多人纠结"我要不要上 ClickHouse"，其实先搞清楚它在你架构里扮演什么角色就不纠结了。它是<strong>分析层</strong>，不是<strong>业务层</strong>。</p>
+<p><strong>ClickHouse 怎么解决？</strong>ClickHouse 是专门做 OLAP（分析型查询）的列存数据库，同样的查询比 MySQL 快 100 到 1000 倍。刚才那个 5 分钟的查询，用 ClickHouse 只要几十毫秒。</p>
+
+<pre><code class="language-sql">-- 统计每个页面的PV
+SELECT page, COUNT(*) as pv
+FROM access_log
+WHERE date = '2026-09-21'
+GROUP BY page</code></pre>
+
+<p>1 亿条数据的统计查询，ClickHouse 一秒钟就出结果。</p>
+
+<!-- 场景2：日志分析 -->
+<h2 id="problem2">场景二：海量日志，要做实时分析</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的应用每天产生 100G 日志，要做实时分析：看错误率、看接口耗时、看流量趋势。用 Elasticsearch 存日志，数据量大了成本很高，查询也慢。</p>
+</div>
+
+<p><strong>ClickHouse 怎么解决？</strong>ClickHouse 压缩比特别高，同样的数据只需要 Elasticsearch 1/10 的磁盘空间，查询还更快。很多公司用 ClickHouse 替代 ES 做日志分析。</p>
+
+<!-- 场景3：用户行为分析 -->
+<h2 id="problem3">场景三：用户行为分析，要做留存、漏斗</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你要做用户行为分析：第一天注册的用户，第二天还有多少人登录？从首页到下单的转化率是多少？这种多表关联、复杂统计的查询，MySQL 根本跑不动。</p>
+</div>
+
+<p><strong>ClickHouse 怎么解决？</strong>ClickHouse 对这种复杂统计查询做了专门优化，留存、漏斗、路径分析，都能秒级出结果。</p>
+
 <table>
-<thead><tr><th>角色</th><th>典型技术</th><th>擅长</th><th>不擅长</th></tr></thead>
+<thead><tr><th>对比</th><th>MySQL</th><th>ClickHouse</th></tr></thead>
 <tbody>
-<tr><td>业务主库</td><td>MySQL / PostgreSQL</td><td>事务、点查、强一致</td><td>大批量聚合分析</td></tr>
-<tr><td>缓存</td><td>Redis</td><td>毫秒点查、热点数据</td><td>持久化、复杂聚合</td></tr>
-<tr><td>搜索</td><td>Elasticsearch</td><td>全文检索、相关性打分</td><td>超大规模精确聚合</td></tr>
-<tr><td>分析引擎</td><td>ClickHouse / Doris</td><td>亿级数据 GROUP BY、实时报表</td><td>单行更新、事务、点查</td></tr>
+<tr><td>存储方式</td><td>行存</td><td>列存</td></tr>
+<tr><td>聚合查询速度</td><td>慢</td><td>快 100-1000 倍</td></tr>
+<tr><td>写入速度</td><td>快</td><td>非常快（每秒几百万条）</td></tr>
+<tr><td>更新删除</td><td>支持很好</td><td>不擅长</td></tr>
+<tr><td>适用场景</td><td>业务系统（增删改查）</td><td>分析报表（统计查询）</td></tr>
 </tbody>
 </table>
-<p>典型数据流是：业务写 MySQL/日志写 Kafka → 实时或批量 ETL → ClickHouse 存明细和预聚合 → BI 报表直接查 ClickHouse。业务库负责"存得对"，ClickHouse 负责"算得快"。</p>
 
-<h2>和 ES、Doris 比，各自什么脾气</h2>
-
-<div class="echart-container" id="clickhouse-olap-compare" style="height: 320px; margin: 20px 0;"></div>
-<p>这三个经常被放一起比，但定位其实不一样。我先给个粗印象，第五篇会展开：</p>
-<ul>
-<li><strong>ClickHouse</strong>：单表聚合查询天花板，写入吞吐猛，运维相对轻，但 Join 和实时更新弱。</li>
-<li><strong>Elasticsearch</strong>：全文检索和多条件过滤的王者，聚合是附赠功能，数据量大了聚合又贵又慢。</li>
-<li><strong>Doris</strong>：MPP 架构，Join 和实时导入能力强，MySQL 协议兼容好，更像"能分析的数据仓库"。</li>
-</ul>
 <div class="callout callout-tip">
-<div class="callout-title">我的第一性判断</div>
-<p>你的核心需求是"日志/行为数据的聚合报表"，闭眼选 ClickHouse；核心需求是"商品/文章的全文搜索 + 过滤"，选 ES；核心需求是"业务库直接做实时数仓、多表 Join 多"，再认真考虑 Doris。别拿一个引擎解决所有问题。</p>
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>不要把 ClickHouse 当业务库用：</strong>它不擅长频繁更新删除，只适合写多查少、做分析的场景。</li>
+<li><strong>不要一条一条插数据：</strong>ClickHouse 是批量写入的，一条一条插性能很差，要攒一批再插。</li>
+<li><strong>时间分区很重要：</strong>按日期分区，查询的时候带时间条件，才能用上分区裁剪，速度才快。</li>
+<li><strong>不要建太多列：</strong>列存数据库列太多会影响性能，一般几十列就够了。</li>
+</ul>
 </div>
-
-<h2>这个系列怎么读</h2>
-<p>五篇文章由浅入深，建议按顺序读：</p>
-<div class="series-item">
-    <h3><a href="./architecture/">ClickHouse 架构与核心特性</a></h3>
-    <p>列式存储原理、向量化执行引擎、MergeTree 家族、分区与分片、主从复制，以及"为什么快"的底层三要素：压缩、批量处理、CPU 缓存。</p>
-</div>
-<div class="series-item">
-    <h3><a href="./table-import/">建表与数据导入</a></h3>
-    <p>MergeTree 建表语句、ORDER BY / PARTITION BY / TTL、INSERT、CSV/JSON、Kafka Engine、S3 导入，以及批量插入的最佳实践和表引擎选择指南。</p>
-</div>
-<div class="series-item">
-    <h3><a href="./query-optimization/">查询优化与分区</a></h3>
-    <p>EXPLAIN 分析、主键索引与跳数索引、分区裁剪、物化视图、Projection、GROUP BY 优化、并发查询设置和慢查询排查套路。</p>
-</div>
-<div class="series-item">
-    <h3><a href="./olap-practice/">OLAP 场景实战</a></h3>
-    <p>日志分析系统架构、用户行为埋点分析、实时报表、用 ClickHouse 做轻量数据仓库、与 Kafka/Flink 集成、数据生命周期管理。</p>
-</div>
-<div class="series-item">
-    <h3><a href="./compare/">ClickHouse vs Elasticsearch vs Doris</a></h3>
-    <p>三者在存储模型、写入吞吐、查询延迟、聚合能力、全文检索、运维复杂度上的横向对比，各自优劣势，以及一张选型决策树。</p>
-</div>
-
-<h2>先跑起来：一条命令体验一下</h2>
-<p>想动手感受的话，Docker 一把梭：</p>
-<pre><code class="language-bash">docker run -d --name clickhouse-server \
-  -p 8123:8123 -p 9000:9000 \
-  -e CLICKHOUSE_PASSWORD=yourpass \
-  clickhouse/clickhouse-server:24.8
-
-# 进客户端
-docker run --rm -it --network=host \
-  clickhouse/clickhouse-client:24.8 \
-  --query "SELECT version()"</code></pre>
-<p>本机装的话我一般用官方 deb 包，别用系统源里那个老掉牙的版本。生产环境我建议至少跟到 24.x 稳定线，老版本的跳数索引和 Projection 都还不完整。</p>
-
-<h2>FAQ</h2>
-<p><strong>Q：ClickHouse 能当业务数据库用吗？</strong><br/>不建议。它没有完整事务、不擅长单行 UPDATE/DELETE、主键点查也不快。业务读写还得交给 MySQL/PG，ClickHouse 只做分析层。</p>
-<p><strong>Q：数据量多大才值得上 ClickHouse？</strong><br/>没有硬门槛。十万行的小数据量 MySQL 就够；但只要你开始频繁做"按维度聚合"的报表、单表跑到千万行以上、或者要接日志流做实时看板，ClickHouse 的优势就开始显现了。</p>
-<p><strong>Q：它和 Doris 比是不是 ClickHouse 更强？</strong><br/>不是一个维度的"更强"。ClickHouse 单表聚合更猛、更轻；Doris 多表 Join 和实时数仓更顺手。选型看你查询模型，别唯性能论。第五篇我会给一张决策树。</p>
-
-<h2>我的结论</h2>
-<p>ClickHouse 不是万能数据库，但它把"OLAP 聚合查询"这一件事做到了开源顶级。2026 年它已经是日志分析、用户行为分析、实时数仓这些场景的事实标准之一。这个系列我会从架构原理一路讲到生产踩坑，读完你应该能自己判断"我这个场景该不该上、怎么建表、怎么调优"。</p>
 
                     </div>
                 </article>
