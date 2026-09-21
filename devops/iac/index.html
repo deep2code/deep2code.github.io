@@ -84,94 +84,76 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">IaC 基础设施即代码总览</h1>
+                        <h1 class="article-title">IaC 入门：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ IaC / Terraform</span>
+                            <span class="meta-item">🏷️ IaC 入门</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>我为什么写这系列</h2>
-<p>刚入行那会儿，我管服务器是这样的：登控制台点鼠标，开机器、配安全组、挂磁盘，全靠截图和脑子记。换个人接手？文档里写着"密码在某个飞书群的文件里"。</p>
-<p>这系列就是我这几年用 Terraform 管 AWS 和阿里云攒下来的实战笔记。不讲什么"基础设施即代码的哲学意义"，直接讲怎么上手、怎么不把自己搞死、多人协作怎么搞、2026 年了 OpenTofu 和 Pulumi 到底该怎么选。</p>
 
-<h2>一句话说清 IaC</h2>
-<p>IaC（Infrastructure as Code）就是<strong>用声明式代码描述你要什么基础设施，工具负责把它变成真实的云资源</strong>。你写"我要一台 2C4G 的 ECS，在深圳 region"，工具自己去调 API 开机器；你改代码说"升到 4C8G"，工具对比差异，只改变化的部分。核心三件事：声明式、幂等、可审计。</p>
+<p>你要在阿里云上买 10 台服务器，每台都要手动配安全组、装环境、配网络，点半天鼠标，累死人。不小心配错了，还要重来。</p>
+<p>这篇不讲理论，就讲你真的会遇到的问题，以及 IaC 怎么帮你解决。</p>
+
+<!-- 场景1：手动买服务器配环境太麻烦 -->
+<h2 id="problem1">场景一：买 10 台服务器，手动配半天，还容易错</h2>
+
 <div class="callout callout-info">
-<div class="callout-title">和传统脚本的区别</div>
-Shell 脚本是命令式——你告诉工具"第一步干嘛第二步干嘛"，重跑一遍可能就炸了。IaC 是声明式——你只描述"最终状态应该是什么样"，工具自己算怎么达到。跑十遍和跑一遍结果一样，这才是幂等。
+<div class="callout-title">你遇到的问题</div>
+<p>领导说要扩容，买 10 台新服务器。你登录阿里云控制台，一台一台点：选配置、买系统盘、配网络、配安全组、装环境。点了一下午，手都酸了，还不小心把两台的安全组配错了，还要重来。</p>
 </div>
 
-<h2>Terraform 工作流程全景</h2>
-<p>不管你用 Terraform、OpenTofu 还是别的，工作流都是这四步循环。我团队现在每条变更都是这个循环跑一遍：</p>
-<div class="mermaid">
-flowchart LR
-    EDIT[编辑 .hcl 代码] --> INIT[terraform init<br/>下载 provider 插件]
-    INIT --> PLAN[terraform plan<br/>预览变更 不落盘]
-    PLAN --> REVIEW[Code Review<br/>PR 评审]
-    REVIEW --> APPLY[terraform apply<br/>真正创建/变更资源]
-    APPLY --> STATE[state 记录实际状态]
-    STATE --> EDIT
-</div>
-<p>这套流程里最关键的是 <code>plan</code>——它是你 apply 之前的"安全网"。我见过太多人直接 <code>apply -auto-approve</code>，结果 plan 里藏着一个"销毁并重建 RDS"的危险操作。<strong>永远先看 plan，看清楚再 apply</strong>。</p>
+<p><strong>IaC 怎么解决？</strong>你把要什么服务器、什么配置、什么网络、什么安全组，都写成代码，跑一下，自动就买好了。10 台服务器，1 分钟就全部创建完，配置一模一样，不会错。</p>
 
-<h2>这系列讲什么</h2>
-<p>五篇文章，从入门到选型，按顺序看就行：</p>
+<pre><code class="language-hcl"># Terraform 代码，跑一下自动创建 10 台服务器
+resource "alicloud_instance" "web" {
+  count = 10
+  instance_type = "ecs.g6.large"
+  image_id = "centos_7_9"
+  security_group_id = alicloud_security_group.web.id
+}</code></pre>
+
+<p>现在买服务器就是跑个脚本的事，1 分钟搞定，不用点半天鼠标。</p>
+
+<!-- 场景2：环境不一致 -->
+<h2 id="problem2">场景二：10 台服务器，有的装了 git 有的没装，配置不一样</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你手动配 10 台服务器，有的装了 git，有的忘了装。有的开放了 80 端口，有的没开。过了几天，有的服务跑不起来，因为配置不对，排查了半天才发现。</p>
+</div>
+
+<p><strong>IaC 怎么解决？</strong>所有服务器的配置都是同一份代码生成的，10 台服务器配置完全一模一样，不会有的装了有的没装。</p>
+
+<!-- 场景3：要扩容缩容，手动点太累 -->
+<h2 id="problem3">场景三：大促要扩容 20 台，大促完了要删掉，手动点太累</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>大促来了，要临时扩容 20 台服务器。大促完了，要把这 20 台删掉，省钱。你手动买 20 台，配 20 台，完了再手动删 20 台，折腾一整天。</p>
+</div>
+
+<p><strong>IaC 怎么解决？</strong>扩容就是把代码里的 count 从 10 改成 30，跑一下，自动就多了 20 台。缩容就是改回 10，跑一下，自动就删掉了 20 台。1 分钟搞定。</p>
+
 <table>
-<thead><tr><th>篇号</th><th>主题</th><th>你能学到</th><th>适合谁</th></tr></thead>
+<thead><tr><th>概念</th><th>通俗理解</th></tr></thead>
 <tbody>
-<tr><td>01</td><td><a href="intro/">Terraform 入门与 HCL 语法</a></td><td>init/plan/apply 工作流、resource/variable/output 语法、第一个 EC2、state 文件是啥</td><td>零基础第一次写 HCL</td></tr>
-<tr><td>02</td><td><a href="state/">Terraform 状态管理</a></td><td>远程 state、S3+DynamoDB 锁、多人协作、state 损坏怎么救</td><td>单机玩腻了要团队协作</td></tr>
-<tr><td>03</td><td><a href="cloud/">AWS/阿里云资源编排实战</a></td><td>VPC+安全组+ECS+RDS+SLB 完整代码、环境隔离、tfvars 组织</td><td>要把真实业务搬上云</td></tr>
-<tr><td>04</td><td><a href="modules/">Module 与最佳实践</a></td><td>Module 结构、public registry、DRY 原则、CI/CD 集成、pre-commit</td><td>多环境多项目要复用</td></tr>
-<tr><td>05</td><td><a href="compare/">IaC 工具对比</a></td><td>Terraform vs OpenTofu vs Pulumi vs CloudFormation vs Crossplane</td><td>要给团队做技术选型</td></tr>
+<tr><td>IaC（基础设施即代码）</td><td>把服务器、网络、安全组这些都写成代码，用代码创建和管理</td></tr>
+<tr><td>Terraform</td><td>最常用的 IaC 工具，支持阿里云、AWS、腾讯云各种云</td></tr>
+<tr><td>Plan</td><td>先预览：跑一下会改什么，不会马上真的改</td></tr>
+<tr><td>Apply</td><td>真的执行：把改动应用上去</td></tr>
 </tbody>
 </table>
 
-<h2>2026 年的 IaC 生态长什么样</h2>
-<p>站在 2026 年回看，Terraform 早就不是 HashiCorp 一家独大了。2023 年 HashiCorp 改 BSL 协议之后，Cloud Native Computing Foundation 接盘搞了个 OpenTofu——代码几乎和 Terraform 兼容，但走真正的开源路线。现在我团队新项目基本默认 OpenTofu，老项目继续 Terraform 1.x，两边语法差别不大，迁移成本很低。</p>
-<table>
-<thead><tr><th>工具</th><th>语法</th><th>状态管理</th><th>多云</th><th>我的定位</th></tr></thead>
-<tbody>
-<tr><td>Terraform 1.x</td><td>HCL 声明式</td><td>state 文件/远程后端</td><td>全平台</td><td>事实标准，生态最厚</td></tr>
-<tr><td>OpenTofu</td><td>HCL 兼容</td><td>同 Terraform</td><td>全平台</td><td>CNCF 托管的开源 fork</td></tr>
-<tr><td>Pulumi</td><td>通用语言(TS/Python/Go)</td><td>自带后端</td><td>全平台</td><td>想写代码不想学新 DSL</td></tr>
-<tr><td>CloudFormation</td><td>YAML/JSON</td><td>S3 原生</td><td>仅 AWS</td><td>AWS 深度用户首选</td></tr>
-<tr><td>Crossplane</td><td>K8s CRD</td><td>K8s etcd</td><td>全平台</td><td>已经重度 K8s 的团队</td></tr>
-</tbody>
-</table>
-<div class="callout callout-danger">
-<div class="callout-title">第一个大坑先打个预防针</div>
-state 文件是 Terraform 的命根子。它记录着"云上现在有什么"，一旦丢了或坏了，Terraform 就不知道哪些资源是它管的——你再 apply 会重新建一遍，生产环境等于双重开机器。第二篇专门讲怎么保护它。
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>先跑 Plan 再 Apply：</strong>先看一下要改什么，没问题了再真的执行，不要上来就 Apply。</li>
+<li><strong>不要手动改云上的配置：</strong>所有配置都要改 IaC 代码，手动改了下次就被覆盖了，白改了。</li>
+<li><strong>密钥不要写到代码里：</strong>云的 AccessKey 要存在环境变量里，不要写在代码里传到 Git。</li>
+<li><strong>生产环境操作要小心：</strong>terraform destroy 一下，所有资源就删了，生产环境操作一定要确认好。</li>
+</ul>
 </div>
-
-<h2>我的建议路线</h2>
-<p>别一上来就学 Module 和 CI/CD。先花半天跟第一篇走通"写一个 .tf → init → plan → apply → 看到 EC2 跑起来"这个完整闭环。有了手感再往下看。我带过不少新人，上来就啃 Module 文档，三天还没写出第一台机器，直接放弃了。</p>
-<div class="mermaid">
-flowchart LR
-    D1[Day 1<br/>跑通第一个实例] --> D3[Day 2-3<br/>远程 state 协作]
-    D3 --> W1[Week 1<br/>完整编排测试环境]
-    W1 --> W2[Week 2<br/>抽 Module 接 CI/CD]
-    W2 --> SEL[选型时<br/>翻对比表]
-</div>
-<ol>
-<li><strong>第 1 天</strong>：跟着第一篇，本地跑通第一个 EC2/ECS 实例。</li>
-<li><strong>第 2-3 天</strong>：把 state 搬到远程（第二篇），理解锁机制。</li>
-<li><strong>第 1 周</strong>：用第三篇的代码模板，把一个测试环境完整编排出来。</li>
-<li><strong>第 2 周</strong>：抽 Module（第四篇），接进 GitLab CI/GitHub Actions。</li>
-<li><strong>选型时</strong>：翻第五篇对比表，按团队技术栈做决定。</li>
-</ol>
-
-<h2>FAQ</h2>
-<p><strong>Q：我只会 AWS，有必要学 Terraform 吗？直接用 CloudFormation 不行？</strong><br/>单一云、规模不大，CloudFormation 完全够用，还免费、原生。但只要你未来有一天要碰第二个云、或者要把同一套东西复用到另一个项目，Terraform/OpenTofu 的抽象能力就值回来了。</p>
-<p><strong>Q：Terraform 和 OpenTofu 选哪个？</strong><br/>新项目我倾向 OpenTofu：纯开源、CNCF 背书、语法 99% 兼容。存量 Terraform 项目不急着迁，两边可以并存。第五篇有详细对比。</p>
-<p><strong>Q：学这个要会编程吗？</strong><br/>HCL 不是编程语言，是配置语言，会写 JSON/YAML 就能上手。但要把 Module 写好、做复杂编排，会一门通用语言（最好是 Python 或 Go）会轻松很多。</p>
-<p><strong>Q：state 文件到底能不能提交到 Git？</strong><br/>绝对不能。它里面有敏感信息（密钥、密码哈希），而且多人同时改会冲突。第二篇详细讲正确做法。</p>
-
-<h2>我的结论</h2>
-<p>IaC 不是什么新潮概念，它解决的就是"手工操作不可重复、不可审计、不可协作"这三个老问题。Terraform 把这件事做到了行业标准，OpenTofu 让它真正开源，Pulumi 和 Crossplane 代表了另外两条路线。</p>
-<p>我自己的判断：<strong>2026 年新项目，多云团队选 OpenTofu，纯 AWS 团队可以 CloudFormation 起步，重度 K8s 团队看 Crossplane，想用通用语言写的选 Pulumi</strong>。别纠结，先跑通一个最小例子，比读十篇选型文章都管用。下面就从第一篇开始。</p>
-
 
                     </div>
                 </article>
