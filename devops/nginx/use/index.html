@@ -380,6 +380,127 @@ access_log /var/log/nginx/access.log custom;</code></pre>
 
 <p>加上 <code>$upstream_response_time</code> 就能直接看到后端耗时，不用再去后端日志里翻。</p>
 
+
+<h3>CORS 跨域配置</h3>
+<p>前后端分离跨域是刚需，Nginx 直接配，不用后端处理：</p>
+
+<pre><code class="language-nginx">location /api/ {
+    # 允许的源
+    add_header Access-Control-Allow-Origin $http_origin always;
+    add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
+    add_header Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With" always;
+    add_header Access-Control-Max-Age 86400 always;
+
+    # 预检请求直接返回 204
+    if ($request_method = OPTIONS) {
+        return 204;
+    }
+
+    proxy_pass http://backend;
+}</code></pre>
+
+<h3>防盗链</h3>
+<pre><code class="language-nginx"># 只允许本站和白名单站引用图片
+location ~* \.(jpg|png|webp|gif)$ {
+    valid_referers none blocked example.com *.example.com github.io;
+    if ($invalid_referer) {
+        return 403;
+        # 或者返回一张"防盗链"占位图
+        # rewrite ^ /anti-hotlink.jpg break;
+    }
+}</code></pre>
+
+<h3>大文件分片上传</h3>
+<p>上传大文件时，Nginx 临时目录写满磁盘是常见事故。优化一下：</p>
+
+<pre><code class="language-nginx">http {
+    client_body_buffer_size 10M;      # 10M 以内直接走内存
+    client_max_body_size 10G;         # 最大 10G
+    client_body_temp_path /data/nginx/tmp 1 2;  # 放大盘
+    proxy_request_buffering off;       # 流式转发，不缓冲整个请求
+}</code></pre>
+
+<h3>SSE 流式响应</h3>
+<p>AI 大模型输出、实时日志推送，必须关缓冲：</p>
+
+<pre><code class="language-nginx">location /sse {
+    proxy_pass http://backend;
+    proxy_http_version 1.1;
+
+    # 关键：关掉所有缓冲
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+
+    # SSE 专用头
+    proxy_set_header Connection "";
+    chunked_transfer_encoding on;
+
+    # 长连接超时
+    proxy_read_timeout 1h;
+}</code></pre>
+
+<h3>超时调优对照表</h3>
+<table>
+<thead><tr><th>参数</th><th>默认值</th><th>建议值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>proxy_connect_timeout</td><td>60s</td><td>3s</td><td>连后端超时，别等太久</td></tr>
+<tr><td>proxy_send_timeout</td><td>60s</td><td>30s</td><td>发请求给后端超时</td></tr>
+<tr><td>proxy_read_timeout</td><td>60s</td><td>60s（普通）/ 1h（长连接）</td><td>等后端返回超时</td></tr>
+<tr><td>keepalive_timeout</td><td>75s</td><td>65s</td><td>客户端 keepalive</td></tr>
+<tr><td>send_timeout</td><td>60s</td><td>30s</td><td>发响应给客户端超时</td></tr>
+</tbody>
+</table>
+
+<h3>健康检查</h3>
+<p>Nginx Plus 有主动健康检查，开源版用被动检查：</p>
+
+<pre><code class="language-nginx">upstream backend {
+    server 10.0.0.1:8080 max_fails=3 fail_timeout=30s;
+    server 10.0.0.2:8080 max_fails=3 fail_timeout=30s;
+    server 10.0.0.3:8080 backup;  # 备用节点，主节点全挂才上
+    keepalive 32;
+}</code></pre>
+
+<p><code>max_fails=3</code>：连续失败 3 次就摘下来。<code>fail_timeout=30s</code>：摘下来 30 秒后再试。</p>
+
+<h3>动态上游（服务发现）</h3>
+<p>配合 Consul / Nacos 做服务发现，不用改 Nginx 配置：</p>
+
+<pre><code class="language-nginx">upstream backend {
+    zone backend 64k;  # 共享内存，支持运行时改
+    server 127.0.0.1:81;
+    # 实际用 nginx-upsync-module 从 Consul 拉节点
+}</code></pre>
+
+<h3>错误页面美化</h3>
+<pre><code class="language-nginx">error_page 404 /404.html;
+error_page 500 502 503 504 /50x.html;
+
+location = /50x.html {
+    root /usr/share/nginx/html;
+    internal;  # 只能内部跳转，不能直接访问
+}</code></pre>
+
+<h3>静态站点部署</h3>
+<p>纯静态博客、文档站，Nginx 配置：</p>
+
+<pre><code class="language-nginx">server {
+    listen 80;
+    server_name blog.example.com;
+    root /var/www/blog;
+    index index.html;
+
+    # 干净 URL：/about -> /about.html
+    location / {
+        try_files $uri $uri.html $uri/ =404;
+    }
+
+    # gzip 压缩
+    gzip on;
+    gzip_types text/css application/javascript image/svg+xml;
+}</code></pre>
+
 <h2 id="faq">FAQ</h2>
 
 <h3>Nginx 怎么查看当前请求走的是哪个 location？</h3>
