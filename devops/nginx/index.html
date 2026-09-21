@@ -82,126 +82,131 @@
             <main id="body-content">
 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Nginx 概述</h1>
+                        <h1 class="article-title">Nginx 入门：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Nginx</span>
+                            <span class="meta-item">🏷️ Nginx 入门</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2 id="overview">你什么时候会需要 Nginx？</h2>
+
 <p>你写了个网站，跑在 8080 端口，用户访问要加 :8080 才能打开，这也太不专业了。或者你想上 HTTPS，但改后端代码太麻烦。</p>
-<p>这些问题，Nginx 全能解决。从最早配个反向代理，到现在管着几十台服务器的负载均衡、HTTPS 终止、限流缓存，Nginx 始终是我工具箱里最可靠的那个。2026 年主流版本是 Nginx 1.26+，HTTP/3 和 QUIC 已经默认支持了。</p>
+<p>这些问题，Nginx 全能解决。这篇不讲理论，就讲 Nginx 是什么、为什么要用它，以及最常用的几个配置。</p>
 
-<h2 id="why-nginx">为什么 Nginx 比 Apache 快</h2>
+<!-- 场景1：用户要加端口号才能访问 -->
+<h2 id="problem1">场景一：用户访问你的网站要加 :8080</h2>
 
-<div class="echart-container" id="nginx-perf-compare" style="height: 320px; margin: 20px 0;"></div>
-
-<div class="mermaid">
-flowchart TD
-    subgraph Apache prefork
-        REQ1[请求1] --> P1[进程1]
-        REQ2[请求2] --> P2[进程2]
-        REQ3[请求3] --> P3[进程3]
-    end
-    subgraph Nginx 事件驱动
-        REQ10k[1万请求] --> EPOLL[epoll 事件循环]
-        EPOLL --> W1[Worker 1<br/>单线程处理]
-    end
-    style Nginx fill:#e3f2fd
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你用 Node.js 写了个网站，跑在 8080 端口。用户输入 www.example.com，浏览器默认找 80 端口，结果连不上，必须加 :8080 才行。这也太不专业了。</p>
 </div>
 
-<p>这是面试常问的问题。说白了就是架构不同：Apache prefork 模式每个请求开一个进程，并发高了进程切换就把 CPU 吃满。Nginx 是事件驱动，一个 Worker 进程用 epoll 同时处理几万连接，没有进程切换开销。</p>
+<p><strong>Nginx 怎么解决？</strong>让 Nginx 监听 80 端口，把请求转发给你跑在 8080 的后端。用户只知道访问 www.example.com，根本不知道后面还有个 8080 的服务。</p>
 
-<p>实际测试下来（参考值）：</p>
+<pre><code class="language-nginx">server {
+    listen 80;
+    server_name www.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+    }
+}</code></pre>
+
+<p>就这么简单。现在用户直接输入 www.example.com 就能访问你的网站了，不用加端口号。</p>
+
+<!-- 场景2：一台服务器想跑好几个网站 -->
+<h2 id="problem2">场景二：一台服务器想跑好几个网站</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你有 3 个小网站，想都部署在同一台服务器上。每个网站跑在不同端口？用户要在网址后面加端口号，太傻了。能不能用同一个 80 端口，根据域名自动分给不同网站？</p>
+</div>
+
+<p><strong>Nginx 怎么解决？</strong>用 server_name 区分不同域名，同一个 80 端口，根据用户输入的域名，自动转发给对应的后端服务。</p>
+
+<pre><code class="language-nginx"># 第一个网站
+server {
+    listen 80;
+    server_name www.site1.com;
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+    }
+}
+
+# 第二个网站
+server {
+    listen 80;
+    server_name www.site2.com;
+    location / {
+        proxy_pass http://127.0.0.1:8082;
+    }
+}
+
+# 第三个网站
+server {
+    listen 80;
+    server_name www.site3.com;
+    location / {
+        proxy_pass http://127.0.0.1:8083;
+    }
+}</code></pre>
+
+<p>现在 3 个网站都跑在同一台服务器的 80 端口，用户输入不同域名，自动访问对应的网站。完美。</p>
+
+<!-- 场景3：想上HTTPS，但不想改后端代码 -->
+<h2 id="problem3">场景三：浏览器提示不安全，想上 HTTPS</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的网站还是 HTTP，浏览器地址栏旁边有个"不安全"的提示。用户一看就不敢用了，搜索引擎也把你的排名往下压。你想换成 HTTPS，但不想改后端代码。</p>
+</div>
+
+<p><strong>Nginx 怎么解决？</strong>SSL 证书只放在 Nginx 上，后端还是用 HTTP。用户和 Nginx 之间是加密的，Nginx 和后端之间是内网，不用加密。后端代码一行都不用改。</p>
+
+<pre><code class="language-nginx">server {
+    listen 80;
+    server_name www.example.com;
+    # HTTP 自动跳转到 HTTPS
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name www.example.com;
+
+    ssl_certificate     /path/to/fullchain.pem;
+    ssl_certificate_key /path/to/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+    }
+}</code></pre>
+
+<p>现在用户输入 www.example.com，自动跳转到 https://www.example.com，浏览器也不提示不安全了。后端还是跑在 8080，啥都不用改。</p>
+
 <table>
-<thead><tr><th>对比项</th><th>Nginx</th><th>Apache prefork</th></tr></thead>
+<thead><tr><th>Nginx 能干什么</th><th>什么时候用</th></tr></thead>
 <tbody>
-<tr><td>10K 并发内存占用</td><td>~100MB</td><td>~1GB</td></tr>
-<tr><td>静态文件 QPS（4核）</td><td>50000+</td><td>~5000</td></tr>
-<tr><td>连接模型</td><td>事件驱动（epoll）</td><td>每请求一进程</td></tr>
-<tr><td>CPU 利用率</td><td>高（无锁）</td><td>低（频繁切换）</td></tr>
-</tbody>
-</table>
-
-<h2 id="sub-pages">本专题子页面</h2>
-<ul>
-<li><a href="install/">源码安装剖析</a> — 从 configure 到 make install 全过程，含编译参数详解和模块系统</li>
-<li><a href="use/">常用技巧</a> — 反向代理、负载均衡、限流、gzip、mirror 等实战配置</li>
-<li><a href="http/">HTTP 模块</a> — 请求处理 11 个阶段、FastCGI、事件驱动架构底层</li>
-<li><a href="rtmp/">RTMP 模块</a> — 直播推流、HLS 转封装、SRT/WebRTC 对比</li>
-</ul>
-
-<h2 id="openssl">OpenSSL 分叉：大厂都自己搞了</h2>
-<p>2014 年 Heartbleed 漏洞把 OpenSSL 推到了风口浪尖。之后大厂纷纷搞自己的分支：</p>
-
-<table>
-<thead><tr><th>分支</th><th>维护方</th><th>特点</th></tr></thead>
-<tbody>
-<tr><td>BoringSSL</td><td>Google</td><td>砍掉不用的接口，Chromium 在用</td></tr>
-<tr><td>LibreSSL</td><td>OpenBSD</td><td>精简代码库，安全审计严格</td></tr>
-<tr><td>QuicTLS</td><td>Cloudflare</td><td>在 OpenSSL 3 基础上加 QUIC 支持</td></tr>
-</tbody>
-</table>
-
-<p>Nginx 编译时可以用 <code>--with-openssl=源码路径</code> 指定这些分支。2026 年要做 HTTP/3，官方推荐用 OpenSSL 3.5+ 或 BoringSSL，老的 OpenSSL 1.1 已于 2023 年 9 月 EOL。</p>
-
-<h2 id="version">版本选择：mainline 还是 stable</h2>
-<p>Nginx 的版本号规则很简单：奇数是 mainline（主线），偶数是 stable（稳定版）。比如 1.31 是 mainline，1.30 是 stable。</p>
-
-<table>
-<thead><tr><th>版本线</th><th>当前版本（2026-08）</th><th>推荐场景</th></tr></thead>
-<tbody>
-<tr><td>1.31.x mainline</td><td>1.31.4</td><td>需要 HTTP/3、ECH 等新特性</td></tr>
-<tr><td>1.30.x stable</td><td>1.30.4</td><td>生产环境首选</td></tr>
-<tr><td>1.28.x 维护线</td><td>1.28.3</td><td>存量环境，安全补丁</td></tr>
+<tr><td>反向代理</td><td>把请求转发给后端服务</td></tr>
+<tr><td>负载均衡</td><td>一台服务器扛不住，多台一起扛</td></tr>
+<tr><td>静态文件服务</td><td>直接发 CSS、JS、图片，比后端快 10 倍</td></tr>
+<tr><td>HTTPS 终止</td><td>SSL 证书放 Nginx，后端不用改</td></tr>
+<tr><td>限流</td><td>防止恶意爬虫把你服务器打爆</td></tr>
+<tr><td>缓存</td><td>把经常访问的内容缓存起来，不用每次都查后端</td></tr>
 </tbody>
 </table>
 
 <div class="callout callout-tip">
-<div class="callout-title">我的建议</div>
-<p>没有特殊要求就上 1.30.x stable。官方 2026 年其实推荐 mainline 用于生产，因为 mainline 经过充分测试后才合并到 stable，stable 更新慢反而容易落后。但金融、医疗这种要求极稳的行业，还是用 stable。</p>
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>改完配置一定要测试：</strong><code>nginx -t</code> 测试语法，没问题再 <code>nginx -s reload</code> 重载。改坏了网站就挂了。</li>
+<li><strong>location 顺序：</strong>精确匹配 > 前缀匹配 > 正则匹配 > 最长匹配，别搞反了。</li>
+<li><strong>静态文件直接让 Nginx 发：</strong>不要让后端处理静态文件，太慢了。</li>
+<li><strong>gzip 一定要开：</strong>减少传输体积，网站快一倍。</li>
+</ul>
 </div>
 
-<h2 id="http3">HTTP/3：2026 年终于能用了</h2>
-<p>HTTP/3 基于 QUIC 协议跑在 UDP 上，解决了 TCP 层的队头阻塞。Nginx 从 1.25.0 开始实验性支持，到 1.30 稳定版全量落地。</p>
-
-<pre><code class="language-nginx">server {
-    listen 443 ssl;
-    listen 443 quic reuseport;  # 这行开 HTTP/3
-    ssl_protocols TLSv1.3;
-    add_header Alt-Svc 'h3=":443"; ma=86400';
-}</code></pre>
-
-<p>注意：网上流传的 <code>http3 on;</code> 指令是<strong>不存在的</strong>。启用 HTTP/3 靠的是 listen 的 quic 参数。这个错误配置我见过不下五次，每次都浪费半天排查。</p>
-
-<h2 id="alternatives">Nginx 的替代品</h2>
-<table>
-<thead><tr><th>服务器</th><th>语言</th><th>什么时候用</th></tr></thead>
-<tbody>
-<tr><td>Caddy</td><td>Go</td><td>个人项目，自动 HTTPS 最省心</td></tr>
-<tr><td>Traefik</td><td>Go</td><td>Docker/K8s 环境，动态配置</td></tr>
-<tr><td>Envoy</td><td>C++</td><td>服务网格，Sidecar 代理</td></tr>
-<tr><td>Nginx</td><td>C</td><td>通用场景，生态最成熟</td></tr>
-</tbody>
-</table>
-
-<p>我的选择：生产环境还是 Nginx。Caddy 个人项目用，Traefik 在 K8s 里用。各有所长。</p>
-
-<h2 id="faq">FAQ</h2>
-
-<h3>Nginx 为什么要 master/worker 架构？</h3>
-<p>Master 以 root 运行，负责绑定 80/443 特权端口和管理 Worker。Worker 用普通用户运行，即使被攻破也拿不到 root 权限。这种设计既安全又能利用多核——每个 Worker 绑一个 CPU 核心。</p>
-
-<h3>worker_processes 设多少合适？</h3>
-<p>直接设 <code>auto</code>，Nginx 会自动等于 CPU 核心数。手动设多了没用，超过核心数反而增加上下文切换。</p>
-
-<h3>Nginx 能处理多少并发？</h3>
-<p>理论上限 = worker_processes × worker_connections。8 核 81920 连接是常见配置。实际上还受文件描述符限制（ulimit -n）和内存大小影响。</p>
-
-<h3>HTTP/3 为什么要 TLS 1.3？</h3>
-<p>QUIC 协议把 TLS 1.3 集成在了传输层，不再像 TCP+TLS 那样分开握手。TLS 1.3 的握手本身就快（1-RTT），加上 QUIC 的 0-RTT 恢复，连接建立比 HTTP/2 快一倍。</p>
-</div>
+                    </div>
                 </article>
 <nav class="article-nav">
 <span></span>
