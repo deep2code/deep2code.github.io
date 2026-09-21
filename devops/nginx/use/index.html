@@ -82,533 +82,321 @@
             <main id="body-content">
 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Nginx 常用技巧</h1>
+                        <h1 class="article-title">Nginx 常用技巧：从实际问题出发</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ Nginx 实战</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2 id="reverse-proxy">反向代理：Nginx 最核心的用法</h2>
-<p>Nginx 做反向代理，说白了就是客户端以为自己在跟服务器说话，实际上 Nginx 在中间把请求转发给后端。我用得最多的配置就是这个。</p>
+
+<p>你写了个网站，跑在 8080 端口。现在来了几个问题：</p>
+<ul>
+<li>用户要在网址后面加 :8080 才能访问，能不能直接用域名？</li>
+<li>网站访问的人多了，一台服务器扛不住，怎么办？</li>
+<li>用户上传的图片太大，打开很慢，能不能自动缩小？</li>
+<li>晚上想偷偷上线新版本，不想让用户看到报错的页面，怎么办？</li>
+</ul>
+<p>这些问题，Nginx 全能解决。这篇文章不讲理论，就讲你真的会遇到的问题，以及怎么配。</p>
+
+<!-- 场景1：你的网站跑在8080，用户要加端口号 -->
+<h2 id="problem1">场景一：用户访问你的网站，要加 :8080 才打得开</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你用 Node.js / Python 写了个网站，跑在 8080 端口。用户输入 www.example.com，浏览器默认找 80 端口，结果连不上，必须加 :8080 才行。这也太不专业了。</p>
+</div>
+
+<p><strong>Nginx 怎么解决？</strong>让 Nginx 监听 80 端口，把请求转发给你跑在 8080 的后端。用户只知道访问 www.example.com，根本不知道后面还有个 8080 的服务。这就是<strong>反向代理</strong>。</p>
 
 <div class="mermaid">
 flowchart LR
-    CLIENT[客户端] -->|HTTP| NGINX[Nginx]
-    NGINX -->|proxy_pass| APP1[后端应用 1]
-    NGINX -->|proxy_pass| APP2[后端应用 2]
-    NGINX -->|proxy_pass| APP3[后端应用 3]
-    style NGINX fill:#e3f2fd
+    U[用户浏览器] -->|访问 www.example.com| N[Nginx<br/>监听 80 端口]
+    N -->|转发请求| B[你的后端<br/>Node.js / Python<br/>跑在 8080]
+    style N fill:#e3f2fd
 </div>
 
-<pre><code class="language-nginx">upstream backend {
-    server 10.0.0.1:8080 weight=3;
-    server 10.0.0.2:8080 weight=2;
-    keepalive 32;  # 复用后端连接
+<pre><code class="language-nginx">server {
+    listen 80;
+    server_name www.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+    }
+}</code></pre>
+
+<p>就这么简单。现在用户直接输入 www.example.com 就能访问你的网站了，不用加端口号。</p>
+
+<!-- 场景2：网站访问的人多了，一台服务器扛不住 -->
+<h2 id="problem2">场景二：访问的人突然多了，一台服务器扛不住了</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的网站火了，同时在线的人从 100 涨到了 1000。你的服务器 CPU 100%，请求开始超时，用户开始骂。你加了一台服务器，但怎么让两台服务器一起干活？</p>
+</div>
+
+<p><strong>Nginx 怎么解决？</strong>把两台服务器都放到 Nginx 后面，Nginx 自动把请求分给两台服务器，这就是<strong>负载均衡</strong>。用户根本不知道有几台服务器，只知道网站变快了。</p>
+
+<pre><code class="language-nginx">upstream myapp {
+    # 两台服务器，按权重分流量
+    server 10.0.0.1:8080 weight=3;  # 性能好的，多分点
+    server 10.0.0.2:8080 weight=1;  # 性能差点的，少分点
+}
+
+server {
+    listen 80;
+    server_name www.example.com;
+
+    location / {
+        proxy_pass http://myapp;
+    }
+}</code></pre>
+
+<table>
+<thead><tr><th>分配方式</th><th>什么时候用</th></tr></thead>
+<tbody>
+<tr><td>轮询（默认）</td><td>两台服务器性能差不多</td></tr>
+<tr><td>加权轮询（weight=）</td><td>服务器性能不一样，性能好的多分点</td></tr>
+<tr><td>ip_hash</td><td>同一个用户的请求总是打到同一台服务器（比如有登录状态）</td></tr>
+</tbody>
+</table>
+
+<!-- 场景3：网站还没上 HTTPS，浏览器提示不安全 -->
+<h2 id="problem3">场景三：浏览器提示"不安全"，SEO 排名也上不去</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的网站还是 HTTP，浏览器地址栏旁边有个"不安全"的提示。用户一看就不敢用了，搜索引擎也把你的排名往下压。你想换成 HTTPS，但不想改后端代码。</p>
+</div>
+
+<p><strong>Nginx 怎么解决？</strong>SSL 证书只放在 Nginx 上，后端还是用 HTTP。用户和 Nginx 之间是加密的，Nginx 和后端之间是内网，不用加密。这就是<strong>SSL 终止</strong>，后端代码一行都不用改。</p>
+
+<pre><code class="language-nginx">server {
+    listen 80;
+    server_name www.example.com;
+    # HTTP 自动跳转到 HTTPS
+    return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl http2;
-    server_name example.com;
+    server_name www.example.com;
+
+    ssl_certificate     /path/to/fullchain.pem;
+    ssl_certificate_key /path/to/privkey.pem;
 
     location / {
-        proxy_pass http://backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";  # 必须，否则 keepalive 不生效
+        proxy_pass http://127.0.0.1:8080;
     }
 }</code></pre>
 
-<h2 id="forward-vs-reverse">正向代理 vs 反向代理</h2>
-<table>
-<thead><tr><th></th><th>正向代理</th><th>反向代理</th></tr></thead>
-<tbody>
-<tr><td>代理谁</td><td>代理客户端</td><td>代理服务端</td></tr>
-<tr><td>客户端知道吗</td><td>知道（手动配代理）</td><td>不知道（以为 Nginx 就是服务器）</td></tr>
-<tr><td>典型用途</td><td>翻墙、访问控制</td><td>负载均衡、SSL 终止</td></tr>
-<tr><td>Nginx 支持</td><td>1.31.0+ 内置</td><td>原生支持</td></tr>
-</tbody>
-</table>
+<p>现在用户输入 www.example.com，自动跳转到 https://www.example.com，浏览器也不提示不安全了。后端还是跑在 8080，啥都不用改。</p>
 
-<h2 id="http-to-https">HTTP 跳转 HTTPS</h2>
-<pre><code class="language-nginx">server {
-    listen 80;
-    server_name example.com;
-    return 301 https://$host$request_uri;
-}</code></pre>
+<!-- 场景4：用户上传的图片太大，打开很慢 -->
+<h2 id="problem4">场景四：用户上传的图片太大，打开很慢</h2>
 
-<p>用 <code>$host</code> 而不是 <code>$server_name</code>，因为 $host 是客户端请求的原始域名，泛域名场景不会出问题。</p>
-
-<h2 id="gzip">gzip 压缩</h2>
-<pre><code class="language-nginx">gzip on;
-gzip_vary on;
-gzip_comp_level 6;  # 默认就是6，性价比最高
-gzip_min_length 1024;  # 小于1KB不压
-gzip_types text/plain text/css application/json
-           application/javascript text/xml image/svg+xml;</code></pre>
-
-<div class="callout callout-tip">
-<div class="callout-title">gzip_comp_level 的坑</div>
-<p>level 1 到 9，level 6 是性价比拐点。从 6 到 9，压缩率只多 2%，但 CPU 翻三倍。别图省带宽把 CPU 吃满。图片视频已经是压缩格式了，不要再 gzip。</p>
-</div>
-
-<h2 id="location">location 匹配：最容易搞混的部分</h2>
-
-<div class="mermaid">
-flowchart TD
-    A[请求进来] --> B{= 精确匹配？}
-    B -- 是 --> C[立即用这个 location]
-    B -- 否 --> D{^~ 前缀匹配？}
-    D -- 是 --> E[用最长前缀匹配]
-    D -- 否 --> F{正则 ~ ~* 匹配？}
-    F -- 第一个匹配 --> G[用正则 location]
-    F -- 都不匹配 --> E
-    style A fill:#e3f2fd
-</div>
-
-<p>优先级：<code>=</code>（精确）&gt; <code>^~</code>（前缀优先）&gt; <code>~</code>/<code>~*</code>（正则，按顺序）&gt; 无前缀（最长匹配）。</p>
-
-<pre><code class="language-nginx"># 这些写法的区别
-location = /favicon.ico { ... }     # 精确匹配，只匹配 /favicon.ico
-location ^~ /static/ { ... }       # 前缀匹配，匹配到就不再检查正则
-location ~ \.php$ { ... }           # 正则匹配，区分大小写
-location ~* \.jpg$ { ... }          # 正则匹配，不区分大小写
-location /api/ { ... }              # 普通前缀，最长匹配胜出</code></pre>
-
-<h2 id="root-alias">root 和 alias 的区别</h2>
-<p>这个我每次都要查一遍。简单说：</p>
-
-<table>
-<thead><tr><th></th><th>root</th><th>alias</th></tr></thead>
-<tbody>
-<tr><td>行为</td><td>完整路径拼到 root 后面</td><td>替换 location 前缀</td></tr>
-<tr><td>请求 /abc/123 + root /var/www</td><td>找 /var/www/abc/123</td><td>—</td></tr>
-<tr><td>请求 /abc/123 + alias /var/www</td><td>—</td><td>找 /var/www/123</td></tr>
-</tbody>
-</table>
-
-<h2 id="limit">限流和连接数控制</h2>
-<pre><code class="language-nginx"># 限流：每个 IP 每秒 10 个请求
-limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
-
-# 限连接：每个 IP 最多 20 个并发
-limit_conn_zone $binary_remote_addr zone=conn:10m;
-
-location /api {
-    limit_req zone=api burst=20 nodelay;
-    limit_conn conn 20;
-    proxy_pass http://backend;
-}</code></pre>
-
-<p>burst=20 意思是允许瞬间多过 20 个请求排队。nodelay 表示不排队，直接处理。不加 nodelay 的话，突发请求会排队等待，客户端感觉就是卡顿。</p>
-
-<h2 id="mirror">流量镜像</h2>
-<pre><code class="language-nginx">location / {
-    mirror /mirror;
-    proxy_pass http://production;
-}
-
-location = /mirror {
-    internal;
-    proxy_pass http://test_backend$request_uri;
-}</code></pre>
-
-<p>mirror 把生产流量复制一份到测试环境，用来做灰度验证。回包被忽略，不影响主请求。我做过全链路压测的影子流量，用这个方法把生产流量 1:1 复制到预发环境。</p>
-
-<h2 id="websocket">WebSocket 代理</h2>
-<pre><code class="language-nginx">location /ws {
-    proxy_pass http://backend;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_read_timeout 3600s;  # WebSocket 长连接，默认60s会断
-}</code></pre>
-
-<div class="callout callout-warning">
-<div class="callout-title">WebSocket 超时的坑</div>
-<p>我刚开始配 WebSocket，连上之后每隔 60 秒就断一次。查了半天发现是 proxy_read_timeout 默认 60 秒。WebSocket 是长连接，如果 60 秒内没有数据传输，Nginx 就把连接关了。设成 3600 秒就好。</p>
-</div>
-
-<h2 id="gRPC">gRPC 代理</h2>
-<pre><code class="language-nginx">location /greeter.Greeter {
-    grpc_pass grpc://grpc-backend:50051;
-    grpc_set_header X-Real-IP $remote_addr;
-}</code></pre>
-
-<p>gRPC 基于 HTTP/2，Nginx 从 1.13.6 开始原生支持 grpc_pass。注意后端必须是 HTTP/2。</p>
-
-<h2 id="http3">HTTP/3 配置（纠正版）</h2>
-<pre><code class="language-nginx">server {
-    listen 443 ssl;                # TCP：HTTP/1.1 + HTTP/2
-    listen 443 quic reuseport;     # UDP：HTTP/3
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_early_data on;             # 0-RTT
-    quic_retry on;                 # 地址验证
-    add_header Alt-Svc 'h3=":443"; ma=86400';  # 告诉浏览器支持h3
-}</code></pre>
-
-<p><strong>没有 http3 on; 这个指令</strong>。网上很多教程写错了。启用 HTTP/3 靠的是 listen 的 quic 参数。</p>
-
-<h2 id="pitfalls">8 个配置坑</h2>
-<ol>
-<li><strong>location 匹配顺序搞错</strong>：以为按配置顺序匹配，实际是按优先级。正则 location 一定要从具体到通用排列</li>
-<li><strong>rewrite 无限循环</strong>：用 last 会重新匹配 location，如果新 URI 又匹配到同一个 rewrite 规则，循环 10 次后 500</li>
-<li><strong>proxy_pass 带不带 URI</strong>：带 URI 会替换 location 前缀，不带则完整转发。搞混了后端收到的路径就错了</li>
-<li><strong>HTTPS 证书链不完整</strong>：只配了服务器证书，没配中间证书，部分浏览器报"证书不受信任"。用 fullchain.pem</li>
-<li><strong>gzip 压图片</strong>：图片视频已经是压缩格式，再 gzip 纯浪费 CPU</li>
-<li><strong>静态资源缓存策略不对</strong>：HTML 不该长缓存，带 hash 的 JS/CSS 可以永久缓存。更新了用户还看到旧版就是这个原因</li>
-<li><strong>client_max_body_size 太小</strong>：默认 1m，上传文件报 413。按需调大</li>
-<li><strong>暴露 Nginx 版本号</strong>：响应头 Server: nginx/1.24.0，攻击者知道你版本就能找漏洞。server_tokens off;</li>
-</ol>
-
-
-<h2 id="creative">有创意的高级玩法</h2>
-
-<h3>灰度发布 / 蓝绿部署</h3>
 <div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>直接全量发布新版本，万一有问题全站挂掉。灰度就是先放一小部分流量到新版本，观察没问题再逐步放量。</p>
+<div class="callout-title">你遇到的问题</div>
+<p>用户上传了几张 5MB 的原图，手机用户打开页面要等 10 秒，都跑光了。你想把图片自动缩小成 800px 宽，再发给用户，但你不想写图片处理的代码，也不想存两份图片。</p>
 </div>
 
-<p><strong>用途：</strong>上线新版本、新功能，降低发布风险。我做过 1% → 10% → 50% → 100% 的灰度流程，出问题秒回滚。</p>
+<p><strong>Nginx 怎么解决？</strong>用 Nginx 的 image_filter 模块，自动把大图缩小成小图，用户访问的时候才生成，还能缓存。不用改后端，不用存两份文件。</p>
 
-<pre><code class="language-nginx">upstream v1 {
-    server 10.0.0.1:8080;
-    server 10.0.0.2:8080;
+<pre><code class="language-nginx">location ~* /uploads/.*_small\.(jpg|png)$ {
+    alias /path/to/uploads/;
+    image_filter resize 800 -;  # 宽度800，高度自动
+    image_filter_jpeg_quality 85;
+    image_filter_buffer 10M;
+
+    # 缓存生成的小图
+    expires 7d;
+}</code></pre>
+
+<p>用户访问 <code>/uploads/photo.jpg</code> 就是原图，访问 <code>/uploads/photo_small.jpg</code> 就是自动缩小到 800px 宽的小图。手机端用小图，PC 端用原图，完美。</p>
+
+<!-- 场景5：想偷偷上线新版本，不想让用户看到报错 -->
+<h2 id="problem5">场景五：晚上想偷偷上线新版本，不想让用户看到报错</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你想上线新版本，但万一新版本有 bug 怎么办？用户正在付钱的时候你更新了，页面报错了，用户就跑了。你想先让 10% 的用户用新版本，没问题再全量上线。</p>
+</div>
+
+<p><strong>Nginx 怎么解决？</strong>这就是<strong>灰度发布</strong>（也叫金丝雀发布）。Nginx 按比例把流量分给旧版本和新版本，出问题随时切回去。</p>
+
+<pre><code class="language-nginx">upstream app_old {
+    server 10.0.0.1:8080;  # 旧版本
 }
-upstream v2 {
-    server 10.0.0.3:8080;  # 新版本
-    server 10.0.0.4:8080;
+upstream app_new {
+    server 10.0.0.2:8080;  # 新版本
 }
 
 server {
+    listen 80;
+    server_name www.example.com;
+
+    # 10% 的用户访问新版本
+    split_clients "$remote_addr$request_id" $app {
+        10%     app_new;
+        *       app_old;
+    }
+
     location / {
-        # 90% 走 v1，10% 走 v2
-        set $group "v1";
-        if ($request_uri ~* "/new-feature/") { set $group "v2"; }
-        proxy_pass http://$group;
+        proxy_pass http://$app;
     }
 }</code></pre>
 
-<div class="callout callout-tip">
-<div class="callout-title">按 Cookie 灰度</div>
-<p>更精细的做法：把命中灰度的用户种一个 cookie，下次还走新版本。这样用户体验一致，不会一会新一会旧。</p>
-</div>
+<p>现在 90% 的用户还是用旧版本，10% 的"幸运儿"用新版本。观察几天没问题，把比例调到 100% 就全量上线了。出问题？改回 0%，1 分钟切回旧版本。</p>
 
-<h3>A/B 测试分流</h3>
+<!-- 场景6：静态文件太多，后端服务器扛不住 -->
+<h2 id="problem6">场景六：CSS、JS、图片太多，后端服务器扛不住了</h2>
+
 <div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>产品想知道哪个版本转化率高、用户更喜欢，就跑 A/B 测试。一半用户看 A 版，一半看 B 版，对比数据。</p>
+<div class="callout-title">你遇到的问题</div>
+<p>你的网站有 100 个 JS 文件，每个用户打开要加载 2MB 的静态资源。你的后端服务器既要处理动态请求，又要发静态文件，CPU 全花在发文件上了，动态请求反而变慢了。</p>
 </div>
 
-<p><strong>用途：</strong>产品选型、UI 改版、新功能效果验证。</p>
-
-<pre><code class="language-nginx"># 按 User-Agent 或 Cookie 分流
-split_clients "$http_user_agent$request_id" $variant {
-    50.0%    A;
-    50.0%    B;
-}
-
-location / {
-    proxy_pass http://backend_$variant;
-    add_header X-Experiment $variant;  # 告诉前端走的哪个版本
-}</code></pre>
-
-<h3>图片动态处理</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>上传原图 5MB，前端要显示缩略图，难道让后端生成一堆尺寸？Nginx 直接在传输中处理，省存储省开发量。</p>
-</div>
-
-<p><strong>用途：</strong>图片站、电商、CMS，按需裁剪缩放。装了 nginx-image-filter 模块之后，前端请求 <code>/img/test.jpg!w800</code> 自动出 800px 宽的图。</p>
-
-<pre><code class="language-nginx">location ~* ^/img/(.*)!w(\d+)$ {
-    image_filter resize $2 -;
-    image_filter_jpeg_quality 85;
-    root /var/www/images;
-}</code></pre>
-
-<h3>接口 Mock / 调试</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>前后端并行开发，前端等后端接口，进度卡住。Nginx 直接返回假数据，前端先跑起来。</p>
-</div>
-
-<p><strong>用途：</strong>联调阶段、演示 demo、临时复现 bug。</p>
-
-<pre><code class="language-nginx">location /api/user/ {
-    # 后端没好之前，先返回假数据
-    default_type application/json;
-    return 200 '{"id":1,"name":"测试用户","email":"test@example.com"}';
-}</code></pre>
-
-<h3>静态资源 hash 缓存策略</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>用户反馈"更新了网站我怎么还是旧版？"——因为浏览器把 JS/CSS 缓存了。但带 hash 的文件内容一变文件名就变，可以永久缓存。</p>
-</div>
-
-<p><strong>用途：</strong>所有前端项目，解决缓存更新问题。</p>
-
-<pre><code class="language-nginx"># 带 hash 的静态资源永久缓存
-location ~* \.(js|css|png|jpg|webp|woff2?)$ {
-    expires 1y;
-    add_header Cache-Control "public, immutable";
-}
-
-# HTML 不缓存，每次都拉最新
-location ~* \.html$ {
-    expires -1;
-    add_header Cache-Control "no-cache, must-revalidate";
-}</code></pre>
-
-<h3>安全防护（基础 WAF）</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>公网暴露的服务，每天被扫各种漏洞。Nginx 做第一层拦截，挡住大部分低级攻击。</p>
-</div>
-
-<p><strong>用途：</strong>所有公网服务，基础安全防护。</p>
-
-<pre><code class="language-nginx"># 禁止访问隐藏文件
-location ~ /\. {
-    deny all;
-    return 404;
-}
-
-# 拦截常见 SQL 注入特征
-if ($query_string ~* "union.*select|information_schema|sleep\(") {
-    return 403;
-}
-
-# 只允许指定 IP 访问管理后台
-location /admin/ {
-    allow 10.0.0.0/8;
-    allow 192.168.0.0/16;
-    deny all;
-    proxy_pass http://backend;
-}</code></pre>
-
-<h3>降级兜底</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>后端服务挂了，用户看到 502 错误页，体验极差。不如直接返回一个静态"系统维护中"页面。</p>
-</div>
-
-<p><strong>用途：</strong>核心服务降级、运维窗口、故障兜底。</p>
-
-<pre><code class="language-nginx">location / {
-    proxy_pass http://backend;
-    proxy_intercept_errors on;
-    error_page 502 503 504 /fallback.html;
-}
-
-location = /fallback.html {
-    root /var/www/static;
-}</code></pre>
-
-<h3>访问日志自定义格式</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>默认日志只有状态码和大小，看不出哪里慢。加上后端耗时字段，不用翻后端日志就能定位问题。</p>
-</div>
-
-<p><strong>用途：</strong>性能排查、慢接口定位、监控告警。</p>
-
-<pre><code class="language-nginx">log_format custom '$remote_addr - $remote_user [$time_local] '
-                  '"$request" $status $body_bytes_sent '
-                  '"$http_referer" "$http_user_agent" '
-                  'rt=$request_time uct="$upstream_connect_time" '
-                  'urt="$upstream_response_time"';
-
-access_log /var/log/nginx/access.log custom;</code></pre>
-
-<h3>CORS 跨域配置</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>前后端分离，前端跑 3000 端口，后端跑 8080 端口，浏览器同源策略直接拦截。</p>
-</div>
-
-<p><strong>用途：</strong>所有前后端分离项目，不用后端再写跨域逻辑。</p>
-
-<pre><code class="language-nginx">location /api/ {
-    # 允许的源
-    add_header Access-Control-Allow-Origin $http_origin always;
-    add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
-    add_header Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With" always;
-    add_header Access-Control-Max-Age 86400 always;
-
-    # 预检请求直接返回 204
-    if ($request_method = OPTIONS) {
-        return 204;
-    }
-
-    proxy_pass http://backend;
-}</code></pre>
-
-<h3>防盗链</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>别的网站直接引用你服务器上的图片，流量全跑你这了。防盗链就是只允许本站引用。</p>
-</div>
-
-<p><strong>用途：</strong>图片站、素材站、有大量图片资源的网站。</p>
-
-<pre><code class="language-nginx"># 只允许本站和白名单站引用图片
-location ~* \.(jpg|png|webp|gif)$ {
-    valid_referers none blocked example.com *.example.com github.io;
-    if ($invalid_referer) {
-        return 403;
-        # 或者返回一张"防盗链"占位图
-        # rewrite ^ /anti-hotlink.jpg break;
-    }
-}</code></pre>
-
-<h3>大文件分片上传</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>默认 Nginx 把整个请求缓冲完才转发给后端，10G 文件直接把磁盘写满。</p>
-</div>
-
-<p><strong>用途：</strong>网盘、视频上传、大文件管理系统。</p>
-
-<pre><code class="language-nginx">http {
-    client_body_buffer_size 10M;      # 10M 以内直接走内存
-    client_max_body_size 10G;         # 最大 10G
-    client_body_temp_path /data/nginx/tmp 1 2;  # 放大盘
-    proxy_request_buffering off;       # 流式转发，不缓冲整个请求
-}</code></pre>
-
-<h3>SSE 流式响应</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>Nginx 默认会把后端响应缓冲完再发给客户端，大模型输出一个字就发一个字的场景，用户得等半天。</p>
-</div>
-
-<p><strong>用途：</strong>AI 大模型输出、实时日志推送、股票行情、聊天机器人。</p>
-
-<pre><code class="language-nginx">location /sse {
-    proxy_pass http://backend;
-    proxy_http_version 1.1;
-
-    # 关键：关掉所有缓冲
-    proxy_buffering off;
-    proxy_cache off;
-    gzip off;
-
-    # SSE 专用头
-    proxy_set_header Connection "";
-    chunked_transfer_encoding on;
-
-    # 长连接超时
-    proxy_read_timeout 1h;
-}</code></pre>
-
-<h3>超时调优对照表</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>默认 60 秒超时，生产环境要么太慢要么太快。不同场景参数不一样。</p>
-</div>
-
-<p><strong>用途：</strong>性能调优、故障快速失败。</p>
-
-<table>
-<thead><tr><th>参数</th><th>默认值</th><th>建议值</th><th>说明</th></tr></thead>
-<tbody>
-<tr><td>proxy_connect_timeout</td><td>60s</td><td>3s</td><td>连后端超时，别等太久</td></tr>
-<tr><td>proxy_send_timeout</td><td>60s</td><td>30s</td><td>发请求给后端超时</td></tr>
-<tr><td>proxy_read_timeout</td><td>60s</td><td>60s（普通）/ 1h（长连接）</td><td>等后端返回超时</td></tr>
-<tr><td>keepalive_timeout</td><td>75s</td><td>65s</td><td>客户端 keepalive</td></tr>
-<tr><td>send_timeout</td><td>60s</td><td>30s</td><td>发响应给客户端超时</td></tr>
-</tbody>
-</table>
-
-<h3>健康检查</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>后端节点挂了，Nginx 还往那发请求，用户就看到错误。健康检查就是自动摘掉挂掉的节点。</p>
-</div>
-
-<p><strong>用途：</strong>多实例部署、高可用、自动故障转移。</p>
-
-<pre><code class="language-nginx">upstream backend {
-    server 10.0.0.1:8080 max_fails=3 fail_timeout=30s;
-    server 10.0.0.2:8080 max_fails=3 fail_timeout=30s;
-    server 10.0.0.3:8080 backup;  # 备用节点，主节点全挂才上
-    keepalive 32;
-}</code></pre>
-
-<p><code>max_fails=3</code>：连续失败 3 次就摘下来。<code>fail_timeout=30s</code>：摘下来 30 秒后再试。</p>
-
-<h3>动态上游（服务发现）</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>微服务几十上百个实例，每次扩缩容都改 Nginx 配置 reload 太麻烦。服务发现自动拉节点列表。</p>
-</div>
-
-<p><strong>用途：</strong>微服务架构、K8s  ingress、自动扩缩容。</p>
-
-<pre><code class="language-nginx">upstream backend {
-    zone backend 64k;  # 共享内存，支持运行时改
-    server 127.0.0.1:81;
-    # 实际用 nginx-upsync-module 从 Consul 拉节点
-}</code></pre>
-
-<h3>错误页面美化</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>Nginx 默认 404 页面太丑，还暴露 Nginx 版本号。换成自己的品牌页，还能加个返回首页按钮。</p>
-</div>
-
-<p><strong>用途：</strong>所有公网网站，提升用户体验。</p>
-
-<pre><code class="language-nginx">error_page 404 /404.html;
-error_page 500 502 503 504 /50x.html;
-
-location = /50x.html {
-    root /usr/share/nginx/html;
-    internal;  # 只能内部跳转，不能直接访问
-}</code></pre>
-
-<h3>静态站点部署</h3>
-<div class="callout callout-info">
-<div class="callout-title">背景</div>
-<p>博客、文档站、纯前端项目，不需要后端，直接 Nginx 托管静态文件。</p>
-</div>
-
-<p><strong>用途：</strong>个人博客、技术文档、产品官网、演示站点。</p>
+<p><strong>Nginx 怎么解决？</strong>静态文件直接让 Nginx 发，根本不经过后端。Nginx 发静态文件比后端快 10 倍，还能开 gzip 压缩。</p>
 
 <pre><code class="language-nginx">server {
     listen 80;
-    server_name blog.example.com;
-    root /var/www/blog;
-    index index.html;
+    server_name www.example.com;
 
-    # 干净 URL：/about -> /about.html
-    location / {
-        try_files $uri $uri.html $uri/ =404;
+    # 静态文件，直接让 Nginx 发
+    location /static/ {
+        root /path/to/your/project;
+        expires 30d;  # 缓存30天
+        add_header Cache-Control "public, immutable";
     }
 
-    # gzip 压缩
-    gzip on;
-    gzip_types text/css application/javascript image/svg+xml;
+    # 动态请求，才转发给后端
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+    }
 }</code></pre>
 
-<h2 id="faq">FAQ</h2>
+<p>现在 CSS、JS、图片都由 Nginx 直接发，后端只处理登录、下单这些动态请求，服务器压力瞬间小了一大半。</p>
 
-<h3>Nginx 怎么查看当前请求走的是哪个 location？</h3>
-<p>开 debug 日志，或者在每个 location 里配不同的 access_log 文件。<code>nginx -T</code> 能看完整配置，配合 curl -v 测试。</p>
+<!-- 场景7：想限制一下恶意爬虫 -->
+<h2 id="problem7">场景七：有人恶意爬你的网站，把你服务器流量跑满了</h2>
 
-<h3>proxy_buffering 什么时候关？</h3>
-<p>流式响应（SSE、视频流、大文件下载）要关。关了之后 Nginx 不缓冲后端响应，直接转发给客户端，延迟低。但后端会被慢客户端拖住。</p>
-
-<h3>keepalive_timeout 设多少合适？</h3>
-<p>65 秒。太长了占连接资源，太短了频繁建连。上游 keepalive 是另一回事——upstream 块里 keepalive 32 是复用后端连接的数量。</p>
-
-<h3>Nginx 能做正向代理吗？</h3>
-<p>1.31.0 以后原生支持。之前要第三方模块。但说实话正向代理场景用 Squid 或者 dante 更合适。</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你发现日志里有个 IP 每秒请求 100 次，在爬你的商品数据，服务器带宽都被他一个人占了。你想封掉他，但不想一个个封 IP。</p>
 </div>
+
+<p><strong>Nginx 怎么解决？</strong>用 limit_req 模块，限制每个 IP 的请求频率，超过的直接拒绝。</p>
+
+<pre><code class="language-nginx">http {
+    # 定义限流区域：每个IP最多每秒10个请求
+    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+    server {
+        location /api/ {
+            limit_req zone=api_limit burst=20 nodelay;
+            # 超过频率的，返回429错误
+            limit_req_status 429;
+
+            proxy_pass http://backend;
+        }
+    }
+}</code></pre>
+
+<p>现在普通用户正常访问没问题，爬虫一秒钟发 100 个请求？直接被拒绝。不用改后端，Nginx 直接帮你挡掉了。</p>
+
+<!-- 场景8：想做个简单的A/B测试 -->
+<h2 id="problem8">场景八：想测试两个版本的页面，哪个转化率更高</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你做了两个版本的首页，一个是红色按钮，一个是绿色按钮。你不知道哪个点击量更高，想让一半用户看红色，一半看绿色，统计一下数据。</p>
+</div>
+
+<p><strong>Nginx 怎么解决？</strong>和灰度发布类似，Nginx 把请求分成两组，分别转发给两个版本的后端。</p>
+
+<pre><code class="language-nginx">upstream app_red {
+    server 10.0.0.1:8080;  # 红色按钮版本
+}
+upstream app_green {
+    server 10.0.0.2:8080;  # 绿色按钮版本
+}
+
+server {
+    listen 80;
+    server_name www.example.com;
+
+    # 按用户ID哈希，同一个用户总是看到同一个版本
+    split_clients "$cookie_user_id" $app_version {
+        50%     app_red;
+        *       app_green;
+    }
+
+    location / {
+        proxy_pass http://$app_version;
+    }
+}</code></pre>
+
+<p>现在 50% 的用户看红色按钮，50% 看绿色按钮。统计一周数据，哪个转化率高就用哪个。</p>
+
+<!-- 场景9：想做个维护页面 -->
+<h2 id="problem9">场景九：网站要维护，想给用户看个友好的提示</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你要更新数据库，预计 10 分钟。用户现在访问的话，会看到一堆报错的页面，体验很差。你想显示一个"网站维护中，10分钟后回来"的页面。</p>
+</div>
+
+<p><strong>Nginx 怎么解决？</strong>一个 maintenance 开关就行，不用改后端代码。</p>
+
+<pre><code class="language-nginx">server {
+    listen 80;
+    server_name www.example.com;
+
+    # 维护开关：存在 maintenance.html 就显示维护页面
+    if (-f $document_root/maintenance.html) {
+        return 503;
+    }
+
+    error_page 503 /maintenance.html;
+    location = /maintenance.html {
+        root /path/to/your/project;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+    }
+}</code></pre>
+
+<p>维护的时候，在项目根目录放一个 maintenance.html 文件，所有用户访问都看到"网站维护中"。维护完了，删掉这个文件，自动恢复正常。</p>
+
+<!-- 常用配置参数 -->
+<h2 id="common-config">常用配置参数速查</h2>
+
+<table>
+<thead><tr><th>参数</th><th>作用</th><th>什么时候用</th></tr></thead>
+<tbody>
+<tr><td><code>proxy_pass</code></td><td>把请求转发给后端</td><td>反向代理</td></tr>
+<tr><td><code>upstream</code></td><td>定义一组后端服务器</td><td>负载均衡</td></tr>
+<tr><td><code>server_name</code></td><td>匹配域名</td><td>一个 Nginx 跑多个网站</td></tr>
+<tr><td><code>location</code></td><td>匹配 URL 路径</td><td>不同路径用不同处理方式</td></tr>
+<tr><td><code>gzip on</code></td><td>开启压缩</td><td>减少传输体积，加快加载</td></tr>
+<tr><td><code>expires 30d</code></td><td>设置缓存</td><td>静态文件让浏览器缓存</td></tr>
+<tr><td><code>limit_req</code></td><td>限流</td><td>防止恶意爬虫</td></tr>
+<tr><td><code>return 301</code></td><td>永久跳转</td><td>HTTP 跳 HTTPS</td></tr>
+</tbody>
+</table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>改完配置一定要测试：</strong><code>nginx -t</code> 测试语法，没问题再 <code>nginx -s reload</code> 重载。改坏了网站就挂了。</li>
+<li><strong>静态文件 location 要放在前面：</strong>Nginx 是按优先级匹配的，把 <code>location /static/</code> 放在 <code>location /</code> 前面。</li>
+<li><strong>gzip 不要压图片视频：</strong>图片视频本身已经是压缩格式了，再压只会浪费 CPU。</li>
+<li><strong>不要把 access_log 放在 RAM 盘：</strong>日志很大，放系统盘就行，别放内存盘把内存占满了。</li>
+</ul>
+</div>
+
+                    </div>
                 </article>
 <nav class="article-nav">
 <a class="nav-prev" href="../../nginx/install/index.html"><span class="nav-label">← 上一篇</span><span class="nav-title">源码安装</span></a>
