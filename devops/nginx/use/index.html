@@ -262,6 +262,124 @@ location = /mirror {
 <li><strong>暴露 Nginx 版本号</strong>：响应头 Server: nginx/1.24.0，攻击者知道你版本就能找漏洞。server_tokens off;</li>
 </ol>
 
+
+<h2 id="creative">有创意的高级玩法</h2>
+
+<h3>灰度发布 / 蓝绿部署</h3>
+<p>用 Nginx 做流量切分，按比例把新版本放出去。我做过 1% → 10% → 50% → 100% 的灰度流程，出问题秒回滚。</p>
+
+<pre><code class="language-nginx">upstream v1 {
+    server 10.0.0.1:8080;
+    server 10.0.0.2:8080;
+}
+upstream v2 {
+    server 10.0.0.3:8080;  # 新版本
+    server 10.0.0.4:8080;
+}
+
+server {
+    location / {
+        # 90% 走 v1，10% 走 v2
+        set $group "v1";
+        if ($request_uri ~* "/new-feature/") { set $group "v2"; }
+        proxy_pass http://$group;
+    }
+}</code></pre>
+
+<div class="callout callout-tip">
+<div class="callout-title">按 Cookie 灰度</div>
+<p>更精细的做法：把命中灰度的用户种一个 cookie，下次还走新版本。这样用户体验一致，不会一会新一会旧。</p>
+</div>
+
+<h3>A/B 测试分流</h3>
+<pre><code class="language-nginx"># 按 User-Agent 或 Cookie 分流
+split_clients "$http_user_agent$request_id" $variant {
+    50.0%    A;
+    50.0%    B;
+}
+
+location / {
+    proxy_pass http://backend_$variant;
+    add_header X-Experiment $variant;  # 告诉前端走的哪个版本
+}</code></pre>
+
+<h3>图片动态处理</h3>
+<p>装了 nginx-image-filter 模块之后，Nginx 直接在传输中裁剪、压缩、转 WebP。不用后端介入，前端请求 <code>/img/test.jpg!w800</code> 自动出 800px 宽的图。</p>
+
+<pre><code class="language-nginx">location ~* ^/img/(.*)!w(\d+)$ {
+    image_filter resize $2 -;
+    image_filter_jpeg_quality 85;
+    root /var/www/images;
+}</code></pre>
+
+<h3>接口 Mock / 调试</h3>
+<p>前端联调时，后端接口没好，Nginx 直接返回 mock 数据：</p>
+
+<pre><code class="language-nginx">location /api/user/ {
+    # 后端没好之前，先返回假数据
+    default_type application/json;
+    return 200 '{"id":1,"name":"测试用户","email":"test@example.com"}';
+}</code></pre>
+
+<h3>静态资源 hash 缓存策略</h3>
+<p>带 hash 的 JS/CSS 永久缓存，HTML 不缓存，解决"更新了用户还看到旧版"的问题：</p>
+
+<pre><code class="language-nginx"># 带 hash 的静态资源永久缓存
+location ~* \.(js|css|png|jpg|webp|woff2?)$ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+
+# HTML 不缓存，每次都拉最新
+location ~* \.html$ {
+    expires -1;
+    add_header Cache-Control "no-cache, must-revalidate";
+}</code></pre>
+
+<h3>安全防护（基础 WAF）</h3>
+<pre><code class="language-nginx"># 禁止访问隐藏文件
+location ~ /\. {
+    deny all;
+    return 404;
+}
+
+# 拦截常见 SQL 注入特征
+if ($query_string ~* "union.*select|information_schema|sleep\(") {
+    return 403;
+}
+
+# 只允许指定 IP 访问管理后台
+location /admin/ {
+    allow 10.0.0.0/8;
+    allow 192.168.0.0/16;
+    deny all;
+    proxy_pass http://backend;
+}</code></pre>
+
+<h3>降级兜底</h3>
+<p>后端挂了怎么办？Nginx 直接返回静态兜底页面，用户体验不至于 502：</p>
+
+<pre><code class="language-nginx">location / {
+    proxy_pass http://backend;
+    proxy_intercept_errors on;
+    error_page 502 503 504 /fallback.html;
+}
+
+location = /fallback.html {
+    root /var/www/static;
+}</code></pre>
+
+<h3>访问日志自定义格式</h3>
+<pre><code class="language-nginx">log_format custom '$remote_addr - $remote_user [$time_local] '
+                  '"$request" $status $body_bytes_sent '
+                  '"$http_referer" "$http_user_agent" '
+                  'rt=$request_time uct="$upstream_connect_time" '
+                  'urt="$upstream_response_time"';
+
+access_log /var/log/nginx/access.log custom;</code></pre>
+
+<p>加上 <code>$upstream_response_time</code> 就能直接看到后端耗时，不用再去后端日志里翻。</p>
+
 <h2 id="faq">FAQ</h2>
 
 <h3>Nginx 怎么查看当前请求走的是哪个 location？</h3>
