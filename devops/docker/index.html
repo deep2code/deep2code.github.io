@@ -82,328 +82,113 @@
             <main id="body-content">
 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Docker 29</h1>
+                        <h1 class="article-title">Docker 实战：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Docker</span>
+                            <span class="meta-item">🏷️ Docker 入门</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2 id="overview">你什么时候会需要 Docker？</h2>
-<p>你在自己电脑上写的代码，跑到同事电脑上就跑不起来了。"我这明明是好的啊！"——这是每个程序员都喊过的话。</p>
+
+<p>你在自己电脑上写的代码，跑到同事电脑上就跑不起来了。"我这明明是好的啊！"——每个程序员都喊过这句话。</p>
 <p>或者：你要部署个新服务，光装依赖就装了一下午，还遇到各种版本冲突。部署到服务器上又出问题，来回折腾了一整天。</p>
-<p>这些问题，Docker 就是为解决这个而生的。它不是虚拟机，是用 Linux namespace 和 cgroups 搞出来的轻量级隔离。2026 年主流版本是 Docker 27.x，BuildKit 默认开启。</p>
+<p>这些问题，Docker 就是为解决这个而生的。这篇不讲理论，就讲你真的会遇到的问题，以及怎么用 Docker 解决。</p>
 
-<h2 id="install">装一个</h2>
-<p>macOS 直接下 Docker Desktop，省心。Linux 上用 yum/apt：</p>
-<pre><code class="language-bash"># CentOS
-yum install -y docker
-systemctl start docker
-systemctl enable docker
+<!-- 场景1：我这明明是好的啊 -->
+<h2 id="problem1">场景一：我这明明是好的啊！</h2>
 
-# 国内拉镜像慢，配个加速器
-cat > /etc/docker/daemon.json <<'EOF'
-{
-  "registry-mirrors": ["https://docker.m.daocloud.io"],
-  "live-restore": true
-}
-EOF
-systemctl restart docker</code></pre>
-
-<div class="callout callout-warning">
-<div class="callout-title">国内拉镜像超时怎么办</div>
-<p>这个问题我被问了无数次。Docker Hub 国内直连经常 TLS 握手超时，配个加速器就好。注意 2024 年官方的 docker-cn.com 镜像站关了，现在用 daocloud 或者阿里云的加速器，地址填到 <code>registry-mirrors</code> 数组里。</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你在自己电脑上写了个 Python 服务，跑的好好的。你把代码发给同事，他一跑就报错："依赖找不到！"你们俩 Python 版本不一样，你是 3.10，他是 3.8。折腾了一下午才弄好环境。</p>
 </div>
 
-<h2 id="version">版本选哪个</h2>
-<table>
-<thead><tr><th>版本线</th><th>状态</th><th>我的建议</th></tr></thead>
-<tbody>
-<tr><td>29.x</td><td>当前稳定（29.7.2 @ 2026-08）</td><td>生产推荐</td></tr>
-<tr><td>28.x</td><td>2026-05 已停止支持</td><td>赶紧升 29.x</td></tr>
-<tr><td>25.0.x</td><td>维护到 2026-12</td><td>老系统，规划升级</td></tr>
-</tbody>
-</table>
+<p><strong>Docker 怎么解决？</strong>把你的代码和环境一起打包成一个镜像，这个镜像在任何地方跑都是一样的。你电脑上跑的好好的，同事电脑上、服务器上，跑出来一模一样。</p>
 
-<h2 id="arch">Docker 到底是什么：底层原理</h2>
-<p>很多人天天用 Docker，但说不清容器和虚拟机的区别。我画个图你就明白了：</p>
+<pre><code class="language-dockerfile"># Dockerfile：把你的项目和环境打包
+FROM python:3.10-slim
 
-<div class="mermaid">
-graph TB
-    subgraph 容器
-        C1[容器1<br/>应用+依赖]
-        C2[容器2<br/>应用+依赖]
-    end
-    subgraph 共享内核
-        KR[Linux 内核<br/>namespace + cgroups]
-    end
-    subgraph 虚拟机
-        V1[Guest OS]
-        V2[Guest OS]
-        HV[Hypervisor]
-    end
-    KR --> C1
-    KR --> C2
-    HV --> V1
-    HV --> V2
-    style KR fill:#c8e6c9
-    style HV fill:#fff9c4
-</div>
-
-<p>虚拟机要把整个操作系统装进去，每个 VM 有自己的内核，重得很。容器共享宿主机的内核，只是用 namespace 把进程隔离开，用 cgroups 限制资源。所以容器启动是秒级的，镜像比 VM 小一两个数量级。</p>
-
-<div class="echart-container" id="docker-vs-vm-compare" style="height: 320px; margin: 20px 0;"></div>
-
-<h3 id="namespaces">Namespace：隔离的核心</h3>
-<p>Docker 用了 6 种 namespace，把容器跟宿主机隔开：</p>
-
-<table>
-<thead><tr><th>Namespace</th><th>隔离什么</th><th>不隔离会怎样</th></tr></thead>
-<tbody>
-<tr><td>PID</td><td>进程 ID</td><td>容器能看到宿主机所有进程</td></tr>
-<tr><td>Network</td><td>网络栈</td><td>容器跟宿主机共享 IP 和端口</td></tr>
-<tr><td>Mount</td><td>文件系统挂载点</td><td>容器能看到宿主机整个文件系统</td></tr>
-<tr><td>UTS</td><td>主机名</td><td>容器和宿主机 hostname 一样</td></tr>
-<tr><td>IPC</td><td>进程间通信</td><td>容器间共享内存</td></tr>
-<tr><td>User</td><td>用户和组 ID</td><td>容器内 root = 宿主机 root</td></tr>
-</tbody>
-</table>
-
-<h3 id="cgroups">Cgroups：资源限制</h3>
-<p>Namespace 负责"隔离开"，Cgroups 负责"限制住"。不给内存限制的话，一个容器把内存吃满，整个宿主机就 OOM 了。</p>
-
-<pre><code class="language-bash"># 限制 CPU 和内存
-docker run -d --cpus="1.5" --memory="512m" nginx
-
-# --cpus：最多用 1.5 个核
-# --memory：最多用 512MB，超了 OOM Killer 直接杀进程</code></pre>
-
-<div class="callout callout-danger">
-<div class="callout-title">不给内存限制的教训</div>
-<p>我早期踩过一个坑：一个 Java 容器没设内存限制，JVM 以为自己有宿主机全部内存，堆设得很大，结果把宿主机内存吃满，OOM Killer 把 Docker daemon 杀了，所有容器全挂。从那以后我所有容器都设 <code>--memory</code> 限制，JVM 启动参数也跟着调 <code>-Xmx</code>。</p>
-</div>
-
-<h3 id="overlayfs">镜像层：Copy-on-Write</h3>
-<p>Docker 镜像是分层的，每层只读，多个容器共享相同的层。这就是为什么拉镜像快、占空间少——公共层只存一份。</p>
-
-<div class="mermaid">
-graph TB
-    subgraph 镜像层
-        L1[基础层<br/>alpine rootfs]
-        L2[依赖层<br/>apt install ...]
-        L3[应用层<br/>COPY app]
-    end
-    subgraph 容器
-        C[可写层<br/>容器运行时修改]
-    end
-    L1 --> L2 --> L3 --> C
-    style C fill:#fedd00,stroke:#333
-</div>
-
-<p>容器启动的时候，在镜像层上面加一个可写层。修改文件的时候，先把文件从只读层复制到可写层（Copy-on-Write），然后改副本。所以容器删除了，镜像层不受影响，多个容器共享。</p>
-
-<h2 id="commands">常用命令速查</h2>
-
-<h3 id="container-cmd">容器管理</h3>
-<pre><code class="language-bash">docker ps              # 看运行中的
-docker ps -a           # 看所有（包括停了的）
-docker stop $(docker ps -q)   # 停所有运行中的
-docker rm $(docker ps -a -q) # 删所有停了的
-
-# 进入正在运行的容器
-docker exec -it <container_id> /bin/bash
-
-# 看日志
-docker logs -f <container_id>
-docker logs --tail 100 <container_id>
-
-# 进入容器 vs 在容器里执行
-# docker run -it：容器前台跑，命令结束容器就停了
-# docker exec -it：容器已经在跑了，进去开个新终端</code></pre>
-
-<h3 id="image-cmd">镜像管理</h3>
-<pre><code class="language-bash">docker images                    # 列镜像
-docker rmi <image_id>             # 删镜像
-docker image prune               # 删所有没在用的镜像
-
-# 清理悬空镜像（<none> 标签的）
-docker images | grep none | awk '{print $3}' | xargs docker rmi
-
-# 看镜像怎么构建出来的
-docker history --no-trunc nginx</code></pre>
-
-<h3 id="volume-cmd">卷管理</h3>
-<pre><code class="language-bash">docker volume ls                 # 列卷
-docker volume create mydata       # 建卷
-docker volume prune               # 清没用的卷</code></pre>
-
-<h2 id="dockerfile">Dockerfile 怎么写</h2>
-<p>Dockerfile 写得好不好，直接决定镜像大小和构建速度。我踩过很多坑，总结几条经验。</p>
-
-<h3 id="multistage">多阶段构建：从 1.2GB 到 20MB</h3>
-<p>这是最重要的优化。编译需要编译工具，但运行时不需要。把编译和运行分开：</p>
-
-<pre><code class="language-dockerfile"># 第一阶段：编译
-FROM golang:1.26 AS builder
 WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 COPY . .
-RUN go build -o /app/server .
 
-# 第二阶段：只复制二进制到极简镜像
-FROM gcr.io/distroless/static
-COPY --from=builder /app/server /server
-EXPOSE 8080
-ENTRYPOINT ["/server"]</code></pre>
+CMD ["python", "main.py"]</code></pre>
+
+<pre><code class="language-bash"># 打包成镜像
+docker build -t myapp .
+
+# 跑起来，不管在哪都是一样的环境
+docker run -p 8080:8080 myapp</code></pre>
+
+<p>现在你把镜像发给同事，他直接跑就行，不用装 Python，不用装依赖，什么都不用管。再也不用说"我这明明是好的啊"了。</p>
+
+<!-- 场景2：部署服务太麻烦 -->
+<h2 id="problem2">场景二：部署个新服务，光装环境就装了一下午</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你要在服务器上部署一个 MySQL、一个 Redis、一个你的应用。你要先装 MySQL，配配置，启动；再装 Redis，配密码，启动；再装你的应用，配环境变量。一台服务器装一下午，换台服务器又要再来一遍。</p>
+</div>
+
+<p><strong>Docker 怎么解决？</strong>所有服务都跑在容器里，一条命令就能起一个服务。</p>
+
+<pre><code class="language-bash"># 启动 MySQL，一条命令
+docker run -d --name mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0
+
+# 启动 Redis，一条命令
+docker run -d --name redis -p 6379:6379 redis:7
+
+# 启动你的应用，一条命令
+docker run -d --name myapp -p 8080:8080 myapp</code></pre>
+
+<p>现在部署一个服务只要一条命令，换台服务器？把这三条命令复制过去就行，5 分钟搞定。</p>
+
+<!-- 场景3：测试环境和线上环境不一致 -->
+<h2 id="problem3">场景三：测试环境好好的，上线就挂了</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>测试环境你装的 MySQL 8.0，线上服务器是 MySQL 5.7。测试的时候好好的，上线就报语法错误。你还得在本地重新装个 5.7 来调试，折腾死了。</p>
+</div>
+
+<p><strong>Docker 怎么解决？</strong>测试环境和线上环境用同一个 Docker 镜像，版本完全一样。测试的时候跑的就是 8.0，线上跑的也是 8.0，不会有版本不一致的问题。</p>
+
+<table>
+<thead><tr><th>概念</th><th>通俗理解</th></tr></thead>
+<tbody>
+<tr><td>镜像（Image）</td><td>安装包：把程序和环境打包好的文件</td></tr>
+<tr><td>容器（Container）</td><td>运行起来的程序：用安装包装完跑起来的进程</td></tr>
+<tr><td>Dockerfile</td><td>安装脚本：告诉你怎么打包成镜像</td></tr>
+<tr><td>仓库（Registry）</td><td>应用商店：存镜像的地方，比如 Docker Hub</td></tr>
+</tbody>
+</table>
+
+<!-- 场景4：服务挂了要自动重启 -->
+<h2 id="problem4">场景四：服务挂了，要手动重启</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的应用半夜崩溃了，第二天用户投诉了你才发现。你想：能不能服务挂了自动重启？</p>
+</div>
+
+<p><strong>Docker 怎么解决？</strong>加个 <code>--restart=always</code> 参数，容器挂了自动重启。</p>
+
+<pre><code class="language-bash"># 服务挂了自动重启，开机也自动启动
+docker run -d --restart=always --name myapp -p 8080:8080 myapp</code></pre>
+
+<p>现在服务崩了，Docker 自动帮你重启，不用你半夜爬起来手动操作了。</p>
 
 <div class="callout callout-tip">
-<div class="callout-title">效果有多明显</div>
-<p>上面这个 Dockerfile，最终镜像大概 20MB。如果不用多阶段，直接在 golang 镜像里跑，镜像 1.2GB。差距 60 倍。我现在所有 Go 项目都用这个模式，CI 构建快、推送快、拉取快。</p>
-</div>
-
-<div class="echart-container" id="docker-multistage-compare" style="height: 300px; margin: 20px 0;"></div>
-
-<h3 id="dockerfile-tips">Dockerfile 写法规避</h3>
-<ol>
-<li><strong>基础镜像选小的</strong>：alpine > slim > debian。alpine 用 musl libc，5MB 左右。但有些 C 扩展编译不了，那就用 slim</li>
-<li><strong>COPY 顺序要注意缓存</strong>：先 COPY 依赖文件（go.mod / requirements.txt），下载依赖，再 COPY 代码。这样代码变了不用重新下依赖</li>
-<li><strong>合并 RUN</strong>：每多一行 RUN 就多一层，<code>apt-get update && apt-get install -y xxx && rm -rf /var/lib/apt/lists/*</code> 写一行</li>
-<li><strong>用 .dockerignore</strong>：把 .git、node_modules、.env 排除掉，不然构建上下文传一大堆没用的文件</li>
-<li><strong>别用 latest 标签</strong>：写死版本号 <code>nginx:1.25</code>，不然今天和明天拉的镜像不一样，出了问题没法复现</li>
-</ol>
-
-<h2 id="compose">Docker Compose：多容器编排</h2>
-<p>一个项目有 Web、API、数据库、缓存，手动 docker run 太麻烦。Compose 用一个 yaml 文件管理所有服务。注意 v2 已经没有 <code>version</code> 字段了，直接写 services：</p>
-
-<pre><code class="language-yaml">services:
-  web:
-    image: nginx:alpine
-    ports:
-      - "8080:80"
-    depends_on:
-      - api
-
-  api:
-    build: ./api
-    environment:
-      - DB_HOST=db
-    deploy:
-      replicas: 3
-      resources:
-        limits:
-          memory: 512M
-
-  db:
-    image: postgres:16
-    volumes:
-      - db_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_PASSWORD: secret
-
-volumes:
-  db_data:</code></pre>
-
-<p>启动就一行：<code>docker compose up -d</code>。停掉：<code>docker compose down</code>。开发环境用这个比手动管方便太多。</p>
-
-<h2 id="registry">私有镜像仓库</h2>
-<p>公司内部镜像总不能推到 Docker Hub 吧。搭个私有 Registry 很简单：</p>
-
-<pre><code class="language-bash">docker run -d -p 5000:5000 --restart=always \
-  -v /opt/registry:/var/lib/registry \
-  registry:2
-
-# 打标签推上去
-docker tag myapp:latest myregistry:5000/myapp:v1
-docker push myregistry:5000/myapp:v1
-
-# 默认 Registry 走 HTTP，Docker daemon 要配 insecure
-# /etc/docker/daemon.json:
-# { "insecure-registries": ["myregistry:5000"] }</code></pre>
-
-<p>生产环境我推荐用 <strong>Harbor</strong> 而不是裸 Registry——Harbor 有 UI、有 RBAC、有镜像扫描、有复制。裸 Registry 就是个存储桶，啥功能都没有。</p>
-
-<h2 id="network">网络模式</h2>
-<table>
-<thead><tr><th>模式</th><th>原理</th><th>性能</th><th>什么时候用</th></tr></thead>
-<tbody>
-<tr><td>bridge（默认）</td><td>独立网络栈，通过 docker0 通信</td><td>中等</td><td>大多数场景</td></tr>
-<tr><td>host</td><td>共享宿主机网络</td><td>最高</td><td>高性能网络，端口不冲突时</td></tr>
-<tr><td>none</td><td>只有 loopback</td><td>—</td><td>完全隔离的离线任务</td></tr>
-<tr><td>自定义 bridge</td><td>类似默认 bridge 但有 DNS</td><td>中等</td><td>多容器编排，用容器名互访</td></tr>
-</tbody>
-</table>
-
-<p>我在生产环境一般用自定义 bridge，服务之间直接用容器名通信，不用管 IP 变没变。默认 bridge 没有 DNS，只能用 IP，容器重启 IP 变了就找不到了。</p>
-
-<h2 id="security">2026 年的安全提醒</h2>
-<p>Docker 这几年出了几个比较严重的 CVE，特别是容器逃逸类的。几个我知道的：</p>
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>CVE-2026-41567</strong>：docker cp 解压恶意归档可以逃逸到宿主机 root。29.5.1 修了</li>
-<li><strong>CVE-2026-41568</strong>：docker cp 挂载竞态，可以在宿主机任意路径创建文件。也是 29.5.1 修的</li>
-</ul>
-
-<div class="callout callout-warning">
-<div class="callout-title">安全建议</div>
-<ul>
-<li>别用 <code>--privileged</code>，除非真的需要。特权容器等于把宿主机 root 交出去了</li>
-<li>Dockerfile 里加 <code>USER appuser</code>，别用 root 跑应用</li>
-<li>基础镜像用官方的、签名验证过的，别随便用不知名的第三方镜像</li>
-<li>及时升级 Docker Engine，29.5.1 以下的版本有逃逸漏洞</li>
+<li><strong>不要把数据存在容器里：</strong>容器删了数据就没了，要用 volume 挂载出来。</li>
+<li><strong>镜像不要太大：</strong>用 alpine 或者 slim 版本，能小一半。多阶段构建也能减体积。</li>
+<li><strong>不要把密码写在 Dockerfile 里：</strong>用环境变量或者 secrets。</li>
+<li><strong>不要用 latest 标签：</strong>版本不固定，下次拉镜像可能就变了，要指定具体版本号。</li>
 </ul>
 </div>
 
-<h2 id="alternatives">Docker 不是唯一选择</h2>
-<table>
-<thead><tr><th>工具</th><th>特点</th><th>什么时候选</th></tr></thead>
-<tbody>
-<tr><td>Docker</td><td>全家桶，最流行</td><td>大多数场景，开发和 CI/CD</td></tr>
-<tr><td>Podman</td><td>无 daemon，Rootless</td><td>安全敏感环境，K8s 生态</td></tr>
-<tr><td>containerd</td><td>轻量运行时</td><td>K8s 节点用的就是这个</td></tr>
-<tr><td>Kaniko</td><td>K8s 里构建镜像</td><td>CI/CD 不需要装 Docker daemon</td></tr>
-</tbody>
-</table>
-
-<p>K8s 底层用的就是 containerd，不是 Docker。所以很多人以为 K8s = Docker，其实不是。K8s 只是用 OCI 标准，Docker 和 containerd 都是实现。</p>
-
-<h2 id="pitfalls">我踩过的坑</h2>
-<ol>
-<li><strong>数据存容器里</strong>：容器删了数据就没了。所有有状态的数据一定要挂 volume，容器本身是临时的</li>
-<li><strong>没设内存限制</strong>：前面说了，OOM 把整个宿主机搞挂</li>
-<li><strong>用 latest 标签</strong>：今天构建的和明天构建的 latest 不是同一个镜像，出了问题回滚都不知道回哪个版本</li>
-<li><strong>日志写文件</strong>：应用把日志写到容器内文件，容器删了日志没了。正确做法是输出到 stdout/stderr，Docker 的 json-file driver 自动收集</li>
-<li><strong>构建上下文太大</strong>：忘了写 .dockerignore，把 node_modules（几个 G）全传上去，构建慢得要死</li>
-<li><strong>特权容器</strong>：图省事加了 --privileged，等于把宿主机内核暴露给容器了。能不用就不用，用 --cap-add 加特定能力</li>
-</ol>
-
-<h2 id="faq">FAQ</h2>
-
-<h3>容器和虚拟机到底有啥区别？</h3>
-<p>虚拟机每个有自己的内核，重，启动分钟级。容器共享宿主机内核，轻，启动秒级。容器不是虚拟化硬件，是虚拟化操作系统。你可以理解成"沙盒化的进程"，比 VM 快但隔离性弱一些。</p>
-
-<h3>Docker Desktop 和 Engine 有什么区别？</h3>
-<p>Docker Engine 是服务端，跑在 Linux 上。Docker Desktop 是给 Mac/Windows 用的桌面应用，里面跑了个 Linux VM，VM 里装了 Engine。Mac 上跑 Docker 其实就是跑虚拟机里的 Linux，这就是为什么 Mac 上 Docker 比 Linux 上慢——多了一层虚拟化。</p>
-
-<h3>怎么减小镜像体积？</h3>
-<p>多阶段构建是第一招。然后选小基础镜像（alpine 或 distroless），合并 RUN 清理缓存，用 .dockerignore。我一般把一个 Go 服务从 1.2GB 压到 20MB 左右。</p>
-
-<h3>Docker 和 K8s 是什么关系？</h3>
-<p>Docker 是容器运行时，K8s 是容器编排系统。K8s 管一堆机器上的容器怎么调度、怎么扩容、怎么自愈。K8s 底层可以用 containerd、CRI-O，不一定非要 Docker。但 Docker Desktop 是开发本机用的，K8s 生产环境跑在服务器上。</p>
-
-<h2 id="checklist">上线前自查清单</h2>
-<table>
-<thead><tr><th>✅ 应该这么做</th><th>❌ 别这么干</th></tr></thead>
-<tbody>
-<tr><td>多阶段构建，镜像压到最小</td><td>编译工具和运行时放一个镜像里</td></tr>
-<tr><td>所有容器设内存和 CPU 限制</td><td>不设限制让容器随便吃资源</td></tr>
-<tr><td>数据挂 volume</td><td>数据写容器里</td></tr>
-<tr><td>用具体版本标签</td><td>用 latest 标签</td></tr>
-<tr><td>日志输出到 stdout</td><td>日志写容器内文件</td></tr>
-<tr><td>非 root 用户跑应用</td><td>容器里全是 root</td></tr>
-<tr><td>写 .dockerignore</td><td>把 .git 和 node_modules 都传上去</td></tr>
-</tbody>
-</table>
-</div>
+                    </div>
                 </article>
 <nav class="article-nav">
 <a class="nav-prev" href="../../other/rpc/"><span class="nav-label">← 上一篇</span><span class="nav-title">运行过程</span></a>
