@@ -81,134 +81,121 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Kubernetes 架构原理</h1>
+                        <h1 class="article-title">Kubernetes 入门：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Kubernetes,云原生</span>
+                            <span class="meta-item">🏷️ K8s 入门</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
 
-<h2>你什么时候会需要 Kubernetes？</h2>
 <p>你用 Docker 跑了 10 个服务，现在要更新一个版本，得一个个 docker stop、docker run，稍不注意就挂了一个。或者其中一台服务器挂了，上面的服务全都没了。</p>
-<p>这些问题，K8s 就是为解决这个而生的。2014 年 Google 将内部大规模集群管理系统 Borg 的经验开源为 Kubernetes，其背后是十年以上在数百万核 CPU 上调度真实业务沉淀出的工程哲学。</p>
-<p>Kubernetes 的核心价值不在于"跑容器"，而在于提供了一套<strong>声明式（Declarative）</strong>的集群操作系统：你描述"我期望系统长什么样"（What you want），K8s 负责把当前状态不断向期望状态收敛（Reconcile）。</p>
+<p>这些问题，K8s 就是为解决这个而生的。这篇不讲理论，就讲你真的会遇到的问题，以及 K8s 怎么帮你解决。</p>
 
-<h2>整体架构：控制面与数据面</h2>
-<p>Kubernetes 采用经典的<strong>主从（Master/Worker）分离架构</strong>。控制面（Control Plane）是"大脑"，负责全局决策与响应集群事件；工作节点（Worker Node）是"手脚"，真正运行业务容器。理解每个组件的职责与交互时序，是排查一切集群问题的前提。</p>
+<!-- 场景1：服务太多，管不过来 -->
+<h2 id="problem1">场景一：跑了 10 个服务，更新一个要手动操作半天</h2>
 
-<div class="mermaid">
-flowchart TB
-    subgraph ControlPlane[控制面 Control Plane]
-        API[API Server<br/>kube-apiserver]
-        SCHED[Scheduler<br/>kube-scheduler]
-        CM[Controller Manager<br/>kube-controller-manager]
-        ETCD[(etcd<br/>集群状态存储)]
-    end
-    subgraph Worker[工作节点 Worker Node]
-        KUBELET[kubelet]
-        PROXY[kube-proxy]
-        subgraph Pods[业务 Pod]
-            P1[Pod A]
-            P2[Pod B]
-        end
-    end
-    USER[kubectl / CI / Operator] -->|REST| API
-    API <--> ETCD
-    API <--> SCHED
-    API <--> CM
-    KUBELET -->|上报状态/拉取期望| API
-    PROXY -->|规则下发/同步| API
-    SCHED -->|绑定 Node| API
-    CM -->|调谐对象| API
-
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你用 Docker 跑了 10 个微服务，现在要更新一个版本，得先停旧的，再跑新的，一个一个来。10 个服务还好，等你跑到 100 个服务，你就疯了。而且哪个服务跑在哪台服务器上，你都记不清了。</p>
 </div>
 
-<p>各组件职责一句话总结：</p>
+<p><strong>K8s 怎么解决？</strong>你只要告诉 K8s："我要跑 3 个我的应用，版本是 v2"，K8s 自动帮你安排在哪台服务器上跑，自动更新，自动重启挂掉的。你不用管具体哪台机器跑了什么。</p>
+
+<pre><code class="language-yaml"># deployment.yaml：你只要描述你想要什么
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 3  # 我要跑3个实例
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: myapp
+        image: myapp:v2  # 版本是v2</code></pre>
+
+<pre><code class="language-bash"># 一条命令应用，K8s自动帮你搞定
+kubectl apply -f deployment.yaml</code></pre>
+
+<p>现在你要更新版本？改一下 image 标签，再 apply 一下，K8s 自动帮你滚动更新，不会停服。</p>
+
+<!-- 场景2：服务器挂了，服务全没了 -->
+<h2 id="problem2">场景二：一台服务器挂了，上面的服务全没了</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你有 3 台服务器，上面跑了各种服务。突然其中一台服务器硬件坏了，上面跑的 5 个服务全挂了，用户投诉爆了。你才发现，你没有做高可用。</p>
+</div>
+
+<p><strong>K8s 怎么解决？</strong>K8s 会自动把挂掉服务器上的服务，重新调度到其他正常的服务器上。你只要告诉它"我要 3 个实例一直跑着"，不管哪台服务器挂了，它都会自动补上。</p>
+
+<pre><code class="language-bash"># 看看现在有几个实例
+kubectl get pods
+
+# 手动删掉一个，K8s会自动再起一个新的
+kubectl delete pod myapp-xxx</code></pre>
+
+<p>现在服务器挂了？K8s 自动把服务搬到其他服务器上，用户根本感觉不到。</p>
+
+<!-- 场景3：流量突然暴涨，扛不住了 -->
+<h2 id="problem3">场景三：流量突然暴涨，服务器扛不住了</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的网站突然上热搜了，流量一下子涨了 10 倍，服务器 CPU 直接 100%，用户开始打不开。你要手动去新的服务器上启动更多实例，等你弄完，流量都已经退了。</p>
+</div>
+
+<p><strong>K8s 怎么解决？</strong>自动伸缩。流量大的时候自动多起几个实例，流量小的时候自动缩回去。</p>
+
+<pre><code class="language-yaml"># HorizontalPodAutoscaler：自动伸缩
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: myapp
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: myapp
+  minReplicas: 2  # 最少2个
+  maxReplicas: 10  # 最多10个
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70  # CPU超过70%就扩容</code></pre>
+
+<p>现在流量涨了，K8s 自动帮你多起几个实例，流量降了，自动缩回去。你什么都不用管。</p>
+
 <table>
-<thead><tr><th>组件</th><th>跑在哪</th><th>职责</th></tr></thead>
+<thead><tr><th>概念</th><th>通俗理解</th></tr></thead>
 <tbody>
-<tr><td>kube-apiserver</td><td>控制面</td><td>唯一接触 etcd 的网关，所有组件都通过它读写状态</td></tr>
-<tr><td>etcd</td><td>控制面</td><td>Raft 分布式 KV，存集群全部状态，生产必须 3/5 节点</td></tr>
-<tr><td>kube-scheduler</td><td>控制面</td><td>给未绑定的 Pod 选最优节点（过滤→打分）</td></tr>
-<tr><td>kube-controller-manager</td><td>控制面</td><td>跑一堆调谐控制器（Deployment/Node/Endpoint）</td></tr>
-<tr><td>kubelet</td><td>每个节点</td><td>本节点 Pod 生命周期、健康检查、调 containerd</td></tr>
-<tr><td>kube-proxy</td><td>每个节点</td><td>写 iptables/IPVS 规则，实现 Service 负载均衡</td></tr>
+<tr><td>Pod</td><td>最小的运行单元：跑起来的一个容器</td></tr>
+<tr><td>Deployment</td><td>管理 Pod：保证一直有 N 个实例跑着</td></tr>
+<tr><td>Service</td><td>服务发现：给一组 Pod 一个固定的访问地址</td></tr>
+<tr><td>Node</td><td>工作机器：你的物理机或者虚拟机</td></tr>
+<tr><td>Cluster</td><td>集群：所有 Node 加起来就是一个集群</td></tr>
 </tbody>
 </table>
 
-<h2>声明式 API 与调谐循环</h2>
-<p>Kubernetes 的所有对象（Pod、Deployment、Service…）都存储在 etcd 中，由三部分组成：<code>apiVersion</code>、<code>kind</code>、<code>metadata</code>、<code>spec</code>（期望状态）与 <code>status</code>（观测状态）。控制器的工作就是不断做<strong>diff</strong>。下面用一个极简 Go 伪代码展示调谐循环的本质——这也是阅读 Operator 源码的钥匙：</p>
-
-<pre><code class="language-go">// reconcile 是所有 K8s 控制器的核心思想：对比期望与观测，收敛偏差
-func (c *Controller) reconcile(ctx context.Context, key string) error {
-    // 1. 从 apiserver 拉取"期望状态"（spec）
-    deployment, err := c.client.AppsV1().Deployments(ns).Get(ctx, key, metav1.GetOptions{})
-    if err != nil {
-        return err
-    }
-    desired := *deployment.Spec.Replicas
-
-    // 2. 列出当前"观测状态"下实际运行的 Pod
-    pods, _ := c.podLister.Pods(ns).List(deployment.Spec.Selector.MatchLabels)
-    running := int32(len(pods))
-
-    // 3. 偏差不为零就采取行动，直到 running == desired
-    if running &lt; desired {
-        return c.scaleUp(ctx, deployment, desired-running)
-    } else if running &gt; desired {
-        return c.scaleDown(ctx, deployment, running-desired)
-    }
-    return nil
-}
-</code></pre>
-
-<p>注意这个循环里没有任何"业务专属逻辑"——它只是不断地读写 apiserver。这种 <strong>Level Triggered（电平触发）</strong>设计意味着：即使控制器重启、事件丢失，只要重新拉取状态就能自愈，这就是 K8s"自愈能力"的工程本质。</p>
-
-<h2>快速验证你的第一个集群</h2>
-<p>先用一条命令确认集群可用，再观察节点与系统组件的分布，建立对"集群由哪些进程构成"的直观认识：</p>
-
-<pre><code class="language-bash"># 查看节点状态与角色
-kubectl get nodes -o wide
-
-# 看控制面 Pod 是否都 Running（kube-system 命名空间）
-kubectl get pods -n kube-system
-
-# 实时观察一次 Pod 创建全过程：调度 -> 拉镜像 -> 启动
-kubectl get events --watch
-
-# 查看集群详细信息与组件健康端点
-kubectl get --raw='/readyz?verbose' | head -20
-</code></pre>
-
-<p>输出中重点关注：节点 STATUS 是否为 <code>Ready</code>、ROLES 是否区分 control-plane 与 worker、系统 Pod 是否全部 <code>Running</code>。若某个 kube-system Pod 一直 <code>ContainerCreating</code> 或 <code>CrashLoopBackOff</code>，基本可以断定 CNI/容器运行时/镜像拉取存在问题。</p>
-
-<h2>最佳实践与性能优化</h2>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>给每个容器设置 requests/limits</strong>：没有 requests 的 Pod 会被调度器当作"可压缩资源"随意摆放，容易引发节点资源争抢与 OOM。生产环境务必为 CPU/Memory 同时设置 requests 与 limits。</li>
-<li><strong>控制单集群规模</strong>：单个集群 Pod 数建议不超过 5000、Node 不超过 500。超大集群应拆分为多集群（多租户/多环境隔离），而非硬撑单集群。</li>
-<li><strong>关注 apiserver 性能</strong>：apiserver 是所有操作的瓶颈。给它配置适当的 QPS/Burst（如 controller 的 <code>--kube-api-qps=50</code>），并启用 Watch 缓存而非频繁 List。</li>
-<li><strong>etcd 独立部署</strong>：不要把 etcd 和业务混部，使用 SSD、独立网络，定期备份（<code>etcdctl snapshot save</code>）。</li>
-<li><strong>命名与标签规范</strong>：统一使用 <code>app</code>、<code>app.kubernetes.io/name</code>、<code>version</code> 等标准标签，为后续 Service 选择与监控聚合打下基础。</li>
+<li><strong>不要一开始就用 K8s：</strong>就一两个小网站，用 Docker Compose 就够了，K8s 是给大规模用的。</li>
+<li><strong>配置文件不要写死：</strong>用 ConfigMap 和 Secret 管理配置和密码。</li>
+<li><strong>一定要设资源限制：</strong>不设的话一个服务就能把整台机器吃满。</li>
+<li><strong>日志不要写在容器里：</strong>容器删了日志就没了，要输出到 stdout，让 K8s 收集。</li>
 </ul>
-
-<div class="callout callout-danger">
-<div class="callout-title">我的教训：etcd 没备份，集群重建了</div>
-<p>有次测试集群 etcd 盘满了，整个集群状态全丢。因为没做快照，只能重新 kubeadm init 重建——所有 Deployment、Service、Ingress 全靠 Git 里的 manifest 重新 apply，业务停了两小时。从那以后我给每个 etcd 集群配了每日快照 + 异地备份，<code>etcdctl snapshot save</code> 到对象存储，恢复流程跑通过一次才算数。<strong>etcd 是集群唯一的"硬盘"，没备份等于裸奔。</strong></p>
 </div>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：Kubernetes 和 Docker 是什么关系？是替代品吗？</h3>
-<p>不是。Docker（containerd）是<strong>容器运行时</strong>，负责真正把镜像跑成进程；Kubernetes 是<strong>编排系统</strong>，负责决定"哪个 Pod 跑在哪个节点、故障了在哪重启"。K8s 通过 CRI（Container Runtime Interface）与 containerd/CRI-O 通信，Docker Desktop 也可以作为本地开发运行时。</p>
-<h3>Q2：为什么我的 Pod 一直停在 Pending 状态？</h3>
-<p>Pending 意味着调度器还没把它绑定到任何节点。常见原因：节点资源不足（CPU/内存 requests 超过可分配量）、节点亲和性/污点与容忍度不匹配、PVC 未就绪、镜像拉取 Secret 缺失。用 <code>kubectl describe pod &lt;name&gt;</code> 看 Events 字段，调度失败原因会直接写在那里。</p>
-<h3>Q3：K8s 是不是过度设计？小团队有必要用吗？</h3>
-<p>若服务只有两三个实例且变更不频繁，用 Docker Compose 或 systemd 确实更轻。但当你需要自动扩缩容、多环境一致性、滚动发布、配置集中管理、跨云迁移时，K8s 的声明式模型会把这些复杂度收敛成 YAML。判断标准：你的运维重复劳动是否已经高到值得一次性学习曲线？</p>
-<h3>Q4：控制面挂了业务还能跑吗？</h3>
-<p>能短暂跑。控制面（apiserver/scheduler/controller）挂了，已经运行在节点上的 kubelet 与 Pod 不会立即停止，现有 Service 转发也继续工作。但此时无法创建新 Pod、无法调度故障 Pod、无法更新配置——所以生产必须多副本控制面 + 外部负载均衡。</p>
-
-<h2>总结</h2>
-<p>Kubernetes 的本质是一个<strong>分布式状态机收敛系统</strong>：etcd 存状态、apiserver 做网关、scheduler 做放置、各类控制器做调谐、kubelet 落地执行。理解了"声明式 + 调谐循环"这一条主线，后续的 Deployment、Service、Storage 都只是这条主线在不同资源类型上的具体实现。下一篇我们动手搭建一个真实可用的集群。</p>
 
                     </div>
                 </article>
