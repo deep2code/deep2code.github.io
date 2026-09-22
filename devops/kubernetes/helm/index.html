@@ -81,151 +81,65 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Helm 包管理</h1>
+                        <h1 class="article-title">Helm：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Kubernetes,云原生</span>
+                            <span class="meta-item">🏷️ Helm</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Helm怎么帮你解决。</p>
 
-<h2>为什么需要 Helm：K8s 的包管理器</h2>
-<p>当你用 K8s 部署一个真实应用，往往要写 Deployment + Service + Ingress + ConfigMap + Secret + HPA 一堆 YAML，几十上百行。</p>
-<p>Helm 就是 K8s 生态的 <strong>apt/yum/Homebrew</strong>：把一组相关 YAML 打包成 <strong>Chart</strong>，用 <strong>values.yaml</strong> 统一管理变量，支持模板渲染、版本化、一键升级回滚。Helm 3 砍掉了服务端 Tiller，纯客户端 CLI + CRD，安全模型干净得多。</p>
-
-<h2>Helm 核心概念</h2>
 <div class="mermaid">
 flowchart LR
-    CHART[Chart 包<br/>模板+默认values] --> TPL[模板渲染引擎<br/>Go template/sprig]
-    VAL[values.yaml<br/>环境变量覆盖] --> TPL
-    TPL --> YAML[渲染后的 K8s YAML]
-    YAML -->|helm install/upgrade| API[K8s apiserver]
-    API --> RELEASE[Release 实例<br/>含版本历史]
-
+    A[Helm Chart] --> B[模板化配置]
+    B --> C[不同环境部署]
 </div>
+
+<h2>1. K8s YAML 文件太多</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你部署一个应用要写十几个 YAML 文件，太麻烦。</p>
+</div>
+
+<p><strong>怎么解决？</strong>Helm 把所有 YAML 打包成 Chart，一条命令部署。</p>
+
+<h2>2. 不同环境配置不一样</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>测试环境和生产环境配置不一样，要维护两套 YAML。</p>
+</div>
+
+<p><strong>怎么解决？</strong>Helm 用 values.yaml 区分配置，同一套 Chart 部署不同环境。</p>
+
+<h2>3. 怎么分享部署配置</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你写的部署配置想给别人用。</p>
+</div>
+
+<p><strong>怎么解决？</strong>Helm Chart 打包，别人 helm install 就能部署。</p>
+
+<h2>核心概念</h2>
+
 <table>
-<thead><tr><th>概念</th><th>类比 apt</th><th>说明</th></tr></thead>
+<thead><tr><th>概念</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>Chart</td><td>apt 包</td><td>模板 + 默认 values 的目录打包</td></tr>
-<tr><td>Release</td><td>安装实例</td><td>Chart 的一次部署，同 Chart 可装多次</td></tr>
-<tr><td>values.yaml</td><td>配置文件</td><td>默认变量，部署时用 -f / --set 覆盖</td></tr>
-<tr><td>helm repo</td><td>apt 源</td><td>Chart 仓库，add/update/search</td></tr>
-</tbody>
-</table>
+<tr><td>Chart</td><td>部署包，相当于 apt 包</td></tr>
+<tr><td>Release</td><td>Chart 的运行实例</td></tr>
+<tr><td>values.yaml</td><td>配置文件</td></tr>
+</tbody></table>
 
-<h2>实战：开发一个最简 Chart</h2>
-<p>用 Helm 命令生成骨架，再看关键文件：</p>
-
-<pre><code class="language-bash"># 创建 Chart 骨架
-helm create myapp
-tree myapp
-# myapp/
-# ├── Chart.yaml          # Chart 元信息
-# ├── values.yaml         # 默认变量
-# ├── templates/
-# │   ├── deployment.yaml
-# │   ├── service.yaml
-# │   ├── ingress.yaml
-# │   └── _helpers.tpl    # 模板函数
-# └── charts/             # 子 Chart 依赖
-</code></pre>
-
-<p><code>templates/deployment.yaml</code> 用 Go template 语法把变量注入 YAML：</p>
-
-<pre><code class="language-yaml">apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .Release.Name }}-web
-  labels:
-    app: {{ .Chart.Name }}
-    release: {{ .Release.Name }}
-spec:
-  replicas: {{ .Values.replicaCount }}
-  selector:
-    matchLabels:
-      app: {{ .Chart.Name }}
-      release: {{ .Release.Name }}
-  template:
-    metadata:
-      labels:
-        app: {{ .Chart.Name }}
-    spec:
-      containers:
-        - name: web
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          resources:
-{{ toYaml .Values.resources | indent 12 }}
-          {{- with .Values.env }}
-          env:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-</code></pre>
-
-<p>对应的 <code>values.yaml</code>：</p>
-
-<pre><code class="language-yaml">replicaCount: 2
-image:
-  repository: registry.example.com/myapp
-  tag: "v1.2.0"
-resources:
-  requests:
-    cpu: 100m
-    memory: 128Mi
-  limits:
-    cpu: 500m
-    memory: 256Mi
-env:
-  - name: LOG_LEVEL
-    value: info
-</code></pre>
-
-<p>本地渲染验证（不真正部署）与安装：</p>
-
-<pre><code class="language-bash"># 渲染查看最终 YAML，dry-run 排错利器
-helm template myapp ./myapp -f prod-values.yaml
-
-# 安装到集群
-helm install myapp-prod ./myapp -f prod-values.yaml -n prod --create-namespace
-
-# 升级（修改 values 后）
-helm upgrade myapp-prod ./myapp -f prod-values.yaml --set image.tag=v1.3.0
-
-# 查看 Release 历史与回滚
-helm history myapp-prod
-helm rollback myapp-prod 1
-
-# 从官方/第三方仓库安装现成 Chart
-helm repo add bitnami https://charts.bitnami.com/bitnami
-helm install redis bitnami/redis --set auth.password=xxx
-</code></pre>
-
-<h2>最佳实践</h2>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>Chart 与应用代码同仓库</strong>：Chart 跟着应用版本走，CI 里 <code>helm package</code> 后推到私有 Chart Museum/OCI Registry。</li>
-<li><strong>values 分层</strong>：Chart 自带默认 values.yaml，环境差异用独立的 <code>values-prod.yaml</code> 覆盖，不要改默认文件。</li>
-<li><strong>用 helm-docs 自动生成 values 注释文档</strong>：values 多了以后，自动从注释生成 README，降低协作成本。</li>
-<li><strong>生产用 --wait --timeout</strong>：<code>helm upgrade --wait --timeout 5m</code>，确保所有资源 Ready 才算发布成功，避免"命令成功但 Pod 还在 CrashLoop"。</li>
-<li><strong>避免在模板里写复杂逻辑</strong>：模板应该是"渲染"，不是"编程"。复杂逻辑放应用侧或 Operator。</li>
-<li><strong>敏感值用 --set 或外部 Secret</strong>：不要把密码写进 values.yaml 提交到 Git，用 sealed-secrets 或 external-secrets。</li>
+<li><strong>不要把敏感配置放 Chart</strong>密码、密钥用 secret 管理，不要放 values。</li>
+<li><strong>先会用官方 Chart</strong>常用应用先装官方 Chart，不要自己写。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：helm install 报 rendered manifests contain a resource that already exists</h3>
-<p>说明同名资源已存在但不归当前 Helm 管理。这是典型的"先用 kubectl apply 又用 helm"混用导致。用 <code>helm adopt</code> 或先手动删除旧资源再装；更干净的做法是全量改用 Helm 管理。</p>
-<h3>Q2：values.yaml 里改了镜像 tag，为什么升级不生效？</h3>
-<p>检查模板里镜像 tag 是否真的引用了 <code>.Values.image.tag</code>。常见错误：写死了 tag、或 <code>--set</code> 的 key 路径写错。先 <code>helm template</code> 渲染出来肉眼确认。</p>
-<h3>Q3：helm rollback 真的能完全回滚吗？</h3>
-<p>Helm 回滚的是<strong>上一版本的 manifests</strong>，并重新 apply。但它不会回滚 PV 里的数据、也不会回滚已经执行过的数据库迁移。有状态变更必须靠应用自身的回滚能力。</p>
-
-<div class="callout callout-warning">
-<div class="callout-title">我的教训：helm rollback 救不了数据库迁移</div>
-<p>有次发了个带 schema 变更的版本，执行了 <code>ALTER TABLE</code>，新版本上线后业务报错，<code>helm rollback</code> 回退了 Deployment YAML，但表结构已经改不回去了，只能人工回滚数据库。从那以后我所有 schema 变更都走"扩展-双写-切读-删旧列"四步，绝不做不可逆的 DDL。<strong>Helm 管的是 YAML，不是数据。</strong></p>
 </div>
-<h3>Q4：Helmfile 是什么？和 Helm 什么关系？</h3>
-<p>Helmfile 是 Helm 的声明式封装：用一个 helmfile.yaml 描述"在哪些环境装哪些 Chart、用哪些 values"，一条命令批量部署多个 Release，适合 GitOps 场景。如果你开始管理十几个 Release，是时候引入它了。</p>
-
-<h2>总结</h2>
-<p>Helm 把"一组 YAML + 变量 + 版本"打包成可复用的 Chart，用 values 做多环境差异化，用 Release 历史做升级回滚。它不是万能的——简单服务直接 Kustomize 可能更轻，但当应用超过 5 个资源对象、需要多环境复用时，Helm 的收益立刻显现。下一篇进入生产运维的收尾环节：监控与排障。</p>
 
                     </div>
                 </article>
