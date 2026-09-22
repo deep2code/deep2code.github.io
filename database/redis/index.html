@@ -84,174 +84,301 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">Redis 入门：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ Redis</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及 Redis 怎么帮你解决。2026 年主流版本是 Redis 8.x。</p>
+    <header class="article-header">
+        <h1 class="article-title">Redis 深度原理：为什么它这么快？</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ Redis</span>
+        </div>
+    </header>
 
-<div class="mermaid">
-flowchart TB
-    A[Redis 8.x] --> B[缓存]
-    A --> C[分布式锁]
-    A --> D[排行榜]
-    A --> E[消息队列]
-    A --> F[地理位置]
-</div>
+    <p>很多人用 Redis 只会 SET/GET，但不知道它为什么比 MySQL 快 100 倍，也不知道数据结构底层怎么实现的。这篇从原理讲透 Redis。</p>
 
-<h2>1. 数据库查询太慢</h2>
+    <div class="mermaid">
+flowchart TD
+    A[Redis 为什么快] --> B[纯内存操作]
+    A --> C[单线程模型]
+    A --> D[IO 多路复用]
+    A --> E[高效数据结构]
+    C --> C1[无锁无上下文切换]
+    D --> D1[epoll/kqueue]
+    E --> E1[SDS/跳表/压缩列表]
+    </div>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>一个详情页接口查数据库要 300ms，QPS 高了数据库直接扛不住。</p>
-</div>
+    <h2>核心原理一：单线程为什么还这么快？</h2>
+    <p>很多人以为单线程性能差，但 Redis 单线程却能扛 10万 QPS，原因有三个：</p>
 
-<p><strong>怎么解决？</strong>前面架一层 Redis 缓存，热点数据放内存，快 10~100 倍。</p>
-
-<pre><code class="language-bash"># 写入缓存
-SET user:1001 '{"name":"张三","age":28}' EX 3600
-
-# 读缓存
-GET user:1001</code></pre>
-
-<h2>2. Redis 8.x 新特性（2026）</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>还在用 Redis 5.x/6.x，不知道新版本有什么好处。</p>
-</div>
-
-<p><strong>怎么解决？</strong>Redis 8.x 比 6.x 性能提升 30%+，自带向量搜索和 JSON 原生支持。</p>
-
-<table>
-<thead><tr><th>版本</th><th>关键特性</th><th>建议</th></tr></thead>
-<tbody>
-<tr><td>Redis 5.x</td><td>基础功能</td><td>太老，建议升级</td></tr>
-<tr><td>Redis 6.x</td><td>多线程 IO、ACL</td><td>可用，但推荐升 8</td></tr>
-<tr><td>Redis 7.x</td><td>Functions、Sharded Pub/Sub</td><td>稳定</td></tr>
-<tr><td>Redis 8.x</td><td>向量搜索、JSON 原生、性能 +30%</td><td><strong>2026 主流推荐</strong></td></tr>
-</tbody></table>
-
-<h2>3. 五种核心数据结构速查</h2>
-
-<p>不同场景选不同结构，选错了性能差很多。</p>
-
-<table>
-<thead><tr><th>结构</th><th>常用场景</th><th>典型命令</th></tr></thead>
-<tbody>
-<tr><td><strong>String</strong></td><td>缓存、计数、分布式锁</td><td>SET / GET / INCR / SETNX</td></tr>
-<tr><td><strong>Hash</strong></td><td>存对象（用户信息）</td><td>HSET / HGET / HGETALL</td></tr>
-<tr><td><strong>List</strong></td><td>消息队列、最新列表</td><td>LPUSH / RPOP / LRANGE</td></tr>
-<tr><td><strong>Set</strong></td><td>去重、共同好友</td><td>SADD / SISMEMBER / SINTER</td></tr>
-<tr><td><strong>ZSet</strong></td><td>排行榜、延迟队列</td><td>ZADD / ZRANGE / ZRANK</td></tr>
-</tbody></table>
-
-<h2>4. 缓存三大经典问题</h2>
-
-<div class="mermaid">
+    <div class="mermaid">
 flowchart LR
-    A[缓存问题] --> B[穿透]
+    A[网络请求] --> B[IO多路复用 epoll]
+    B --> C[事件分发]
+    C --> D[命令执行 单线程]
+    D --> E[返回结果]
+    style D fill:#ff6b6b,color:#fff
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>原因</th>
+                <th>解释</th>
+                <th>对比 MySQL</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>纯内存</td>
+                <td>所有数据都在内存，操作不涉及磁盘</td>
+                <td>MySQL 要读磁盘页</td>
+            </tr>
+            <tr>
+                <td>单线程</td>
+                <td>没有锁竞争，没有上下文切换开销</td>
+                <td>MySQL 多线程要加锁</td>
+            </tr>
+            <tr>
+                <td>IO多路复用</td>
+                <td>一个线程处理上万连接，epoll 事件驱动</td>
+                <td>MySQL 每连接一个线程</td>
+            </tr>
+            <tr>
+                <td>高效数据结构</td>
+                <td>SDS、跳表、压缩列表，针对场景优化</td>
+                <td>B+ 树，通用型</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">小知识</div>
+        <p>Redis 6.0 之后网络 IO 是多线程的，但命令执行还是单线程，所以还是不用加锁。</p>
+    </div>
+
+    <h2>核心原理二：五种数据结构底层怎么实现的？</h2>
+    <p>很多人知道 Redis 有五种数据结构，但不知道每种底层用了什么数据结构，也不知道什么场景用哪种。</p>
+
+    <div class="mermaid">
+flowchart TD
+    A[五种数据结构] --> B[String 字符串]
+    A --> C[List 列表]
+    A --> D[Hash 哈希]
+    A --> E[Set 集合]
+    A --> F[ZSet 有序集合]
+    B --> B1[SDS 动态字符串]
+    C --> C1[压缩列表/双向链表]
+    D --> D1[压缩列表/哈希表]
+    E --> E1[整数集合/哈希表]
+    F --> F1[压缩列表/跳表+哈希表]
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>数据结构</th>
+                <th>底层实现</th>
+                <th>时间复杂度</th>
+                <th>典型场景</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>String</td>
+                <td>SDS 动态字符串</td>
+                <td>O(1)</td>
+                <td>缓存、计数器、分布式锁</td>
+            </tr>
+            <tr>
+                <td>List</td>
+                <td>压缩列表（小）/ 双向链表（大）</td>
+                <td>O(1) 头尾，O(n) 中间</td>
+                <td>消息队列、最新列表</td>
+            </tr>
+            <tr>
+                <td>Hash</td>
+                <td>压缩列表（小）/ 哈希表（大）</td>
+                <td>O(1)</td>
+                <td>存对象、用户信息</td>
+            </tr>
+            <tr>
+                <td>Set</td>
+                <td>整数集合（全数字）/ 哈希表</td>
+                <td>O(1)</td>
+                <td>标签、去重、共同好友</td>
+            </tr>
+            <tr>
+                <td>ZSet</td>
+                <td>压缩列表（小）/ 跳表+哈希表</td>
+                <td>O(log n)</td>
+                <td>排行榜、延迟队列</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">为什么 ZSet 用跳表不用红黑树？</div>
+        <p>跳表实现简单，范围查询更友好，并发更好维护，平均效率和红黑树差不多。</p>
+    </div>
+
+    <h2>核心原理三：缓存三大问题原理</h2>
+    <p>用 Redis 最容易踩的三个坑：穿透、击穿、雪崩，每个都是不同原理。</p>
+
+    <div class="mermaid">
+flowchart LR
+    A[缓存三大问题] --> B[穿透]
     A --> C[击穿]
     A --> D[雪崩]
     B --> B1[查不存在的数据]
-    C --> C1[热点 key 过期]
-    D --> D1[大量 key 同时过期]
-</div>
+    C --> C1[热点key过期]
+    D --> D1[大量key同时过期]
+    B --> B2[布隆过滤器]
+    C --> C2[互斥锁/永不过期]
+    D --> D2[随机过期时间]
+    </div>
 
-<h3>缓存穿透</h3>
-<p><strong>问题：</strong>查数据库不存在的数据，每次都打数据库。</p>
-<p><strong>解决：</strong>空值也缓存（短时间），或用布隆过滤器。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>问题</th>
+                <th>原理</th>
+                <th>现象</th>
+                <th>解决方案</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>缓存穿透</td>
+                <td>查一个根本不存在的数据，缓存没有，每次都打到数据库</td>
+                <td>恶意攻击，数据库被打满</td>
+                <td>布隆过滤器 / 缓存空值</td>
+            </tr>
+            <tr>
+                <td>缓存击穿</td>
+                <td>一个热点 key 突然过期，瞬间大量请求打到数据库</td>
+                <td>数据库瞬间 QPS 飙高</td>
+                <td>互斥锁 / 热点数据永不过期</td>
+            </tr>
+            <tr>
+                <td>缓存雪崩</td>
+                <td>大量 key 同时过期，或者 Redis 挂了</td>
+                <td>数据库整体扛不住</td>
+                <td>过期时间加随机值 / 集群高可用</td>
+            </tr>
+        </tbody>
+    </table>
 
-<h3>缓存击穿</h3>
-<p><strong>问题：</strong>某个热点 key 突然过期，瞬间大量请求打数据库。</p>
-<p><strong>解决：</strong>热点 key 不过期，或用互斥锁重建缓存。</p>
+    <h2>核心原理四：持久化 RDB vs AOF</h2>
+    <p>Redis 是内存数据库，挂了数据就没了，所以要持久化到磁盘。两种方式各有优劣。</p>
 
-<h3>缓存雪崩</h3>
-<p><strong>问题：</strong>大量 key 同一时间过期，数据库瞬间压力陡增。</p>
-<p><strong>解决：</strong>过期时间加随机值，不要同一批过期。</p>
+    <div class="mermaid">
+flowchart TD
+    A[Redis 持久化] --> B[RDB 快照]
+    A --> C[AOF 日志]
+    B --> B1[定时全量快照]
+    B --> B2[二进制文件 体积小]
+    B --> B3[恢复快 但可能丢数据]
+    C --> C1[记录每个写命令]
+    C --> C2[文本文件 体积大]
+    C --> C3[数据更安全 恢复慢]
+    </div>
 
-<pre><code class="language-bash"># 过期时间加随机值，防雪崩
-EXPIRE key 3600 + random(0, 600)</code></pre>
+    <table>
+        <thead>
+            <tr>
+                <th>对比项</th>
+                <th>RDB 快照</th>
+                <th>AOF 日志</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>原理</td>
+                <td>定时把内存数据快照写到磁盘</td>
+                <td>每个写命令追加到日志文件</td>
+            </tr>
+            <tr>
+                <td>数据安全性</td>
+                <td>差，可能丢最后一次快照后的数据</td>
+                <td>好，最多丢 1 秒数据</td>
+            </tr>
+            <tr>
+                <td>文件体积</td>
+                <td>小，二进制压缩</td>
+                <td>大，文本命令</td>
+            </tr>
+            <tr>
+                <td>恢复速度</td>
+                <td>快</td>
+                <td>慢，要重放命令</td>
+            </tr>
+            <tr>
+                <td>适用场景</td>
+                <td>备份、容灾</td>
+                <td>数据安全性要求高</td>
+            </tr>
+        </tbody>
+    </table>
 
-<h2>5. 持久化：RDB vs AOF</h2>
+    <div class="callout callout-tip">
+        <div class="callout-icon">✅</div>
+        <div class="callout-title">生产建议</div>
+        <p>生产环境一般 RDB + AOF 同时开，RDB 做冷备，AOF 保证数据安全。</p>
+    </div>
 
-<table>
-<thead><tr><th>对比</th><th>RDB</th><th>AOF</th></tr></thead>
-<tbody>
-<tr><td>原理</td><td>快照（二进制）</td><td>追加写命令日志</td></tr>
-<tr><td>恢复速度</td><td>快</td><td>慢</td></tr>
-<tr><td>数据安全</td><td>可能丢最后一次快照后的数据</td><td>更安全（最多丢 1 秒）</td></tr>
-<tr><td>文件体积</td><td>小</td><td>大</td></tr>
-<tr><td>适合</td><td>备份、容灾</td><td>生产环境</td></tr>
-</tbody></table>
+    <h2>核心原理五：主从复制原理</h2>
+    <p>Redis 高可用的基础是主从复制，主写从读，主节点挂了从节点顶上。</p>
 
-<p><strong>生产建议：</strong>Redis 8 默认 RDB + AOF 混合持久化，直接用默认配置就行。</p>
+    <div class="mermaid">
+flowchart LR
+    A[客户端] --> B{读写分离}
+    B -->|写| C[Master 主节点]
+    B -->|读| D[Slave 从节点1]
+    B -->|读| E[Slave 从节点2]
+    C -->|1. 全量同步 RDB| D
+    C -->|2. 增量同步 replbacklog| D
+    C -->|2. 增量同步 replbacklog| E
+    </div>
 
-<h2>6. 高可用架构怎么选</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>阶段</th>
+                <th>做什么</th>
+                <th>原理</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>全量同步</td>
+                <td>从节点第一次连接主节点</td>
+                <td>主节点 bgsave 生成 RDB，发给从节点加载</td>
+            </tr>
+            <tr>
+                <td>增量同步</td>
+                <td>同步过程中的新写命令</td>
+                <td>主节点把新命令写到 replbacklog 缓冲区，发给从节点</td>
+            </tr>
+            <tr>
+                <td>命令传播</td>
+                <td>后续持续同步</td>
+                <td>主节点每执行一个写命令，就发给所有从节点</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="mermaid">
-flowchart TB
-    A[Redis 高可用] --> B[单机]
-    A --> C[主从复制]
-    A --> D[Sentinel 哨兵]
-    A --> E[Cluster 集群]
-    B --> B1[开发测试]
-    C --> C1[读多写少]
-    D --> D1[中小生产]
-    E --> E1[大规模生产]
-</div>
-
-<table>
-<thead><tr><th>方案</th><th>数据量</th><th>可用性</th><th>适合场景</th></tr></thead>
-<tbody>
-<tr><td>单机</td><td>&lt;10G</td><td>低</td><td>开发/个人项目</td></tr>
-<tr><td>主从</td><td>&lt;20G</td><td>中</td><td>读多写少</td></tr>
-<tr><td>Sentinel</td><td>&lt;50G</td><td>高</td><td>中小生产</td></tr>
-<tr><td>Cluster</td><td>&gt;50G</td><td>高</td><td>大规模生产</td></tr>
-</tbody></table>
-
-<h2>7. 常用场景实战</h2>
-
-<h3>分布式锁</h3>
-<pre><code class="language-bash"># 加锁（原子操作）
-SET lock:order:1001 random_value NX EX 10
-
-# 解锁（Lua 脚本保证原子）
-EVAL "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end" 1 lock:order:1001 random_value</code></pre>
-
-<h3>排行榜</h3>
-<pre><code class="language-bash"># 添加分数
-ZADD rank:weekly 95 "user1001"
-ZADD rank:weekly 88 "user1002"
-
-# 取 Top 10
-ZRANGE rank:weekly 0 9 WITHSCORES REV</code></pre>
-
-<h3>计数器</h3>
-<pre><code class="language-bash"># 阅读量 +1
-INCR article:123:views
-
-# 限频（每分钟最多 100 次）
-INCR rate:user:1001
-EXPIRE rate:user:1001 60</code></pre>
-
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>缓存一定要设过期</strong>：不要把数据一直放内存，迟早撑爆。</li>
-<li><strong>防三大问题</strong>：穿透、击穿、雪崩，上线前一定想清楚怎么防。</li>
-<li><strong>key 要有前缀</strong>：user:1001、order:2024，不要乱命名。</li>
-<li><strong>大 key 要拆</strong>：一个 key 不要存几 MB 数据，拆成多个小 key。</li>
-<li><strong>不要当数据库用</strong>：Redis 是缓存，不是持久化数据库，重要数据还是要落库。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>Redis 是单线程的，别在里面执行复杂的计算，会阻塞所有请求</li>
+            <li>大 key 是大坑，一个 key 存几 MB，读写都会阻塞，要拆</li>
+            <li>设置过期时间，不然内存迟早被占满</li>
+            <li>缓存不是银弹，不是所有数据都该放缓存，一致性要求高的别放</li>
+            <li>生产环境一定要开持久化，别裸奔</li>
+        </ul>
+    </div>
+</article>
 <nav class="article-nav">
 <a class="nav-prev" href="../mysql/"><span class="nav-label">← 上一篇</span><span class="nav-title">MySQL</span></a>
 <a class="nav-next" href="../memcached/"><span class="nav-label">下一篇 →</span><span class="nav-title">Memcached</span></a>

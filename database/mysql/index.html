@@ -84,116 +84,253 @@
             <main id="body-content">
 <article class="article">
     <header class="article-header">
-        <h1 class="article-title">MySQL 入门：从你遇到的问题出发</h1>
+        <h1 class="article-title">MySQL 深度原理：B+树、事务、MVCC</h1>
         <div class="article-meta">
             <span class="meta-item">🏷️ MySQL</span>
         </div>
     </header>
-    <p>SQL 跑好几秒，接口超时；加了索引还是慢；数据库挂了数据丢了。这篇不讲理论，就讲你做项目时会遇到的真实问题，以及 MySQL 怎么帮你解决。</p>
+
+    <p>很多人用 MySQL 只会写 SQL，但不知道为什么索引能加速，不知道事务隔离级别怎么实现的，也不知道 MVCC 是什么。这篇从底层原理讲透 MySQL。</p>
+
+    <div class="mermaid">
+flowchart TD
+    A[MySQL 核心原理] --> B[索引 B+树]
+    A --> C[事务 ACID]
+    A --> D[MVCC 多版本并发]
+    A --> E[锁机制]
+    B --> B1[为什么用B+树不用二叉树]
+    C --> C1[隔离级别怎么实现]
+    D --> D1[快照读不加锁原理]
+    E --> E1[行锁/表锁/间隙锁]
+    </div>
+
+    <h2>核心原理一：索引为什么用 B+ 树？</h2>
+    <p>索引是 MySQL 最重要的优化手段，但为什么用 B+ 树，不用二叉树、哈希、B 树？</p>
+
+    <div class="mermaid">
+flowchart TD
+    A[索引选型] --> B[哈希表]
+    A --> C[二叉搜索树]
+    A --> D[B 树]
+    A --> E[B+ 树]
+    B --> B1[O(1) 快 但不支持范围查询]
+    C --> C1[树太高 磁盘IO多]
+    D --> D1[所有节点都存数据 范围查询慢]
+    E --> E1[只有叶子存数据 范围查询快 树矮]
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>数据结构</th>
+                <th>查找复杂度</th>
+                <th>范围查询</th>
+                <th>磁盘 IO</th>
+                <th>为什么不用</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>哈希表</td>
+                <td>O(1)</td>
+                <td>不支持</td>
+                <td>少</td>
+                <td>不支持范围查询、排序</td>
+            </tr>
+            <tr>
+                <td>二叉搜索树</td>
+                <td>O(log n)</td>
+                <td>支持</td>
+                <td>多（树太高）</td>
+                <td>树太高，磁盘 IO 次数多</td>
+            </tr>
+            <tr>
+                <td>B 树</td>
+                <td>O(log n)</td>
+                <td>支持</td>
+                <td>少</td>
+                <td>所有节点存数据，范围查询要中序遍历整棵树</td>
+            </tr>
+            <tr>
+                <td>B+ 树</td>
+                <td>O(log n)</td>
+                <td>支持</td>
+                <td>最少</td>
+                <td>只有叶子节点存数据，叶子节点用链表相连，范围查询极快</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">为什么 B+ 树磁盘 IO 少？</div>
+        <p>B+ 树是多叉树，一个节点存很多 key，树的高度很低，几百万行数据树高也就 3-4 层，查一次只要 3-4 次磁盘 IO。</p>
+    </div>
+
+    <h2>核心原理二：事务 ACID 怎么实现的？</h2>
+    <p>事务的 ACID 四个特性，每个都有对应的实现机制，不是空喊口号。</p>
+
+    <div class="mermaid">
+flowchart TD
+    A[ACID 四大特性] --> B[原子性 Atomicity]
+    A --> C[一致性 Consistency]
+    A --> D[隔离性 Isolation]
+    A --> E[持久性 Durability]
+    B --> B1[undo log 回滚日志]
+    D --> D1[锁 + MVCC]
+    E --> E1[redo log 重做日志]
+    C --> C1[前面三个共同保证]
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>特性</th>
+                <th>含义</th>
+                <th>实现机制</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>原子性</td>
+                <td>事务要么全做，要么全不做</td>
+                <td>undo log：出错了用 undo log 回滚</td>
+            </tr>
+            <tr>
+                <td>一致性</td>
+                <td>事务前后数据完整性一致</td>
+                <td>原子性 + 隔离性 + 持久性共同保证</td>
+            </tr>
+            <tr>
+                <td>隔离性</td>
+                <td>事务之间互不干扰</td>
+                <td>锁机制 + MVCC 多版本并发控制</td>
+            </tr>
+            <tr>
+                <td>持久性</td>
+                <td>事务提交后永久生效</td>
+                <td>redo log：先写日志，再写磁盘，挂了可以恢复</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>核心原理三：MVCC 多版本并发控制</h2>
+    <p>MVCC 是 MySQL 并发性能高的关键，读不加锁，读写不阻塞。</p>
+
     <div class="mermaid">
 flowchart LR
-    A[查询慢] --> B[explain 分析]
-    B --> C[加索引]
-    C --> D[优化SQL]
-    D --> E[分库分表]
+    A[行数据] --> B[隐藏字段]
+    B --> B1[trx_id 最近修改事务ID]
+    B --> B2[roll_ptr 指向undo log]
+    A --> C[Read View 读视图]
+    C --> C1[低水位/高水位]
+    C --> C2[活跃事务列表]
+    B --> D{能不能看到这个版本?}
+    D -->|能| E[返回数据]
+    D -->|不能| F[顺着undo log找上个版本]
     </div>
 
-    <h2>SQL 跑好几秒，接口超时</h2>
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">你遇到的问题</div>
-        <p>一个详情页接口要 3 秒，用户都走了。</p>
-    </div>
-    <p><strong>怎么解决？</strong>先 explain 看执行计划，是不是没走索引，是不是全表扫描。</p>
-    <pre><code class="language-bash">-- 看执行计划
-EXPLAIN SELECT * FROM orders WHERE user_id = 123;
--- type 列是 ALL 就是全表扫描，要加索引</code></pre>
-
-    <h2>加了索引还是慢</h2>
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">你遇到的问题</div>
-        <p>索引加了，结果还是慢，甚至更慢了。</p>
-    </div>
-    <p><strong>怎么解决？</strong>看看是不是索引失效了，比如对索引列用了函数、类型不匹配。</p>
-    <pre><code class="language-bash"># 索引失效的常见情况
-1. WHERE 里对索引列用了函数
-2. 类型不匹配：user_id 是 int，传了字符串
-3. 模糊查询以 % 开头</code></pre>
-    <h2>explain 关键列</h2>
     <table>
         <thead>
             <tr>
-                <th>列</th>
-                <th>含义</th>
-                <th>怎么判断</th>
+                <th>隔离级别</th>
+                <th>MVCC 行为</th>
+                <th>现象</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>type</td>
-                <td>访问类型</td>
-                <td>至少要 range，const/eq_ref 最好，ALL 最差</td>
+                <td>读未提交</td>
+                <td>不生成 Read View</td>
+                <td>直接读最新数据，能读到未提交的</td>
             </tr>
             <tr>
-                <td>key</td>
-                <td>实际用的索引</td>
-                <td>NULL 就是没用到索引</td>
+                <td>读已提交</td>
+                <td>每次 SELECT 都生成新 Read View</td>
+                <td>能看到其他事务已提交的新数据</td>
             </tr>
             <tr>
-                <td>rows</td>
-                <td>扫描行数</td>
-                <td>越少越好</td>
+                <td>可重复读</td>
+                <td>事务开始时生成 Read View，一直复用</td>
+                <td>整个事务里读到的数据都一样</td>
             </tr>
             <tr>
-                <td>Extra</td>
-                <td>额外信息</td>
-                <td>Using filesort / Using temporary 都要优化</td>
+                <td>串行化</td>
+                <td>不用 MVCC，全加锁</td>
+                <td>最严格，性能最差</td>
             </tr>
         </tbody>
     </table>
-    <h2>常见索引失效场景</h2>
+
+    <h2>核心原理四：锁机制</h2>
+    <p>MySQL 的锁分很多种，理解了锁才能解决死锁问题。</p>
+
+    <div class="mermaid">
+flowchart TD
+    A[MySQL 锁] --> B[粒度]
+    A --> C[性质]
+    B --> B1[表锁 粒度大 性能差]
+    B --> B2[行锁 粒度小 性能好]
+    B2 --> B21[记录锁 锁单行]
+    B2 --> B22[间隙锁 锁范围]
+    B2 --> B23[临键锁 锁+间隙]
+    C --> C1[共享锁 S锁 读锁]
+    C --> C2[排他锁 X锁 写锁]
+    </div>
+
     <table>
         <thead>
             <tr>
-                <th>场景</th>
-                <th>例子</th>
-                <th>解决方案</th>
+                <th>锁类型</th>
+                <th>锁什么</th>
+                <th>什么时候加</th>
+                <th>会导致什么问题</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>索引列用函数</td>
-                <td>WHERE DATE(create_time) = ...</td>
-                <td>改成范围查询</td>
+                <td>表锁</td>
+                <td>整张表</td>
+                <td>DDL 操作、没走索引的 UPDATE</td>
+                <td>并发差，全表阻塞</td>
             </tr>
             <tr>
-                <td>类型不匹配</td>
-                <td>user_id 是 int，传了字符串</td>
-                <td>类型保持一致</td>
+                <td>记录锁</td>
+                <td>单行记录</td>
+                <td>走唯一索引的 UPDATE/DELETE</td>
+                <td>并发好，只锁一行</td>
             </tr>
             <tr>
-                <td>% 开头模糊查询</td>
-                <td>WHERE name LIKE %张%</td>
-                <td>全文索引或搜索引擎</td>
+                <td>间隙锁</td>
+                <td>索引记录之间的间隙</td>
+                <td>范围查询，防止幻读</td>
+                <td>插入阻塞，死锁常见原因</td>
             </tr>
             <tr>
-                <td>OR 条件</td>
-                <td>WHERE a = 1 OR b = 2</td>
-                <td>改用 UNION 或加复合索引</td>
+                <td>临键锁</td>
+                <td>记录 + 前面的间隙</td>
+                <td>可重复读级别下范围查询</td>
+                <td>Next-Key Lock，防止幻读</td>
             </tr>
         </tbody>
     </table>
+
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">死锁怎么来的？</div>
+        <p>两个事务互相等对方的锁：事务 A 锁了行 1 等行 2，事务 B 锁了行 2 等行 1，就死锁了。间隙锁最容易导致死锁。</p>
+    </div>
 
     <h2>新手最容易踩的坑</h2>
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
         <div class="callout-title">避坑指南</div>
         <ul>
-            <li>别在索引列上用函数、计算，不然索引直接失效</li>
-            <li>联合索引要遵守最左前缀原则，别乱加</li>
-            <li>不是索引越多越好，索引多了写入会慢，要权衡</li>
-            <li>大表不要随便加索引，会锁表，要用 online DDL 或者 pt-osc</li>
+            <li>UPDATE 一定要走索引，不然会加表锁，整个表都锁住</li>
+            <li>间隙锁在可重复读级别才有，别在范围查询里乱加锁</li>
+            <li>长事务是大坑，占着锁不释放，其他事务都等着，尽快提交</li>
+            <li>索引不是越多越好，每个索引都要占空间，还要维护成本</li>
+            <li>不要在事务里做 RPC 调用，会拉长事务时间，增加死锁概率</li>
         </ul>
     </div>
 </article>

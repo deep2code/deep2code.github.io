@@ -67,70 +67,228 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">Kafka 入门：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ Kafka</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Kafka怎么帮你解决。</p>
+    <header class="article-header">
+        <h1 class="article-title">Kafka 深度原理：为什么这么快？</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ Kafka</span>
+        </div>
+    </header>
 
-<div class="mermaid">
+    <p>很多人用 Kafka 只会生产消费消息，但不知道为什么它能扛每秒百万级消息，不知道分区副本怎么保证不丢数据，也不知道为什么它比 RabbitMQ 快这么多。这篇从底层原理讲透 Kafka。</p>
+
+    <div class="mermaid">
+flowchart TD
+    A[Kafka 为什么快] --> B[顺序写磁盘]
+    A --> C[零拷贝 sendfile]
+    A --> D[批量处理]
+    A --> E[分区并行]
+    B --> B1[随机写 100MB/s → 顺序写 600MB/s]
+    C --> C1[内核态直接到网卡 不经过用户态]
+    D --> D1[批量发 批量存 批量拉]
+    E --> E1[多分区并行 水平扩展]
+    </div>
+
+    <h2>核心原理一：为什么 Kafka 快？</h2>
+    <p>Kafka 能扛百万级 QPS，核心是四个优化，每个都能带来几倍提升。</p>
+
+    <div class="mermaid">
 flowchart LR
-    A[生产者] --> B[Kafka]
-    B --> C[消费者]
-    B --> D[消息持久化]
-</div>
+    A[Producer] -->|批量发| B[Broker]
+    B -->|顺序写 追加到日志末尾| C[磁盘 Page Cache]
+    C -->|零拷贝 sendfile| D[网卡]
+    D -->|批量拉| E[Consumer]
+    style C fill:#ff6b6b,color:#fff
+    </div>
 
-<h2>1. Kafka 是干什么的</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>优化点</th>
+                <th>原理</th>
+                <th>提升</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>顺序写磁盘</td>
+                <td>消息只追加到日志文件末尾，不随机改，机械盘顺序写比随机写快 10 倍</td>
+                <td>10x 性能提升</td>
+            </tr>
+            <tr>
+                <td>Page Cache</td>
+                <td>操作系统页缓存，数据先写内存，异步刷盘，读直接从内存读</td>
+                <td>接近内存速度</td>
+            </tr>
+            <tr>
+                <td>零拷贝 sendfile</td>
+                <td>数据直接从内核态磁盘→网卡，不经过用户态，减少两次拷贝</td>
+                <td>2x 性能提升</td>
+            </tr>
+            <tr>
+                <td>批量处理</td>
+                <td>生产端批量发，Broker 批量存，消费端批量拉，减少网络 IO 次数</td>
+                <td>减少 90% IO 次数</td>
+            </tr>
+            <tr>
+                <td>分区并行</td>
+                <td>Topic 分多个 Partition，不同分区并行处理，水平扩展</td>
+                <td>N 倍并行度</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>听说 Kafka 很火，是干嘛的？</p>
-</div>
+    <h2>核心原理二：分区副本怎么保证不丢数据？</h2>
+    <p>Kafka 高可用的核心是分区 + 副本机制，一个 Partition 有多个副本，一个 Leader 负责读写，多个 Follower 同步数据。</p>
 
-<p><strong>怎么解决？</strong>分布式消息队列，高吞吐，用来做异步、解耦、削峰。</p>
+    <div class="mermaid">
+flowchart TD
+    A[Topic: order-events] --> B[Partition 0]
+    A --> C[Partition 1]
+    A --> D[Partition 2]
+    B --> B1[Leader 副本]
+    B --> B2[Follower 副本1]
+    B --> B3[Follower 副本2]
+    C --> C1[Leader 副本]
+    C --> C2[Follower 副本1]
+    D --> D1[Leader 副本]
+    D --> D2[Follower 副本1]
+    </div>
 
-<h2>2. 什么时候用 Kafka</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>角色</th>
+                <th>职责</th>
+                <th>说明</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Leader</td>
+                <td>负责所有读写请求</td>
+                <td>每个分区只有一个 Leader，所有读写都走它</td>
+            </tr>
+            <tr>
+                <td>Follower</td>
+                <td>同步 Leader 数据</td>
+                <td>不处理读写，只从 Leader 拉数据同步</td>
+            </tr>
+            <tr>
+                <td>ISR</td>
+                <td>同步中的副本集合</td>
+                <td>跟上 Leader 进度的 Follower 才在 ISR 里，落后太多会被踢出去</td>
+            </tr>
+            <tr>
+                <td>AR</td>
+                <td>所有副本集合</td>
+                <td>ISR + OSR（不同步的副本）</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>什么场景该上 Kafka？</p>
-</div>
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">acks 参数怎么设？</div>
+        <p>acks=0：不管，最快但可能丢；acks=1：Leader 写成功就返回，Leader 挂了可能丢；acks=all：ISR 所有副本都写成功才返回，最安全，生产环境推荐这个。</p>
+    </div>
 
-<p><strong>怎么解决？</strong>日志收集、大数据、高吞吐消息，业务消息用 RabbitMQ。</p>
+    <h2>核心原理三：消息顺序怎么保证？</h2>
+    <p>Kafka 只能保证单个 Partition 内的消息是有序的，多个 Partition 之间不保证顺序。</p>
 
-<h2>3. 和 RabbitMQ 选哪个</h2>
+    <div class="mermaid">
+flowchart LR
+    A[同一个Key的消息] --> B[Hash(key)]
+    B --> C[固定路由到同一个Partition]
+    C --> D[Partition内 顺序写]
+    D --> E[Consumer 顺序消费]
+    </div>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Kafka 和 RabbitMQ 选哪个？</p>
-</div>
+    <table>
+        <thead>
+            <tr>
+                <th>场景</th>
+                <th>顺序保证</th>
+                <th>怎么做</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>全局顺序</td>
+                <td>严格有序</td>
+                <td>只设一个 Partition，性能差，一般不用</td>
+            </tr>
+            <tr>
+                <td>Key 维度顺序</td>
+                <td>同一个 Key 的消息有序</td>
+                <td>用同一个业务 Key（比如 order_id）做分区键</td>
+            </tr>
+            <tr>
+                <td>乱序问题</td>
+                <td>重试导致乱序</td>
+                <td>消费失败重试可能插到前面，要用版本号判断</td>
+            </tr>
+        </tbody>
+    </table>
 
-<p><strong>怎么解决？</strong>高吞吐日志大数据用 Kafka，业务消息用 RabbitMQ。</p>
+    <h2>核心原理四：为什么会消息积压？</h2>
+    <p>生产环境最常见的问题：消息积压，Consumer 消费速度跟不上生产速度。</p>
 
-<h2>Kafka vs RabbitMQ</h2>
+    <div class="mermaid">
+flowchart TD
+    A[消息积压原因] --> B[生产太快]
+    A --> C[消费太慢]
+    A --> D[Consumer 挂了]
+    B --> B1[流量突增]
+    C --> C1[消费逻辑重/查数据库慢]
+    C --> C2[单线程消费]
+    D --> D1[重启后慢慢追]
+    </div>
 
-<table>
-<thead><tr><th>对比</th><th>Kafka</th><th>RabbitMQ</th></tr></thead>
-<tbody>
-<tr><td>吞吐</td><td>极高</td><td>中等</td></tr>
-<tr><td>延迟</td><td>ms 级</td><td>us 级</td></tr>
-<tr><td>场景</td><td>日志大数据</td><td>业务消息</td></tr>
-</tbody></table>
+    <table>
+        <thead>
+            <tr>
+                <th>原因</th>
+                <th>现象</th>
+                <th>解决方案</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>消费逻辑太重</td>
+                <td>每条消息要查好几次数据库</td>
+                <td>批量处理、异步化、加缓存</td>
+            </tr>
+            <tr>
+                <td>并发度不够</td>
+                <td>单线程消费，一个 Consumer</td>
+                <td>加 Consumer 数量，但不能超过 Partition 数</td>
+            </tr>
+            <tr>
+                <td>生产突增</td>
+                <td>流量突然翻 10 倍</td>
+                <td>临时加 Partition，临时加 Consumer</td>
+            </tr>
+            <tr>
+                <td>Consumer 频繁重启</td>
+                <td>消费到一半挂了重启</td>
+                <td>排查重启原因，优化消费逻辑</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>小项目不要用 Kafka</strong>小项目不需要 Kafka，复杂度太高。</li>
-<li><strong>先跑通 Hello World</strong>不要一开始就学一堆概念，先跑起来。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>消息一定要加唯一 ID，消费端要做幂等，重复消息不能出问题</li>
+            <li>acks 不要设成 0 或 1，生产环境用 acks=all，不然容易丢数据</li>
+            <li>分区数不要乱加，太多分区会增加 Leader 选举时间，影响可用性</li>
+            <li>消费失败不要直接重试，不然会导致消息乱序，要死信队列处理</li>
+            <li>消息不要太大，Kafka 适合传小消息，大消息会严重影响性能</li>
+        </ul>
+    </div>
+</article>
             </main>
         </div>
     </div>
