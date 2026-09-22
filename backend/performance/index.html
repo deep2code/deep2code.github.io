@@ -63,73 +63,161 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">性能优化入门：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ 性能优化</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及性能优化怎么帮你解决。</p>
+    <header class="article-header">
+        <h1 class="article-title">限流熔断深度原理：令牌桶与漏桶</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ 高可用</span>
+        </div>
+    </header>
+    <p>系统扛不住的时候为什么会崩？怎么限流？令牌桶和漏桶有什么区别？熔断降级怎么实现的？这篇讲透高可用底层原理。</p>
 
-<div class="mermaid">
-flowchart TB
-    A[慢] --> B[定位瓶颈]
-    B --> C[CPU]
-    C --> D[内存]
-    D --> E[IO]
-    E --> F[网络]
-</div>
+    <h2>核心原理1：限流原理：为什么要限流？</h2>
+    <p>系统处理能力有上限，流量超过了就排队、超时、OOM，最后整个系统崩。限流就是控制入口流量，超过阈值就拒绝或者排队。</p>
+    <div class="mermaid">
+flowchart TD
+    A[请求进来] --> B{限流判断}
+    B -->|没超阈值| C[正常处理]
+    B -->|超阈值| D[拒绝/排队/降级]
+    C --> E[返回结果]
+         
+    </div>
+    <h3>限流算法对比</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>算法</th>
+                <th>原理</th>
+                <th>特点</th>
+                <th>适用场景</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>固定窗口</td>
+                <td>固定时间窗口计数</td>
+                <td>简单，窗口边界有突刺</td>
+                <td>简单限流</td>
+            </tr>
+            <tr>
+                <td>滑动窗口</td>
+                <td>窗口滑动，更平滑</td>
+                <td>解决突刺问题</td>
+                <td>接口限流</td>
+            </tr>
+            <tr>
+                <td>漏桶</td>
+                <td>请求像水倒进桶，匀速漏出</td>
+                <td>输出速率恒定，平滑</td>
+                <td>调用下游接口</td>
+            </tr>
+            <tr>
+                <td>令牌桶</td>
+                <td>桶里放令牌，请求拿令牌才处理</td>
+                <td>允许突发流量</td>
+                <td>API 网关限流</td>
+            </tr>
+        </tbody>
+    </table>
 
-<h2>1. 系统响应慢</h2>
+    <h2>核心原理2：令牌桶 vs 漏桶</h2>
+    <p>两个最常用的限流算法，区别是：令牌桶允许突发，漏桶匀速输出，不允许突发。</p>
+    <div class="mermaid">
+flowchart LR
+    A[令牌桶] --> B[令牌 匀速生成]
+    B --> C[请求 拿令牌]
+    C --> D[没令牌 拒绝]
+    E[漏桶] --> F[请求 倒进桶]
+    F --> G[匀速漏出 处理]
+    G --> H[桶满 拒绝]
+         
+    </div>
+    <h3>['对比项', '令牌桶', '漏桶']</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>对比项</th>
+                <th>令牌桶</th>
+                <th>漏桶</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>突发流量</td>
+                <td>允许，桶里有令牌就可以突发</td>
+                <td>不允许，匀速输出</td>
+            </tr>
+            <tr>
+                <td>输出速率</td>
+                <td>可以突发超过平均速率</td>
+                <td>恒定速率</td>
+            </tr>
+            <tr>
+                <td>适用场景</td>
+                <td>用户请求，允许突发</td>
+                <td>调用下游，保护下游</td>
+            </tr>
+            <tr>
+                <td>参数</td>
+                <td>桶大小 + 令牌生成速率</td>
+                <td>桶大小 + 漏出速率</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>系统响应越来越慢，不知道哪慢。</p>
-</div>
+    <h2>核心原理3：熔断降级原理</h2>
+    <p>调用下游服务，下游挂了，你还一直调用，自己线程都阻塞等着，最后自己也崩。熔断就是错多了就直接不调用了，降级返回兜底。</p>
+    <div class="mermaid">
+flowchart LR
+    A[正常调用] --> B{熔断器}
+    B --> C[错误率低]
+    C --> D[正常调用下游]
+    D --> E[错误率超阈值]
+    E --> F[熔断打开 直接降级]
+    F --> G[过冷却时间 半开 试一下]
+    G --> H[成功 恢复正常]
+    G --> I[失败 继续熔断]
+         
+    </div>
+    <h3>['熔断器状态', '行为', '触发条件']</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>熔断器状态</th>
+                <th>行为</th>
+                <th>触发条件</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>关闭</td>
+                <td>正常调用下游</td>
+                <td>默认状态</td>
+            </tr>
+            <tr>
+                <td>打开</td>
+                <td>直接降级，不调用下游</td>
+                <td>错误率/慢调用比例超阈值</td>
+            </tr>
+            <tr>
+                <td>半开</td>
+                <td>放少量请求试一下</td>
+                <td>熔断过了冷却时间</td>
+            </tr>
+        </tbody>
+    </table>
 
-<p><strong>怎么解决？</strong>先定位瓶颈（CPU/内存/IO/网络），再针对性优化。</p>
-
-<h2>2. 性能优化怎么入手</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>性能优化怎么入手？</p>
-</div>
-
-<p><strong>怎么解决？</strong>先测，找瓶颈，不要瞎改。</p>
-
-<h2>3. 常见瓶颈</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>常见性能瓶颈有哪些？</p>
-</div>
-
-<p><strong>怎么解决？</strong>CPU 计算密集、内存不足、磁盘 IO、网络 IO、慢 SQL。</p>
-
-<h2>定位工具</h2>
-
-<table>
-<thead><tr><th>瓶颈</th><th>工具</th></tr></thead>
-<tbody>
-<tr><td>CPU</td><td>top / perf</td></tr>
-<tr><td>内存</td><td>top / free</td></tr>
-<tr><td>IO</td><td>iostat</td></tr>
-<tr><td>网络</td><td>iftop / tcpdump</td></tr>
-</tbody></table>
-
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>先测再优化</strong>不要上来就优化，先定位瓶颈。</li>
-<li><strong>量化指标</strong>优化前后要有数据对比，不要凭感觉。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>限流不要只拒绝，要返回友好提示，不要让用户等超时</li>
+            <li>令牌桶适合入口限流，漏桶适合调用下游，别用反了</li>
+            <li>熔断要有半开状态，不能一直熔断，也不能一下全放进来</li>
+            <li>降级要有兜底数据，比如推荐挂了返回热门列表，不要直接报错</li>
+        </ul>
+    </div>
+</article>
             </main>
         </div>
     </div>
