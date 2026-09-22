@@ -82,178 +82,69 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">查询优化与分区</h1>
+                        <h1 class="article-title">ClickHouse 查询优化：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ ClickHouse,查询优化</span>
+                            <span class="meta-item">🏷️ ClickHouse</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>查询慢了先别急着加机器</h2>
-<p>ClickHouse 本身够快，但不代表你随便写个 SQL 都快。我见过最离谱的一条查询：业务方在一张五亿行的表上 SELECT count(*) FROM t WHERE url LIKE '%xx...</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及ClickHouse怎么帮你解决。</p>
 
-<h2>EXPLAIN：先看查询计划</h2>
-<p>和 MySQL 一样，ClickHouse 也有 EXPLAIN。但它的输出更详细，能看到读了多少分区、跳过了多少 part：</p>
-<pre><code class="language-sql">EXPLAIN header = 1, actions = 1
-SELECT toStartOfHour(event_time) AS hour, count()
-FROM event_log
-WHERE event_time &gt;= '2026-09-15' AND event_time &lt; '2026-09-16'
-  AND event_type = 'click'
-GROUP BY hour;</code></pre>
-<p>重点看几样东西：<code>ReadFromMergeTree</code> 节点里的 <code>Parts</code> 读了几个、<code>Granules</code> 跳过了多少。理想情况下，时间范围应该只命中当天那一个分区，granule 跳过率很高。如果 Parts 读了一堆、Granules 几乎没跳，说明你的过滤条件没走到索引或分区。</p>
 <div class="mermaid">
 flowchart TB
-    Q[SQL 查询] --> EP[EXPLAIN 执行计划]
-    EP --> CHK1{读了几个分区?}
-    CHK1 -->|全部分区| FIX1[补时间 WHERE / 修 PARTITION BY]
-    CHK1 -->|只命中相关| CHK2{主键/跳数索引用上了?}
-    CHK2 -->|没用| FIX2[检查 ORDER BY 前缀 / 加跳数索引]
-    CHK2 -->|用上了| CHK3{GROUP BY 落盘了吗?}
-    CHK3 -->|落盘| FIX3[调大 max_bytes_before_external_group_by]
-    style FIX1 fill:#dc382d,stroke:#fff,color:#fff
-    style FIX2 fill:#dc382d,stroke:#fff,color:#fff
-    style FIX3 fill:#f59e0b,stroke:#fff,color:#fff
+    A[查询慢] --> B{数据量太大?}
+    B -->|是| C[加分区键]
+    B -->|否| D{没加索引?}
+    D -->|是| E[加跳数索引]
+    D -->|否| F[优化SQL]
 </div>
 
-<h2>主键索引：稀疏索引怎么用</h2>
-<p>上一篇讲过，ClickHouse 的主键索引是<strong>稀疏</strong>的——每 8192 行（index_granularity）才记一条索引项。这意味着它不是精确找一行，而是"跳过一整块不相关的数据"。</p>
-<p>主键索引生效的前提是：WHERE 条件能命中 ORDER BY 的<strong>最左前缀</strong>。比如 ORDER BY (event_type, event_time)：</p>
-<pre><code class="language-sql">-- 走主键索引：event_type 等值 + event_time 范围
-SELECT ... FROM event_log
-WHERE event_type = 'click'
-  AND event_time &gt;= '2026-09-15';
+<h2>1. 亿级数据查询要几分钟</h2>
 
--- 不走主键索引：跳过了 event_type 直接查 event_time
-SELECT ... FROM event_log
-WHERE event_time &gt;= '2026-09-15';</code></pre>
-<p>第二条虽然也能靠分区裁剪干掉大部分数据，但 part 内部的主键索引用不上。这就是为什么 ORDER BY 第一列要选高频等值过滤列。</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你做个报表查询，亿级数据要跑 5 分钟，太慢了。</p>
+</div>
 
-<h2>跳数索引：主键覆盖不到的字段怎么办</h2>
-<p>主键索引只能服务 ORDER BY 前缀。但你可能还想按 url、user_id、city 这些字段过滤——它们不在 ORDER BY 里。这时候用<strong>跳数索引（Data Skipping Index）</strong>。</p>
-<pre><code class="language-sql">ALTER TABLE event_log
-ADD INDEX idx_url bloom_filter(url)
-TYPE bloom_filter(0.01)
-GRANULARITY 4;
+<p><strong>怎么解决？</strong>ClickHouse 是列存，加对分区键和索引，快很多。</p>
 
-ALTER TABLE event_log
-ADD INDEX idx_user minmax(user_id)
-TYPE minmax
-GRANULARITY 4;</code></pre>
+<h2>2. 怎么选分区键</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道要加分区键，但不知道怎么选。</p>
+</div>
+
+<p><strong>怎么解决？</strong>按时间分区，比如按天、按月，查询的时候能过滤掉大量数据。</p>
+
+<h2>3. 为什么比 MySQL 快</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>都是数据库，为什么 ClickHouse 查询这么快？</p>
+</div>
+
+<p><strong>怎么解决？</strong>列存 + 向量化执行，适合分析查询，不适合 OLTP。</p>
+
+<h2>ClickHouse 特点</h2>
+
 <table>
-<thead><tr><th>索引类型</th><th>适合字段</th><th>过滤效果</th></tr></thead>
+<thead><tr><th>特点</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>minmax</td><td>数值/时间范围</td><td>记录 granule 内 min/max</td></tr>
-<tr><td>set(N)</td><td>低基数字符串/枚举</td><td>记录 granule 内 distinct 值</td></tr>
-<tr><td>bloom_filter</td><td>等值过滤的高基数列</td><td>bitmap 判断值是否可能存在</td></tr>
-<tr><td>ngrambf_v1</td><td>文本 LIKE 模糊匹配</td><td>n-gram 布隆过滤</td></tr>
-</tbody>
-</table>
-<p>跳数索引不是建完立刻生效——它在建表时对已有数据不会自动建索引，要 <code>MATERIALIZE</code> 或等后台 merge。新写入的数据会自动带上。</p>
+<tr><td>列存</td><td>按列存，查某几列快</td></tr>
+<tr><td>向量化执行</td><td>批量处理，性能高</td></tr>
+<tr><td>适合 OLAP</td><td>适合分析报表，不适合交易</td></tr>
+<tr><td>不适合更新</td><td>更新删除很慢</td></tr>
+</tbody></table>
+
 <div class="callout callout-tip">
-<div class="callout-title">跳数索引别贪多</div>
-<p>每加一个跳数索引，写入和存储都有额外开销。我见过有人给十几个字段全加 bloom filter，写入吞吐掉了 40%。原则：只给那些"高频过滤、又不在主键里"的字段加，加完用 <code>EXPLAIN</code> 确认真的跳过了数据再保留。</p>
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>不要用 ClickHouse 做业务库</strong>它是分析型数据库，不适合存订单交易数据。</li>
+<li><strong>不要 SELECT *</strong>只查需要的列，发挥列存的优势。</li>
+</ul>
 </div>
-
-<h2>分区裁剪：最划算的优化</h2>
-<p>分区裁剪（Partition Pruning）是成本最低、收益最大的优化——只要 WHERE 里带上了分区键（通常是时间），ClickHouse 直接不读其他分区的数据。</p>
-<pre><code class="language-sql">-- 按天分区，带 event_time 范围：只读 20260915 这一个分区
-SELECT count() FROM event_log
-WHERE event_time &gt;= '2026-09-15 00:00:00'
-  AND event_time &lt;  '2026-09-16 00:00:00';
-
--- 忘了带时间：扫全部 90 天分区，慢 90 倍
-SELECT count() FROM event_log;</code></pre>
-<p>检查分区裁剪有没有生效，查 <code>system.query_log</code> 或 EXPLAIN 里的 <code>SelectedParts</code>。我的经验：<strong>所有线上查询必须带时间范围</strong>，哪怕业务说"查全部"，也至少给个近 30 天的默认窗口。</p>
-
-<h2>物化视图：把查询预算提前算好</h2>
-<p>物化视图（Materialized View）是 ClickHouse 做预聚合的核心武器。它不是普通视图——数据真的物理存在另一张表上，新数据写入明细表时自动触发聚合。</p>
-<pre><code class="language-sql">-- 按小时预聚合的报表底表
-CREATE MATERIALIZED VIEW mv_event_hourly
-ENGINE = SummingMergeTree
-PARTITION BY toYYYYMMDD(hour)
-ORDER BY (hour, event_type)
-AS
-SELECT
-    toStartOfHour(event_time) AS hour,
-    event_type,
-    count() AS pv,
-    uniqState(user_id) AS uv_state
-FROM event_log
-GROUP BY hour, event_type;
-
--- 查报表直接走预聚合表，毫秒返回
-SELECT hour, pv, uniqMerge(uv_state) AS uv
-FROM mv_event_hourly
-WHERE hour &gt;= '2026-09-15 00:00:00'
-GROUP BY hour, pv
-ORDER BY hour;</code></pre>
-<p>注意 <code>uniqState</code> / <code>uniqMerge</code> 这对组合——聚合中间状态不直接存 UV 数字，而是存一个可合并的近似去重状态（HLL），查询时再 merge。这样不同批次的数据合并时 UV 依然准确。</p>
-
-<div class="mermaid">
-flowchart LR
-    INS[新数据 INSERT 明细表] --> MV[物化视图触发]
-    MV --> AGG[按 hour+event_type 聚合]
-    AGG --> MT[预聚合表 SummingMergeTree]
-    Q[报表查询] --> MT
-    style MV fill:#f0682a,stroke:#fff,color:#fff
-</div>
-
-<h2>Projection：自动选最佳排序</h2>
-<p>24.x 之后 Projection（投影）是个很香的特性。它允许你对同一张明细表额外维护一个"按另一套 ORDER BY 排序的物理副本"，查询时优化器自动判断用哪个排序更快，对业务透明。</p>
-<pre><code class="language-sql">ALTER TABLE event_log
-ADD PROJECTION proj_by_user
-(
-    SELECT user_id, event_time, event_type
-    ORDER BY user_id
-);</code></pre>
-<p>比如你一张表按 (event_type, event_time) 排序，但偶尔又要按 user_id 查"某用户的所有事件"——这种查询原本要全表扫。加了 proj_by_user，优化器自动走按 user_id 排序的投影，查询快几个数量级。代价是多一份存储和写入开销。</p>
-<div class="callout callout-danger">
-<div class="callout-title">Projection 不是银弹</div>
-<p>Projection 会让写入变慢、存储翻倍。一个表挂三四个 Projection，写入吞吐可能腰斩。我的原则：先确认这个查询真的高频且慢，再上 Projection。低频偶发的查询，宁可让它慢一点，也别拖累写入。</p>
-</div>
-
-<h2>GROUP BY 优化</h2>
-<p>聚合是 ClickHouse 的主场，但 <code>GROUP BY</code> 也有坑。最常见的是聚合键基数太高，内存爆掉：</p>
-<pre><code class="language-sql">-- 按 user_id 聚合，亿级用户，中间状态能把内存吃满
-SELECT user_id, count() FROM event_log
-WHERE event_time &gt;= '2026-09-01'
-GROUP BY user_id;</code></pre>
-<p>解决办法：让 ClickHouse 把溢写数据落盘。关键设置：</p>
-<pre><code class="language-sql">-- 内存超过 1GB 就溢写磁盘，避免 OOM
-SET max_bytes_before_external_group_by = 1000000000;
-SET max_memory_usage = 10000000000;  -- 单查询 10GB 上限</code></pre>
-<p>另外 <code>GROUP BY</code> 的列尽量和 ORDER BY 对齐——数据已经按那列排好序了，聚合就是顺序扫描，不用建大哈希表。这就是为什么把高频聚合列放进 ORDER BY 这么重要。</p>
-
-<h2>并发查询与资源控制</h2>
-<p>ClickHouse 是"少并发、大批量"的引擎。你同时塞 100 个大查询进来，每个都抢 CPU 和内存，全变慢。生产上要做并发控制：</p>
-<table>
-<thead><tr><th>参数</th><th>作用</th><th>我的建议</th></tr></thead>
-<tbody>
-<tr><td>max_concurrent_queries</td><td>节点最大并发查询数</td><td>CPU 核数 ×2，别盲目调大</td></tr>
-<tr><td>max_memory_usage</td><td>单查询内存上限</td><td>物理内存 1/4，防单查询吃满</td></tr>
-<tr><td>max_threads</td><td>单查询并行线程数</td><td>= CPU 核数</td></tr>
-<tr><td>queue_max_wait_ms</td><td>排队等待超时</td><td>让慢查询排队而不是挤爆</td></tr>
-</tbody>
-</table>
-
-<h2>慢查询排查流程</h2>
-<p>线上遇到慢查询，我按这个顺序查：</p>
-<ol>
-<li><strong>查 query_log</strong>：<code>SELECT query, query_duration_ms, read_rows, read_bytes FROM system.query_log WHERE ... ORDER BY query_duration_ms DESC LIMIT 20</code>。看 read_rows 是不是远大于预期行数。</li>
-<li><strong>看分区裁剪</strong>：EXPLAIN 看读了几个分区。read_rows 大往往是没带时间条件。</li>
-<li><strong>看是否用了索引</strong>：EXPLAIN 里 granule 跳过率。没跳过就是过滤列不在主键/跳数索引里。</li>
-<li><strong>看是否溢写磁盘</strong>：<code>read_from_disk</code> 标志位。GROUP BY/JOIN 中间数据落盘就慢了，调大内存上限或优化聚合键。</li>
-<li><strong>看是不是大表 JOIN</strong>：ClickHouse 不擅长多表大 JOIN。能预聚合到一张表就别 JOIN。</li>
-</ol>
-
-<h2>FAQ</h2>
-<p><strong>Q：为什么我的查询 EXPLAIN 显示读了全部分区？</strong><br/>大概率 WHERE 里没带分区键（event_time），或者分区键表达式和 WHERE 对不上。比如 <code>PARTITION BY toYYYYMMDD(event_time)</code>，但你 WHERE 里写的是 <code>toDate(ts)</code> 另一个字段，ClickHouse 认不出来。分区键必须和 WHERE 里的表达式能对上。</p>
-<p><strong>Q：物化视图建了之后，历史数据会补吗？</strong><br/>不会。物化视图只对建视图之后新写入的数据生效。要补历史，得手动 <code>INSERT INTO mv SELECT ... FROM 明细表</code> 回填。</p>
-<p><strong>Q：uniq 为什么结果不准？</strong><br/><code>uniq</code> 和 <code>uniqCombined</code> 是近似去重（基于 HLL），有 1%~2% 误差。要精确用 <code>uniqExact</code>，但它吃内存。报表场景近似就够，财务对账才上 exact。</p>
-
-<h2>我的结论</h2>
-<p>ClickHouse 查询优化的核心就一句话：<strong>少扫数据</strong>。分区裁剪让你不读无关分区，主键索引让你不读无关 granule，跳数索引让你不读无关列块，物化视图和 Projection 让你直接读预聚合结果。剩下的就是控制并发和内存，别让一个慢查询把整个节点拖垮。下一篇我们把这些优化手段放到真实业务场景里，看看日志分析和实时报表怎么搭。</p>
-
 
                     </div>
                 </article>

@@ -81,179 +81,70 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Jenkins Pipeline</h1>
+                        <h1 class="article-title">Jenkins：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Jenkins,CI/CD</span>
+                            <span class="meta-item">🏷️ Jenkins</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2 id="bg">一、Jenkins 的定位：灵活到"什么都能做"</h2>
-<p>Jenkins 诞生于 2011 年（前身 Hudson），是 CI/CD 领域的"活化石"。它没有被 GitHub Actions、GitLab CI 这些后起之秀淘汰，靠的是极其丰富的插件生态和私有化部署能力。</p>
-<h2 id="concepts">二、核心概念与 Pipeline as Code</h2>
-<p>现代 Jenkins 的正确用法不是在 UI 上点配，而是用 <strong>Jenkinsfile</strong> 描述流水线并提交进代码仓库（Pipeline as Code）。Jenkinsfile 有两种语法：</p>
-<ul>
-<li><strong>Declarative Pipeline（声明式）</strong>：结构化、受校验、推荐用于大多数场景，结构是 <code>pipeline { agent any stages { stage('Build') { steps { ... } } } }</code>。</li>
-<li><strong>Scripted Pipeline（脚本式）</strong>：基于 Groovy 的命令式写法，灵活但难维护，只在需要复杂逻辑（动态分支、条件循环）时使用。</li>
-</ul>
-<p>核心术语：<code>agent</code>（执行节点）、<code>stage</code>（阶段，对应流水线可视化上的一个方块）、<code>steps</code>（步骤）、<code>post</code>（后置处理，无论成功失败都执行清理/通知）、<code>environment</code>（环境变量与凭证绑定）。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Jenkins怎么帮你解决。</p>
+
 <div class="mermaid">
 flowchart LR
-    A[Git 仓库<br/>Jenkinsfile] --> B[Jenkins Master<br/>调度/渲染]
-    B --> C[Agent 节点 1<br/>Build ＆ UnitTest]
-    B --> D[Agent 节点 2<br/>Integration Test]
-    C --> E[制品仓库<br/>镜像/jar]
-    D --> E
-    E --> F[部署<br/>测试环境]
-    F --> G{人工审批<br/>input}
-    G --> H[生产环境]
-    style B fill:#7c3aed,color:#fff
-    style G fill:#f59e0b,color:#fff
-    style H fill:#10b981,color:#fff
+    A[代码 push] --> B[Jenkins]
+    B --> C[拉代码]
+    B --> D[构建]
+    B --> E[测试]
+    B --> F[部署]
 </div>
-<h2 id="install">三、安装：用 Docker 快速起一套</h2>
-<p>不推荐在裸机上裸装，Docker 方式最干净，升级、迁移、备份都容易：</p>
-<pre><code class="language-bash"># 1. 拉取 LTS 镜像并启动，挂载数据目录
-docker run -d --name jenkins \
-  -p 8080:8080 -p 50000:50000 \
-  -v jenkins_home:/var/jenkins_home \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  jenkins/jenkins:lts-jdk17
 
-# 2. 查看初始管理员密码
-docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+<h2>1. 想自己搭 CI/CD</h2>
 
-# 3. 浏览器打开 http://localhost:8080，选择 "Install suggested plugins"
-# 4. 安装必备插件：Pipeline、Git、Docker、Kubernetes Credentials、Role-based Authorization Strategy
-# 5. 新建任务 → 选择 Pipeline → Definition 选 "Pipeline script from SCM"，指向仓库里的 Jenkinsfile</code></pre>
-<p>把 <code>/var/run/docker.sock</code> 挂进容器，是为了让 Jenkins 容器内部能调用 Docker（即"Docker outside Docker"模式）来构建镜像。生产环境更推荐 Kubernetes 插件：让每个流水线动态申请一个 Pod 作为 agent，用完即毁，比固定机器资源利用率高得多。</p>
-
-<div class="callout callout-warning">
-<div class="callout-title">我踩过的坑：插件地狱</div>
-<p>有次我升级 Jenkins，点了"全部更新插件"，结果 Pipeline 插件和某个旧插件版本不兼容，整个流水线全部挂掉。回滚都来不及——备份忘了做。从那以后我定了三条规矩：① 升级前先在测试实例跑一遍；② 插件更新逐个来，别一键全更；③ 每周备份一次 JENKINS_HOME。Jenkins 本身不难，难的是养它。</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>不想用 GitHub Actions，想自己控制流水线。</p>
 </div>
-<h2 id="example1">四、实战示例 1：声明式 Jenkinsfile 完整流水线</h2>
-<p>下面是一个 Java/Maven 项目的标准流水线：拉代码 → 编译测试 → 构建镜像 → 部署测试环境 → 等待人工审批 → 生产发布。所有凭证通过 <code>credentials()</code> 注入，绝不明文：</p>
-<pre><code class="language-groovy">pipeline {
-  agent any
-  options {
-    timestamps()
-    buildDiscarder(logRotator(numToKeepStr: '20'))
-    timeout(time: 30, unit: 'MINUTES')
-  }
-  environment {
-    IMAGE = "registry.example.com/app:${BUILD_NUMBER}"
-  }
-  stages {
-    stage('Checkout &amp; Test') {
-      steps {
-        checkout scm
-        sh 'mvn -B -DskipTests=false clean test'
-      }
-    }
-    stage('Build Image') {
-      steps {
-        sh 'mvn -B package -DskipTests'
-        sh "docker build -t ${IMAGE} ."
-        withCredentials([usernamePassword(credentialsId: 'registry-cred',
-                                         usernameVariable: 'REG_USER',
-                                         passwordVariable: 'REG_PASS')]) {
-          sh 'echo $REG_PASS | docker login registry.example.com -u $REG_USER --password-stdin'
-          sh "docker push ${IMAGE}"
-        }
-      }
-    }
-    stage('Deploy Staging') {
-      steps {
-        sh "kubectl set image deployment/app app=${IMAGE} -n staging"
-      }
-    }
-    stage('Approve &amp; Deploy Prod') {
-      steps {
-        input message: '确认发布到生产？', ok: '发布'
-        sh "kubectl set image deployment/app app=${IMAGE} -n production"
-      }
-    }
-  }
-  post {
-    success { echo 'Pipeline succeeded' }
-    failure { echo 'Pipeline failed, notify on-call' }
-    always  { sh 'docker image prune -f || true' }
-  }
-}</code></pre>
-<p>几个关键点：<code>options</code> 里的 <code>buildDiscarder</code> 自动清理历史构建，防止磁盘写满；<code>input</code> 步骤天然实现"人工卡点"，比外部审批系统更内聚；<code>post.always</code> 保证无论成败都清理悬空镜像——这是 Jenkins 跑久了磁盘爆掉的最常见原因。</p>
-<h2 id="example2">五、实战示例 2：Dockerfile 与多分支并行</h2>
-<p>配合上面流水线使用的多阶段 Dockerfile，以及多分支流水线配置：</p>
-<pre><code class="language-dockerfile"># ---- 构建阶段 ----
-FROM maven:3.9-eclipse-temurin-17 AS build
-WORKDIR /src
-COPY pom.xml .
-RUN mvn -B dependency:go-offline          # 先缓存依赖层
-COPY src ./src
-RUN mvn -B package -DskipTests
 
-# ---- 运行阶段 ----
-FROM eclipse-temurin:17-jre-alpine
-RUN addgroup -S app &amp;&amp; adduser -S app -G app
-WORKDIR /app
-COPY --from=build /src/target/*.jar app.jar
-USER app
-EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]</code></pre>
-<pre><code class="language-groovy">// Jenkinsfile 顶部添加：按分支决定行为
-pipeline {
-  agent any
-  stages {
-    stage('Build') {
-      steps { echo "building branch=${env.BRANCH_NAME}" }
-    }
-    stage('Deploy') {
-      when {
-        branch 'main'          // 只有 main 分支才部署
-      }
-      steps { echo 'deploy to prod' }
-    }
-    stage('Preview') {
-      when {
-        allOf { branch 'feature/*'; environment name: 'RUN_IT', value: 'true' }
-      }
-      steps { echo '部署预览环境' }
-    }
-  }
-}</code></pre>
-<p><code>when { branch 'main' }</code> 实现了"只在主干部署"，feature 分支只跑构建测试；结合 Multibranch Pipeline 任务，Jenkins 会自动为每个分支/PR 建一条流水线，这就是企业级"分支即环境"的基础。</p>
-<h2 id="practice">六、最佳实践</h2>
-<ul>
-<li><strong>Jenkinsfile 入库</strong>：流水线和代码同仓，改动走 review，UI 只留触发器和凭据。</li>
-<li><strong>用 Kubernetes Agent</strong>：固定 agent 机器资源利用率低且堆积脏状态，动态 Pod agent 按需启停。</li>
-<li><strong>插件治理</strong>：插件越多越脆。定期用 "Plugin Installation Manager" 清理未用插件，升级前先在测试实例验证，千万别在凌晨点"全部更新"。</li>
-<li><strong>凭证集中管理</strong>：所有密钥走 Credentials 绑定 ID，Jenkinsfile 里只引用 ID，禁止 <code>export PASS=xxx</code>。</li>
-<li><strong>主从分离 + 备份</strong>：Master 只做调度，构建全放 agent；定期备份 <code>JENKINS_HOME</code>（任务、凭据、历史都在这里）。</li>
-<li><strong>共享库复用</strong>：团队多项目时把公共步骤抽成 Shared Library，各仓库 Jenkinsfile 只写业务差异。</li>
-</ul>
-<h2 id="faq">七、常见问题 FAQ</h2>
-<h3>Q1：Jenkins 构建动不动卡住，日志不更新怎么办？</h3>
-<p>先看"Executor 数量"是否被占满：系统管理 → 节点管理，看是否所有 executor 都在跑，卡住的任务是否僵尸进程。常见根因：① 某个 step 在等输入（比如交互式命令）；② Docker daemon 卡死，挂 socket 的 Jenkins 跟着挂；③ 磁盘满导致写日志阻塞。排查顺序：看系统日志、磁盘空间、Docker 状态，必要时重启 agent 而非 Master。</p>
-<h3>Q2：Jenkins 和 GitHub Actions 怎么选？</h3>
-<p>三个判断维度：代码在 GitHub 且无强私有化要求 → GHA；代码在 GitLab 自建 → GitLab CI；必须内网、需要对接企业自有系统（如内部制品库、堡垒机审批、国产化平台）→ Jenkins。Jenkins 的隐性成本是"有人维护"，如果团队没有全职运维 CI 的人，选托管方案能省一半心。</p>
-<h3>Q3：多分支流水线里，每个 PR 都部署一个环境会不会太浪费？</h3>
-<p>直接给每个 PR 起一套完整环境确实贵，常见折中：① PR 阶段只跑构建+测试，不部署；② 需要联调时手动触发部署到"预览命名空间"，用 K8s 的 namespace + 域名前缀隔离，用后即毁；③ 资源按命名空间设 limit，防止单个 PR 吃满集群。</p>
-<h2 id="summary">八、总结</h2>
-<p>Jenkins 的价值在于"完全可控"：声明式 Pipeline 把流程结构化，Kubernetes Agent 把执行环境弹性化，插件生态把一切系统接进来。它的门槛不是语法，而是运维——插件治理、备份、权限、性能，这些是把 Jenkins 用稳的真功夫。</p>
+<p><strong>怎么解决？</strong>Jenkins 是最常用的开源 CI/CD 工具，插件多，灵活。</p>
+
+<h2>2. 流水线怎么配</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>装好了 Jenkins，不知道怎么配流水线。</p>
+</div>
+
+<p><strong>怎么解决？</strong>写 Jenkinsfile，把构建流程代码化。</p>
+
+<h2>3. Jenkins 太重了</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>大项目用 Jenkins 没问题，小项目用它太重了。</p>
+</div>
+
+<p><strong>怎么解决？</strong>小项目用 GitHub Actions、Gitea Actions 更轻量。</p>
+
+<h2>Jenkins 特点</h2>
 
 <table>
-<thead><tr><th>维度</th><th>Jenkins</th><th>GitHub Actions</th><th>GitLab CI</th></tr></thead>
+<thead><tr><th>特点</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>部署模式</td><td>自托管</td><td>SaaS</td><td>自托管/SaaS</td></tr>
-<tr><td>插件生态</td><td>1800+，最丰富</td><td>Marketplace</td><td>内置为主</td></tr>
-<tr><td>运维成本</td><td>高（需专人维护）</td><td>零</td><td>低（随 GitLab 一起）</td></tr>
-<tr><td>内网部署</td><td>原生支持</td><td>需自托管 Runner</td><td>原生支持</td></tr>
-<tr><td>配置复杂度</td><td>高（Groovy）</td><td>低（YAML）</td><td>中（YAML）</td></tr>
-<tr><td>适合团队</td><td>大企业/合规要求</td><td>中小团队/开源</td><td>GitLab 用户</td></tr>
-</tbody>
-</table>
+<tr><td>开源</td><td>免费</td></tr>
+<tr><td>插件多</td><td>几乎所有工具都有插件</td></tr>
+<tr><td>灵活</td><td>什么都能做</td></tr>
+<tr><td>配置麻烦</td><td>要自己维护服务器</td></tr>
+</tbody></table>
 
-<p>如果你的组织已经有 Jenkins，把现有"点选式任务"逐步迁移成 Jenkinsfile 入库，就是性价比最高的改造。下一篇看 GitLab CI——当代码和流水线同处一个平台时，配置能简洁到什么程度。</p>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>用流水线即代码</strong>不要在网页上点来点去，用 Jenkinsfile 代码化。</li>
+<li><strong>定期清理构建</strong>构建记录太多会占磁盘，要定期清理。</li>
+</ul>
+</div>
+
                     </div>
                 </article>
                 <nav class="article-nav">

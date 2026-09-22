@@ -81,173 +81,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">SQL 注入防护</h1>
+                        <h1 class="article-title">SQL 注入防护：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Web安全,网络安全,安全实践</span>
+                            <span class="meta-item">🏷️ SQL注入</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及SQL注入怎么帮你解决。</p>
 
-<h2>SQL 注入：一个 1998 年被披露的漏洞，为什么 2026 年还在刷榜</h2>
-<p>SQL 注入（SQLi）是 Web 安全里历史最久、原理最简单、危害最直观的漏洞。1998 年 Rain Forest Puppy 在 Phrack 杂志上披露了第一个完整的 SQLi 利用过程；25 年后，它依然是 O...</p>
-<p>2019 年某社交平台 5 亿用户数据泄露、2022 年某 ERP 厂商被勒索，根因都是 SQLi。原因不复杂：<strong>只要你还在拼字符串写 SQL，你就在赌"用户输入永远不包含引号"</strong>。</p>
-<p>SQLi 的本质是<strong>控制流与数据流混淆</strong>：程序员期望变量是"数据"（一个 ID、一个名字），攻击者把它变成了"控制流"（一段新的 SQL 语句）。一旦数据库把攻击者的输入当成 SQL 语法的一部分来解析，整个数据库的防线就塌了。</p>
-
-<h2>攻击原理：从一个引号到拖库</h2>
 <div class="mermaid">
-flowchart TB
-    APP[应用代码] -->|拼接 SQL 字符串| DB[(数据库)]
-    ATT[攻击者输入 单引号 OR 永真] --> APP
-    DB -->|拼接后变成永真条件| RESULT[返回全表]
-    ATT2[UNION 注入 查询用户表] --> DB
-    DB -->|拖出凭据表| CREDS[管理员密码泄露]
-    ATT3[盲注 SLEEP 时间延迟] --> DB
-    DB -->|根据响应时间逐位猜数据| BLIND[盲出整列数据]
+flowchart LR
+    A[用户输入] --> B[拼接到SQL]
+    B --> C[执行任意SQL]
+    C --> D[数据泄露/被删]
 </div>
 
-<h2>攻击演示：三种典型注入手法</h2>
-<pre><code class="language-python"># 漏洞代码：字符串拼接 SQL
-@app.route("/user")
-def user():
-    uid = request.args.get("id")
-    # ❌ 用户输入直接拼进 SQL
-    sql = "SELECT id, name, email FROM users WHERE id = " + uid
-    row = db.execute(sql).fetchone()
-    return jsonify(dict(row) if row else {})
-</code></pre>
-<p>攻击者访问 <code>/user?id=1 OR 1=1</code> 就能拿到全表；访问 <code>/user?id=1 UNION SELECT username,password,role FROM admins--</code> 就能拖出管理员凭据。如果页面不直接返回数据（只显示成功/失败），还能用<strong>盲注</strong>：</p>
-<pre><code class="language-bash"># 布尔盲注：页面有差异
-curl "https://example.com/user?id=1 AND SUBSTRING((SELECT password FROM admins LIMIT 1),1,1)='a'"
+<h2>1. 怎么会被 SQL 注入</h2>
 
-# 时间盲注：通过响应时间逐字符猜
-curl "https://example.com/user?id=1 AND IF(SUBSTRING((SELECT password),1,1)='a',SLEEP(3),0)"
-# 响应耗时 3 秒 → 第一位是 'a'；以此类推
-</code></pre>
-<p>更隐蔽的是<strong>二阶注入</strong>：用户注册时名字被正常转义入库，后续业务代码从数据库再读出来拼进 SQL，此时字符串已经"合法"过一次，静态扫描很难发现。</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你直接把用户输入拼到 SQL 里，别人输入 `1 OR 1=1`，直接查出所有数据。</p>
+</div>
 
-<h2>防御第一层：参数化查询（Prepared Statement）</h2>
-<p>参数化查询的关键是：<strong>SQL 语法先于数据发送给数据库编译，数据永远以独立参数绑定，不会被解析为语法</strong>。这是根治 SQLi 的唯一手段。</p>
-<pre><code class="language-go">// Go database/sql：占位符 + 参数绑定
-import "database/sql"
+<p><strong>怎么解决？</strong>用参数化查询，不要拼接 SQL。</p>
 
-func getUserByID(db *sql.DB, id string) (*User, error) {
-    u := &amp;User{}
-    // ✅ ? 是占位符，id 永远作为参数传入，不会进入 SQL 语法解析
-    err := db.QueryRow(
-        "SELECT id, name, email FROM users WHERE id = ?",
-        id,
-    ).Scan(&amp;u.ID, &amp;u.Name, &amp;u.Email)
-    return u, err
-}
+<h2>2. 怎么防止 SQL 注入</h2>
 
-// 批量查询同样安全
-func listUsers(db *sql.DB, ids []int) ([]User, error) {
-    placeholders := make([]string, len(ids))
-    args := make([]interface{}, len(ids))
-    for i, id := range ids {
-        placeholders[i] = "?"
-        args[i] = id
-    }
-    query := "SELECT id, name FROM users WHERE id IN (" +
-        strings.Join(placeholders, ",") + ")"
-    rows, err := db.Query(query, args...)
-    // ...
-}
-</code></pre>
-<pre><code class="language-python"># Python：psycopg2 / sqlite3 同样用参数化（注意不是字符串拼接！）
-import psycopg2
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道有风险，不知道怎么防。</p>
+</div>
 
-def get_user(conn, uid: str):
-    # ✅ 用 %s 占位符 + 参数元组
-    with conn.cursor() as cur:
-        cur.execute("SELECT id, name, email FROM users WHERE id = %s", (uid,))
-        return cur.fetchone()
+<p><strong>怎么解决？</strong>参数化查询 + 输入校验 + 最小权限账号。</p>
 
-# ❌ 反面教材：f-string 拼接，任何输入都能注入
-# cur.execute(f"SELECT * FROM users WHERE id = '{uid}'")
+<h2>3. ORM 就安全吗</h2>
 
-# ORM（SQLAlchemy）默认也是参数化的：
-from sqlalchemy import text
-db.session.execute(text("SELECT * FROM users WHERE id = :uid"), {"uid": uid})
-</code></pre>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>用 MyBatis、Hibernate 就不会注入了吗？</p>
+</div>
 
-<h2>防御第二层：ORM 与查询构造器</h2>
-<pre><code class="language-go">// GORM：链式 API 默认参数化
-db.Where("id = ?", uid).First(&amp;user)
-db.Where("id IN ?", []int{1, 2, 3}).Find(&amp;users)
+<p><strong>怎么解决？</strong>用 #{} 是安全的，用 ${} 还是会注入。</p>
 
-// ⚠️ 注意：GORM 的 Order/Where 原生字符串仍可能有风险
-// db.Order("name " + userInput)   // ❌ 攻击者可注入 "id; DROP TABLE users;--"
-// 正确做法：白名单排序字段
-allowedSorts := map[string]bool{"name": true, "created_at": true}
-if !allowedSorts[sortBy] { sortBy = "created_at" }
-db.Order(sortBy)
-</code></pre>
-
-<h2>防御第三层：最小权限与数据库侧兜底</h2>
-<pre><code class="language-sql">-- 应用账号只给业务库的 CRUD，不给 DDL、不给 super
-CREATE USER 'app_rw'@'%' IDENTIFIED BY 'strong-password';
-GRANT SELECT, INSERT, UPDATE ON appdb.orders TO 'app_rw'@'%';
-GRANT SELECT ON appdb.orders TO 'app_ro'@'%';  -- 只读副本账号
--- 禁止文件读写、禁止存储过程：
--- FILE / PROCESS / SUPER 权限一律不给
--- 即使被注入，攻击者也无法 SELECT ... INTO OUTFILE 写 WebShell
-</code></pre>
-<pre><code class="language-yaml"># Kubernetes Secret + 按命名空间分发数据库凭据（最小权限落地）
-apiVersion: v1
-kind: Secret
-metadata:
-  name: orders-db-credentials
-type: Opaque
-stringData:
-  username: app_rw
-  password: ${DB_PASSWORD_FROM_VAULT}
----
-apiVersion: apps/v1
-kind: Deployment
-# ... 容器以非 root 运行，只挂载本服务需要的 Secret
-</code></pre>
-
-<h2>最佳实践</h2>
+<h2>防护手段</h2>
 
 <table>
-<thead><tr><th>防御层</th><th>手段</th><th>效果</th><th>是否根治</th></tr></thead>
+<thead><tr><th>手段</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>第一层</td><td>参数化查询（Prepared Statement）</td><td>数据与语法分离</td><td>✅ 根治</td></tr>
-<tr><td>第二层</td><td>ORM / 查询构造器</td><td>默认参数化，但 raw() 有风险</td><td>⚠️ 需审查</td></tr>
-<tr><td>第三层</td><td>数据库账号最小权限</td><td>即使注入也无法 DROP/写文件</td><td>兜底</td></tr>
-<tr><td>第四层</td><td>WAF（ModSecurity CRS）</td><td>挡已知 Payload 和扫描器</td><td>❌ 可绕过</td></tr>
-</tbody>
-</table>
+<tr><td>参数化查询</td><td>用 ? 占位，不要拼接</td></tr>
+<tr><td>输入校验</td><td>校验输入格式</td></tr>
+<tr><td>最小权限</td><td>数据库账号不要给管理员权限</td></tr>
+</tbody></table>
 
-<div class="callout callout-danger">
-<div class="callout-title">我踩过的坑：GORM 的 Order 注入</div>
-<p>有次排序功能用了 <code>db.Order(c.Request.Query("sort"))</code>，以为 GORM 就安全。结果有人传了 <code>sort=id; DROP TABLE users;--</code>。还好我们是 MySQL，多语句执行默认关闭，没炸库。从那以后排序字段全走白名单。<strong>ORM 的链式 API 安全，但 Order/Where 里拼用户输入就是自己给自己挖坑</strong>。</p>
-</div>
-
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>永远不用字符串拼接 SQL</strong>，code review 里见 <code>f"...{var}..."</code> 拼 SQL 直接打回。</li>
-<li>ORM 不是万能的：<code>raw()</code>、<code>Order(用户输入)</code>、<code>Where(原生字符串)</code> 三个口子要重点审。</li>
-<li>数据库账号最小权限：应用账号不给 <code>DROP/ALTER/FILE/SUPER</code>，只读报表用只读账号。</li>
-<li>错误信息不要回显 SQL 原文（"You have an error in your SQL syntax"），统一返回 500。</li>
-<li>预发环境用 OWASP ZAP / sqlmap 自动跑一遍，重点测搜索、详情、筛选、排序参数。</li>
-<li>WAF 作为兜底（ModSecurity OWASP CRS 规则集），但不要替代参数化。</li>
-<li>对 LIKE 查询做特殊处理：<code>%</code>、<code>_</code> 是通配符，要转义，否则会变成慢查询攻击。</li>
+<li><strong>不要拼接 SQL</strong>永远用参数化查询，不要拼字符串。</li>
+<li><strong>${} 要慎用</strong>MyBatis 里 ${} 会直接替换，容易注入。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：用了 ORM 是不是就彻底没有 SQL 注入了？</h3>
-<p>不是。ORM 的链式 API 默认安全，但只要你调用 <code>raw()</code> / <code>原生 SQL 片段</code> / 把用户输入拼进 ORDER BY / 表名 / 列名，注入就回来了。ORM 挡不住"你主动绕过它"的场景。</p>
-<h3>Q2：预编译能防 LIKE 注入吗？<code>%</code> 怎么办？</h3>
-<p>预编译能防引号闭合类注入，但 <code>%</code> 和 <code>_</code> 是 SQL 通配符，不是注入字符。如果不希望用户输入通配符，需要在应用层把 <code>%</code> <code>_</code> 转义成 <code>\%</code> <code>\_</code>，否则会导致全表扫描式慢查询。</p>
-<h3>Q3：NoSQL（MongoDB）就没有注入问题了吗？</h3>
-<p>有，只是形式不同。MongoDB 的 <code>$where</code> 接受 JS 表达式、<code>$gt</code> 操作符可以从请求体注入（<code>{"password": {"$ne": null}}</code> 绕过登录）。Mongoose 默认会过滤查询对象，但如果你用 <code>Mixed</code> 类型或 <code>$where</code>，一样要小心。</p>
-<h3>Q4：参数化查询会影响性能吗？</h3>
-<p>现代数据库对预编译语句有执行计划缓存，<strong>重复执行的性能比拼接 SQL 还好</strong>——因为拼接每次都要硬解析。只有首次编译略有开销，这点开销相对于安全收益可以忽略。</p>
-
-<h2>总结</h2>
-<p>SQL 注入的修复只有一条铁律：<strong>数据与 SQL 语法必须分离，参数化是唯一根治方案</strong>。ORM 是加速器不是替代品，最小权限是兜底，WAF 是最后一道墙。下一篇我们离开数据层，进入攻击者最爱突破的门面——认证授权，看 JWT、OAuth 2.0、OIDC 这三个常被误解的协议各自解决什么问题、又在哪里被误用。</p>
+</div>
 
                     </div>
                 </article>

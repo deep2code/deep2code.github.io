@@ -81,236 +81,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Kafka 分区与副本</h1>
+                        <h1 class="article-title">Kafka 分区：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Kafka,分区,副本,存储引擎</span>
+                            <span class="meta-item">🏷️ Kafka 分区</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-
-<h2 id="背景">理解存储引擎才能调优 Kafka</h2>
-<p> Kafka 当消息队列用，从不关心它在磁盘上是怎么存的。但当你遇到"为什么消费延迟突然飙升""为什么 Partition 不均衡""Leader 切换为什么会丢消息"这些问题时，就必须搞懂分区的底层原理。</p>
-
-<h2 id="partition-storage">Partition 物理存储结构</h2>
-<p>每个 Partition 对应文件系统上的一个目录，命名规则是 <code>{topic}-{partition}</code>。目录内由多个<strong>日志段（LogSegment）</strong>组成，每个日志段包含三个文件：</p>
-<ul>
-<li><code>00000000000000001234.log</code>：消息数据文件，实际存储消息的 key/value 和时间戳</li>
-<li><code>00000000000000001234.index</code>：偏移量索引，记录"第 N 条消息在 .log 文件的字节位置"</li>
-<li><code>00000000000000001234.timeindex</code>：时间戳索引，按时间戳查 Offset</li>
-</ul>
-<p>日志段按 <code>log.segment.bytes</code>（默认 1GB）或 <code>log.segment.ms</code>（默认 7 天）滚动。当前活跃段（Active Segment）是唯一一个可写的，旧段只读。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Kafka 分区怎么帮你解决。</p>
 
 <div class="mermaid">
-graph TD
-    subgraph TopicOrders [Topic orders 4 Partitions]
-        P0[Partition 0]
-        P1[Partition 1]
-        P2[Partition 2]
-        P3[Partition 3]
-    end
-
-    subgraph P0Dir [orders-0 directory]
-        SEG1[00000000000000000000 log/index/timeindex]
-        SEG2[0000000000000001234 log/index/timeindex]
-        SEG3[0000000000000005678 log/index/timeindex  Active]
-    end
-
-    subgraph QueryFlow [Offset lookup process]
-        Q1[1. Binary search .index] --> Q2[2. Find nearest coarse index]
-        Q2 --> Q3[3. Sequential scan .log to target]
-    end
-
-    P0 --> P0Dir
-    style SEG3 fill:#4CAF50,color:#fff
-    style SEG1 fill:#9E9E9E,color:#fff
-    style SEG2 fill:#9E9E9E,color:#fff
+flowchart TB
+    A[Topic] --> B[Partition 0]
+    A --> C[Partition 1]
+    A --> D[Partition 2]
+    B & C & D --> E[并行处理]
 </div>
 
-<h3>稀疏索引的精妙设计</h3>
-<p>你可能会问：为什么不为每条消息都建索引？那索引文件会和数据文件一样大，内存都装不下。Kafka 用的是<strong>稀疏索引</strong>——每写 4KB 数据才在 .index 里记一条索引项。查找时先二分 .index 找到最近的粗索引项，再顺序扫描 .log 文件定位精确 Offset。这个设计把索引内存占用降到极低（通常只有数据量的 1% 左右），而查找成本仍然是 O(log N) 的。</p>
+<h2>1. Kafka 怎么提高吞吐量</h2>
 
-<h2 id="replication">副本机制：Leader 与 Follower</h2>
-<p>每个 Partition 有一个 Leader 和 N-1 个 Follower。所有读写请求都走 Leader，Follower 只做<strong>数据拉取同步</strong>。这个设计和 MySQL 主从复制类似，但有几个关键区别：</p>
-<ul>
-<li>Follower 是<strong>主动拉</strong>（Pull），不是 Leader 推。这避免了 Leader 被慢 Follower 拖慢，也天然实现了批量传输。</li>
-<li>消费者<strong>永远不从 Follower 读</strong>。即使你在地理上离 Follower 更近，Kafka 也不允许从 Follower 消费——这保证了读取一致性（Leader 是唯一权威）。</li>
-</ul>
-
-<h3>ISR：In-Sync Replicas</h3>
-<p>ISR 是当前与 Leader 保持同步的副本集合。Follower 落后超过 <code>replica.lag.time.max.ms</code>（默认 30 秒）会被踢出 ISR。当 Leader 宕机时，Controller 从 ISR 中选一个新 Leader——<strong>只有 ISR 中的副本保证数据不丢</strong>。</p>
-
-<div class="mermaid">
-graph LR
-    subgraph Partition [Partition: orders-0]
-        direction TB
-        LEADER[Leader Broker1 LEO:1000 HW:950]
-
-        subgraph ISR
-            F1[Follower Broker2 LEO:990 HW:950]
-            F2[Follower Broker3 LEO:985 HW:950]
-        end
-
-        subgraph OutOfSync
-            F3[Follower Broker4 LEO:800 lag 30s+]
-        end
-    end
-
-    LEADER -.->|Fetch| F1
-    LEADER -.->|Fetch| F2
-    LEADER -.->|Fetch| F3
-    F1 -.->|Response| LEADER
-    F2 -.->|Response| LEADER
-
-    style LEADER fill:#4CAF50,color:#fff
-    style F1 fill:#2196F3,color:#fff
-    style F2 fill:#2196F3,color:#fff
-    style F3 fill:#F44336,color:#fff
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>单分区太慢了，怎么提高？</p>
 </div>
 
-<h3>LEO 与 HW</h3>
-<p>两个关键水位线：</p>
-<ul>
-<li><strong>LEO（Log End Offset）</strong>：日志末尾的下一条待写入 Offset。每个副本自己维护。</li>
-<li><strong>HW（High Watermark）</strong>：所有 ISR 副本都已复制到的最高 Offset。只有 HW 以下的消息才对消费者可见。</li>
-</ul>
-<p>为什么需要 HW？考虑这个场景：Leader 写入消息 Offset=1000，Follower A 同步到了，Follower B 还没同步。此时 Leader 宕机，Follower A 被选为新 Leader。旧 Leader 重启后，它上面 Offset=1000 的消息对新 Leader 来说是"多余的"，需要截断到新 Leader 的 LEO。HW 就是这个截断点的依据——<strong>HW 以下的消息一定已被所有 ISR 复制，不会截断</strong>。</p>
+<p><strong>怎么解决？</strong>一个 Topic 分多个分区，并行生产消费。</p>
 
-<h2 id="leader-election">Leader 选举流程</h2>
-<p>KRaft 模式下，Controller 监控 Broker 心跳。某个 Broker 挂了，Controller 做以下事情：</p>
-<ol>
-<li>识别该 Broker 上的所有 Partition Leader</li>
-<li>从每个 Partition 的 ISR 列表中选第一个存活副本作为新 Leader</li>
-<li>更新元数据（存到 <code>__cluster_metadata</code> Topic）</li>
-<li>通知所有 Broker 和客户端元数据变更</li>
-</ol>
-<p>整个过程通常在 3~5 秒内完成（KRaft 模式）。在这期间，受影响的 Partition 不可写（生产者 <code>acks=all</code> 会超时），但如果生产者配置了重试，会自动切换到新 Leader 继续写。</p>
+<h2>2. 分区数怎么定</h2>
 
-<h2 id="topic-ops">Topic 与 Partition 运维命令</h2>
-<pre><code class="language-bash"># 创建 Topic
-kafka-topics.sh --bootstrap-server node-1:9092   --create --topic orders   --partitions 12 --replication-factor 3   --config retention.ms=604800000   --config cleanup.policy=delete
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道要多分，不知道分多少个。</p>
+</div>
 
-# 查看 Topic 详细信息（重点看 ISR 和 Leader）
-kafka-topics.sh --bootstrap-server node-1:9092   --describe --topic orders
+<p><strong>怎么解决？</strong>消费者数 = 分区数，每个分区一个消费者。</p>
 
-# 输出示例：
-# Topic: orders  Partition: 0  Leader: 1  Replicas: 1,2,3  Isr: 1,2,3
-# Topic: orders  Partition: 1  Leader: 2  Replicas: 2,3,1  Isr: 2,3,1
-# 如果 Isr 列少于 Replicas 列，说明有副本不同步
+<h2>3. 怎么保证顺序</h2>
 
-# 修改 Topic 配置
-kafka-configs.sh --bootstrap-server node-1:9092   --entity-type topics --entity-name orders   --alter --add-config retention.ms=1209600000
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>同一个订单的消息要按顺序消费。</p>
+</div>
 
-# 扩容 Partition（只能增不能减！）
-kafka-topics.sh --bootstrap-server node-1:9092   --alter --topic orders --partitions 24
+<p><strong>怎么解决？</strong>同一个业务 key 发到同一个分区，就能保证顺序。</p>
 
-# 删除 Topic
-kafka-topics.sh --bootstrap-server node-1:9092   --delete --topic orders</code></pre>
+<h2>分区规则</h2>
 
-<h2 id="go-admin">Go 管理客户端（sarama）</h2>
-<pre><code class="language-go">package main
-
-import (
-    "fmt"
-    "log"
-
-    "github.com/IBM/sarama"
-)
-
-func main() {
-    config := sarama.NewConfig()
-    config.Version = sarama.V3_8_0_0
-
-    admin, err := sarama.NewClusterAdmin([]string{"node-1:9092"}, config)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer admin.Close()
-
-    // 创建 Topic
-    detail := sarama.TopicDetail{
-        NumPartitions:     12,
-        ReplicationFactor: 3,
-        ConfigEntries: map[string]*string{
-            "retention.ms":  sarama.String("604800000"),
-            "cleanup.policy": sarama.String("delete"),
-        },
-    }
-    if err := admin.CreateTopic("orders", &detail, false); err != nil {
-        log.Printf("创建 Topic 失败（可能已存在）: %v", err)
-    }
-
-    // 列出所有 Topic
-    topics, err := admin.ListTopics()
-    if err != nil {
-        log.Fatal(err)
-    }
-    for name, detail := range topics {
-        fmt.Printf("Topic: %s, Partitions: %d, ReplicationFactor: %d
-",
-            name, detail.NumPartitions, detail.ReplicationFactor)
-    }
-
-    // 查看 Broker 列表
-    brokers, _, err := admin.DescribeCluster()
-    if err != nil {
-        log.Fatal(err)
-    }
-    for _, broker := range brokers {
-        fmt.Printf("Broker %d: %s
-", broker.ID(), broker.Addr())
-    }
-}</code></pre>
-
-<h2 id="best-practices">Partition 规划与副本设计最佳实践</h2>
-<h3>Partition 数量怎么定？</h3>
-<blockquote class="callout callout-warn">
-<p><strong>我的血泪教训：</strong>有个老系统一开始只给 Topic 建了 3 个 Partition，后来业务量涨了 10 倍才发现消费并行度到顶了。扩容 Partition 后，已存在的消息不会重新分配，新旧 key 的消息混在不同 Partition 里，顺序性直接乱了。<strong>Partition 数规划要一步到位，预留 2~3 倍增长空间。</strong></p>
-</blockquote>
-<p>这是 Kafka 运维中最常见的问题。参考公式：</p>
-<pre><code class="language-text">Partition 数 = max(目标消费并行度, 目标生产吞吐 / 单 Partition 生产吞吐)
-
-单 Partition 生产吞吐 ≈ 10 MB/s
-单 Partition 消费吞吐 ≈ 20~50 MB/s（取决于业务逻辑）
-</code></pre>
-<p>实际经验值：</p>
-<ul>
-<li>中小规模（日消息量 &lt; 10 亿）：Topic 6~12 个 Partition 够用</li>
-<li>大规模（日消息量 10~100 亿）：24~48 个 Partition</li>
-<li>单 Broker 上 Partition 总数不要超过 2000（每个 Partition 占一个文件句柄和少量堆内存）</li>
-</ul>
-
-<h3>副本因子选择</h3>
 <table>
-<thead><tr><th>副本因子</th><th>容忍故障</th><th>磁盘开销</th><th>写入延迟</th><th>推荐场景</th></tr></thead>
+<thead><tr><th>规则</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>RF=1</td><td>0 台</td><td>1x</td><td>最低</td><td>仅开发/测试</td></tr>
-<tr><td>RF=2</td><td>0 台（min.insync=2 时挂1台不可写）</td><td>2x</td><td>低</td><td>不推荐生产</td></tr>
-<tr><td>RF=3</td><td>1 台</td><td>3x</td><td>中</td><td>生产默认推荐</td></tr>
-<tr><td>RF=5</td><td>2 台</td><td>5x</td><td>高</td><td>金融级/跨机房</td></tr>
-</tbody>
-</table>
+<tr><td>同一个key</td><td>发到同一个分区</td></tr>
+<tr><td>顺序保证</td><td>同一个分区内是顺序的</td></tr>
+<tr><td>并行度</td><td>分区数决定最大并行度</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>RF=3</strong>：默认推荐，容忍 1 台 Broker 故障，磁盘开销 3 倍</li>
-<li><strong>RF=2</strong>：仅测试环境可用。RF=2 时 <code>min.insync.replicas=2</code>，挂 1 台就不可写</li>
-<li><strong>RF=5+</strong>：金融级场景，跨机房部署时考虑。注意 RF 越高，写入延迟越大</li>
+<li><strong>分区数不要太少</strong>少了并行度上不去，一般 16/32 个起步。</li>
+<li><strong>消费者数不要超过分区数</strong>超过了多余的消费者是闲着的。</li>
 </ul>
-
-<h3>机架感知（Rack Awareness）</h3>
-<p>如果集群跨机架部署，一定要配 <code>broker.rack=rack-1</code>。Controller 分配副本时会确保同一个 Partition 的副本分布在不同机架上，避免单个机架断电导致整个 Partition 不可用。</p>
-
-<h2 id="FAQ">常见问题 FAQ</h2>
-<h3>Q1：Partition 数为什么只能增不能减？</h3>
-<p>因为消息路由是按 key 哈希到 Partition 的。如果减少 Partition 数，原来在 Partition 3 的 key 可能会路由到 Partition 1，但 Partition 1 上的历史消息还在那里，新旧 key 的消息混在一起，顺序性就乱了。Kafka 选择"不支持减少"而不是"支持后重新哈希"——后者代价太大且难以保证一致性。所以 Partition 数规划要<strong>一步到位</strong>，预留 2~3 倍增长空间。</p>
-
-<h3>Q2：ISR 频繁收缩是什么原因？</h3>
-<p>ISR 收缩说明 Follower 跟不上 Leader。常见原因：(1) 网络带宽打满，副本同步 fetch 请求超时；(2) Follower 所在 Broker 磁盘 IO 瓶颈，消息刷盘慢；(3) 频繁 Full GC 导致 Follower 暂停拉取。排查思路：看 UnderReplicatedPartitions 监控指标，定位是哪个 Broker 的副本落后，再查该 Broker 的磁盘 IO、网络带宽和 GC 日志。</p>
-
-<h3>Q3：为什么生产环境不建议用 log compaction（日志压缩）？</h3>
-<p>日志压缩（Compact）只保留每个 key 的最新值，适合 changelog 流（数据库 CDC）。但压缩过程是异步的，可能出现"同一 key 的旧值还没被删，新值已经写入"的中间状态。而且 Compact 后的日志段无法按时间清理，磁盘可能在你不注意时被撑满。除非你明确知道自己在做什么，否则用 Delete 策略（按时间/大小过期）更安全。</p>
-
-<h2 id="总结">总结</h2>
-<p>Kafka 的存储引擎设计有两个核心思想：<strong>顺序追加写 + 稀疏索引</strong>让磁盘吞吐接近内存，<strong>Leader/Follower + ISR</strong>在性能和可靠性之间取得了精妙平衡。理解 LEO 和 HW 的区别、ISR 收缩的含义、Leader 选举的触发条件，是排查 Kafka 生产故障的基本功。下一篇我们聚焦消息可靠性——如何在分布式环境下实现"不丢一条消息"甚至"不重一条消息"。</p>
+</div>
 
                     </div>
                 </article>
