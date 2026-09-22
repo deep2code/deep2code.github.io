@@ -92,58 +92,161 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Redis怎么帮你解决。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及 Redis 怎么帮你解决。2026 年主流版本是 Redis 8.x。</p>
 
 <div class="mermaid">
 flowchart TB
-    A[Redis] --> B[内存数据库]
-    B --> C[快]
-    C --> D[缓存/计数/队列]
+    A[Redis 8.x] --> B[缓存]
+    A --> C[分布式锁]
+    A --> D[排行榜]
+    A --> E[消息队列]
+    A --> F[地理位置]
 </div>
 
 <h2>1. 数据库查询太慢</h2>
 
 <div class="callout callout-info">
 <div class="callout-title">你遇到的问题</div>
-<p>一个接口查数据库要几百毫秒。</p>
+<p>一个详情页接口查数据库要 300ms，QPS 高了数据库直接扛不住。</p>
 </div>
 
-<p><strong>怎么解决？</strong>前面架一层 Redis 缓存，快几十倍。</p>
+<p><strong>怎么解决？</strong>前面架一层 Redis 缓存，热点数据放内存，快 10~100 倍。</p>
 
-<h2>2. Redis 是什么</h2>
+<pre><code class="language-bash"># 写入缓存
+SET user:1001 '{"name":"张三","age":28}' EX 3600
+
+# 读缓存
+GET user:1001</code></pre>
+
+<h2>2. Redis 8.x 新特性（2026）</h2>
 
 <div class="callout callout-info">
 <div class="callout-title">你遇到的问题</div>
-<p>Redis 是什么？</p>
+<p>还在用 Redis 5.x/6.x，不知道新版本有什么好处。</p>
 </div>
 
-<p><strong>怎么解决？</strong>内存数据库，数据存在内存，读写快，支持多种数据结构。</p>
-
-<h2>3. Redis 能做什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Redis 除了缓存还能做什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>缓存、计数、分布式锁、排行榜、消息队列。</p>
-
-<h2>数据结构</h2>
+<p><strong>怎么解决？</strong>Redis 8.x 比 6.x 性能提升 30%+，自带向量搜索和 JSON 原生支持。</p>
 
 <table>
-<thead><tr><th>结构</th><th>用途</th></tr></thead>
+<thead><tr><th>版本</th><th>关键特性</th><th>建议</th></tr></thead>
 <tbody>
-<tr><td>String</td><td>缓存/计数</td></tr>
-<tr><td>Hash</td><td>存对象</td></tr>
-<tr><td>List</td><td>队列</td></tr>
-<tr><td>ZSet</td><td>排行榜</td></tr>
+<tr><td>Redis 5.x</td><td>基础功能</td><td>太老，建议升级</td></tr>
+<tr><td>Redis 6.x</td><td>多线程 IO、ACL</td><td>可用，但推荐升 8</td></tr>
+<tr><td>Redis 7.x</td><td>Functions、Sharded Pub/Sub</td><td>稳定</td></tr>
+<tr><td>Redis 8.x</td><td>向量搜索、JSON 原生、性能 +30%</td><td><strong>2026 主流推荐</strong></td></tr>
 </tbody></table>
+
+<h2>3. 五种核心数据结构速查</h2>
+
+<p>不同场景选不同结构，选错了性能差很多。</p>
+
+<table>
+<thead><tr><th>结构</th><th>常用场景</th><th>典型命令</th></tr></thead>
+<tbody>
+<tr><td><strong>String</strong></td><td>缓存、计数、分布式锁</td><td>SET / GET / INCR / SETNX</td></tr>
+<tr><td><strong>Hash</strong></td><td>存对象（用户信息）</td><td>HSET / HGET / HGETALL</td></tr>
+<tr><td><strong>List</strong></td><td>消息队列、最新列表</td><td>LPUSH / RPOP / LRANGE</td></tr>
+<tr><td><strong>Set</strong></td><td>去重、共同好友</td><td>SADD / SISMEMBER / SINTER</td></tr>
+<tr><td><strong>ZSet</strong></td><td>排行榜、延迟队列</td><td>ZADD / ZRANGE / ZRANK</td></tr>
+</tbody></table>
+
+<h2>4. 缓存三大经典问题</h2>
+
+<div class="mermaid">
+flowchart LR
+    A[缓存问题] --> B[穿透]
+    A --> C[击穿]
+    A --> D[雪崩]
+    B --> B1[查不存在的数据]
+    C --> C1[热点 key 过期]
+    D --> D1[大量 key 同时过期]
+</div>
+
+<h3>缓存穿透</h3>
+<p><strong>问题：</strong>查数据库不存在的数据，每次都打数据库。</p>
+<p><strong>解决：</strong>空值也缓存（短时间），或用布隆过滤器。</p>
+
+<h3>缓存击穿</h3>
+<p><strong>问题：</strong>某个热点 key 突然过期，瞬间大量请求打数据库。</p>
+<p><strong>解决：</strong>热点 key 不过期，或用互斥锁重建缓存。</p>
+
+<h3>缓存雪崩</h3>
+<p><strong>问题：</strong>大量 key 同一时间过期，数据库瞬间压力陡增。</p>
+<p><strong>解决：</strong>过期时间加随机值，不要同一批过期。</p>
+
+<pre><code class="language-bash"># 过期时间加随机值，防雪崩
+EXPIRE key 3600 + random(0, 600)</code></pre>
+
+<h2>5. 持久化：RDB vs AOF</h2>
+
+<table>
+<thead><tr><th>对比</th><th>RDB</th><th>AOF</th></tr></thead>
+<tbody>
+<tr><td>原理</td><td>快照（二进制）</td><td>追加写命令日志</td></tr>
+<tr><td>恢复速度</td><td>快</td><td>慢</td></tr>
+<tr><td>数据安全</td><td>可能丢最后一次快照后的数据</td><td>更安全（最多丢 1 秒）</td></tr>
+<tr><td>文件体积</td><td>小</td><td>大</td></tr>
+<tr><td>适合</td><td>备份、容灾</td><td>生产环境</td></tr>
+</tbody></table>
+
+<p><strong>生产建议：</strong>Redis 8 默认 RDB + AOF 混合持久化，直接用默认配置就行。</p>
+
+<h2>6. 高可用架构怎么选</h2>
+
+<div class="mermaid">
+flowchart TB
+    A[Redis 高可用] --> B[单机]
+    A --> C[主从复制]
+    A --> D[Sentinel 哨兵]
+    A --> E[Cluster 集群]
+    B --> B1[开发测试]
+    C --> C1[读多写少]
+    D --> D1[中小生产]
+    E --> E1[大规模生产]
+</div>
+
+<table>
+<thead><tr><th>方案</th><th>数据量</th><th>可用性</th><th>适合场景</th></tr></thead>
+<tbody>
+<tr><td>单机</td><td>&lt;10G</td><td>低</td><td>开发/个人项目</td></tr>
+<tr><td>主从</td><td>&lt;20G</td><td>中</td><td>读多写少</td></tr>
+<tr><td>Sentinel</td><td>&lt;50G</td><td>高</td><td>中小生产</td></tr>
+<tr><td>Cluster</td><td>&gt;50G</td><td>高</td><td>大规模生产</td></tr>
+</tbody></table>
+
+<h2>7. 常用场景实战</h2>
+
+<h3>分布式锁</h3>
+<pre><code class="language-bash"># 加锁（原子操作）
+SET lock:order:1001 random_value NX EX 10
+
+# 解锁（Lua 脚本保证原子）
+EVAL "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end" 1 lock:order:1001 random_value</code></pre>
+
+<h3>排行榜</h3>
+<pre><code class="language-bash"># 添加分数
+ZADD rank:weekly 95 "user1001"
+ZADD rank:weekly 88 "user1002"
+
+# 取 Top 10
+ZRANGE rank:weekly 0 9 WITHSCORES REV</code></pre>
+
+<h3>计数器</h3>
+<pre><code class="language-bash"># 阅读量 +1
+INCR article:123:views
+
+# 限频（每分钟最多 100 次）
+INCR rate:user:1001
+EXPIRE rate:user:1001 60</code></pre>
 
 <div class="callout callout-tip">
 <div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>缓存要设过期</strong>缓存一定要设过期时间，不要一直占内存。</li>
-<li><strong>缓存穿透击穿</strong>要防缓存穿透、击穿、雪崩。</li>
+<li><strong>缓存一定要设过期</strong>：不要把数据一直放内存，迟早撑爆。</li>
+<li><strong>防三大问题</strong>：穿透、击穿、雪崩，上线前一定想清楚怎么防。</li>
+<li><strong>key 要有前缀</strong>：user:1001、order:2024，不要乱命名。</li>
+<li><strong>大 key 要拆</strong>：一个 key 不要存几 MB 数据，拆成多个小 key。</li>
+<li><strong>不要当数据库用</strong>：Redis 是缓存，不是持久化数据库，重要数据还是要落库。</li>
 </ul>
 </div>
 
