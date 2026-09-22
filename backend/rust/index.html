@@ -83,215 +83,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Rust 1.9x</h1>
+                        <h1 class="article-title">Rust：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ 后端与编程语言</span>
+                            <span class="meta-item">🏷️ Rust</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>Rust 2026 走到哪了</h2>
-<p>Rust 保持六周一版的稳定节奏，只有最新稳定版接收补丁。2026 年从 1.94 走到 1.98，重点是语言细节收紧、Cargo 配置能力与数值计算性能。</p>
-<p>Edition 是 Rust 跨版本兼容的关键机制——每三年一次的不兼容改动打包成 Edition，旧代码不用强制迁移。演进时间线：</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Rust怎么帮你解决。</p>
+
 <div class="mermaid">
-timeline
-    title Rust Edition 演进
-    section 2015
-    初始稳定版
-    : 1.0 发布
-    section 2018
-    模块系统改进
-    : 非词法生命周期
-    section 2021
-    闭包捕获改进
-    : IntoIterator for arrays
-    section 2024
-    async 闭包
-    : gen 块
-    : unsafe 标注
+flowchart TB
+    A[写代码] --> B[编译时检查]
+    B -->|通过| C[运行时零开销]
+    B -->|不通过| D[编译失败]
 </div>
 
-<h2>Rust 2024 Edition</h2>
-<p>Rust 2024 Edition 是继 2015、2018、2021 之后的第四个 Edition，随 1.85 于 2025-02 发布，带来多项语言改进：</p>
-<ul>
-<li><strong>async 闭包</strong>：原生支持 <code>async ||</code> 语法：</li>
-</ul>
-<pre><code class="language-rust">// Rust 2024: async 闭包
-let fetcher = async || {
-    let data = fetch_data().await;
-    process(data).await
-};
-let result = fetcher().await;</code></pre>
-<ul>
-<li><strong>gen 块</strong>：生成器块，简化迭代器编写：</li>
-</ul>
-<pre><code class="language-rust">// Rust 2024: gen 块
-fn fibonacci() -&gt; impl Iterator&lt;Item = u64&gt; {
-    gen {
-        let mut a = 0;
-        let mut b = 1;
-        loop {
-            yield a;
-            let next = a + b;
-            a = b;
-            b = next;
-        }
-    }
-}</code></pre>
-<ul>
-<li><strong>生命周期捕获规则变更</strong>：<code>impl Trait</code> 返回类型默认捕获所有生命周期。</li>
-<li><strong><code>unsafe_op_in_unsafe_fn</code> 默认启用</strong>：unsafe 函数内的 unsafe 操作需显式标注。</li>
-<li><strong><code>cfg_select!</code></strong>：编译时条件选择宏（1.95.0 正式稳定）。</li>
-</ul>
+<h2>1. 内存泄露、空指针崩溃</h2>
 
-<h2>2026 版本线：1.94 → 1.98</h2>
-<table>
-<thead><tr><th>版本</th><th>发布时间</th><th>关键变化</th></tr></thead>
-<tbody>
-<tr><td>1.94.0</td><td>2026-03-06</td><td>RISC-V 稳定 29 项 target feature、Unicode 17、Cargo config include、TOML v1.1</td></tr>
-<tr><td>1.95.0</td><td>2026-04-16</td><td><code>cfg_select!</code> 稳定、闭包捕获更精确、Supertrait Upcasting</td></tr>
-<tr><td>1.97.0</td><td>2026-07-09</td><td>默认 v0 符号改编、整数位操作 API 稳定、Cargo <code>build.warnings</code></td></tr>
-<tr><td>1.98.0</td><td>2026-08-20</td><td>代数浮点运算方法、<code>format_into</code>+<code>NumBuffer</code> 稳定（当前最新）</td></tr>
-</tbody>
-</table>
-<p>升级建议：<code>rustup update stable</code> 跟随最新线即可；1.95+ 的 lint 与兼容性说明较多，工程升级前过一遍 release notes。</p>
-
-<h3>1.98.0：代数浮点与 format_into</h3>
-<p><strong>代数浮点运算方法</strong>：在特定代码块中，开发者可告知编译器"这段代码可遵循实数代数性质进行激进重排与并行化"，大幅增强循环向量化（SIMD），成倍提升数值计算效率且不引入未定义行为——对 HPC 与科学计算是重要突破。</p>
-<p><strong><code>format_into</code></strong>：所有原生整数类型新增该方法，直接把整数格式化写入预分配缓冲区，绕过动态分发，效率与知名 <code>itoa</code> 库相当：</p>
-<pre><code class="language-rust">// Rust 1.98: 零分配整数格式化
-let mut buf = NumBuffer::new();
-let n = 12345u64;
-let s = n.format_into(&amp;mut buf); // &amp;str，写入预分配缓冲区
-assert_eq!(s, "12345");</code></pre>
-<p>对高频日志、数据序列化等依赖整数格式化的场景提升可观。</p>
-
-<h3>1.97 工具链收紧</h3>
-<ul>
-<li><strong>v0 symbol mangling 成为默认</strong>：老版本调试器/性能工具可能无法解码符号，升级工具链时留意。</li>
-<li><strong>Cargo <code>build.warnings</code> 稳定</strong>：CI 强制"无警告构建"，替代 <code>-Dwarnings</code>。</li>
-<li><strong>cargo clean 防误删</strong>：<code>--target-dir</code> 不像 target 目录时直接报错。</li>
-<li><strong>整数位操作 API</strong>：<code>isolate_highest_one</code>/<code>highest_one</code>/<code>bit_width</code> 进入标准库。</li>
-</ul>
-
-<h2>所有权与借用检查器</h2>
-<p>所有权三规则是 Rust 内存安全的全部：每个值有唯一所有者；所有者离开作用域自动 drop；多个不可变引用或单个可变引用二选一。</p>
-<pre><code class="language-rust">// 规则1：每个值有且只有一个所有者
-let s1 = String::from("hello");
-let s2 = s1;                 // 所有权移动，s1 不再有效
-// println!("{}", s1);       // 错 borrowed after move
-
-// 规则2：离开作用域自动 drop
-{
-    let s = String::from("hello");
-} // drop(s) 自动释放
-
-// 规则3：借用互斥
-let mut s = String::from("hello");
-let r1 = &s;
-let r2 = &s;                 // 多个不可变引用可以
-println!("{}, {}", r1, r2);
-let r3 = &mut s;             // NLL 后 r1/r2 已不再使用
-r3.push_str(", world");</code></pre>
-<div class="mermaid">
-flowchart TD
-    V[一个值] --> O[唯一所有者 owner]
-    O --> M{赋值或传参}
-    M -->|基本类型 Copy| CP[按位复制 新旧都可用]
-    M -->|其他类型 move| MV[所有权移动 旧变量失效]
-    O --> D[离开作用域 自动 drop 释放]
-    B{借用} --> R[多个 不可变引用 可读共存]
-    B --> W[单个 可变引用 独占]
-    R -.同时出现即编译报错.-> W
-</div>
 <div class="callout callout-info">
-<div class="callout-title">核心心智模型</div>
-所有权解决"谁来释放"，借用规则解决"能不能同时读/写"。编译器在编译期查完这两件事，运行时就不需要 GC 兜底——这是 Rust 零成本安全的来源。
+<div class="callout-title">你遇到的问题</div>
+<p>C/C++ 写的服务经常内存泄露、空指针崩溃。</p>
 </div>
 
-<h3>借用检查器工作原理</h3>
-<p>借用检查器在编译时分析引用生命周期：构建控制流图（CFG），追踪每个引用的创建与最后使用位置，按 NLL（Non-Lexical Lifetimes）规则——引用生命周期到最后一次使用为止，而非作用域结束。经典错误模式：悬垂引用、同时可变与不可变引用、迭代时修改集合。</p>
+<p><strong>怎么解决？</strong>Rust 编译时就帮你检查内存安全，不会有空指针。</p>
+
+<h2>2. 高并发性能不够</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>Python/Node 性能不够，Go GC 停顿影响延迟。</p>
+</div>
+
+<p><strong>怎么解决？</strong>Rust 没有 GC，性能接近 C，又安全。</p>
+
+<h2>3. 想学 Rust 不知道从哪开始</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>听说 Rust 很好但太陡了，不知道从哪学。</p>
+</div>
+
+<p><strong>怎么解决？</strong>先写个小工具，跟着 Rust Book 走，不要一上来就写操作系统。</p>
+
+<h2>Rust vs 其他语言</h2>
+
 <table>
-<thead><tr><th>场景</th><th>解决手段</th></tr></thead>
+<thead><tr><th>对比</th><th>Rust</th><th>Go</th><th>Python</th></tr></thead>
 <tbody>
-<tr><td>返回引用关系不明</td><td>生命周期标注 <code>'a</code> 告诉编译器</td></tr>
-<tr><td>不想被借用绑住</td><td><code>clone()</code> 深拷贝</td></tr>
-<tr><td>运行时借用检查</td><td><code>RefCell&lt;T&gt;</code> 内部可变性</td></tr>
-<tr><td>多所有权</td><td><code>Rc&lt;T&gt;</code> 单线程 / <code>Arc&lt;T&gt;</code> 多线程</td></tr>
-</tbody>
-</table>
+<tr><td>性能</td><td>极高</td><td>高</td><td>中</td></tr>
+<tr><td>内存安全</td><td>编译保证</td><td>运行时 GC</td><td>GC</td></tr>
+<tr><td>学习曲线</td><td>陡</td><td>平缓</td><td>平缓</td></tr>
+<tr><td>适合</td><td>系统、高性能</td><td>云服务</td><td>快速开发</td></tr>
+</tbody></table>
 
-<h2>异步运行时与零成本抽象</h2>
-<p>Rust 异步 = async/await + Future trait + 运行时。<code>Future::poll</code> 返回 <code>Ready(T)</code> 或 <code>Pending</code>（注册 waker 等待唤醒）；每个 <code>.await</code> 是一个状态转换点，编译器把 async fn 编译成状态机。</p>
-<p>Tokio 运行时三件套：执行器（多线程工作窃取）+ Reactor（epoll/kqueue/IOCP）+ 时间轮定时器。</p>
-<pre><code class="language-rust">// 泛型单态化：编译期生成具体版本，无运行时类型检查
-fn largest&lt;T: PartialOrd&gt;(list: &amp;[T]) -&gt; &amp;T { ... }
-
-// 迭代器内联：等价手写循环，无堆分配
-let sum: i32 = (1..=1000).filter(|&amp;x| x % 2 == 0).map(|x| x * x).sum();
-
-// ? 操作符编译为早期返回，无栈展开开销
-fn parse(s: &amp;str) -&gt; Result&lt;i32, ParseError&gt; { ... }</code></pre>
-<p>零成本抽象的来源：泛型单态化编译期为每个具体类型生成代码；迭代器链完全内联等价手写循环；<code>Result</code> 是标签联合无异常开销；智能指针无虚表。</p>
-
-<h2>Rust vs Go</h2>
-<table>
-<thead><tr><th>维度</th><th>Rust</th><th>Go</th></tr></thead>
-<tbody>
-<tr><td>内存管理</td><td>编译期所有权+借用检查，无 GC</td><td>运行期 GC 自动回收</td></tr>
-<tr><td>安全性保证</td><td>编译期杜绝数据竞争/悬垂引用</td><td>编译放行，race detector 事后抓</td></tr>
-<tr><td>并发任务</td><td>Future 状态机，无栈协程零开销</td><td>goroutine 初始 2KB 可增长栈</td></tr>
-<tr><td>启动延迟</td><td>无 GC，启动即全速</td><td>GC 初始化有停顿</td></tr>
-<tr><td>学习曲线</td><td>陡峭（借用/生命周期）</td><td>平缓</td></tr>
-<tr><td>典型场景</td><td>系统编程、Wasm、性能敏感</td><td>微服务、云原生、快速交付</td></tr>
-</tbody>
-</table>
 <div class="callout callout-tip">
-<div class="callout-title">取舍</div>
-要极致性能与"编译期拿到内存安全"选 Rust；要开发速度与庞大云原生生态选 Go。二者不是替代关系，按场景分工。
-</div>
-
-<h2>生态与常见陷阱</h2>
-<p>2026 年 Rust 主流 crate 选型：</p>
-<table>
-<thead><tr><th>领域</th><th>推荐 crate</th><th>说明</th></tr></thead>
-<tbody>
-<tr><td>Web 框架</td><td><code>axum</code></td><td>基于 tokio，类型安全</td></tr>
-<tr><td>异步运行时</td><td><code>tokio</code></td><td>事实标准</td></tr>
-<tr><td>序列化</td><td><code>serde</code></td><td>JSON/YAML/TOML</td></tr>
-<tr><td>HTTP 客户端</td><td><code>reqwest</code></td><td>基于 hyper</td></tr>
-<tr><td>数据库</td><td><code>sqlx</code></td><td>编译时 SQL 检查</td></tr>
-<tr><td>CLI</td><td><code>clap</code></td><td>命令行解析</td></tr>
-<tr><td>日志</td><td><code>tracing</code></td><td>结构化日志+分布式追踪</td></tr>
-<tr><td>测试</td><td><code>cargo-nextest</code></td><td>并行测试事实标准</td></tr>
-</tbody>
-</table>
-<p>常见陷阱：</p>
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>学习曲线陡峭</strong>：借用检查器、生命周期、trait 对象需要时间。</li>
-<li><strong>编译时间长</strong>：泛型单态化导致编译慢，用 sccache 加速。</li>
-<li><strong>dyn vs impl Trait</strong>：dyn 有虚函数开销，impl 是静态分发。</li>
-<li><strong>unwrap() 滥用</strong>：生产代码用 <code>?</code> 或 match，unwrap 只用于测试。</li>
-<li><strong>异步运行时不兼容</strong>：Tokio 和 async-std API 不完全兼容，统一选一个。</li>
+<li><strong>不要一开始就啃难概念</strong>所有权、借用这些概念先知道，用多了自然理解。</li>
+<li><strong>小项目练手</strong>先写个命令行小工具，不要上来就写大项目。</li>
 </ul>
-<p>工具链安装：</p>
-<pre><code class="language-bash">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Cargo.toml 里指定 edition = "2024"
-rustup default stable
-rustup component add rustfmt clippy
-cargo install cargo-watch</code></pre>
-
-<h2>FAQ</h2>
-<p><strong>Q：Rust 适合新手吗？</strong><br/>学习曲线陡峭，建议先有 C++/Go 基础，从 ownership+借用+trait 三个概念入手。</p>
-<p><strong>Q：async fn 一定比 goroutine 快吗？</strong><br/>不一定。Rust 是无栈协程零开销，Go 是有栈 goroutine 调度快；高并发 IO 密集场景 Rust 优势在内存与 GC 停顿。</p>
-<p><strong>Q：2024 Edition 必须立刻迁移吗？</strong><br/>不必。Edition 是 opt-in，旧版工程可继续用 2021，新工程直接 <code>edition = "2024"</code>。</p>
-
-<h2>我的取舍</h2>
-<p>Rust 2026 处于 1.9x 稳定性冲刺：2024 Edition 带来 async 闭包与 gen 块，1.98 用代数浮点与 format_into 压榨数值性能。</p>
-<p>我用下来的核心心智没变：所有权+借用检查器在编译期兜底内存安全，配合 Tokio 无栈协程与单态化零成本抽象。我的选择标准很简单——要编译期安全与极致性能选 Rust，要开发速度与云原生生态选 Go。</p>
-
-
+</div>
 
                     </div>
                 </article>
