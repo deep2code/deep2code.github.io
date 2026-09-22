@@ -81,152 +81,68 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Prometheus 架构原理</h1>
+                        <h1 class="article-title">Prometheus：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ 监控,可观测性,Prometheus,Grafana</span>
+                            <span class="meta-item">🏷️ Prometheus</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-
-<h2>Prometheus 为什么成了云原生监控的事实标准</h2>
-<p>Prometheus 由 SoundCloud 在 2012 年开发，2016 年从 CNCF 毕业，是继 Kubernetes 之后第二个毕业的项目，如今几乎所有云原生监控（kube-prometheus、Victor...</p>
-<p>第一，<strong>Pull 模型</strong>而不是 Push：监控系统主动去每个实例拉指标，而不是每个应用主动推送。Pull 的好处是监控系统天然知道"哪些目标死了"——抓不到就是宕机，不需要应用自己维护"推给谁"的配置；在 Kubernetes 里配合服务发现，新 Pod 一注册就自动被抓到，零配置。</p>
-<ul>
-<li><strong>第二，多维标签模型</strong>：指标不是孤立的数字，而是 <code>metric{label1=v1, label2=v2}</code>，可以任意维度聚合切片。</li>
-<li><strong>第三，把告警规则和查询语言放在一起</strong>：PromQL 既能画仪表盘也能写告警，不需要在两套系统之间翻译。</li>
-</ul>
-
-<h2>核心概念：指标四类型与标签模型</h2>
-<p>Prometheus 的指标分四种，选错类型是新手最常见的坑：</p>
-<table>
-<thead><tr><th>类型</th><th>方向</th><th>典型场景</th><th>查询要点</th></tr></thead>
-<tbody>
-<tr><td>Counter</td><td>只增不减（重启归零）</td><td>请求总数、错误总数</td><td>永远套 rate()/increase()</td></tr>
-<tr><td>Gauge</td><td>可增可减</td><td>内存用量、队列长度</td><td>直接查</td></tr>
-<tr><td>Histogram</td><td>分桶计数</td><td>接口延迟 P99</td><td>histogram_quantile() 算分位</td></tr>
-<tr><td>Summary</td><td>客户端算好分位</td><td>精确到个位的分位</td><td>无法跨实例聚合，高基数噩梦</td></tr>
-</tbody>
-</table>
-<p>另一个核心概念是<strong>标签基数（cardinality）</strong>：同一个指标名 + 不同标签值的组合数。<code>http_requests_total{route="/pay"}</code> 是低基数（几十个 route），<code>http_requests_total{user_id="12345"}</code> 就是高基数（几百万用户）。Prometheus 为每个唯一标签组合维护一条时间序列，基数失控会直接把内存吃光——这是 Prometheus 生产事故第一名。</p>
-
-<div class="callout callout-danger">
-<div class="callout-title">我踩过的坑：user_id 进 label 直接 OOM</div>
-<p>有个同学图方便，把 user_id 当 label 打到 <code>http_requests_total</code> 上，上线第一天序列数从 5 万飙到 800 万，Prometheus 内存从 4G 涨到 32G 直接 OOM。后来改成把 user_id 放进日志 body，指标里只留 route/status_code 这种低基数字段，要查某个用户的请求走日志。<strong>label 是用来聚合的，不是用来追踪个体的。</strong></p>
-</div>
-
-<h2>架构原理：从抓取到 TSDB</h2>
-<p>Prometheus Server 本身是单体进程（不像 ELK 那样需要多组件），内部分为抓取、存储、查询、告警四个模块。下图展示完整数据通路：</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Prometheus怎么帮你解决。</p>
 
 <div class="mermaid">
-flowchart TB
-    subgraph PM[prometheus-server]
-        SCR[Scraper<br/>按 scrape_interval 拉取]
-        SERVED[Service Discovery<br/>k8s_sd / consul / file_sd]
-        TSDB[(TSDB<br/>本地磁盘 head + blocks)]
-        QUERY[PromQL Engine]
-        RULE[Recording/Alert Rules]
-    end
-    EXP1[Node Exporter] -->|GET /metrics| SCR
-    EXP2[应用内嵌 /metrics] --> SCR
-    PUSH[Pushgateway<br/>短任务] --> SCR
-    SERVED -->|发现 targets| SCR
-    SCR -->|采样点| TSDB
-    QUERY --> TSDB
-    RULE --> TSDB
-    RULE -->|firing| AM[AlertManager]
-    G[Grafana] -->|PromQL| QUERY
-    AM -->|分组/抑制| DST[邮件/钉钉/PagerDuty]
-
+flowchart LR
+    A[应用暴露 metrics] --> B[Prometheus 抓取]
+    B --> C[存储时序数据]
+    C --> D[Grafana 展示]
+    C --> E[AlertManager 告警]
 </div>
 
-<p>几个关键设计点：</p>
+<h2>1. 不知道服务现在什么状态</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你不知道服务 QPS 多少、响应时间多少、错误率多少。</p>
+</div>
+
+<p><strong>怎么解决？</strong>Prometheus 采集所有指标，Grafana 上画图看。</p>
+
+<h2>2. 出问题才知道</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>服务挂了用户告诉你，你才发现。</p>
+</div>
+
+<p><strong>怎么解决？</strong>Prometheus 配告警规则，指标超过阈值自动发钉钉。</p>
+
+<h2>3. 历史数据查不到</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>昨天服务为什么变慢了？当时的指标没了。</p>
+</div>
+
+<p><strong>怎么解决？</strong>Prometheus 存时序数据，随时查过去的指标。</p>
+
+<h2>Prometheus 核心概念</h2>
+
+<table>
+<thead><tr><th>概念</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>metric</td><td>指标，比如 http_requests_total</td></tr>
+<tr><td>label</td><td>标签，比如 method="GET"</td></tr>
+<tr><td>PromQL</td><td>查询语言，查指标用</td></tr>
+<tr><td>AlertRule</td><td>告警规则</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>本地 TSDB 是单层内存+磁盘结构</strong>：最近 2 小时的数据在 head block（内存+WAL），更早的切成 2 小时一个 block 落盘，用snappy压缩、block 间按时间不重叠。这意味着 Prometheus <strong>单机只适合存 15~30 天数据</strong>，长期归档要靠 Thanos/VictoriaMetrics 远程写对象存储。</li>
-<li><strong>抓取是同步 HTTP GET</strong>：target 返回的文本格式（`<metric>{labels} value timestamp`）被逐行解析。抓取超时默认 10s，超过就标记 up=0。</li>
-<li><strong>AlertManager 是独立进程</strong>：Prometheus 只负责"判断告警该不该 firing"，分组、静默、抑制、路由到哪个值班组全部由 AlertManager 负责。这个拆分让 Prometheus 本身保持简单。</li>
-<li><strong>Pushgateway 是给短任务用的</strong>：批处理 Job 活不到下一次抓取间隔，必须主动 push 到 Pushgateway，再由 Prometheus 来拉。<strong>长驻服务不要用它</strong>——它会把"进程已退出"的指标永远留在那里。</li>
+<li><strong>不要存太久数据</strong>Prometheus 本地存储不适合存太久，长周期存储接 Thanos。</li>
+<li><strong>告警不要太多</strong>告警太多就没人看了，只告警需要处理的。</li>
 </ul>
-
-<h2>安装与配置：一个 docker run 起步</h2>
-<p>生产环境用 Helm chart（kube-prometheus-stack），本地实验用 docker 最直接。下面是一份完整的 <code>prometheus.yml</code>，演示三种最常见的抓取目标：</p>
-
-<pre><code class="language-yaml"># prometheus.yml：全局配置 + 三种抓取目标
-global:
-  scrape_interval: 15s          # 默认抓取间隔
-  evaluation_interval: 15s      # 规则评估间隔
-  external_labels:
-    cluster: 'prod-shanghai'
-    replica: 'prom-0'
-
-scrape_configs:
-  # 1) 监控 Prometheus 自身
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-
-  # 2) 静态目标：业务服务
-  - job_name: 'order-service'
-    metrics_path: '/metrics'
-    scheme: http
-    static_configs:
-      - targets: ['order-0:8080', 'order-1:8080']
-        labels:
-          env: 'prod'
-
-  # 3) 文件服务发现：运维把新实例写进文件即可，不用重启 Prometheus
-  - job_name: 'file-discovery'
-    file_sd_configs:
-      - files: ['/etc/prometheus/targets/*.json']
-        refresh_interval: 30s
-
-rule_files:
-  - '/etc/prometheus/rules/*.yml'   # 告警/记录规则
-alerting:
-  alertmanagers:
-    - static_configs:
-        - targets: ['alertmanager:9093']
-</code></pre>
-
-<pre><code class="language-bash"># 一条命令起本地 Prometheus，挂载配置并打开 9090
-docker run -d --name prometheus \
-  -p 9090:9090 \
-  -v /opt/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml \
-  -v prometheus-data:/prometheus \
-  prom/prometheus:v2.54.0 \
-  --config.file=/etc/prometheus/prometheus.yml \
-  --storage.tsdb.retention.time=15d \
-  --web.enable-otlp-receiver
-
-# 验证： targets 页面应该看到所有 up=1
-curl -s http://localhost:9090/api/v1/targets | python3 -m json.tool | grep health
-
-# 装 Node Exporter 采集机器指标（CPU/内存/磁盘）
-docker run -d --name node-exporter --net host \
-  prom/node-exporter:v1.8.1
-</code></pre>
-
-<h2>最佳实践</h2>
-<ul>
-<li><strong>先控基数，再谈功能</strong>。上线前用 <code>count by (__name__)({__name__=~".+"})</code> 查每个指标的序列数，单指标超过 1 万条就要警觉。URL、用户 ID、订单号这类高基数维度一律用 exemplar 或日志去查，不要进 label。</li>
-<li><strong>Recording Rule 预计算大盘查询</strong>：Grafana 上每个面板都现算 <code>sum(rate(...))</code>，人一多 PromQL 引擎就 CPU 飙高。把高频查询写成 recording rule，按小时预聚合。</li>
-<li><strong>抓间隔分级</strong>：核心业务指标 15s，基础设施 30s，batch job 60s。抓取间隔决定了你能看到的最细粒度，也决定了存储成本。</li>
-<li><strong>保留策略与容量估算</strong>：粗略公式——序列数 × 每秒采样点数 × 保留天数 ≈ 磁盘量。经验值：单条序列 15s 一个点、保留 15 天 ≈ 1.5KB/序列。100 万序列 ≈ 1.5GB/天，预留 30% 头。</li>
-<li><strong>永远启用远程写</strong>：单机 Prometheus 挂了就丢数据，生产环境必须配 remote_write 到 VictoriaMetrics/Mimir/Thanos，或至少配联邦集群。</li>
-</ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：Pull 模型比 Push 好在哪？K8s 里 Pod IP 老变怎么办？</h3>
-<p>Pull 的最大优势是<strong>失败检测免费</strong>：抓不到目标就是 down，不需要应用反向注册心跳。Pod IP 变化由 Service Discovery 解决——Prometheus 的 <code>kubernetes_sd_config</code> 直接监听 apiserver，Pod 一创建就被发现，一销毁就自动摘除，全程零运维。Push 模型（StatsD/OpenTelemetry Push）则适合短生命周期任务和网络边界外的设备。</p>
-<h3>Q2：为什么我的 Counter 查出来是负数或者突降？</h3>
-<p>两种可能：① 进程重启了，Counter 归零——这就是为什么<strong>永远要包 <code>rate()</code> / <code>increase()</code></strong>，它们会正确处理计数器重置；② 你把一个 Gauge 当 Counter 用了。另外注意 PromQL 里 <code>rate()</code> 必须给区间向量（如 <code>rate(http_requests_total[5m])</code>），不能作用于即时向量。</p>
-<h3>Q3：Prometheus 能存多久数据？为什么不能直接存一年？</h3>
-<p>默认本地盘 15 天。它的 TSDB 是为"最近数据点查询快"优化的，全量索引在内存里，序列数一多内存扛不住。长期方案：Thanos（对象存储 + 全局查询）、VictoriaMetrics（单机或集群，压缩率比 Prometheus 高 10 倍）、Mimir（Grafana 企业版开源）。它们都兼容 PromQL，前端不用改。</p>
-<h3>Q4：Prometheus 和 AlertManager 都能告警，有什么区别？</h3>
-<p>Prometheus 负责<strong>判火</strong>：评估 alert rule，满足条件就把告警推给 AlertManager；AlertManager 负责<strong>善后</strong>：按业务分组（同一服务的几十条告警合并成一条）、按标签路由到不同值班组、对维护窗口做静默、对依赖告警做抑制（数据库挂了就别再发"应用连不上数据库"了）。两者必须拆开部署。</p>
-
-<h2>总结</h2>
-<p>Prometheus 的精髓是<strong>"多维标签 + Pull 采集 + 类 SQL 查询"三件套</strong>：标签模型让数据可以任意切片，Pull 模型让失败检测和服务发现免费，PromQL 让告警和仪表盘共用一套语言。它不是万能的——单机存不了长期数据、基数控制不好会 OOM、没有多租户——但它的开放格式让整个生态（Grafana/VictoriaMetrics/Tempo）都围绕它生长。下一篇我们就深入它的查询语言 PromQL，这是日常工作里使用频率最高的部分。</p>
+</div>
 
                     </div>
                 </article>
