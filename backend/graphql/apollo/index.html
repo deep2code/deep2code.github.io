@@ -83,239 +83,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Apollo Server 与 Client 实战</h1>
+                        <h1 class="article-title">Apollo Server：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ GraphQL</span>
+                            <span class="meta-item">🏷️ Apollo</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>为什么是 Apollo，不是裸 graphql-js</h2>
-<p>上一篇我们用 startStandaloneServer 跑了个最小服务。真上生产，你要处理鉴权、插件、上传、订阅、错误格式化、指标采集——这些 graphql-js 都不管。</p>
-<p>这篇我按"服务端搭起来 → 加 DataLoader → 接 React/Vue 客户端 → 缓存和订阅"的顺序走，每段都是我项目里的真实代码裁剪。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Apollo怎么帮你解决。</p>
 
-<h2>Apollo Server 4.x 标准工程结构</h2>
-<p>2026 年我新建的 Apollo 项目都是这套结构，按功能模块拆 schema，不堆在一个文件里：</p>
-<pre><code class="language-bash">src/
-  schema/
-    user.ts        # User type + resolver
-    post.ts        # Post type + resolver
-    index.ts       # 合并 typeDefs/resolvers
-  context.ts       # 每个请求的 context
-  datasource.ts    # 数据访问层
-  server.ts        # 启动入口
-  plugins.ts       # 插件（日志/埋点）</code></pre>
-<p>入口长这样，重点是 <code>context</code> 工厂和 <code>plugins</code>：</p>
-<pre><code class="language-typescript">// server.ts
-import { ApolloServer } from '@apollo/server';
-import { expressMiddleware } from '@apollo/server/express4';
-import express from 'express';
-import { typeDefs, resolvers } from './schema';
-
-const app = express();
-const server = new ApolloServer({
-  typeDefs,
-  resolvers,
-  formatError: (err) => {
-    // 线上别把 stack 泄露给前端
-    if (err.extensions?.code === 'INTERNAL_SERVER_ERROR') {
-      return new Error('Internal server error');
-    }
-    return err;
-  },
-});
-await server.start();
-
-app.use('/graphql', express.json(), expressMiddleware(server, {
-  context: async ({ req }) => ({
-    user: authenticate(req.headers.authorization),
-    loaders: createLoaders(), // 每请求新建，关键！
-  }),
-}));
-app.listen(4000, () => console.log('🚀 on :4000'));</code></pre>
-<div class="callout callout-danger">
-<div class="callout-title">Apollo Server 3 → 4 的迁移大坑</div>
-很多老教程还在用 <code>new ApolloServer({ typeDefs, resolvers }); server.applyMiddleware()</code>。4.x 必须先 <code>await server.start()</code> 再挂中间件，而且 standalone 和 express 分了两个包。跟着老文档抄会直接报 <code>You need to call the .start() method</code>，别怀疑人生。
-</div>
-
-<h2>DataLoader：批量+缓存，GraphQL 的救星</h2>
-<p>刚学 GraphQL 时写 resolver 很容易这样：</p>
-<pre><code class="language-typescript">// 反面教材：N+1
-const resolvers = {
-  Post: {
-    author: async (post) => await db.users.findById(post.authorId),
-  },
-};</code></pre>
-<p>查 100 篇文章，就发 100 次查用户的 SQL。DataLoader 的思路是：<strong>把同一帧 tick 里的 id 攒起来，合并成一次 <code>WHERE id IN (...)</code> 查询</strong>。</p>
-<pre><code class="language-typescript">// datasource/userLoader.ts
-import DataLoader from 'dataloader';
-
-export function createUserLoader() {
-  return new DataLoader(async (ids: readonly string[]) => {
-    const users = await db.users.find({ id: { $in: [...ids] } });
-    // 关键：返回顺序必须和 ids 一一对应
-    return ids.map((id) => users.find((u) => u.id === id) || new Error('未找到'));
-  });
-}</code></pre>
-<pre><code class="language-typescript">// resolver 里用 loader
-const resolvers = {
-  Post: {
-    author: (post, _args, { loaders }) =>
-      loaders.user.load(post.authorId),
-  },
-};</code></pre>
 <div class="mermaid">
-flowchart LR
-    subgraph 没有DataLoader
-        P1[post1] --> U1[查询user(1)]
-        P2[post2] --> U2[查询user(2)]
-        P3[post3] --> U3[查询user(3)]
-    end
-    subgraph 有DataLoader
-        Q1[3个load()调用] --> BATCH[攒一批]
-        BATCH --> ONE[SELECT * FROM users WHERE id IN (1,2,3)]
-    end
-    style ONE fill:#10b981,stroke:#fff,color:#fff
+flowchart TB
+    A[Node.js] --> B[Apollo Server]
+    B --> C[GraphQL Schema]
+    B --> D[Resolver]
+    B --> E[接前端请求]
 </div>
-<p>DataLoader 还自带"单请求内"的缓存：同一帧里 <code>load(1)</code> 调两次，第二次直接命中内存。但这个缓存是<strong>每请求一个实例</strong>的，所以前面 <code>context</code> 里一定要 <code>createLoaders()</code> 新造，别用单例——不然 A 用户的请求会读到 B 用户刚缓存的数据，越权。这个坑第四篇还会展开。</p>
 
-<h2>Apollo Client：React 集成</h2>
-<p>前端这边我用 Apollo Client 3.x，React 官方支持最好。装依赖：</p>
-<pre><code class="language-bash">npm install @apollo/client graphql</code></pre>
-<p>初始化 Client，注意 <code>uri</code> 和 <code>cache</code>：</p>
-<pre><code class="language-typescript">// apollo/client.ts
-import { ApolloClient, InMemoryCache, HttpLink } from '@apollo/client';
+<h2>1. Node.js 怎么做 GraphQL</h2>
 
-const client = new ApolloClient({
-  link: new HttpLink({
-    uri: 'https://api.example.com/graphql',
-    credentials: 'include',
-  }),
-  cache: new InMemoryCache({
-    typePolicies: {
-      Query: {
-        fields: {
-          posts: {
-            merge: false, // 分页用自定义合并策略
-          },
-        },
-      },
-    },
-  }),
-});</code></pre>
-<p>React 组件里用 <code>useQuery</code>，loading/error/data 三态全包了：</p>
-<pre><code class="language-typescript">import { useQuery, gql } from '@apollo/client';
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你用 Node.js，想做 GraphQL 服务，用什么？</p>
+</div>
 
-const GET_POSTS = gql`
-  query GetPosts($limit: Int!) {
-    posts(limit: $limit) {
-      id
-      title
-      author { name }
-    }
-  }
-`;
+<p><strong>怎么解决？</strong>Apollo Server 是最常用的 GraphQL 服务端框架。</p>
 
-function PostList() {
-  const { data, loading, error } = useQuery(GET_POSTS, {
-    variables: { limit: 10 },
-  });
-  if (loading) return &lt;p&gt;加载中...&lt;/p&gt;;
-  if (error) return &lt;p&gt;出错了: {error.message}&lt;/p&gt;;
-  return data.posts.map((p) =&gt; &lt;div key={p.id}&gt;{p.title}&lt;/div&gt;);
-}</code></pre>
+<h2>2. 和 Express 怎么结合</h2>
 
-<h2>Vue 集成</h2>
-<p>Vue 生态官方支持是 <code>@apollo/client</code> + <code>@vue/apollo-composable</code>：</p>
-<pre><code class="language-typescript">import { ApolloClient, InMemoryCache, createHttpLink } from '@apollo/client/core';
-import { createApolloProvider } from '@vue/apollo-composable';
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>我已经有 Express 服务了，怎么加 GraphQL？</p>
+</div>
 
-const client = new ApolloClient({
-  link: createHttpLink({ uri: '/graphql' }),
-  cache: new InMemoryCache(),
-});
-export const apolloProvider = createApolloProvider();
+<p><strong>怎么解决？</strong>Apollo 可以直接挂在 Express 上，一个端口同时提供 REST 和 GraphQL。</p>
 
-// main.ts
-app.use(apolloProvider, { defaultClient: client });</code></pre>
-<pre><code class="language-vue">&lt;script setup lang="ts"&gt;
-import { useQuery } from '@vue/apollo-composable';
-const { result, loading, error } = useQuery(gql`
-  query { posts { id title } }
-`);
-&lt;/script&gt;</code></pre>
+<h2>3. 新手怎么开始</h2>
 
-<h2>归一化缓存：Apollo Client 的杀手锏</h2>
-<p>这是 Apollo Client 最香的部分，也是新手最容易绕晕的。普通 REST 缓存是"按 URL 存响应"，同一个 User 在两个接口里要存两份。Apollo Client 按 <strong>对象 id</strong> 归一化：</p>
-<pre><code class="language-typescript">// 第一次查询
-query { user(id:1){ name } }
-// 第二次查询
-query { post(id:10){ author{ name } } }
-// 两个查询的 author.id 都是 1，自动命中同一份缓存</code></pre>
-<p>默认靠 <code>__typename + id</code> 拼成 key（如 <code>User:1</code>）。如果你的主键不叫 <code>id</code>（比如叫 <code>_id</code>），要在 <code>typePolicies</code> 里指认：</p>
-<pre><code class="language-typescript">new InMemoryCache({
-  typePolicies: {
-    User: { keyFields: ['_id'] },
-  },
-});</code></pre>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>不知道怎么上手 Apollo。</p>
+</div>
+
+<p><strong>怎么解决？</strong>先定义 Schema，再写 Resolver，跑个简单的查询试试。</p>
+
+<h2>核心概念</h2>
+
+<table>
+<thead><tr><th>概念</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>Schema</td><td>定义数据类型和查询</td></tr>
+<tr><td>Resolver</td><td>定义每个查询怎么取数据</td></tr>
+<tr><td>TypeDefs</td><td>类型定义</td></tr>
+</tbody></table>
+
 <div class="callout callout-tip">
-<div class="callout-title">写操作后怎么刷新缓存</div>
-Mutation 返回新对象时，Apollo 会按 id 自动写回缓存——这就是为什么 <code>createPost</code> 要返回完整的新 Post 对象。如果你 mutation 没返回数据，就得手动 <code>client.cache.evict()</code> 或 <code>refetchQueries: [{ query: GET_POSTS }]</code>。别在 mutation 里只返回个 boolean，前端没法更新缓存。
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>先跑通 Hello World</strong>不要一上来就做复杂的，先跑个最简单的查询。</li>
+<li><strong>用 Playground 调试</strong>Apollo 自带 Playground，方便调试查询。</li>
+</ul>
 </div>
-
-<h2>错误处理：两层错误</h2>
-<p>Apollo Client 的错误分两层：网络层和 GraphQL 业务层。<code>useQuery</code> 的 <code>error</code> 默认两者都包，但你想分开处理，要用 <code>errorPolicy</code>：</p>
-<pre><code class="language-typescript">const { error } = useQuery(GET_USER, {
-  errorPolicy: 'all', // 即使部分字段报错也返回 data
-  onError: ({ graphQLErrors, networkError }) =&gt; {
-    if (graphQLErrors) {
-      graphQLErrors.forEach(({ message, extensions }) =&gt; {
-        if (extensions?.code === 'UNAUTHENTICATED') {
-          router.push('/login');
-        }
-      });
-    }
-  },
-});</code></pre>
-<p>服务端抛错要用 Apollo 自带的 <code>GraphQLError</code>，带上 <code>extensions.code</code>，前端才能结构化判断：</p>
-<pre><code class="language-typescript">import { GraphQLError } from 'graphql';
-
-throw new GraphQLError('未找到该用户', {
-  extensions: { code: 'NOT_FOUND' },
-});</code></pre>
-
-<h2>Subscription 实时推送</h2>
-<p>订阅走 WebSocket，不能复用 HTTP link。要装 <code>graphql-ws</code>：</p>
-<pre><code class="language-bash">npm install graphql-ws</code></pre>
-<pre><code class="language-typescript">import { split, HttpLink } from '@apollo/client';
-import { GraphQLWsLink } from '@apollo/client/link/subscriptions';
-import { createClient } from 'graphql-ws';
-
-const httpLink = new HttpLink({ uri: '/graphql' });
-const wsLink = new GraphQLWsLink(createClient({ url: 'ws://localhost:4000/graphql' }));
-
-// 订阅走 ws，查询走 http
-const link = split(
-  ({ query }) => {
-    const def = getMainDefinition(query);
-    return def.kind === 'OperationDefinition' && def.operation === 'subscription';
-  },
-  wsLink,
-  httpLink,
-);</code></pre>
-<p>服务端要给 Apollo Server 挂上 <code>graphql-ws</code> 的服务端插件，4.x 的写法和老教程差别很大，以官方文档为准。</p>
-
-<h2>FAQ</h2>
-<p><strong>Q：Apollo Client 缓存怎么清？</strong><br/>登出时 <code>client.resetStore()</code> 全清；单个对象 <code>client.evict({ id: 'User:1' })</code>。别直接 <code>window.location.reload()</code>，那是治标。</p>
-<p><strong>Q：DataLoader 缓存能跨请求吗？</strong><br/>默认不能，也不应该。跨请求缓存是 Redis/服务端缓存的事，DataLoader 只管"同一请求内去重"。想跨请求就在 resolver 外面套一层 Redis。</p>
-<p><strong>Q：订阅在生产要注意什么？</strong><br/>WebSocket 连接是有状态的，多实例部署要配 sticky session 或用 Redis PubSub 广播，否则用户连到 A 实例、事件从 B 实例发，收不到。</p>
-
-<h2>我的结论</h2>
-<p>Apollo 这套 Server+Client 是目前 GraphQL 生产落地最完整的方案。服务端记住三件事：4.x 要 <code>await server.start()</code>、DataLoader 每请求新建、错误用 <code>GraphQLError</code> 带 code。客户端记住一件事：<strong>把归一化缓存用明白，你就理解了 GraphQL 前端 80% 的体验优势</strong>。</p>
-<p>下一篇专门讲 GraphQL 最臭名昭著的性能问题——N+1，以及怎么用 DataLoader 和查询复杂度分析把它按下去。</p>
-
-
-
 
                     </div>
                 </article>

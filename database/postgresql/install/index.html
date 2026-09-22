@@ -81,165 +81,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">PostgreSQL 安装配置</h1>
+                        <h1 class="article-title">PostgreSQL 安装：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ PostgreSQL,关系数据库</span>
+                            <span class="meta-item">🏷️ PG 安装</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-
-<h2>安装方式的选择：包管理器 vs 源码 vs Docker</h2>
-<p>我自己在生产上装过十几套 PostgreSQL，结论很简单：生产一律用 PGDG 官方仓库，别用操作系统自带的老版本。Debian/Ubuntu 自带的 PG 版本往往滞后一两个大版本，安全补丁也慢。</p>
-<p>源码编译我只在需要定制编译选项或跟内核调试时才碰；Docker 适合本地开发测试，但我<b>不建议</b>直接把数据卷跑在生产裸容器里——容器一删一升级，数据文件的归属和生命周期很容易出岔子。下面以 Debian/Ubuntu 的 apt 与 RHEL/Rocky 的 dnf 为主线，覆盖生产最常见的部署路径。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及PG 安装怎么帮你解决。</p>
 
 <div class="mermaid">
 flowchart LR
-    A[选择大版本<br/>PG 17] --> B[添加 PGDG 官方仓库]
-    B --> C[安装 postgresql-17 服务端]
-    C --> D[initdb 初始化数据目录<br/>或 apt 自动 initdb]
-    D --> E[配置 postgresql.conf<br/>监听 内存 WAL]
-    E --> F[配置 pg_hba.conf<br/>认证策略]
-    F --> G[启动并验证<br/>pg_isready + psql]
-    G --> H[创建业务库 角色 扩展]
-
+    A[系统] --> B[安装 PG]
+    B --> C[启动服务]
+    C --> D[设置密码]
+    D --> E[连接测试]
 </div>
 
-<h2>Debian/Ubuntu 安装实操</h2>
-<p>使用 PGDG 官方仓库可以拿到最新大版本，而不是系统自带的陈旧版本：</p>
+<h2>1. Ubuntu 怎么装 PG</h2>
 
-<pre><code class="language-bash"># 1. 安装官方仓库源（以 PG17 为例，Ubuntu 22.04/24.04）
-sudo apt-get install -y curl ca-certificates
-sudo install -d /usr/share/postgresql-common/pgdg
-sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
-sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>Ubuntu 上怎么安装 PostgreSQL？</p>
+</div>
 
-# 2. 安装服务端与常用扩展包
-sudo apt-get update
-sudo apt-get install -y postgresql-17 postgresql-contrib-17
+<p><strong>怎么解决？</strong>apt install postgresql，一条命令就装好了。</p>
 
-# 3. 服务状态（apt 包会自动 initdb 并启动）
-sudo systemctl enable --now postgresql@17-main
-sudo systemctl status postgresql@17-main
-sudo pg_isready -h 127.0.0.1 -p 5432
-</code></pre>
+<h2>2. 装好了怎么连</h2>
 
-<p>RHEL/Rocky/AlmaLinux 系使用 dnf 仓库：</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>装完了怎么连接？</p>
+</div>
 
-<pre><code class="language-bash"># RHEL/Rocky 9 安装 PG17
-sudo dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm
-sudo dnf -qy module disable postgresql
-sudo dnf install -y postgresql17-server postgresql17-contrib
-# 手动初始化（dnf 包默认不自动 initdb）
-sudo /usr/pgsql-17/bin/postgresql-17-setup initdb
-sudo systemctl enable --now postgresql-17
-</code></pre>
+<p><strong>怎么解决？</strong>sudo -u postgres psql，就进去了。</p>
 
-<h2>数据目录初始化与目录结构</h2>
-<p>无论哪个平台，initdb 都会创建一个独立的数据目录（PGDATA）。生产环境应把它放在独立磁盘/卷上。手工初始化时用 <code>postgres</code> 系统用户执行，<b>禁止用 root 跑 initdb</b>：</p>
+<h2>3. 怎么设置密码</h2>
 
-<pre><code class="language-bash"># 手工初始化（非 apt 自动场景）
-export PGDATA=/mnt/pgdata/17/main
-sudo mkdir -p $PGDATA && sudo chown postgres:postgres $PGDATA
-sudo -u postgres /usr/lib/postgresql/17/bin/initdb -D $PGDATA \
-     --encoding=UTF8 --locale=C.UTF-8 --data-checksums --wal-segsize=64
-# --data-checksums 开启数据页校验，能在 silent corruption 时及时发现，强烈推荐
-# --wal-segsize=64 把 WAL 段从默认 16MB 调到 64MB，减少段数量
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>默认没有密码，怎么改？</p>
+</div>
 
-# 目录结构速览
-ls $PGDATA
-# base/         表数据（每个数据库一个子目录）
-# global/       集群共享系统表
-# pg_wal/       WAL 日志（10+ 版本从 pg_xlog 改名）
-# pg_hba.conf   客户端认证配置
-# postgresql.conf 主配置
-# pg_stat / pg_replslot 等
-</code></pre>
+<p><strong>怎么解决？</strong>进 psql 里 ALTER USER postgres PASSWORD 'xxx'。</p>
 
-<h2>两个核心配置文件</h2>
-<p><code>postgresql.conf</code> 控制实例行为，<code>pg_hba.conf</code> 控制谁能从哪里连进来。生产最小化的关键改动如下（17 版本可用 <code>ALTER SYSTEM</code> 写入 postgresql.auto.conf，避免直接改主文件）：</p>
-
-<pre><code class="language-sql">-- 用 SQL 改配置，更易版本管理；改完 reload 或 restart
-ALTER SYSTEM SET listen_addresses = '*';          -- 监听所有网卡
-ALTER SYSTEM SET port = 5432;
-ALTER SYSTEM SET max_connections = 200;
-ALTER SYSTEM SET shared_buffers = '4GB';          -- 约为内存的 25%
-ALTER SYSTEM SET effective_cache_size = '12GB';  -- 约为内存的 60-75%
-ALTER SYSTEM SET work_mem = '32MB';
-ALTER SYSTEM SET maintenance_work_mem = '512MB';
-ALTER SYSTEM SET wal_level = 'replica';          -- 流复制必需
-ALTER SYSTEM SET max_wal_size = '16GB';
-ALTER SYSTEM SET checkpoint_completion_target = 0.9;
-ALTER SYSTEM SET password_encryption = 'scram-sha-256';
-
-SELECT pg_reload_conf();  -- 多数参数 reload 即可，不需要重启
-</code></pre>
+<h2>常用命令</h2>
 
 <table>
-<thead><tr><th>参数</th><th>我的推荐（16GB 内存示例）</th><th>干啥用</th></tr></thead>
+<thead><tr><th>命令</th><th>用途</th></tr></thead>
 <tbody>
-<tr><td><code>shared_buffers</code></td><td>4GB（内存 25%）</td><td>内核缓存，最关键的一个</td></tr>
-<tr><td><code>effective_cache_size</code></td><td>12GB（内存 75%）</td><td>告诉优化器 OS 还能给多少缓存</td></tr>
-<tr><td><code>work_mem</code></td><td>32MB</td><td>单条排序/哈希的内存，别给太大</td></tr>
-<tr><td><code>maintenance_work_mem</code></td><td>512MB</td><td>建索引、VACUUM 用</td></tr>
-<tr><td><code>max_connections</code></td><td>200</td><td>连接多了别硬调，上 PgBouncer</td></tr>
-<tr><td><code>wal_level</code></td><td>replica</td><td>要做主从复制必须改</td></tr>
-</tbody>
-</table>
+<tr><td>sudo -u postgres psql</td><td>进入 PG</td></tr>
+<tr><td>CREATE DATABASE xxx;</td><td>建库</td></tr>
+<tr><td>CREATE USER xxx WITH PASSWORD 'xxx';</td><td>建用户</td></tr>
+</tbody></table>
 
-<p><code>pg_hba.conf</code> 的每一行是一条规则，<b>从上往下匹配，命中即停</b>。生产典型写法：</p>
-
-<pre><code class="language-conf"># TYPE  DATABASE  USER   ADDRESS        METHOD
-local   all       all                    peer        # 本地 unix socket 用系统用户映射
-host    all       all    127.0.0.1/32   scram-sha-256
-host    all       appuser 10.0.0.0/8     scram-sha-256
-# 复制专用账号，仅允许复制连接
-host    replication replicator 10.0.0.0/8 scram-sha-256
-</code></pre>
-
-<h2>初始化业务库与扩展</h2>
-<p>实例起来后，第一件事是用最小权限原则创建业务角色与数据库，而不是直接用 superuser <code>postgres</code> 跑应用：</p>
-
-<pre><code class="language-sql">-- 创建业务角色（密码用强随机串）
-CREATE ROLE appuser WITH LOGIN PASSWORD 'REPLACE_STRONG_PASSWORD' CONNECTION LIMIT 200;
-CREATE DATABASE appdb OWNER appuser ENCODING 'UTF8' LC_COLLATE 'C.UTF8' LC_CTYPE 'C.UTF8' TEMPLATE template0;
-\c appdb
--- 常用扩展（需要 postgresql-contrib 包）
-CREATE EXTENSION IF NOT EXISTS pg_stat_statements;   -- 慢查询统计，必装
-CREATE EXTENSION IF NOT EXISTS pgcrypto;             -- 加密函数
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";          -- UUID 生成
--- 给业务用户授权
-GRANT CONNECT ON DATABASE appdb TO appuser;
-GRANT USAGE ON SCHEMA public TO appuser;
-ALTER DEFAULT PRIVILEGES FOR ROLE appuser IN SCHEMA public
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO appuser;
-</code></pre>
-
-<h2>性能优化与最佳实践</h2>
-
-<div class="callout callout-danger">
-<div class="callout-title">我踩过的坑：远程连接死活连不上</div>
-<p>刚装好用应用连，报 <code>no pg_hba.conf entry for host</code>。我改了 <code>listen_addresses</code> 也没用，绕了半天才想明白 pg_hba.conf 是<b>从上往下匹配、命中即停</b>——我新加的规则排在一条 <code>host all all 127.0.0.1/32</code> 后面，根本轮不到。把业务网段的规则挪到前面，reload 就通了。这个坑我见新人踩过不下五次。</p>
-</div>
-
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>数据目录与 WAL 分盘</strong>：把 <code>pg_wal</code> 单独挂一块 SSD，顺序写与数据文件随机读写互不干扰。</li>
-<li><strong>先调 shared_buffers 与 effective_cache_size</strong>：这两个是查询规划与缓存的根基，其他参数都是围绕它们微调。</li>
-<li><strong>用 ALTER SYSTEM 而不是手编 postgresql.conf</strong>：变更可追溯、可回滚（删除 postgresql.auto.conf 中对应行即可）。</li>
-<li><strong>生产开 data_checksums</strong>：initdb 时加上，或在线用 <code>pg_checksums -e</code> 后开启，能提前发现磁盘静默坏块。</li>
-<li><strong>防火墙/安全组收紧</strong>：PostgreSQL 不直接暴露公网，永远走内网 + 安全组 + VPN。</li>
+<li><strong>生产用官方源</strong>系统自带的版本老，装官方最新源。</li>
+<li><strong>不要用默认密码</strong>装完马上改密码，不要用弱密码。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：装完了连不上，报 "Connection refused" 或 "no pg_hba.conf entry"？</h3>
-<p>前者是 <code>listen_addresses</code> 默认只绑 localhost，或防火墙挡了 5432；后者是 <code>pg_hba.conf</code> 没有匹配你来源 IP 的规则。先 <code>ss -lntp | grep 5432</code> 确认监听，再看 <code>pg_hba.conf</code> 最后一条匹配规则，改完 <code>SELECT pg_reload_conf();</code>。</p>
-<h3>Q2：initdb 报 "could not create directory /var/lib/pgsql/data" 权限错误？</h3>
-<p>你用 root 跑了 initdb。必须 <code>sudo -u postgres</code> 切换到 postgres 系统用户再执行，且数据目录属主要是 postgres。PostgreSQL 出于安全设计拒绝以 root 运行任何服务进程。</p>
-<h3>Q3：apt 装完后怎么连？密码是什么？</h3>
-<p>Debian/Ubuntu 包默认给 postgres 用户设置了 <code>peer</code> 认证，本地 <code>sudo -u postgres psql</code> 不需要密码。远程应用连接需要先 <code>ALTER USER postgres PASSWORD 'xxx';</code> 并在 pg_hba.conf 里把对应行改成 scram-sha-256。</p>
-
-<h2>总结</h2>
-<p>安装 PostgreSQL 的难点从来不是跑那几行 apt/dnf，而是<strong>初始化参数与认证策略的一次性选择</strong>：数据目录放哪、WAL 分不分盘、shared_buffers 给多少、pg_hba 怎么收紧、扩展装哪些。这些决策一旦上线，后期改起来都要停机或重启，所以第一次配置时就要按生产标准来。下一篇进入 PostgreSQL 最有特色的部分——它的数据类型系统。</p>
+</div>
 
                     </div>
                 </article>
