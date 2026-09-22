@@ -81,202 +81,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">消息队列对比</h1>
+                        <h1 class="article-title">Kafka 性能优化：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Kafka,性能优化,消息队列对比,技术选型</span>
+                            <span class="meta-item">🏷️ Kafka 性能</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Kafka 性能怎么帮你解决。</p>
 
-<h2 id="背景">Kafka 性能调优的三个层次</h2>
-<p>很多人觉得 Kafka 性能不行，其实 90% 的情况是配置没调对。Kafka 的性能瓶颈从来不在一个地方——可能是生产者批量太小、可能是 Broker 磁盘打满、也可能是消费者单次拉取太多导致 GC。</p>
-
-<h2 id="producer-tune">生产者侧调优</h2>
-<table>
-<thead><tr><th>参数</th><th>默认值</th><th>调优建议</th><th>原理</th></tr></thead>
-<tbody>
-<tr><td><code>batch.size</code></td><td>16KB</td><td>32KB~128KB</td><td>批次越大，单次网络请求效率越高，但延迟增加</td></tr>
-<tr><td><code>linger.ms</code></td><td>0</td><td>5~20ms</td><td>等待攒批时间，和 batch.size 是"或"关系，任一满足就发</td></tr>
-<tr><td><code>compression.type</code></td><td>none</td><td>lz4 / zstd</td><td>CPU 换网络和磁盘 I/O。文本消息压缩比 5~10 倍</td></tr>
-<tr><td><code>buffer.memory</code></td><td>32MB</td><td>64MB~256MB</td><td>生产者总发送缓冲区。打满会阻塞 send()</td></tr>
-<tr><td><code>max.in.flight.requests.per.connection</code></td><td>5</td><td>5（幂等模式）</td><td>单连接在途请求数。太高会打乱重试顺序</td></tr>
-</tbody>
-</table>
-
-<pre><code class="language-go">// Go 高性能生产者配置
-config := sarama.NewConfig()
-config.Producer.RequiredAcks = sarama.WaitForAll
-config.Producer.Idempotent = true
-
-// 批量优化
-config.Producer.Flush.Bytes = 64 * 1024        // 64KB 批次
-config.Producer.Flush.Frequency = 10 * time.Millisecond // 最多等 10ms
-
-// 压缩
-config.Producer.Compression = sarama.CompressionLZ4
-
-// 缓冲区
-config.Producer.MaxMessageBytes = 1000000       // 单条消息最大 1MB
-config.Producer.Retry.Max = 3
-config.Producer.Retry.Backoff = 100 * time.Millisecond</code></pre>
-
-<h2 id="broker-tune">Broker 侧调优</h2>
 <div class="mermaid">
-graph LR
-    A[Low throughput] --> B{Disk IO high?}
-    B -->|Yes| C[Check page cache hit rate<br/>Add RAM, use NVMe SSD]
-    B -->|No| D{Network saturated?}
-    D -->|Yes| E[Enable compression<br/>Reduce cross-DC replica sync]
-    D -->|No| F{CPU high?}
-    F -->|Yes| G[Increase num.io.threads<br/>Check GC logs, add heap]
-    F -->|No| H[Tune batch.size and linger.ms]
-
-    style C fill:#4CAF50,color:#fff
-    style E fill:#2196F3,color:#fff
-    style G fill:#FF9800,color:#fff
-    style H fill:#9C27B0,color:#fff
+flowchart TB
+    A[Kafka 慢] --> B{生产慢?}
+    B -->|是| C[批量发送、压缩]
+    B -->|否| D{消费慢?}
+    D -->|是| E[加消费者数]
 </div>
 
-<h3>关键 Broker 配置</h3>
-<blockquote class="callout callout-warn">
-<p><strong>我踩过的坑：</strong>有次为了"更安全"，把 <code>log.flush.interval.messages=1</code> 和 <code>log.flush.interval.ms=100</code> 打开了，结果单机吞吐从 80 万 TPS 直接掉到 5 万。Kafka 依赖 OS 页缓存批量刷盘，强行同步刷盘等于把 SSD 当机械盘用。记住：<strong>副本机制已经保证了数据安全，不要开同步刷盘。</strong></p>
-</blockquote>
-<pre><code class="language-properties"># ===== 线程模型 =====
-num.network.threads=8          # 网络请求处理线程（默认 3，太少会排队）
-num.io.threads=16              # 磁盘 I/O 处理线程（默认 8，建议 = CPU 核数）
-queued.max.requests=500        # 每个网络线程的请求队列上限
+<h2>1. 生产消息太慢</h2>
 
-# ===== 页缓存利用 =====
-# 不要在 JVM 上分配超过 6~8GB 堆
-# 把剩余内存全部留给 OS Page Cache
-# JVM 启动参数: -Xms6g -Xmx6g -XX:+UseG1GC
-
-# ===== 刷盘策略（不要改成同步刷盘！）=====
-# Kafka 依赖 OS 页缓存刷盘，不要设 log.flush.* 强制同步
-# 副本机制已经保证了数据安全，不需要每写一条就 fsync
-
-# ===== 网络 =====
-socket.send.buffer.bytes=1048576       # 1MB
-socket.receive.buffer.bytes=1048576   # 1MB
-socket.request.max.bytes=104857600     # 100MB
-
-# ===== 消费者拉取 =====
-fetch.max.bytes=52428800               # 单次 fetch 最大 50MB
-max.partition.fetch.bytes=1048576      # 单分区单次最大 1MB</code></pre>
-
-<h2 id="consumer-tune">消费者侧调优</h2>
-<pre><code class="language-python"># Python 高性能消费者配置
-config = {
-    'bootstrap.servers': 'node-1:9092',
-    'group.id': 'high-throughput-group',
-
-    # 拉取参数：批量拉取，减少网络往返
-    'fetch.min.bytes': 1024 * 1024,     # 1MB，攒够才返回
-    'fetch.max.wait.ms': 500,           # 最多等 500ms
-    'max.poll.records': 1000,           # 每次 poll 最多 1000 条
-
-    # 会话与心跳
-    'session.timeout.ms': 30000,
-    'heartbeat.interval.ms': 10000,
-    'max.poll.interval.ms': 300000,     # 5 分钟处理超时
-
-    # 提交策略
-    'enable.auto.commit': False,
-    # 手动批量提交，减少 Offset 请求
-    # 每处理 100 条提交一次，而非每条都提交
-
-    # 客户端缓冲
-    'receive.buffer.bytes': 1048576,
-    'send.buffer.bytes': 1048576,
-}</code></pre>
-
-<h3>消费并行度扩容</h3>
-<p>消费者吞吐量不够时，扩容路径是：</p>
-<ol>
-<li><strong>先加消费者实例</strong>：消费组内 Consumer 数增加，每个 Consumer 分到更少 Partition。上限是 Partition 数。</li>
-<li><strong>Partition 数不够了就扩容 Partition</strong>：<code>kafka-topics.sh --alter --partitions N</code>。注意：已存在的消息不会重新分配到新 Partition，只影响新消息。</li>
-<li><strong>批量处理</strong>：不要逐条处理，攒一批（100~1000 条）批量写数据库/调下游 API。</li>
-</ol>
-
-<h2 id="compare">Kafka vs RabbitMQ vs RocketMQ 全面对比</h2>
-<div class="mermaid">
-graph TB
-    subgraph MQPosition [Message Queue Positioning]
-        K[Kafka Distributed Commit Log<br/>High throughput, replayable<br/>Logging, stream processing, big data]
-        R[RabbitMQ Erlang AMQP Broker<br/>Flexible routing, low latency<br/>Business notification, task queue]
-        RMQ[RocketMQ Java, Alibaba<br/>Transactional messages, delayed messages<br/>E-commerce, finance, China ecosystem]
-    end
-
-    style K fill:#231F20,color:#fff
-    style R fill:#FF6600,color:#fff
-    style RMQ fill:#E2231A,color:#fff
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你发 Kafka 消息很慢，吞吐上不去。</p>
 </div>
 
-<table>
-<thead><tr><th>维度</th><th>Kafka</th><th>RabbitMQ</th><th>RocketMQ</th></tr></thead>
-<tbody>
-<tr><td><strong>单机吞吐</strong></td><td>百万级 TPS</td><td>万级 TPS</td><td>十万级 TPS</td></tr>
-<tr><td><strong>延迟</strong></td><td>ms 级（批量设计）</td><td>μs~ms 级（最低）</td><td>ms 级</td></tr>
-<tr><td><strong>消息模型</strong></td><td>发布-订阅 + 消费组</td><td>点对点 + 发布订阅 + 复杂路由</td><td>发布-订阅 + 顺序消息</td></tr>
-<tr><td><strong>消息回溯</strong></td><td>✅ 按 Offset 重放</td><td>❌ 消费即删除</td><td>✅ 按时间戳回溯</td></tr>
-<tr><td><strong>事务消息</strong></td><td>✅ 0.11+ 支持</td><td>❌ 不支持</td><td>✅ 原生支持（半消息）</td></tr>
-<tr><td><strong>延迟消息</strong></td><td>⚠️ 需自研</td><td>✅ 插件支持</td><td>✅ 原生 18 级延迟</td></tr>
-<tr><td><strong>消息优先级</strong></td><td>❌ 不支持</td><td>✅ 支持</td><td>❌ 不支持</td></tr>
-<tr><td><strong>集群部署</strong></td><td>KRaft 3 节点起步</td><td>镜像队列/仲裁队列</td><td>主从 + DLedger 选主</td></tr>
-<tr><td><strong>生态</strong></td><td>流处理（Flink/KStreams）</td><td>企业集成（Spring AMQP）</td><td>阿里系/国内电商</td></tr>
-<tr><td><strong>适用场景</strong></td><td>日志采集、流处理、事件溯源</td><td>业务通知、RPC 解耦、任务分发</td><td>订单交易、支付、金融级</td></tr>
-</tbody>
-</table>
+<p><strong>怎么解决？</strong>批量发送、开压缩、调 batch 参数，吞吐上去。</p>
 
-<h3>怎么选？</h3>
+<h2>2. 消费太慢</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>消息太多，消费者处理不过来。</p>
+</div>
+
+<p><strong>怎么解决？</strong>加消费者数（不超过分区数）、批量消费。</p>
+
+<h2>3. 怎么提高吞吐</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道要提高，不知道怎么调。</p>
+</div>
+
+<p><strong>怎么解决？</strong>加分区数、批量发送、开压缩、用更快的磁盘。</p>
+
+<h2>优化手段</h2>
+
+<table>
+<thead><tr><th>手段</th><th>效果</th></tr></thead>
+<tbody>
+<tr><td>批量发送</td><td>减少网络开销</td></tr>
+<tr><td>开压缩</td><td>减小网络传输</td></tr>
+<tr><td>加分区数</td><td>提高并行度</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>选 Kafka 当你需要</strong>：海量数据（日千亿消息）、流处理管道、数据回溯、和大数据生态（Spark/Flink）集成。</li>
-<li><strong>选 RabbitMQ 当你需要</strong>：复杂路由（交换机 + 绑定键）、低延迟、消息优先级、已经在用 Spring 生态。</li>
-<li><strong>选 RocketMQ 当你需要</strong>：金融级事务消息、延迟消息、国内技术支持、阿里系技术栈。</li>
+<li><strong>不要盲目调</strong>先看瓶颈在哪，是生产还是消费，再调。</li>
+<li><strong>分区数不要太多</strong>多了也不好，一般按消费者数定。</li>
 </ul>
-<p>不要陷入"哪个最好"的争论——它们解决的是不同问题。Kafka 是<strong>数据管道</strong>，RabbitMQ 是<strong>服务总线</strong>，RocketMQ 是<strong>业务消息中枢</strong>。</p>
-
-<h2 id="monitor">关键监控指标</h2>
-<pre><code class="language-bash"># Kafka 自带的 JMX 指标（Prometheus + JMX Exporter 采集）
-# 生产者：
-#   kafka_producer_batch_size_avg       批量大小
-#   kafka_producer_record_send_rate     发送速率
-#   kafka_producer_record_error_rate    错误率
-#   kafka_producer_batch_wait_time_avg  攒批等待时间
-
-# Broker：
-#   kafka_server_replmanager_underrplicatedpartitions  不同步分区数
-#   kafka_server_replmanager_leadercount              Leader 总数
-#   kafka_network_requestavgidle_time                 请求排队时间
-#   kafka_log_logsize                                日志大小
-
-# 消费者：
-#   consumer_lag（消费延迟） = log_end_offset - consumer_offset
-#   这是最重要的业务指标——lag 持续增长说明消费跟不上</code></pre>
-
-<h2 id="best-practices">性能调优最佳实践总结</h2>
-<ol>
-<li><strong>先压测再调优</strong>：用 kafka-producer-perf-test.sh 和 kafka-consumer-perf-test.sh 做基线压测，找到瓶颈点再调。不要凭感觉改配置。</li>
-<li><strong>批量永远是第一优先级</strong>：生产者调 batch.size + linger.ms，消费者调 fetch.min.bytes + max.poll.records。批量 I/O 比任何参数调优都有效。</li>
-<li><strong>压缩是免费的性能提升</strong>：开启 lz4 或 zstd，CPU 多花 5~10%，网络和磁盘省 50~80%。在千兆网络下收益最大。</li>
-<li><strong>监控先行</strong>：没有监控就调优是盲人摸象。至少要有消费 lag、生产吞吐、Broker CPU/磁盘/网络三组监控。</li>
-<li><strong>不要过度调优</strong>：默认配置已经覆盖了 80% 场景。只有压测发现瓶颈、且明确知道改这个参数的影响时才改。</li>
-</ol>
-
-<h2 id="FAQ">常见问题 FAQ</h2>
-<h3>Q1：Kafka 单机到底能跑多少 TPS？</h3>
-<p>参考 LinkedIn 公开数据：3 节点 NVMe SSD 集群，单 Broker 约 150 万 TPS（1KB 消息）。但这是极限压测数字，生产环境建议按 30~50 万 TPS 规划。影响因素：消息大小（10KB 消息吞吐降一个数量级）、副本因子（RF=3 比 RF=1 慢 30~50%）、是否开启压缩（开启后吞吐反升）。</p>
-
-<h3>Q2：为什么我的 Kafka 消费延迟很高（lag 很大）？</h3>
-<p>消费 lag 增长 = 生产速率 &gt; 消费速率。排查方向：(1) 消费者实例数是不是太少？Partition 数够不够？(2) 单条消息处理是不是太慢（同步调下游 API）？改成批量处理或异步化。(3) 频繁 Rebalance 导致停顿？调大 session.timeout.ms。(4) 消费者 GC 频繁？调小堆内存，用 G1GC。</p>
-
-<h3>Q3：什么时候不应该用 Kafka？</h3>
-<p>Kafka 不是银弹。以下场景不适合：(1) 需要复杂路由（"根据消息头路由到不同队列"）——用 RabbitMQ；(2) 需要消息优先级和死信交换器——RabbitMQ 原生支持；(3) 需要延迟消息/定时投递——RocketMQ 原生支持；(4) 消息量很小（每天几万条）——Kafka 的运维成本不值得，用 Redis List 或数据库表都够了。</p>
-
-<h2 id="总结">总结</h2>
-<p>做了这么多年 MQ，我的体会是：Kafka 性能调优的核心是<strong>批量 + 顺序 + 页缓存</strong>三大设计哲学的客户端配合。生产者攒大批次、Broker 顺序写盘 + 利用 OS 页缓存、消费者批量拉取——三者协同才能跑满 Kafka 的设计吞吐。</p>
-<p>技术选型上，我从来不争论"哪个 MQ 最好"。根据业务场景做权衡就够了：Kafka 适合大数据管道，RabbitMQ 适合灵活路由的业务消息，RocketMQ 适合金融级事务消息。理解了它们的设计哲学差异，选型就不再是难题。</p>
+</div>
 
                     </div>
                 </article>

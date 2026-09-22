@@ -82,196 +82,65 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">建表与数据导入</h1>
+                        <h1 class="article-title">CK 数据导入导出：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ ClickHouse,建表,导入</span>
+                            <span class="meta-item">🏷️ CK 导入</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>建表是 ClickHouse 最关键的一步</h2>
-<p>在 MySQL 里建表随手就能 CREATE TABLE，改起来也容易。但 ClickHouse 反过来——建表参数选错了，后面查询怎么调都救不回来。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及CK 导入怎么帮你解决。</p>
 
-<h2>一张标准的 MergeTree 表长什么样</h2>
-<p>先看一个我团队线上跑的日志明细表，这是最典型的形态：</p>
-<pre><code class="language-sql">CREATE TABLE event_log
-(
-    event_time DateTime64(3) CODEC(Delta, ZSTD(3)),
-    user_id     UInt64,
-    event_type  LowCardinality(String),
-    url         String CODEC(ZSTD(1)),
-    status_code UInt16,
-    latency_ms  UInt32,
-    city        LowCardinality(String)
-)
-ENGINE = MergeTree
-PARTITION BY toYYYYMMDD(event_time)
-ORDER BY (event_type, event_time)
-PRIMARY KEY (event_type)
-TTL event_time + INTERVAL 90 DAY DELETE
-SETTINGS index_granularity = 8192;</code></pre>
-<p>逐个子句拆：</p>
+<div class="mermaid">
+flowchart LR
+    A[CSV/JSON] --> B[ClickHouse]
+    B --> C[快速导入]
+    B --> D[导出文件]
+</div>
+
+<h2>1. 怎么把 CSV 导入 CK</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你有一个 CSV 文件，想导入到 ClickHouse。</p>
+</div>
+
+<p><strong>怎么解决？</strong>用 INSERT FROM INFILE 一条命令导入。</p>
+
+<h2>2. 怎么快速导入大量数据</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>几十万行数据怎么快速导入？</p>
+</div>
+
+<p><strong>怎么解决？</strong>批量导入，用 INSERT 批量插，不要一条一条插。</p>
+
+<h2>3. 怎么把数据导出成文件</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>想把 CK 里的数据导成 CSV 文件。</p>
+</div>
+
+<p><strong>怎么解决？</strong>用 SELECT INTO OUTFILE 导出。</p>
+
+<h2>常用命令</h2>
+
+<table>
+<thead><tr><th>操作</th><th>命令</th></tr></thead>
+<tbody>
+<tr><td>导入 CSV</td><td>INSERT INTO xxx FROM INFILE 'xxx.csv' FORMAT CSV</td></tr>
+<tr><td>导出 CSV</td><td>SELECT * FROM xxx INTO OUTFILE 'xxx.csv' FORMAT CSV</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>ORDER BY (event_type, event_time)</strong>：part 内数据按这个排序，也是稀疏索引的依据。排在前面的字段过滤性越强，查询能跳过的数据越多。</li>
-<li><strong>PARTITION BY toYYYYMMDD(event_time)</strong>：按天分区。查询带时间范围时只扫相关分区。</li>
-<li><strong>PRIMARY KEY (event_type)</strong>：主键索引前缀，通常是 ORDER BY 的前几列。这里主键就是排序键第一列。</li>
-<li><strong>TTL ... DELETE</strong>：90 天自动删历史数据，不用你自己写清理任务。</li>
-<li><strong>CODEC(...)</strong>：列级压缩。时间戳用 Delta+ZSTD 效果最好；低基数字符串用 LowCardinality 类型本身就省空间。</li>
+<li><strong>批量导入</strong>不要一条一条插，批量插快很多。</li>
+<li><strong>注意格式</strong>导入前确认格式，CSV 还是 JSON，别搞错了。</li>
 </ul>
-<div class="callout callout-danger">
-<div class="callout-title">ORDER BY 选反了，查询直接废掉</div>
-<p>我见过一个事故：建表时 ORDER BY 写成了 (event_time, event_type)，以为时间在前面查时间快。结果业务查询 90% 是 <code>WHERE event_type = 'click'</code>，时间只是范围。因为排序键第一列是时间，按 event_type 过滤完全用不上主键索引，全表扫。后来只能重建表导数据。<strong>ORDER BY 第一列必须是你最高频过滤的等值条件列</strong>，时间放后面做范围。</p>
 </div>
-
-<h2>ORDER BY / PARTITION BY / TTL 怎么选</h2>
-<p>这三个子句是建表的灵魂，我总结个决策方法：</p>
-<table>
-<thead><tr><th>子句</th><th>决定什么</th><th>选择原则</th></tr></thead>
-<tbody>
-<tr><td>ORDER BY</td><td>part 内物理排序 + 主键索引</td><td>高频等值过滤列放前面，范围列放后面</td></tr>
-<tr><td>PARTITION BY</td><td>数据物理切分</td><td>按天/月，匹配你的查询时间范围</td></tr>
-<tr><td>PRIMARY KEY</td><td>稀疏索引前缀</td><td>通常 = ORDER BY 前缀，不必重复写</td></tr>
-<tr><td>TTL</td><td>数据生命周期</td><td>按时间自动删/聚合，别靠手动任务</td></tr>
-</tbody>
-</table>
-<p>一个常见误区：把所有过滤列都塞进 ORDER BY。没必要。排序键列越多，压缩率越差、写入越慢。ORDER BY 一般 2~4 列就够，剩下的过滤条件靠跳数索引（下一篇讲）或分区裁剪解决。</p>
-
-<h2>导入方式一：INSERT 批插</h2>
-<p>最基础的导入就是 <code>INSERT INTO ... VALUES</code>。但记住一条铁律：<strong>一定要批量插，千万别单条插</strong>。</p>
-<pre><code class="language-sql">-- 正确：一次插一批
-INSERT INTO event_log (event_time, user_id, event_type, url, status_code, latency_ms) VALUES
-    (now(), 1001, 'click', '/home', 200, 35),
-    (now(), 1002, 'view',  '/detail', 200, 42),
-    (now(), 1003, 'click', '/home', 200, 28);
-
--- 错误：单条循环插，吞吐能差 100 倍
-INSERT INTO event_log (...) VALUES (...); -- 一行一次</code></pre>
-<p>原因上一篇讲过：每次 INSERT 都会生成一个不可变 part。你单条插一万行，就是一万个小 part，后台 merge 线程累死都追不上，查询时要合并上万个小文件，直接慢成狗。</p>
-<div class="mermaid">
-flowchart LR
-    I1[小 part 1] --> MG[后台 merge 线程]
-    I2[小 part 2] --> MG
-    I3[小 part 3] --> MG
-    MG --> BIG[大 part 排序合并]
-    BIG --> READ[查询顺序扫描]
-    style MG fill:#f0682a,stroke:#fff,color:#fff
-</div>
-<div class="callout callout-danger">
-<div class="callout-title">第二个大坑：小批量写入</div>
-<p>我有次接埋点，业务方按"每来一条事件就 INSERT 一次"接进来，单机写入 QPS 才 200，CPU 就跑满了——全是 merge 在疯狂合并小 part。改成攒够 1000~10000 行（或攒 1~2 秒）再批量插，同样的数据量，CPU 直接降到 5%。<strong>ClickHouse 的写入单位是"批"，不是"条"</strong>。</p>
-</div>
-
-<h2>导入方式二：CSV / JSON 文件</h2>
-<p>从文件导入是数据迁移和离线导入的常用姿势。clickhouse-client 直接读 stdin：</p>
-<pre><code class="language-bash"># CSV 导入
-clickhouse-client --query="INSERT INTO event_log FORMAT CSV" &lt; events.csv
-
-# JSONEachRow：每行一个 JSON 对象，最常用
-clickhouse-client --query="INSERT INTO event_log FORMAT JSONEachRow" &lt; events.jsonl
-
-# 带压缩的 CSV，导入大文件省带宽
-clickhouse-client --query="INSERT INTO event_log FORMAT CSV" &lt; events.csv.gz</code></pre>
-<p>反向导出也一样顺手：</p>
-<pre><code class="language-bash">clickhouse-client --query="SELECT * FROM event_log WHERE event_time &gt;= '2026-09-01' FORMAT JSONEachRow" &gt; out.jsonl</code></pre>
-<p>我个人最推荐 <code>JSONEachRow</code> 格式——每行独立 JSON，部分行出错不会影响整体，调试也方便。CSV 适合超大数据量的全量迁移，但要注意转义和表头。</p>
-
-<h2>导入方式三：Kafka Engine 流式接入</h2>
-<p>生产上最主流的实时导入是 Kafka。ClickHouse 有个 <code>Kafka</code> 表引擎，直接把 Kafka topic 当数据源，再用物化视图把数据灌进 MergeTree 表。</p>
-<div class="mermaid">
-flowchart LR
-    K[Kafka Topic] --> KE[Kafka Engine 表]
-    KE --> MV[物化视图 INSERT 触发]
-    MV --> MT[MergeTree 明细表]
-    MT --> AGG[聚合查询]
-    style KE fill:#f0682a,stroke:#fff,color:#fff
-</div>
-<pre><code class="language-sql">-- 1. 建 Kafka 引擎表（只消费，不存数据）
-CREATE TABLE kafka_events
-(
-    event_time DateTime64(3),
-    user_id    UInt64,
-    event_type LowCardinality(String),
-    url        String,
-    status_code UInt16
-) ENGINE = Kafka()
-SETTINGS
-    kafka_broker_list = 'kafka1:9092,kafka2:9092',
-    kafka_topic_list  = 'app_events',
-    kafka_group_name  = 'clickhouse_consumer',
-    kafka_format      = 'JSONEachRow',
-    kafka_num_consumers = 2;
-
--- 2. 建真正的 MergeTree 表
-CREATE TABLE event_log
-(
-    event_time DateTime64(3),
-    user_id    UInt64,
-    event_type LowCardinality(String),
-    url        String,
-    status_code UInt16
-) ENGINE = MergeTree
-PARTITION BY toYYYYMMDD(event_time)
-ORDER BY (event_type, event_time);
-
--- 3. 物化视图把 Kafka 表数据自动写进 MergeTree
-CREATE MATERIALIZED VIEW consumer_mv TO event_log AS
-SELECT event_time, user_id, event_type, url, status_code
-FROM kafka_events;</code></pre>
-<p>这套组合是 ClickHouse 实时入仓的标准架构：Kafka Engine 拉数据 → 物化视图做清洗/过滤/字段裁剪 → 落进 MergeTree 明细表。<code>kafka_num_consumers</code> 按消费并发调，Topic 分区多就调大。</p>
-
-<h2>导入方式四：S3 / 对象存储直接导入</h2>
-<p>数据在 S3（或兼容的 MinIO、OSS）上，不用先下载再上传，ClickHouse 能直接读：</p>
-<pre><code class="language-sql">-- 直接查 S3 上的 CSV
-SELECT count()
-FROM s3('https://my-bucket.s3.amazonaws.com/events/2026-09-*.csv.gz',
-        'CSV',
-        'event_time DateTime64(3), user_id UInt64, event_type String')
-WHERE event_time &gt;= '2026-09-01';
-
--- 直接灌进 MergeTree 表
-INSERT INTO event_log
-SELECT * FROM s3('https://my-bucket.s3.amazonaws.com/events/2026-09-*.csv.gz',
-                 'CSV',
-                 'event_time DateTime64(3), user_id UInt64, event_type String, url String, status_code UInt16, latency_ms UInt32');</code></pre>
-<p>这招对历史数据回补、T+1 批量导入特别香——数据本来就在对象存储里，不用搬来搬去。我团队每天凌晨把前一天的离线数据从 Hive 导出到 S3，再用一条 <code>INSERT INTO ... SELECT FROM s3()</code> 补进 ClickHouse。</p>
-
-<h2>批量插入最佳实践</h2>
-<p>把散落的经验汇总成一张表，照着做不会错：</p>
-<table>
-<thead><tr><th>实践</th><th>怎么做</th><th>为什么</th></tr></thead>
-<tbody>
-<tr><td>攒批再插</td><td>每批 1万~10万行 或 5~15MB</td><td>避免小 part 打爆 merge</td></tr>
-<tr><td>单线程导入</td><td>大批量导入时别并发多路插</td><td>并发插会产生多个 part 互相 merge</td></tr>
-<tr><td>插入间隔 ≥ 1 秒</td><td>不要毫秒级连续小批插</td><td>给 merge 留喘气时间</td></tr>
-<tr><td>导入完 OPTIMIZE</td><td><code>OPTIMIZE TABLE xxx FINAL</code></td><td>强制合并小 part，查询更快</td></tr>
-<tr><td>关异步指标</td><td>导入大任务时</td><td>减少后台 IO 争抢</td></tr>
-</tbody>
-</table>
-
-<h2>表引擎选择指南</h2>
-<p>新人最大的困惑之一是"这么多表引擎我用哪个"。给你一张决策表：</p>
-<table>
-<thead><tr><th>你的需求</th><th>选这个引擎</th></tr></thead>
-<tbody>
-<tr><td>日志/埋点明细表，只追加</td><td>MergeTree</td></tr>
-<tr><td>维度表，按主键保留最新</td><td>ReplacingMergeTree</td></tr>
-<tr><td>明细上预聚合求和</td><td>SummingMergeTree</td></tr>
-<tr><td>物化视图聚合底表</td><td>AggregatingMergeTree</td></tr>
-<tr><td>消费 Kafka 流</td><td>Kafka 引擎 + 物化视图</td></tr>
-<tr><td>查其他节点的表</td><td>Distributed 引擎</td></tr>
-<tr><td>临时表/内存表</td><td>Memory / Buffer</td></tr>
-</tbody>
-</table>
-<p>记住一个原则：<strong>业务明细表一律 MergeTree 起步</strong>。只有当你明确需要去重、预聚合这些特性时，才换对应家族成员。别一上来就用 ReplacingMergeTree，大多数情况你不需要。</p>
-
-<h2>FAQ</h2>
-<p><strong>Q：插入数据后立刻查不到是为什么？</strong><br/>ClickHouse 插入后立即可查（不像 ES 要 refresh），但如果你用的是 ReplacingMergeTree 且还没 merge，重复 key 会看到多份。正常明细表插入后就能查。查不到先看 <code>system.parts</code> 里 part 是不是 Active。</p>
-<p><strong>Q：怎么删掉旧数据？</strong><br/>首选 TTL 自动删。手动删用 <code>ALTER TABLE ... DELETE WHERE ...</code>，但这是 mutation，会重写数据，大表很慢。按分区删最快：<code>ALTER TABLE ... DROP PARTITION '202608';</code>，秒级完成。</p>
-<p><strong>Q：导入时类型不匹配报错怎么办？</strong><br/>ClickHouse 类型很严格。字符串里有空串、数字列里有非数字都会报错。用 <code>FORMAT CSVWithNames</code> 带表头对齐列序，或在 SELECT 里显式 <code>CAST</code>。脏数据先清洗再导，别指望它帮你容错。</p>
-
-<h2>我的结论</h2>
-<p>建表和导入是 ClickHouse 工程里最容易"一次定终身"的环节。ORDER BY 决定排序和索引，PARTITION BY 决定裁剪粒度，TTL 决定数据生命周期——这三个建错了，后面怎么调优都救不回来。导入则记住一句话：<strong>批量、批量、还是批量</strong>，Kafka + 物化视图做实时流，S3 做离线回补，单条 INSERT 是万恶之源。下一篇我们聊查询怎么写、怎么调优，把这些数据真正用起来。</p>
-
 
                     </div>
                 </article>
