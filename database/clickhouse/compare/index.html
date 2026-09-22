@@ -82,129 +82,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">ClickHouse vs Elasticsearch vs Doris</h1>
+                        <h1 class="article-title">ClickHouse vs 其他数据库：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ ClickHouse,选型对比</span>
+                            <span class="meta-item">🏷️ CK 对比</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>选型前先把误解打掉</h2>
-<p>这三个引擎经常被放在一张图上比，但我发现很多人比错了方向——拿 ClickHouse 的聚合能力去比 ES 的全文检索，拿 Doris 的 Join 能力去踩 CH 的写入，结论当然歪。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及CK 对比怎么帮你解决。</p>
 
-<h2>一张大表看完核心差异</h2>
-<table>
-<thead><tr><th>维度</th><th>ClickHouse</th><th>Elasticsearch</th><th>Doris</th></tr></thead>
-<tbody>
-<tr><td>存储模型</td><td>列存 MergeTree</td><td>Lucene 倒排索引</td><td>列存 + 倒排混合</td></tr>
-<tr><td>架构</td><td>单主 + 副本，MPP 弱</td><td>分片 + 副本，主从</td><td>FE/BE 分离，MPP</td></tr>
-<tr><td>写入吞吐</td><td>极高（批量顺序写）</td><td>高（近实时，1s refresh）</td><td>高（Stream Load 秒级）</td></tr>
-<tr><td>点查延迟</td><td>弱（不擅长单行）</td><td>强（毫秒）</td><td>中</td></tr>
-<tr><td>聚合查询延迟</td><td>极快（单表聚合天花板）</td><td>中（大聚合贵且慢）</td><td>快（多表 Join 强）</td></tr>
-<tr><td>全文检索</td><td>弱（有 ngram 索引但不专业）</td><td>极强（倒排 + 分词 + 打分）</td><td>中（内置倒排索引）</td></tr>
-<tr><td>多表 Join</td><td>弱（大表 JOIN 易 OOM）</td><td>弱（非 join 主场）</td><td>强（MPP 分布式 Join）</td></tr>
-<tr><td>实时更新</td><td>弱（mutation 重）</td><td>中（更新=删+增）</td><td>强（Unique 模型实时 upsert）</td></tr>
-<tr><td>SQL 兼容</td><td>CH 方言，MySQL 协议</td><td>Query DSL，SQL 有限</td><td>MySQL 协议全兼容</td></tr>
-<tr><td>运维复杂度</td><td>低（单节点都能跑）</td><td>高（JVM 调优 + 分片规划）</td><td>中（FE/BE 集群）</td></tr>
-<tr><td>数据量门槛</td><td>千万级以上价值最大</td><td>十万级起就有用</td><td>百万级起</td></tr>
-</tbody>
-</table>
-
-<h2>ClickHouse：单表聚合的偏执狂</h2>
-<p>ClickHouse 的优势非常尖锐：<strong>单表大批量聚合，它就是开源第一梯队</strong>。列式存储 + 向量化 + 高压缩，同样的硬件，聚合查询经常比 ES 快一个数量级，磁盘还省一大半。日志分析、埋点统计、实时报表，它是我的首选。</p>
-<p>但它的短板同样明显：</p>
-<ul>
-<li><strong>不擅长多表大 Join</strong>：ClickHouse 的 Join 是把右表整个加载进内存做哈希，大表 Join 直接 OOM。</li>
-<li><strong>不擅长单行更新/删除</strong>：mutation 是重写数据，大表上跑一次几小时。</li>
-<li><strong>全文检索弱</strong>：虽然有 ngram 跳数索引，但和 ES 的分词 + 相关性打分不是一个时代的产品。</li>
-<li><strong>并发低</strong>：它为"少并发大批量"设计，同时来几百个大查询就互相打架。</li>
-</ul>
-<div class="callout callout-tip">
-<div class="callout-title">CH 适合谁</div>
-<p>你的核心查询是"一张大明细表 + 按时间/维度 GROUP BY"，几乎没有多表 Join，不需要全文检索——选 ClickHouse，它会让你忘记数据库还能这么快。</p>
-</div>
-
-<h2>Elasticsearch：搜索王者，聚合是附赠</h2>
-<p>ES 的看家本领是<strong>全文检索</strong>。倒排索引 + 分词器 + BM25 打分，"搜含某个关键词的文档并按相关性排序"这件事，它做了二十年，没人比它更成熟。中文有 IK 分词器，商品搜索、日志检索、站内搜索都是它的主场。</p>
-<p>但把 ES 当 OLAP 引擎用是常见误区。它的聚合是"附赠功能"——数据量一大，terms 聚合要分桶、要排序，堆内存直接告警。我之前用 ES 做日志聚合，十亿条数据按状态码 group by 一次，堆就撑爆了。</p>
-<table>
-<thead><tr><th>ES 的强项</th><th>ES 的弱项</th></tr></thead>
-<tbody>
-<tr><td>全文搜索、模糊匹配</td><td>超大规模精确聚合</td></tr>
-<tr><td>多条件过滤 + 相关性排序</td><td>JVM 内存调优复杂</td></tr>
-<tr><td>近实时写入（1 秒可见）</td><td>深分页（from+size）</td></tr>
-<tr><td>生态成熟（Kibana/Beats）</td><td>磁盘占用大（_source + 倒排）</td></tr>
-</tbody>
-</table>
-
-<h2>Doris：能分析的"数仓"，MySQL 党的甜点</h2>
-<p>Doris（起源于百度 Palo，现在 Apache 顶级项目）是 MPP 架构，定位介于 CH 和传统数仓之间。最大卖点是<strong>MySQL 协议全兼容</strong>——你用 MySQL 客户端、Navicat、BI 工具直连就能查，SQL 方言几乎不用学。它的 Join 能力远强于 CH，因为 FE 做优化器、BE 做分布式执行，多表 Join 能并行下推。</p>
-<p>另外 Doris 的<strong>实时 upsert</strong> 能力是 CH 比不了的：Unique 数据模型支持按主键实时更新，这意味着你可以把业务库的近实时数据同步过来做分析，不用像 CH 那样忍受 mutation。</p>
-<div class="callout callout-danger">
-<div class="callout-title">别被"全兼容"冲昏头</div>
-<p>Doris 的单表聚合极限其实不如 ClickHouse——CH 为单表扫描做的向量化和压缩优化更极致。如果你 90% 查询都是单表大聚合，CH 还是更快。Doris 的价值在"既要 Join 又要实时又要 MySQL 生态"的折中场景。</p>
-</div>
-
-<h2>三引擎查询模型对比</h2>
 <div class="mermaid">
 flowchart LR
-    subgraph ClickHouse
-        CHQ[单表大聚合] --> CHR[亚秒返回]
-    end
-    subgraph Elasticsearch
-        ESQ[全文检索+过滤] --> ESR[毫秒返回]
-    end
-    subgraph Doris
-        DQ[多表Join+实时数仓] --> DRR[秒级返回]
-    end
-    style CHR fill:#f0682a,stroke:#fff,color:#fff
-    style ESR fill:#fedd00,stroke:#333
-    style DRR fill:#2563eb,stroke:#fff,color:#fff
+    A[MySQL] -->|OLTP 交易| B[业务库]
+    C[ClickHouse] -->|OLAP 分析| D[报表分析]
 </div>
 
-<h2>选型决策树</h2>
-<p>别纠结，照着这棵树走：</p>
-<div class="mermaid">
-flowchart TD
-    Q1[核心需求是什么?] --> A1{要全文搜索/相关性打分?}
-    A1 -->|是| ES[选 Elasticsearch<br/>商品搜索/日志检索]
-    A1 -->|否| Q2{要多表 Join / 实时 upsert?}
-    Q2 -->|是| DORIS[选 Doris<br/>实时数仓/业务库分析]
-    Q2 -->|否| Q3{单表大聚合 / 日志埋点报表?}
-    Q3 -->|是| CH[选 ClickHouse<br/>OLAP 聚合天花板]
-    Q3 -->|都不确定| MIX[ES 检索 + CH 分析<br/>组合架构]
-    style CH fill:#f0682a,stroke:#fff,color:#fff
-    style ES fill:#fedd00,stroke:#333
-    style DORIS fill:#2563eb,stroke:#fff,color:#fff
+<h2>1. 为什么不用 MySQL 做分析</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>都是数据库，为什么分析报表要用 ClickHouse？</p>
 </div>
 
-<h2>真实组合架构：我的推荐</h2>
-<p>我团队线上跑的其实是"ES + CH"双引擎：</p>
-<ul>
-<li><strong>ES 负责</strong>：日志全文检索（搜 error、按关键词查上下文）、商品搜索。</li>
-<li><strong>CH 负责</strong>：日志聚合报表（按天 PV/UV、状态码分布、P95 延迟）、用户行为分析。</li>
-</ul>
-<p>数据通过 Kafka 双写两边，各司其职。别指望一个引擎解决所有问题——ES 做聚合贵，CH 做搜索弱，组合才是正解。</p>
+<p><strong>怎么解决？</strong>MySQL 是行存，查亿级数据要扫全表，CK 列存快很多。</p>
 
-<h2>迁移成本也要算</h2>
+<h2>2. ClickHouse 和 Elasticsearch 选哪个</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>都是分析型，选哪个？</p>
+</div>
+
+<p><strong>怎么解决？</strong>CK 查结构化数据快，ES 查文本、全文搜索快。</p>
+
+<h2>3. 什么时候用 ClickHouse</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>什么场景应该上 CK？</p>
+</div>
+
+<p><strong>怎么解决？</strong>日志分析、用户行为分析、报表统计，写少读多的分析场景。</p>
+
+<h2>对比</h2>
+
 <table>
-<thead><tr><th>维度</th><th>ClickHouse</th><th>Elasticsearch</th><th>Doris</th></tr></thead>
+<thead><tr><th>对比</th><th>MySQL</th><th>ClickHouse</th></tr></thead>
 <tbody>
-<tr><td>学习曲线</td><td>中（SQL 方言）</td><td>陡（Query DSL + 分词）</td><td>低（MySQL 兼容）</td></tr>
-<tr><td>招人难度</td><td>中</td><td>高（精通 ES 的人少）</td><td>低（会 MySQL 就会）</td></tr>
-<tr><td>开源协议</td><td>Apache 2.0</td><td>AGPL/Elastic 双许可</td><td>Apache 2.0</td></tr>
-<tr><td>云托管</td><td>主流云都有</td><td>最成熟</td><td>较少，多自建</td></tr>
-</tbody>
-</table>
+<tr><td>存储</td><td>行存</td><td>列存</td></tr>
+<tr><td>场景</td><td>交易 OLTP</td><td>分析 OLAP</td></tr>
+<tr><td>写入</td><td>快</td><td>批量写好</td></tr>
+<tr><td>查询</td><td>简单查询快</td><td>大表聚合快</td></tr>
+</tbody></table>
 
-<h2>FAQ</h2>
-<p><strong>Q：我们团队小，只能选一个，选哪个？</strong><br/>看你要解决的核心问题。要做"数据报表/大屏"，选 ClickHouse；要做"站内搜索/日志关键词检索"，选 Elasticsearch；要"把业务库直接做分析、多表 Join"，选 Doris。别选一个"全能"的，没有全能引擎。</p>
-<p><strong>Q：ClickHouse 能装全文检索插件替代 ES 吗？</strong><br/>能做简单的关键词匹配（ngram 跳数索引），但分词、相关性打分、高亮、同义词这些 ES 的成熟能力，CH 都没有。严肃的全文搜索场景别省 ES。</p>
-<p><strong>Q：Doris 会取代 ClickHouse 吗？</strong><br/>短期不会。两者优化目标不同：CH 把单表聚合做到极致，Doris 把多表 Join 和实时 upsert 做顺手。2026 年两者在大厂并行使用，不存在谁取代谁。</p>
-
-<h2>我的结论</h2>
-<p>选型这件事没有"最强"，只有"最匹配你的查询模型"。记住三句话：<strong>单表聚合报表选 ClickHouse，全文搜索选 Elasticsearch，多表 Join 实时数仓选 Doris</strong>。数据量大了，大概率最后是 ES + CH 双引擎组合，而不是二选一。这一系列到这里就结束了，从架构到建表、优化、实战、选型，你手里应该有一套能落地的 ClickHouse 知识了。</p>
-
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>不要用 CK 做业务库</strong>它是分析库，不是交易库。</li>
+<li><strong>不要频繁更新</strong>CK 更新删除很慢，不要频繁改数据。</li>
+</ul>
+</div>
 
                     </div>
                 </article>

@@ -81,232 +81,70 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">PostgreSQL 数据类型</h1>
+                        <h1 class="article-title">PostgreSQL 数据类型：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ PostgreSQL,关系数据库</span>
+                            <span class="meta-item">🏷️ PG 数据类型</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及PG 数据类型怎么帮你解决。</p>
 
-<h2>PostgreSQL 类型系统：不只是表，而是半结构化的瑞士军刀</h2>
-<p>我做业务的时候有个习惯：能塞 JSONB 就别硬拆成一堆关联表。早期用 MySQL 存用户画像，一个新需求就要 ALTER TABLE 加列，一年下来表上挂了 60 多个 nullable 列，查询慢得要死。</p>
-
-<p>大多数关系数据库把 JSON 当成"存进去但查不动"的大字段。PostgreSQL 的思路完全相反：它把类型系统当成一等公民。我把常用的几张牌列一下：</p>
-<ul>
-<li><strong>JSONB</strong>：二进制 JSON，能建 GIN 索引，半结构化数据的主力</li>
-<li><strong>数组</strong>：一列存多个值，标签、特征向量不用拆表</li>
-<li><strong>范围类型</strong>：会议室预约、时间窗口，还能自动防重叠</li>
-<li><strong>hstore / 几何 / 向量 / 全文检索</strong>：按需扩展，不用外挂</li>
-</ul>
-<p>很多在应用层用 ORM 拼半天的查询，在 PostgreSQL 里只是一条带操作符的 SQL。</p>
-
-<h2>类型家族速览</h2>
 <div class="mermaid">
 flowchart TB
-    subgraph Scalar[标量类型]
-        NUM[数值 int2 int4 int8 numeric]
-        TXT[文本 text varchar]
-        DT[时间 timestamptz interval date]
-        UUID[uuid]
-        BOOL[bool]
-    end
-    subgraph Semi[半结构化 复合]
-        JSONB[JSONB 二进制JSON]
-        ARR[数组 type 数组]
-        RANGE[范围 int4range tsrange]
-        HSTORE[hstore 键值]
-    end
-    subgraph Ext[扩展类型]
-        GEO[PostGIS 几何]
-        VEC[pgvector 向量]
-        TS[全文 tsvector tsquery]
-    end
-    Scalar --> Semi --> Ext
+    A[数值] --> B[int/bigint/numeric]
+    A[字符串] --> C[varchar/text]
+    A[时间] --> D[timestamp/date]
+    A[其他] --> E[jsonb/array]
 </div>
 
-<h2>JSONB：把半结构化数据当关系数据查</h2>
-<p>PostgreSQL 有两种 JSON 类型：<code>json</code> 存原始文本（保留空格、重复 key），<code>jsonb</code> 存二进制解析后的结构（去重、去空格、可建索引）。<b>99% 的场景你应该用 jsonb</b>。我几乎只在做审计留存时才用 json，其他一律 jsonb。</p>
+<h2>1. 不知道选什么类型</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>设计表的时候，字段不知道用什么数据类型。</p>
+</div>
+
+<p><strong>怎么解决？</strong>数值用 int/bigint，字符串用 text，时间用 timestamp，JSON 用 jsonb。</p>
+
+<h2>2. JSON 用 json 还是 jsonb</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>PG 有 json 和 jsonb，选哪个？</p>
+</div>
+
+<p><strong>怎么解决？</strong>用 jsonb，能建索引，查询快，json 只能存不能高效查。</p>
+
+<h2>3. 什么时候用数组类型</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>PG 有数组类型，什么时候用？</p>
+</div>
+
+<p><strong>怎么解决？</strong>标签、权限列表这种简单数组用，复杂关系不要用数组。</p>
+
+<h2>常用类型选择</h2>
 
 <table>
-<thead><tr><th>维度</th><th>json</th><th>jsonb</th></tr></thead>
+<thead><tr><th>数据</th><th>推荐类型</th></tr></thead>
 <tbody>
-<tr><td>存储格式</td><td>原始文本，逐字保留</td><td>二进制解析树，去重去空格</td></tr>
-<tr><td>建索引</td><td>不能</td><td>能（GIN）</td></tr>
-<tr><td>写入速度</td><td>快（原样存）</td><td>略慢（要解析）</td></tr>
-<tr><td>查询速度</td><td>每次现解析，慢</td><td>命中索引，快几个数量级</td></tr>
-<tr><td>保留重复 key</td><td>是</td><td>否（后者覆盖前者）</td></tr>
-</tbody>
-</table>
+<tr><td>整数</td><td>bigint</td></tr>
+<tr><td>金额</td><td>numeric</td></tr>
+<tr><td>短字符串</td><td>varchar(n)</td></tr>
+<tr><td>长文本</td><td>text</td></tr>
+<tr><td>时间</td><td>timestamptz</td></tr>
+<tr><td>JSON</td><td>jsonb</td></tr>
+</tbody></table>
 
-<p>常用操作符：<code>-&gt;</code>（取子节点，返回 jsonb）、<code>-&gt;&gt;</code>（取文本）、<code>#&gt;&gt;</code>（按路径取文本）：</p>
-
-<pre><code class="language-sql">CREATE TABLE events (
-    id        bigserial PRIMARY KEY,
-    user_id   int NOT NULL,
-    payload   jsonb NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-
--- 插入半结构化事件
-INSERT INTO events(user_id, payload) VALUES
- (1, '{"action":"purchase","sku":"A-100","amount":99.5,"tags":["promo","mobile"]}'),
- (2, '{"action":"view","sku":"A-100","channel":"web"}'),
- (1, '{"action":"purchase","sku":"B-200","amount":210,"tags":["upsell"]}');
-
--- 路径查询：谁买过 A-100？
-SELECT user_id, payload ->> 'amount' AS amount
-FROM events
-WHERE payload ->> 'action' = 'purchase'
-  AND payload ->> 'sku'    = 'A-100';
-
--- 存在性操作符：payload 是否含 channel 字段？
-SELECT count(*) FROM events WHERE payload ? 'channel';
-
--- 数组元素包含：tags 里是否包含 promo？
-SELECT count(*) FROM events WHERE payload @> '{"tags":["promo"]}';
-</code></pre>
-
-<p>在 JSONB 上建 <b>GIN 索引</b>后，<code>@&gt;</code>、<code>?</code> 这类查询可以走索引：</p>
-
-<pre><code class="language-sql">-- GIN 索引让 JSONB 包含查询从全表扫描变索引扫描
-CREATE INDEX idx_events_payload_gin ON events USING GIN (payload jsonb_path_ops);
-
--- 性能对比（200 万行 events 表，SSD）：
--- 无索引:  Seq Scan on events  ...  actual time=0.012..1820.4  rows≈4000
--- 有 GIN:  Bitmap Index Scan ...  actual time=0.04..3.1   rows≈4000
--- 加速约 600 倍
-</code></pre>
-
-<div class="callout callout-warning">
-<div class="callout-title">我踩过的坑：忘了建 GIN 索引</div>
-<p>有次上线后报表接口从 50ms 掉到 8 秒，EXPLAIN 一看全是 Seq Scan 在 JSONB 上跑 <code>@&gt;</code>。200 万行表，每条都要解析 JSON 再比较。补上 <code>jsonb_path_ops</code> 的 GIN 索引后立刻回到 3 毫秒。教训：JSONB 查询上线前先跑一次 EXPLAIN，别信"数据量小没事"。</p>
-</div>
-
-<h2>数组类型：一列存多个值，还能查</h2>
-<p>数组类型是 PostgreSQL 的独门武器。标签、多值属性、特征向量，都不用拆成关联表：</p>
-
-<pre><code class="language-sql">CREATE TABLE products (
-    id     serial PRIMARY KEY,
-    name   text,
-    tags   text[],
-    prices numeric(10,2)[]
-);
-
-INSERT INTO products(name, tags, prices) VALUES
- ('无线耳机', ARRAY['audio','bluetooth','sale'], ARRAY[299.00, 259.00]),
- ('机械键盘', ARRAY['keyboard','mech'],         ARRAY[599.00]);
-
--- @> 包含：找带 bluetooth 标签的商品
-SELECT name FROM products WHERE tags @> ARRAY['bluetooth'];
--- && 重叠：tags 与给定集合有交集即命中
-SELECT name FROM products WHERE tags && ARRAY['sale','mech'];
--- 数组下标访问（1-based）
-SELECT name, prices[1] AS first_price FROM products;
--- 数组索引（GIN）：让上面的 @> / && 走索引
-CREATE INDEX idx_products_tags ON products USING GIN (tags);
-</code></pre>
-
-<h2>范围类型：连续区间的正确建模方式</h2>
-<p>会议室预约、班次、价格区间、时间窗口——凡是"从 A 到 B"的数据，用范围类型比存两个列优雅得多，还能<b>自动防重叠</b>：</p>
-
-<pre><code class="language-sql">CREATE TABLE bookings (
-    id        serial PRIMARY KEY,
-    room      text,
-    during    tsrange NOT NULL,
-    EXCLUDE USING gist (room WITH =, during WITH &&)  -- 同房间时间不重叠
-);
-
-INSERT INTO bookings(room, during) VALUES
- ('A301', '[2026-09-17 10:00, 2026-09-17 11:00)');
--- 下面这条会被 EXCLUDE 约束拒绝（同一房间时间冲突）：
--- INSERT INTO bookings(room, during) VALUES ('A301', '[2026-09-17 10:30, 2026-09-17 12:00)');
-
--- 查 10:30 这个点是否已被占用
-SELECT room, during FROM bookings
-WHERE room = 'A301' AND during @> timestamptz '2026-09-17 10:30';
-</code></pre>
-
-<h2>Python 与 Go 客户端实战</h2>
-<p>Python 用 <code>psycopg3</code> 或 <code>psycopg2</code>，jsonb 与数组都能直接映射为 Python 对象：</p>
-
-<pre><code class="language-python">import psycopg
-
-with psycopg.connect("dbname=appdb user=appuser") as conn:
-    with conn.cursor() as cur:
-        # 插入 dict → jsonb，list → 数组，自动适配
-        cur.execute(
-            "INSERT INTO events(user_id, payload) VALUES (%s, %s) RETURNING id",
-            (1, {"action": "login", "ip": "10.0.0.5"})
-        )
-        new_id = cur.fetchone()[0]
-
-        # 用 jsonb_path 表达式做参数化查询
-        cur.execute(
-            "SELECT user_id, payload->>'sku' FROM events "
-            "WHERE payload @> %s AND user_id = %s",
-            ({"action": "purchase"}, 1)
-        )
-        for row in cur.fetchall():
-            print(row)
-</code></pre>
-
-<p>Go 用 <code>jackc/pgx</code> 直接把 jsonb 扫描进结构体：</p>
-
-<pre><code class="language-go">package main
-
-import (
-    "context"
-    "fmt"
-    "github.com/jackc/pgx/v5"
-)
-
-type Event struct {
-    ID      int64          `json:"id"`
-    UserID  int            `json:"user_id"`
-    Payload map[string]any `json:"payload"`
-}
-
-func query(ctx context.Context, db *pgx.Conn) ([]Event, error) {
-    rows, err := db.Query(ctx,
-        `SELECT id, user_id, payload FROM events
-         WHERE payload @> $1 LIMIT 50`,
-        map[string]any{"action": "purchase"})
-    if err != nil {
-        return nil, err
-    }
-    defer rows.Close()
-
-    var out []Event
-    for rows.Next() {
-        var e Event
-        if err := rows.Scan(&e.ID, &e.UserID, &e.Payload); err != nil {
-            return nil, err
-        }
-        out = append(out, e)
-    }
-    return out, rows.Err()
-}
-</code></pre>
-
-<h2>性能优化与最佳实践</h2>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>JSONB 用 <code>jsonb_path_ops</code> 建 GIN 索引</strong>：比默认 jsonb_ops 体积小、对包含查询更快，除非你需要 <code>?</code>/<code>?|</code> 键存在性操作符。</li>
-<li><strong>高频查询字段提升为独立列</strong>：JSONB 灵活但不擅长强一致性约束与统计。把 <code>user_id</code>、<code>created_at</code> 这类高频过滤字段拆成普通列，JSONB 只放真正的扩展属性。</li>
-<li><strong>数组不要无界膨胀</strong>：数组列太大（数千元素）会让行外存（TOAST）频繁解压，更新成本高。需要大规模多值关联时还是拆表。</li>
-<li><strong>时间一律 timestamptz</strong>：timestamptz 带时区，timestamptz =  timestamp with time zone，永远别用无时区的 timestamp 存业务时间。</li>
+<li><strong>时间带时区</strong>用 timestamptz，不要用 timestamp，不然跨时区会乱。</li>
+<li><strong>用 jsonb 不要 json</strong>jsonb 能索引，性能好很多。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：JSON 和 JSONB 到底选哪个？</h3>
-<p>99% 场景选 JSONB。json 只在你需要保留原始文本（比如原样存下来做审计、保留重复 key 与格式）时才有意义。JSONB 不能直接索引键的顺序，查询前会被解析一次，但写入稍慢、查询快、可建索引——这正是大多数应用想要的。</p>
-<h3>Q2：范围类型的 <code>[)</code> 半开区间有什么讲究？</h3>
-<p>PostgreSQL 范围默认左闭右开 <code>[)</code>，即包含起点、不包含终点。这是为了相邻区间无缝相邻且不重叠：<code>[10:00,11:00)</code> 与 <code>[11:00,12:00)</code> 不冲突。写全闭 <code>[]</code> 会让边界点同时落在两个区间，容易误判重叠。</p>
-<h3>Q3：用了 JSONB 还要不要建关系表？</h3>
-<p>要。JSONB 适合<b>异构、稀疏、低频关联</b>的属性（用户画像、事件扩展字段）。一旦你需要在多表 JOIN、外键、约束、聚合统计上依赖某个字段，它就该是独立列甚至独立表。纯 JSONB 模型会让优化器失去统计信息，执行计划会变差。</p>
-
-<h2>总结</h2>
-<p>PostgreSQL 类型系统的设计哲学是：<b>让数据库帮你做本来要在应用层写代码才能做的事</b>——JSONB 存半结构化数据、数组存多值属性、范围存连续区间、GIN 索引让这一切都能查。下一篇我们进入查询性能的核心：索引与执行计划。</p>
+</div>
 
                     </div>
                 </article>
