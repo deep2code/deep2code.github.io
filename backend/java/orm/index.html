@@ -82,206 +82,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">MyBatis 与 JPA 实战</h1>
+                        <h1 class="article-title">Java ORM：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Java 总览</span>
+                            <span class="meta-item">🏷️ ORM</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>ORM 选型：MyBatis 还是 JPA</h2>
-<p>这是个吵架吵了十年的话题。我的结论很务实：<strong>国内互联网业务 90% 用 MyBatis-Plus，复杂领域模型/海外项目用 JPA/Hibernate</strong>。别问哪个"更先进"，问你的团队和业务长什么样。先把对比摆出来：</p>
-<table>
-<thead><tr><th>维度</th><th>MyBatis / MyBatis-Plus</th><th>JPA / Hibernate</th></tr></thead>
-<tbody>
-<tr><td>SQL 控制力</td><td>手写 SQL，完全可控</td><td>自动生成，难优化</td></tr>
-<tr><td>开发效率</td><td>CRUD 要写或靠 MP 生成</td><td>Repository 接口即开即用</td></tr>
-<tr><td>学习曲线</td><td>低，会 SQL 就会</td><td>高，注解/状态机/缓存策略一堆</td></tr>
-<tr><td>复杂查询</td><td>XML 或注解写 SQL，爽</td><td>JPQ/Criteria 写复杂查询痛苦</td></tr>
-<tr><td>关联映射</td><td>手动 join 或嵌套结果</td><td>@OneToMany 自动映射</td></tr>
-<tr><td>调优透明度</td><td>SQL 一眼看穿</td><td>自动 SQL 得开日志才看得到</td></tr>
-<tr><td>国内生态</td><td>MyBatis-Plus 一统天下</td><td>用得少，坑没人填</td></tr>
-</tbody>
-</table>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及ORM怎么帮你解决。</p>
 
-<h2>MyBatis-Plus 常用技巧</h2>
-<p>MyBatis-Plus（MP）是国内事实标准，它在 MyBatis 上套了一层 CRUD 自动实现。几个我每天都用的：</p>
-<pre><code class="language-java">// 实体类
-@Data
-@TableName("t_order")
-public class Order {
-    @TableId(type = IdType.ASSIGN_ID)   // 雪花 ID
-    private Long id;
-    private String userId;
-    private BigDecimal amount;
-    @TableField(fill = FieldFill.INSERT)
-    private LocalDateTime createTime;
-    @TableLogic                          // 逻辑删除
-    private Integer deleted;
-}
-
-// Mapper 继承 BaseMapper，单表 CRUD 白送
-public interface OrderMapper extends BaseMapper&lt;Order&gt; {}
-
-// 条件构造器
-List&lt;Order&gt; list = orderMapper.selectList(
-    new LambdaQueryWrapper&lt;Order&gt;()
-        .eq(Order::getStatus, "PAID")
-        .ge(Order::getAmount, new BigDecimal("100"))
-        .orderByDesc(Order::getCreateTime)
-);</code></pre>
-<p><strong>分页插件</strong>是 MP 的标配，配置一次就能用：</p>
-<pre><code class="language-java">@Configuration
-public class MybatisPlusConfig {
-    @Bean
-    public MybatisPlusInterceptor mybatisPlusInterceptor() {
-        MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
-        interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.MYSQL));
-        return interceptor;
-    }
-}
-
-// 业务里直接用
-Page&lt;Order&gt; page = orderMapper.selectPage(
-    new Page&lt;&gt;(1, 20),
-    new LambdaQueryWrapper&lt;Order&gt;().eq(Order::getStatus, "PAID")
-);</code></pre>
-
-<h2>动态 SQL：XML 的真正价值</h2>
-<p>MyBatis 的杀手锏是动态 SQL。多条件查询、可选排序、批量 in，写在 XML 里比在 Java 里拼字符串优雅一百倍：</p>
-<pre><code class="language-xml">&lt;select id="searchOrders" resultType="Order"&gt;
-    SELECT * FROM t_order
-    &lt;where&gt;
-        &lt;if test="userId != null"&gt;
-            user_id = #{userId}
-        &lt;/if&gt;
-        &lt;if test="status != null and status != ''"&gt;
-            AND status = #{status}
-        &lt;/if&gt;
-        &lt;if test="from != null"&gt;
-            AND create_time &gt;= #{from}
-        &lt;/if&gt;
-        &lt;if test="ids != null and ids.size() &gt; 0"&gt;
-            AND id IN
-            &lt;foreach collection="ids" item="id" open="(" separator="," close=")"&gt;
-                #{id}
-            &lt;/foreach&gt;
-        &lt;/if&gt;
-    &lt;/where&gt;
-    &lt;choose&gt;
-        &lt;when test="orderBy != null"&gt;ORDER BY ${orderBy}&lt;/when&gt;
-        &lt;otherwise&gt;ORDER BY create_time DESC&lt;/otherwise&gt;
-    &lt;/choose&gt;
-&lt;/select&gt;</code></pre>
-<div class="callout callout-danger">
-<div class="callout-title">#{} 和 ${} 的区别</div>
-<code>#{}</code> 是预编译参数，防 SQL 注入，安全；<code>${}</code> 是字符串直接拼接，有注入风险。上面的 orderBy 用 ${} 是因为排序字段不能用占位符——这种场景必须在 Java 层做白名单校验，别直接把前端传的字段名塞进去。
-</div>
-
-<h2>一级缓存和二级缓存</h2>
-<p>MyBatis 的缓存分两级，搞不清就会踩坑：</p>
 <div class="mermaid">
 flowchart LR
-    REQ[一次 SQL 查询] --> L1[一级缓存 SqlSession 级别<br/>默认开启 同 session 同语句命中]
-    L1 -->|未命中| DB[查数据库]
-    L2[二级缓存 Mapper namespace 级别<br/>需手动开启 跨 session 共享]
-    L1 -.查不到才查.-> L2
-    style L1 fill:#00add8,stroke:#fff,color:#fff
-    style L2 fill:#10b981,stroke:#fff,color:#fff
-</div>
-<p>一级缓存是 SqlSession 级别的，同一个 session 里相同查询直接命中。但 Spring 里每个请求（或每次事务）就是一个新 SqlSession，所以一级缓存基本"你还没来得及用就没了"。</p>
-<p>二级缓存是 namespace 级别，能跨 session 共享。<strong>但我强烈不推荐在生产开二级缓存</strong>——多表关联、多服务更新同一张表，缓存一致性根本没法保证，出了脏数据你都查不到原因。</p>
-<div class="callout callout-danger">
-<div class="callout-title">二级缓存的脏数据坑</div>
-我们早年开了二级缓存，结果订单表被另一个服务直接 update，MyBatis 不知道，业务读到的还是旧数据，撑了三天才定位到。从那以后我只在 Redis 里做业务缓存，数据库缓存一律交给 MyBatis 关闭。
+    A[Java 对象] --> B[ORM]
+    B --> C[数据库表]
+    B --> D[自动生成SQL]
 </div>
 
-<h2>JPA/Hibernate 常用注解</h2>
-<p>如果你用 JPA，核心是注解把对象映射成表。我列最常用的：</p>
-<pre><code class="language-java">@Entity
-@Table(name = "t_order")
-@Data
-public class Order {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+<h2>1. 写 JDBC 太麻烦</h2>
 
-    @Column(nullable = false, length = 64)
-    private String orderNo;
-
-    @ManyToOne(fetch = FetchType.LAZY)     // 懒加载，避免 N+1
-    @JoinColumn(name = "user_id")
-    private User user;
-
-    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL)
-    private List&lt;OrderItem&gt; items;
-
-    @Enumerated(EnumType.STRING)           // 存枚举名，别用 ORDINAL
-    private OrderStatus status;
-}
-
-// Repository 接口即查询
-public interface OrderRepository extends JpaRepository&lt;Order, Long&gt; {
-    List&lt;Order&gt; findByStatusAndUserId(String status, Long userId);
-}</code></pre>
-
-<h2>N+1 问题：JPA 的天坑</h2>
-<p>N+1 是 JPA 最著名的坑。你查 100 个订单，每个订单的 user 是懒加载，循环里第一次访问就触发一次单独 SQL——1 次查订单 + 100 次查 user = 101 条 SQL，数据库直接被打挂。</p>
-<div class="mermaid">
-flowchart TD
-    Q1[查询 100 个订单] --> LOOP[遍历每个订单]
-    LOOP --> LAZY[访问 order.user 触发懒加载]
-    LAZY --> Q2[第 1 条查 user]
-    Q2 --> Q3[第 2 条查 user]
-    Q3 --> DOT[... 共 100 条]
-    DOT --> Q100[第 100 条查 user]
-    style Q1 fill:#00add8,stroke:#fff,color:#fff
-    style Q100 fill:#dc382d,stroke:#fff,color:#fff
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你写个查询要写一大堆 JDBC 代码，太麻烦。</p>
 </div>
-<p>解法是 <strong>join fetch</strong> 一次性把关联查出来：</p>
-<pre><code class="language-java">@Query("SELECT o FROM Order o JOIN FETCH o.user WHERE o.status = :status")
-List&lt;Order&gt; findWithUser(String status);
-// 一条 SQL：SELECT ... FROM t_order o JOIN t_user u ON ...</code></pre>
-<p>或者用 EntityGraph 注解：</p>
-<pre><code class="language-java">@EntityGraph(attributePaths = {"user"})
-List&lt;Order&gt; findByStatus(String status);</code></pre>
+
+<p><strong>怎么解决？</strong>用 ORM，操作对象就行，自动生成 SQL。</p>
+
+<h2>2. MyBatis 和 JPA 选哪个</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>Java ORM 选 MyBatis 还是 JPA？</p>
+</div>
+
+<p><strong>怎么解决？</strong>简单项目用 JPA，复杂查询用 MyBatis。</p>
+
+<h2>3. ORM 会不会生成慢 SQL</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>ORM 自动生成 SQL，会不会性能不好？</p>
+</div>
+
+<p><strong>怎么解决？</strong>写不对了确实会生成慢 SQL，要会看生成的 SQL。</p>
+
+<h2>常用 ORM 对比</h2>
+
+<table>
+<thead><tr><th>框架</th><th>特点</th></tr></thead>
+<tbody>
+<tr><td>MyBatis</td><td>灵活，手写 SQL</td></tr>
+<tr><td>JPA/Hibernate</td><td>全自动，简单 CRUD 方便</td></tr>
+<tr><td>MyBatis-Plus</td><td>MyBatis 增强，自带 CRUD</td></tr>
+</tbody></table>
+
 <div class="callout callout-tip">
-<div class="callout-title">怎么发现 N+1</div>
-开启 <code>spring.jpa.show-sql=true</code> 或用 datasource-proxy，看控制台打印的 SQL 条数。正常一次查询应该 1 条，如果你发现翻页时突然冒出几百条重复 SQL，就是 N+1 了。生产关 show-sql，但开发环境一定开着。
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>复杂查询不要硬写</strong>复杂 SQL 直接写原生 SQL，不要硬用 ORM。</li>
+<li><strong>要看生成的 SQL</strong>打印出生成的 SQL，看是不是有问题。</li>
+</ul>
 </div>
-
-<h2>多数据源配置</h2>
-<p>实际项目经常一个服务要连多个库。MyBatis-Plus 多数据源用 <code>dynamic-datasource</code> 这个 starter，加个注解就切换：</p>
-<pre><code class="language-yaml">spring:
-  datasource:
-    dynamic:
-      primary: master
-      datasource:
-        master:
-          url: jdbc:mysql://主库:3306/order
-        slave:
-          url: jdbc:mysql://从库:3306/order
-        log:
-          url: jdbc:mysql://日志库:3306/log</code></pre>
-<pre><code class="language-java">@DS("slave")              // 这个方法走从库
-public List&lt;Order&gt; queryFromSlave(Long userId) { ... }
-
-@DS("log")
-public void writeLog(LogRecord log) { ... }</code></pre>
-<p>@DS 放在 Service 类或方法上，自动切换数据源。读写分离、分库分表、跨库 join 都靠它。注意事务别跨数据源——分布式事务是另一个大坑，下篇不展开。</p>
-
-<h2>FAQ</h2>
-<p><strong>Q：MyBatis 和 JPA 能混用吗？</strong><br/>能，同一个项目里复杂查询用 MyBatis，领域模型用 JPA。但别在同一事务里混着用，两级 session 管理会让你怀疑人生。</p>
-<p><strong>Q：MP 的逻辑删除靠谱吗？</strong><br/>@TableLogic 自动在查询加 where deleted=0，靠谱。但注意跨表 join 时别忘了加条件，否则 join 出已删除的数据。</p>
-<p><strong>Q：JPA 的 hibernate 一级缓存是什么？</strong><br/>持久化上下文（Persistence Context），同一个事务内相同实体只查一次。事务结束就清空。别把它当业务缓存用。</p>
-<p><strong>Q：批量插入用 saveAll 还是 foreach？</strong><br/>JPA 的 saveAll 其实是循环单条 insert，性能差。要真批量，用 JDBC 的 rewriteBatchedStatements=true + 手动 batch，或者干脆用 MyBatis 的 foreach。</p>
-
-<h2>我的结论</h2>
-<p>MyBatis-Plus 是国内业务开发的瑞士军刀——CRUD 快、SQL 可控、分页插件开箱即用，团队上手零门槛。JPA 适合领域驱动设计写得正、团队愿意花时间学的项目，自动映射和 Repository 抽象确实优雅，但 N+1 和自动 SQL 调优是绕不过的坎。</p>
-<p>我的建议：<strong>新项目先上 MyBatis-Plus，遇到真正复杂的领域模型再局部引 JPA</strong>。别一上来就 JPA 全套，等线上 N+1 爆了你再回头学，代价太大。下一篇我们看最底层的 JVM——所有这些框架跑得顺不顺，最后都落在 JVM 上。</p>
-
-
-
 
                     </div>
                 </article>

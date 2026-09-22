@@ -82,259 +82,68 @@
             <main id="body-content">
 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Memcached</h1>
+                        <h1 class="article-title">Memcached：从你遇到的问题出发</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ Memcached</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2 id="overview">Memcached：那个被Redis抢了风头的老前辈</h2>
-<p>说起来，Memcached 比 Redis 还早出生两年。我入行的时候（大概 2012 年），公司缓存清一色 Memcached，Redis 还是个小众玩具。</p>
-
-<p>为啥它还活着？因为它简单。<strong>只做 KV 缓存，别的都不干</strong>——没有持久化、没有复杂数据结构、没有集群管理，全交给客户端。正因为简单，它协议解析快、内存元数据少、多线程无锁竞争。在纯缓存场景下，性能不输 Redis，内存效率还更高。</p>
-
-<h2 id="install">装一个跑起来</h2>
-<p>macOS 上 Homebrew 一行：</p>
-<pre><code class="language-sh">brew install memcached
-brew services start memcached</code></pre>
-
-<p>Linux 上源码编译，它依赖 libevent：</p>
-<pre><code class="language-sh">wget https://memcached.org/latest
-tar -zxf memcached-1.6.45.tar.gz
-cd memcached-1.6.45
-./configure && make && make install</code></pre>
-
-<p>启动参数我常用的几个，别记全了，记住关键的就行：</p>
-<pre><code class="language-sh"># 后台运行，分配 4GB 内存，监听 11211，4 个工作线程
-memcached -d -m 4096 -p 11211 -t 4 -u nobody</code></pre>
-
-<table>
-<thead><tr><th>参数</th><th>干啥的</th><th>我的建议</th></tr></thead>
-<tbody>
-<tr><td><code>-m</code></td><td>分配内存大小（MB）</td><td>别超物理内存 70%，留够 OS</td></tr>
-<tr><td>-t</td><td>工作线程数</td><td>跟 CPU 核心数对齐，别盲目设大</td></tr>
-<tr><td>-I</td><td>单个 Item 最大大小</td><td>默认 1MB，大 value 调到 5m</td></tr>
-<tr><td>-f</td><td>Slab 增长因子</td><td>默认 1.25，数据大小集中就调小到 1.1</td></tr>
-<tr><td>-c</td><td>最大并发连接</td><td>默认 1024，大流量调到 8192</td></tr>
-</tbody>
-</table>
-
-<h2 id="commands">怎么用：telnet 就能玩</h2>
-<p>Memcached 的协议简单到什么程度？你直接 telnet 上去就能操作，不用装任何客户端。</p>
-<pre><code class="language-sh">telnet localhost 11211</code></pre>
-
-<p>连上之后，<code>stats</code> 看状态，<code>quit</code> 退出。存储命令的格式很直白：</p>
-<pre><code class="language-sh">set mykey 0 60 5
-hello
-STORED
-
-get mykey
-VALUE mykey 0 5
-hello
-END</code></pre>
-
-<p>参数拆开说：<code>set</code> 是命令，<code>mykey</code> 是 key，<code>0</code> 是 flags（客户端随便用），<code>60</code> 是过期时间（秒），<code>5</code> 是 value 的字节数。第二行是真正的数据。</p>
-
-<div class="callout callout-warning">
-<div class="callout-title">过期时间的坑：一写就过期</div>
-<p>这是新手最容易犯的错。Memcached 的过期时间 ≤ 30 天（2592000 秒）时，按相对时间算——60 就是 60 秒后过期。但如果你传了个大于 30 天的值，它就按 Unix 时间戳解析了。有人想设"一小时后过期"，传了 3600，结果 3600 这个 Unix 时间戳是 1970 年的——一写进去就过期了，get 直接返回 NOT_FOUND。排查了半天才发现这个坑。</p>
-</div>
-
-<h3 id="storage-cmds">几个存储命令的区别</h3>
-<table>
-<thead><tr><th>命令</th><th>行为</th><th>啥时候用</th></tr></thead>
-<tbody>
-<tr><td>set</td><td>有就覆盖，没有就新增</td><td>日常用这个就行</td></tr>
-<tr><td>add</td><td>只有不存在才存</td><td>做分布式锁</td></tr>
-<tr><td>replace</td><td>只有存在才替换</td><td>更新已有值</td></tr>
-<tr><td>append / prepend</td><td>往后/往前追加数据</td><td>拼接日志</td></tr>
-<tr><td>cas</td><td>带版本号的条件更新</td><td>并发更新防覆盖</td></tr>
-</tbody>
-</table>
-
-<h3 id="cas">CAS：乐观锁怎么用</h3>
-<p>两个人同时改同一个 key，怎么防止后写的把先写的覆盖了？Memcached 用 CAS（Check And Set）。</p>
-<pre><code class="language-sh"># gets 会返回一个 CAS 令牌
-gets mykey
-VALUE mykey 0 5 12345
-hello
-END
-
-# 改完用 cas 提交，带上令牌
-cas mykey 0 60 5 12345
-world
-STORED
-
-# 如果期间别人改了，令牌对不上，返回 EXISTS
-cas mykey 0 60 5 12345
-world
-EXISTS</code></pre>
-
-<p>计数器这种场景别用 CAS——<code>incr</code> 和 <code>decr</code> 本身就是原子的，比 CAS 绕一圈快多了。</p>
-
-<h2 id="architecture">多线程架构：为什么它能吃满多核</h2>
-<p>Redis 6.0 之前是单线程，多核 CPU 只用一个核。Memcached 从一开始就是多线程，这是它在某些场景下比 Redis 快的原因。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Memcached怎么帮你解决。</p>
 
 <div class="mermaid">
-flowchart TD
-    subgraph 主线程
-        MT[主线程<br/>accept 新连接]
-    end
-    subgraph 工作线程池
-        W1[Worker 1<br/>独立事件循环]
-        W2[Worker 2<br/>独立事件循环]
-        W3[Worker 3<br/>独立事件循环]
-        WN[Worker N<br/>独立事件循环]
-    end
-    subgraph 共享数据
-        HT[全局哈希表<br/>分片锁]
-        LRU[LRU 队列<br/>按 Slab Class]
-    end
-    CLI[客户端] -->|新连接| MT
-    MT -->|Pipe 分发 fd| W1
-    MT -->|Pipe 分发 fd| W2
-    MT -->|Pipe 分发 fd| W3
-    W1 --> HT
-    W2 --> LRU
-    style MT fill:#fedd00,stroke:#333
+flowchart LR
+    A[应用] --> B[Memcached]
+    B --> C[(纯内存缓存)]
+    B --> D[不持久化]
 </div>
 
-<p>这个设计很妙：主线程只管 accept，接了新连接通过管道（Pipe）把 fd 扔给工作线程。每个工作线程有自己的 libevent 事件循环，互不干扰。全局数据结构用分片锁——每个 LRU 队列一把锁，不是一把全局大锁，并发性能就上去了。</p>
+<h2>1. Memcached 和 Redis 选哪个</h2>
 
-<h2 id="slab">Slab 分配器：内存是怎么管的</h2>
-<p>Memcached 不用系统 malloc/free 管内存，自己搞了套 Slab Allocator。为啥？malloc 频繁分配释放会产生内存碎片，Memcached 把内存切成固定大小的块，从根上解决了碎片问题。</p>
-
-<div class="mermaid">
-flowchart TB
-    A[新数据来了] --> B[算数据大小]
-    B --> C[找最小的<br/>能装下的 Slab Class]
-    C --> D{有空闲 Chunk？}
-    D -->|有| E[直接分配]
-    D -->|没有| F{还有总内存？}
-    F -->|有| G[申请新 Page<br/>切分 Chunk]
-    G --> E
-    F -->|没有| H[从 LRU 尾部<br/>淘汰一个 Item]
-    H --> E
-    E --> I[插入哈希表<br/>移到 LRU 头部]
-    style E fill:#c8e6c9
-    style H fill:#ffcdd2
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>都是缓存，选哪个？</p>
 </div>
 
-<p>具体怎么分的呢？内存先按 1MB 一页（Page）切，然后每个 Slab Class 管一种固定大小的 Chunk。默认增长因子 1.25：</p>
+<p><strong>怎么解决？</strong>简单缓存用 Memcached，功能多的用 Redis。</p>
+
+<h2>2. 什么场景用 Memcached</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>什么时候用 Memcached 比 Redis 好？</p>
+</div>
+
+<p><strong>怎么解决？</strong>纯缓存、简单 KV、多线程场景，Memcached 性能好。</p>
+
+<h2>3. 为什么 Redis 更流行</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>为什么现在大家都用 Redis 不用 Memcached？</p>
+</div>
+
+<p><strong>怎么解决？</strong>Redis 功能多，支持数据结构、持久化、集群，Memcached 太简单了。</p>
+
+<h2>Memcached vs Redis</h2>
 
 <table>
-<thead><tr><th>Slab Class</th><th>Chunk 大小</th><th>1MB Page 能切多少个</th><th>适合存什么</th></tr></thead>
+<thead><tr><th>对比</th><th>Memcached</th><th>Redis</th></tr></thead>
 <tbody>
-<tr><td>1</td><td>96 字节</td><td>~10922 个</td><td>短 key-value、标志位</td></tr>
-<tr><td>2</td><td>120 字节</td><td>~8738 个</td><td>小用户信息</td></tr>
-<tr><td>3</td><td>152 字节</td><td>~7157 个</td><td>中等文本</td></tr>
-<tr><td>...</td><td>...</td><td>...</td><td>...</td></tr>
-<tr><td>N</td><td>1MB（最大）</td><td>1 个</td><td>大对象</td></tr>
-</tbody>
-</table>
-
-<div class="callout callout-danger">
-<div class="callout-title">Slab 间内存不共享——这个坑很大</div>
-<p>这是 Memcached 最浪费内存的地方。假设你的数据大多是 100 字节左右的小对象，都落在 Slab Class 2（120 字节 Chunk）。这个 Class 把 4GB 内存全占满了，这时候来了个 500KB 的大对象，需要 Slab Class 20——但内存没了！</p>
-<p>即使 Class 2 里有大量空闲 Chunk，也<strong>不能借给 Class 20 用</strong>。结果就是 LRU 开始淘汰小对象，大对象也存不进来。遇到这种情况只能调增长因子或者重启。</p>
-</div>
-
-<h3 id="lru">LRU 淘汰：每个 Slab Class 自己管自己</h3>
-<p>Memcached 不是全局 LRU，而是每个 Slab Class 维护自己的 LRU 链表。这意味着：1MB 的大对象 Slab 占满了，它只会淘汰自己里面的大对象，不会去动 96 字节的小对象。</p>
-
-<p>过期策略是<strong>惰性过期</strong>——不会主动扫描过期 key。get 的时候才检查，如果过期了就删掉返回 NOT_FOUND。过期的 key 占的内存要等新数据来要空间时才被覆盖。1.4.11 以后加了 LRU Crawler 后台线程，定期扫描清理过期项。</p>
-
-<h2 id="cluster">集群：官方不支持，全靠客户端</h2>
-<p>Memcached 没有官方集群方案。它就是个单节点服务，水平扩展全靠客户端做分片。</p>
-
-<p>最简单的分片是 <code>hash(key) % N</code>，但这个方案有个致命问题：加一台机器或者挂一台机器，N 变了，几乎所有 key 的映射都变了——缓存全失效，请求瞬间全打到数据库，这就是缓存雪崩。</p>
-
-<p>正经做法是<strong>一致性哈希</strong>：把哈希空间想象成一个环，每个节点在环上占多个虚拟位置（一般 100-200 个虚拟节点）。key 哈希后在环上顺时针找最近的节点。加机器的时候，只有新节点相邻那一段的 key 需要迁移，影响范围大概是 1/N。</p>
+<tr><td>数据结构</td><td>简单 KV</td><td>丰富（list/hash/zset）</td></tr>
+<tr><td>持久化</td><td>不支持</td><td>支持</td></tr>
+<tr><td>线程模型</td><td>多线程</td><td>单线程</td></tr>
+</tbody></table>
 
 <div class="callout callout-tip">
-<div class="callout-title">我的经验</div>
-<p>Memcached 集群设计的关键是：<strong>把它当成"随时可以全清掉重建"的东西</strong>。应用层一定要做缓存缺失降级——缓存挂了或者数据没命中，请求应该能打到数据库返回，而不是直接报错。这样节点增减、故障转移都是无痛的。</p>
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>新项目选 Redis</strong>现在新项目基本都用 Redis，Memcached 用的少了。</li>
+<li><strong>纯简单缓存可选</strong>如果就是纯 KV 缓存，要求极致性能，可以用 Memcached。</li>
+</ul>
 </div>
 
-<h2 id="vs-redis">Memcached vs Redis：到底选哪个</h2>
-
-<div class="echart-container" id="memcached-vs-redis" style="height: 320px; margin: 20px 0;"></div>
-<p>这可能是被问最多的问题。我直接上对比表，然后说我的判断：</p>
-
-<table>
-<thead><tr><th>维度</th><th>Memcached</th><th>Redis</th></tr></thead>
-<tbody>
-<tr><td>数据类型</td><td>只有 String KV</td><td>String/Hash/List/Set/ZSet/Stream/向量</td></tr>
-<tr><td>线程模型</td><td>原生多线程，吃满多核</td><td>6.0+ IO 多线程，命令执行还是单线程</td></tr>
-<tr><td>持久化</td><td>没有，重启全丢</td><td>RDB + AOF，能当数据库用</td></tr>
-<tr><td>集群</td><td>客户端一致性哈希</td><td>原生 Cluster，16384 槽</td></tr>
-<tr><td>内存效率</td><td>高，元数据少</td><td>稍低，功能多编码复杂</td></tr>
-<tr><td>最大 Value</td><td>默认 1MB（可调到 128MB）</td><td>512MB</td></tr>
-<tr><td>许可</td><td>BSD，完全自由</td><td>RSAL/SSPL/AGPL 三选一</td></tr>
-</tbody>
-</table>
-
-<p>我的判断：<strong>纯 KV 缓存、Session 存储、追求简单和多线程吞吐，选 Memcached</strong>。需要数据结构、持久化、消息队列、分布式锁、向量检索，选 Redis。现在新项目我基本都用 Redis，Memcached 只在维护老系统的时候碰。但如果你就是个纯缓存层，Memcached 确实更轻量。</p>
-
-<h2 id="dragonfly-valkey">2026 年的新选择：Dragonfly 和 Valkey</h2>
-<p>Redis 改许可证之后，社区搞了两个分支，Memcached 也面临新的竞争者：</p>
-
-<table>
-<thead><tr><th></th><th>Memcached</th><th>Dragonfly</th><th>Valkey</th></tr></thead>
-<tbody>
-<tr><td>协议兼容</td><td>自己的文本/二进制协议</td><td>Redis + Memcached 双兼容</td><td>Redis RESP 兼容</td></tr>
-<tr><td>线程模型</td><td>多线程</td><td>多线程共享内存</td><td>多线程 IO</td></tr>
-<tr><td>持久化</td><td>无</td><td>RDB + AOF</td><td>RDB + AOF</td></tr>
-<tr><td>数据结构</td><td>仅 String</td><td>Redis 全套</td><td>Redis 全套</td></tr>
-<tr><td>治理</td><td>BSD</td><td>BSD</td><td>Linux 基金会</td></tr>
-</tbody>
-</table>
-
-<p><strong>Dragonfly</strong> 是我觉得最有意思的——它同时兼容 Redis 和 Memcached 协议，多线程共享内存架构，官方基准说单机吞吐是 Redis 单线程的好几倍。如果你的 Memcached 存量应用想升级，换 Dragonfly 几乎零改动，改个地址就行。</p>
-
-<p><strong>Valkey</strong> 是 Linux 基金会接手的 Redis 7.2 分叉，纯开源治理。如果你公司在意 Redis 的许可证问题，Valkey 是最稳妥的替代。</p>
-
-<h2 id="pitfalls">我踩过的坑</h2>
-<ol>
-<li><strong>Slab 内存浪费</strong>：数据大小集中在某一个区间，那个 Slab Class 把内存占满了，其他 Class 想要内存却没有。解法：调增长因子 <code>-f 1.1</code>，让 Slab Class 更密集；开 <code>lru_maintainer</code> 自动在 Slab 间平衡</li>
-<li><strong>大 Value 报错</strong>：默认最大 1MB，塞了个 2MB 的 JSON 进去，直接报 <code>object too large for cache</code>。解法：Value 控制在 100KB 以内，大对象拆分，或者调 <code>-I 5m</code></li>
-<li><strong>节点故障导致缓存雪崩</strong>：一台 Memcached 挂了，它上面的 key 全失效，数据库瞬间被打满。解法：一致性哈希 + 虚拟节点减少影响范围，应用层做熔断降级</li>
-<li><strong>过期时间传错</strong>：前面说了，传了个 3600 以为是一小时，结果是 1970 年的时间戳，一写就过期</li>
-<li><strong>stats 命令阻塞</strong>：大内存实例上跑 <code>stats slabs</code>，阻塞了几百毫秒。监控系统别采集太频繁，30 秒一次够了</li>
-<li><strong>命中率低还不知道</strong>：Memcached 的价值就是命中率。低于 90% 就该查原因了——是内存不够 LRU 在狂淘汰，还是 TTL 设太短，还是 key 设计不合理</li>
-</ol>
-
-<h2 id="faq">FAQ</h2>
-
-<h3>Memcached 和 Redis 到底谁快？</h3>
-<p>纯 KV get/set，Memcached 因为多线程，在多核 CPU 上确实比 Redis 单线程快。但 Redis 6.0 以后网络 IO 也多线程了，差距缩小了很多。而且 Memcached 快是因为它功能少——你不能拿它做 Hash 排序、做排行榜、做消息队列。功能越多越慢，这是 trade-off。</p>
-
-<h3>Memcached 重启数据会丢吗？</h3>
-<p>会，全丢。它没有持久化，设计就是纯内存缓存。别把它当数据库用。重要数据一定要有后端存储兜底。</p>
-
-<h3>怎么监控 Memcached 健康？</h3>
-<p>telnet 上去敲 <code>stats</code>，重点看这几个指标：<code>get_hits</code> 和 <code>get_misses</code>（算命中率）、<code>evictions</code>（被淘汰的 key 数，如果一直涨说明内存不够）、<code>bytes</code>（当前用了多少内存）。生产环境用 Prometheus + memcached_exporter 采集。</p>
-
-<h3>Memcached 支持事务吗？</h3>
-<p>不支持。只有 CAS 乐观锁能做单 key 的读-改-写原子性。多 key 的事务、Lua 脚本这些都没有。要复杂原子操作用 Redis。</p>
-
-<h3>为什么不用 Redis 完全替代 Memcached？</h3>
-<p>大部分场景确实可以。但 Memcached 有两个优势：一是多线程天然吃满多核，在纯缓存场景下不需要 Redis 那些复杂功能；二是 BSD 协议完全无限制，许可证上比 Redis 干净。另外，有些大厂的 CDN 边缘缓存就是用 Memcached，轻量、内存效率高。</p>
-
-<h2 id="checklist">给个实用清单</h2>
-<table>
-<thead><tr><th>✅ 推荐这么做</th><th>❌ 别这么干</th></tr></thead>
-<tbody>
-<tr><td>Value 控制在 100KB 以内</td><td>塞 5MB 的大 JSON 进去</td></tr>
-<tr><td>过期时间 ≤ 30 天用相对秒数</td><td>传个大于 30 天的数以为是相对时间</td></tr>
-<tr><td>监控命中率，低于 90% 查原因</td><td>不管命中率，内存满了才发现</td></tr>
-<tr><td>用一致性哈希做集群分片</td><td>hash(key) % N 简单粗暴</td></tr>
-<tr><td>线程数跟 CPU 核心对齐</td><td>盲目开 32 个线程</td></tr>
-<tr><td>应用层做缓存降级</td><td>缓存挂了数据库也跟着挂</td></tr>
-</tbody>
-</table>
-</div>
+                    </div>
                 </article>
 <nav class="article-nav">
 <a class="nav-prev" href="../redis/"><span class="nav-label">← 上一篇</span><span class="nav-title">Redis</span></a>

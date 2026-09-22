@@ -83,225 +83,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">GraphQL 入门</h1>
+                        <h1 class="article-title">GraphQL 入门：从你遇到的问题出发</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ GraphQL</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>先换个脑子：GraphQL 不是 REST</h2>
-<p>我带过不少从 REST 转过来的同学，第一周写的 GraphQL 全是"换皮 REST"——一个 type Query 里挂 getUser、listOrders、getArticle，每个字段对应一个老接口。</p>
-<p>REST 的思维是"我有哪些资源"：<code>GET /users/1</code>、<code>GET /users/1/posts</code>。GraphQL 的思维是"我有一张图"：用户和文章是节点，<code>User.posts</code> 是边，查询就是沿着边走。下面这张图对比一下两种思维下，"看一个用户和他最近三篇文章"这件事长什么样：</p>
-<table>
-<thead><tr><th></th><th>REST 思维</th><th>GraphQL 思维</th></tr></thead>
-<tbody>
-<tr><td>请求次数</td><td>2 次（先用户再文章）</td><td>1 次</td></tr>
-<tr><td>响应形状</td><td>服务端固定</td><td>客户端声明</td></tr>
-<tr><td>数据冗余</td><td>常带一堆没用字段</td><td>要什么给什么</td></tr>
-<tr><td>契约</td><td>OpenAPI 文档单独维护</td><td>schema 即文档即类型</td></tr>
-</tbody>
-</table>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及GraphQL怎么帮你解决。</p>
 
-<h2>SDL：你的第一份契约</h2>
-<p>Schema Definition Language 是 GraphQL 的入口。它长得像 TypeScript 的类型声明，但它本身就是可执行的契约。一个最小的博客 schema 长这样：</p>
-<pre><code class="language-graphql">type User {
-  id: ID!
-  name: String!
-  email: String!
-  posts: [Post!]!
-}
-
-type Post {
-  id: ID!
-  title: String!
-  content: String!
-  author: User!
-  comments: [Comment!]!
-}
-
-type Comment {
-  id: ID!
-  body: String!
-  author: User!
-}
-
-type Query {
-  user(id: ID!): User
-  post(id: ID!): Post
-  posts(limit: Int = 10): [Post!]!
-}
-
-type Mutation {
-  createPost(title: String!, content: String!): Post!
-  deletePost(id: ID!): Boolean!
-}
-
-type Subscription {
-  postCreated: Post!
-}</code></pre>
-<p>几个语法点必须先记住：</p>
-<ul>
-<li><code>!</code> 表示非空。<code>[Post!]!</code> 意思是"这个列表本身不能 null，里面每个元素也不能 null"。少写一个 <code>!</code>，前端类型推导就会变成可空，线上一堆空指针。</li>
-<li><code>ID</code> 是专门的主键类型，<code>Int</code>/<code>Float</code>/<code>String</code>/<code>Boolean</code> 是标量，自定义对象类型都要显式声明。</li>
-<li><code>Query</code> 是只读入口，<code>Mutation</code> 是写操作入口，<code>Subscription</code> 是实时推送入口——三个根类型缺一不可，但 <code>Mutation</code>/<code>Subscription</code> 可以为空。</li>
-</ul>
-<div class="callout callout-danger">
-<div class="callout-title">! 漏写是新手第一大坑</div>
-我见过一个老 schema 里 <code>Post.author</code> 没写 <code>!</code>，结果后端某条脏数据 authorId 为空时返回 null，前端 React 直接白屏。GraphQL 的空值是可以被 schema 约束住的，别浪费这个武器。建表前对着业务问一遍：这个字段永远不可能为空吗？是就加 <code>!</code>。
-</div>
-
-<h2>Resolver：每个字段背后都有个函数</h2>
-<p>schema 只是"形状"，真正取数的是 resolver。GraphQL 最妙的设计是：<strong>resolver 是按字段定义的，不是按操作定义的</strong>。你查询里要了几个字段，就并行执行几个 resolver。</p>
-<pre><code class="language-typescript">const resolvers = {
-  Query: {
-    user: (_parent, { id }, { db }) => db.users.findById(id),
-    post: (_parent, { id }, { db }) => db.posts.findById(id),
-    posts: (_parent, { limit }, { db }) => db.posts.list({ limit }),
-  },
-  User: {
-    // parent 就是上一级 User 对象
-    posts: (parent, _args, { db }) =>
-      db.posts.find({ authorId: parent.id }),
-  },
-  Post: {
-    author: (parent, _args, { db }) => db.users.findById(parent.authorId),
-    comments: (parent, _args, { db }) =>
-      db.comments.find({ postId: parent.id }),
-  },
-};</code></pre>
-<p>注意 resolver 的签名永远是 <code>(parent, args, context, info)</code>。<code>parent</code> 是上一级字段 resolve 出来的对象——查 <code>user.posts</code> 时，<code>User.posts</code> 这个 resolver 拿到的 <code>parent</code> 就是那个 User。这个设计是理解后面 N+1 问题的钥匙，先记住。</p>
-<div class="mermaid">
-flowchart TD
-    Q[客户端 query user(id:1) name posts{title}] --> PARSE[解析+校验 对比 schema]
-    PARSE --> R1[执行 Query.user 拿到 user 对象]
-    R1 --> R2[并行执行 User.name]
-    R1 --> R3[执行 User.posts 用 parent.id 查文章]
-    R2 --> MERGE[按查询形状组装 JSON]
-    R3 --> MERGE
-    MERGE --> RESP[返回与查询同形状的响应]
-    style PARSE fill:#e535ab,stroke:#fff,color:#fff
-</div>
-
-<h2>第一个能跑的服务</h2>
-<p>2026 年我新项目一律 Apollo Server 4.x，上手最快。先装依赖：</p>
-<pre><code class="language-bash">mkdir graphql-demo && cd graphql-demo
-npm init -y
-npm install @apollo/server graphql
-npm install -D typescript tsx @types/node</code></pre>
-<p>然后写 <code>index.ts</code>：</p>
-<pre><code class="language-typescript">import { ApolloServer } from '@apollo/server';
-import { startStandaloneServer } from '@apollo/server/standalone';
-
-const typeDefs = `#graphql
-  type Book {
-    id: ID!
-    title: String!
-    author: String!
-  }
-  type Query {
-    books: [Book!]!
-    book(id: ID!): Book
-  }
-`;
-
-const books = [
-  { id: '1', title: 'GraphQL 入门', author: '资深码农' },
-  { id: '2', title: '深度思考', author: '另一作者' },
-];
-
-const resolvers = {
-  Query: {
-    books: () => books,
-    book: (_: unknown, { id }: { id: string }) =>
-      books.find((b) => b.id === id),
-  },
-};
-
-const server = new ApolloServer({ typeDefs, resolvers });
-const { url } = await startStandaloneServer(server, { listen: { port: 4000 } });
-console.log(`🚀 跑在 ${url}`);</code></pre>
-<p>跑起来 <code>npx tsx index.ts</code>，浏览器打开 <code>http://localhost:4000</code> 就是内置的 <strong>GraphiQL playground</strong>——左边写查询，右边出结果，自带 schema 自动补全和文档抽屉。</p>
-<pre><code class="language-graphql"># 在 GraphiQL 里试这个查询
-query GetBooks {
-  books {
-    title
-    author
-  }
-}
-
-# 响应形状和查询一模一样
-{
-  "data": {
-    "books": [
-      { "title": "GraphQL 入门", "author": "资深码农" }
-    ]
-  }
-}</code></pre>
-<div class="callout callout-tip">
-<div class="callout-title">GraphiQL 是你最好的文档</div>
-很多团队上线后把 GraphiQL 关了，我觉得是因噎废食。生产环境可以加个登录才开的开关——前端同学对着右侧 Docs 抽屉点来点去就能搞清楚有哪些字段、哪些参数，比你维护一份 Word 文档靠谱一百倍。
-</div>
-
-<h2>Mutation 和 Subscription</h2>
-<p>读操作是 Query，写操作是 Mutation。语法几乎一样，只是根类型不同：</p>
-<pre><code class="language-graphql">mutation CreatePost {
-  createPost(title: "第一篇", content: "Hello") {
-    id
-    title
-    createdAt
-  }
-}</code></pre>
-<p><strong>Mutation 默认串行执行</strong>，这是规范规定的——多个 mutation 写同一个数据必须有先后顺序，不像 query 可以并行。Subscription 则是基于 WebSocket 的实时推送，走另一条连接：</p>
-<pre><code class="language-graphql">subscription OnPostCreated {
-  postCreated {
-    id
-    title
-    author { name }
-  }
-}</code></pre>
-<p>服务端用 <code>pubsub</code> 发布，客户端收到事件后自动更新。这块在第三篇 Apollo 实战里会给完整的 WebSocket 配置。</p>
-
-<h2>context：请求级别的共享数据</h2>
-<p>每个请求进来，Apollo 会构造一个 <code>context</code> 对象传给所有 resolver。这是放当前登录用户、数据库连接、DataLoader 实例的地方：</p>
-<pre><code class="language-typescript">const { url } = await startStandaloneServer(server, {
-  context: async ({ req }) => {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    const user = verifyToken(token); // 自己的鉴权逻辑
-    return { user, db: myDb };
-  },
-  listen: { port: 4000 },
-});</code></pre>
-<div class="callout callout-danger">
-<div class="callout-title">context 别放请求级单例</div>
-<code>context</code> 是每个请求新建的，别把全局的 DataLoader 实例塞进去——那会导致两个请求共享同一个 loader，互相污染缓存。正确做法是 <strong>每个请求 new 一个 DataLoader</strong>，这个坑第四篇还会细讲。
-</div>
-
-<h2>和 REST 的思维差异：一张图</h2>
 <div class="mermaid">
 flowchart LR
-    subgraph REST[REST 思维]
-        R1[GET /users/1] --> R2[GET /users/1/posts]
-        R2 --> R3[前端自己合并]
-    end
-    subgraph GQL[GraphQL 思维]
-        G1[一次 POST /graphql] --> G2[网关沿图遍历]
-        G2 --> G3[按形状返回]
-    end
+    A[前端] -->|发查询| B[GraphQL 服务]
+    B --> C[只返回要的数据]
+    C --> D[不用开多个接口]
 </div>
-<p>理解了这个图，你就理解了 GraphQL 80% 的价值：<strong>把"拼数据"这件事从前端代码挪到了网关运行时</strong>。代价是网关要承担查询复杂度，这个代价值不值，看后面几篇。</p>
 
-<h2>FAQ</h2>
-<p><strong>Q：GraphQL 必须用 Apollo 吗？</strong><br/>不是。规范是 <code>graphql-js</code> 实现的，Apollo 只是上层封装。但生产环境我建议直接用 Apollo Server 或 Yoga，自己从裸 <code>graphql-js</code> 搭要处理的协议细节太多。</p>
-<p><strong>Q：resolver 里能写异步吗？</strong><br/>天生支持。每个 resolver 都可以返回 Promise，Apollo 会等所有字段 resolve 完再组装。并行字段、串行 mutation，调度器都帮你排好了。</p>
-<p><strong>Q：GraphQL 一定要用 POST 吗？</strong><br/>查询用 POST 是惯例（因为 query 可能很长），但规范允许 GET。生产环境我建议只读查询走 GET 以便 CDN/HTTP 缓存，写操作走 POST。</p>
+<h2>1. REST 接口要开好多个</h2>
 
-<h2>我的结论</h2>
-<p>入门 GraphQL 记住三件事：SDL 是契约（类型即文档）、resolver 是按字段取数的函数、查询响应和查询形状一一对应。别一上来就把 REST 接口翻译过来，先想清楚你的"图"长什么样。</p>
-<p>跑通第一个服务后，下一篇我们横向对比 GraphQL、REST、gRPC，看看到底什么场景该选谁。</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>前端要展示用户信息，要调 /user 再调 /user/orders 两个接口。</p>
+</div>
 
+<p><strong>怎么解决？</strong>GraphQL 一个接口，前端要什么就返回什么。</p>
 
+<h2>2. 前端要的数据后端多给了</h2>
 
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>REST 接口返回一大堆字段，前端只用了两个。</p>
+</div>
+
+<p><strong>怎么解决？</strong>GraphQL 前端声明要哪些字段，后端就返回哪些。</p>
+
+<h2>3. 什么场景适合用 GraphQL</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>什么时候用 GraphQL 比 REST 好？</p>
+</div>
+
+<p><strong>怎么解决？</strong>前端需求多变、多个客户端的时候，GraphQL 好用。</p>
+
+<h2>REST vs GraphQL</h2>
+
+<table>
+<thead><tr><th>对比</th><th>REST</th><th>GraphQL</th></tr></thead>
+<tbody>
+<tr><td>接口数量</td><td>多个端点</td><td>一个端点</td></tr>
+<tr><td>数据获取</td><td>后端决定</td><td>前端要什么给什么</td></tr>
+<tr><td>学习成本</td><td>低</td><td>高</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>不要什么都用 GraphQL</strong>简单后端服务用 REST 就行，GraphQL 复杂。</li>
+<li><strong>要加查询深度限制</strong>防止恶意查太多数据拖垮系统。</li>
+</ul>
+</div>
 
                     </div>
                 </article>
