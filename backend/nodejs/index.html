@@ -83,70 +83,178 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">Node.js 入门：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ Node.js</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Node.js怎么帮你解决。</p>
+    <header class="article-header">
+        <h1 class="article-title">Node.js 深度原理：事件循环为什么快？</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ Node.js</span>
+        </div>
+    </header>
+    <p>Node.js 单线程为什么能扛高并发？不是因为它真的单线程，是因为事件循环 + 非阻塞 IO，一个线程处理几万个连接。这篇讲透底层原理。</p>
 
-<div class="mermaid">
-flowchart TB
-    A[Node.js] --> B[JS 跑服务端]
-    B --> C[事件驱动]
-    C --> D[前后端同语言]
-</div>
+    <h2>核心原理1：事件循环原理</h2>
+    <p>Node.js 不是真单线程，JS 引擎是单线程，IO 操作扔给线程池做，完成后把回调放到事件队列，事件循环挨个执行。</p>
+    <div class="mermaid">
+flowchart LR
+    A[事件循环] --> B[执行 JS 代码]
+    B --> C[遇到 IO 操作]
+    C --> D[扔给线程池]
+    D --> E[JS 继续执行别的]
+    E --> F[IO完成 回调进队列]
+    F --> G[事件循环执行回调]
+         
+    </div>
+    <h3>['阶段', '做什么', '常见宏任务']</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>阶段</th>
+                <th>做什么</th>
+                <th>常见宏任务</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>timers</td>
+                <td>执行 setTimeout/setInterval</td>
+                <td>setTimeout</td>
+            </tr>
+            <tr>
+                <td>pending callbacks</td>
+                <td>执行系统回调</td>
+                <td>TCP 错误</td>
+            </tr>
+            <tr>
+                <td>idle/prepare</td>
+                <td>内部使用</td>
+                <td></td>
+            </tr>
+            <tr>
+                <td>poll</td>
+                <td>获取新 IO 事件</td>
+                <td>读文件、网络请求</td>
+            </tr>
+            <tr>
+                <td>check</td>
+                <td>执行 setImmediate</td>
+                <td>setImmediate</td>
+            </tr>
+            <tr>
+                <td>close callbacks</td>
+                <td>执行 close 事件</td>
+                <td>socket.on("close")</td>
+            </tr>
+        </tbody>
+    </table>
 
-<h2>1. 前端想写后端</h2>
+    <h2>核心原理2：非阻塞 IO 原理</h2>
+    <p>传统多线程模型是一个连接一个线程，IO 阻塞就等着。Node.js 非阻塞，IO 发起后不等，继续处理别的，完成了再通知。</p>
+    <div class="mermaid">
+flowchart TD
+    A[传统多线程] --> B[连接1 → 线程1 → IO阻塞等待]
+    A --> C[连接2 → 线程2 → IO阻塞等待]
+    D[Node.js] --> E[一个线程]
+    E --> F[连接1 IO → 不等]
+    E --> G[连接2 IO → 不等]
+    E --> H[都完成了再处理]
+         
+    </div>
+    <h3>['对比', '多线程阻塞', 'Node.js 非阻塞']</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>对比项</th>
+                <th>多线程阻塞 IO</th>
+                <th>Node.js 非阻塞</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>模型</td>
+                <td>一连接一线程</td>
+                <td>单线程事件循环</td>
+            </tr>
+            <tr>
+                <td>并发数</td>
+                <td>几千</td>
+                <td>几万~几十万</td>
+            </tr>
+            <tr>
+                <td>内存占用</td>
+                <td>每个线程几 MB</td>
+                <td>一个线程几 MB</td>
+            </tr>
+            <tr>
+                <td>适合场景</td>
+                <td>CPU 密集</td>
+                <td>IO 密集高并发</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>前端想写后端，不想学新语言。</p>
-</div>
+    <h2>核心原理3：线程池原理</h2>
+    <p>Node.js 不是所有操作都单线程，文件 IO、DNS 查询、加密这些 CPU 密集操作，是扔给 libuv 线程池（默认 4 个）做的。</p>
+    <div class="mermaid">
+flowchart LR
+    A[主线程] --> B[JS 代码]
+    A --> C[文件IO]
+    A --> D[DNS查询]
+    A --> E[加密]
+    C --> F[线程池 4个线程]
+    D --> F
+    E --> F
+    F --> G[完成后 回调进事件队列]
+         
+    </div>
+    <h3>['操作', '在哪执行', '是否阻塞事件循环']</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>操作</th>
+                <th>在哪执行</th>
+                <th>是否阻塞事件循环</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>JS 代码</td>
+                <td>主线程</td>
+                <td>是，死循环会卡死</td>
+            </tr>
+            <tr>
+                <td>网络 IO</td>
+                <td>事件驱动</td>
+                <td>否</td>
+            </tr>
+            <tr>
+                <td>文件 IO</td>
+                <td>libuv 线程池</td>
+                <td>否</td>
+            </tr>
+            <tr>
+                <td>加密压缩</td>
+                <td>libuv 线程池</td>
+                <td>否</td>
+            </tr>
+            <tr>
+                <td>DNS 查询</td>
+                <td>libuv 线程池</td>
+                <td>否</td>
+            </tr>
+        </tbody>
+    </table>
 
-<p><strong>怎么解决？</strong>用 Node.js，JS 写后端，前后端同语言。</p>
-
-<h2>2. Node.js 是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Node.js 是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>基于 V8 的 JS 运行时，让 JS 跑在服务端，事件驱动。</p>
-
-<h2>3. Node.js 适合做什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Node.js 适合做什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>BFF、中间层、API、工具脚本。CPU 密集任务不适合。</p>
-
-<h2>框架</h2>
-
-<table>
-<thead><tr><th>框架</th><th>适合</th></tr></thead>
-<tbody>
-<tr><td>NestJS</td><td>企业级后端</td></tr>
-<tr><td>Express</td><td>轻量 API</td></tr>
-<tr><td>Fastify</td><td>高性能 API</td></tr>
-</tbody></table>
-
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>不要做 CPU 密集</strong>Node.js 单线程，CPU 密集任务会卡。</li>
-<li><strong>企业级用 NestJS</strong>大型 Node.js 后端用 NestJS，结构清晰。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>不要在主线程写死循环或者 CPU 密集计算，会直接卡死整个事件循环</li>
+            <li>回调地狱用 async/await 解决，不要嵌套一堆回调</li>
+            <li>线程池默认 4 个，文件 IO 多了可以调大 UV_THREADPOOL_SIZE</li>
+            <li>CPU 密集型任务不要用 Node.js，用 worker_threads 或者直接用 Go/Java</li>
+        </ul>
+    </div>
+</article>
 
                 <nav class="article-nav">
 <span></span>

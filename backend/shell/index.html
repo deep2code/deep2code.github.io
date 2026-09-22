@@ -67,72 +67,167 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">Shell 脚本：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ Shell</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Shell怎么帮你解决。</p>
+    <header class="article-header">
+        <h1 class="article-title">Shell 深度原理：管道与重定向</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ Shell</span>
+        </div>
+    </header>
+    <p>Shell 不是命令，是操作系统的命令解释器。管道 |、重定向 >、后台 & 这些操作底层是什么原理？这篇讲透 Shell 工作原理。</p>
 
-<div class="mermaid">
+    <h2>核心原理1：Shell 是什么？</h2>
+    <p>Shell 是用户和内核之间的中间层，你敲命令，Shell 解析，调用 fork/exec 启动程序，等待执行完，输出结果。</p>
+    <div class="mermaid">
 flowchart LR
-    A[重复手动操作] --> B[写成 Shell 脚本]
-    B --> C[一键执行]
-    C --> D[省时间不出错]
-</div>
+    A[用户敲命令] --> B[Shell 解析]
+    B --> C[fork 子进程]
+    C --> D[exec 启动程序]
+    D --> E[程序执行]
+    E --> F[返回结果给用户]
+         
+    </div>
+    <h3>['Shell 类型', '说明', '特点']</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Shell 类型</th>
+                <th>说明</th>
+                <th>特点</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>bash</td>
+                <td>大多数 Linux 默认</td>
+                <td>功能全，语法灵活</td>
+            </tr>
+            <tr>
+                <td>zsh</td>
+                <td>macOS 默认</td>
+                <td>补全强，主题多</td>
+            </tr>
+            <tr>
+                <td>sh</td>
+                <td>最基础 POSIX</td>
+                <td>简单，兼容性好</td>
+            </tr>
+            <tr>
+                <td>fish</td>
+                <td>开箱即用</td>
+                <td>语法不兼容 bash</td>
+            </tr>
+        </tbody>
+    </table>
 
-<h2>1. 每次部署要敲一堆命令</h2>
+    <h2>核心原理2：管道 | 原理</h2>
+    <p>管道 | 本质是内核里的内存缓冲区，前一个命令的 stdout，变成后一个命令的 stdin，两个命令并行执行。</p>
+    <div class="mermaid">
+flowchart LR
+    A[命令1 ls] -->|stdout| B[管道 内核缓冲区]
+    B -->|stdin| C[命令2 grep]
+    C -->|stdout| D[输出到屏幕]
+         
+    </div>
+    <h3>['操作符', '含义', '原理']</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>操作符</th>
+                <th>含义</th>
+                <th>原理</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>|</td>
+                <td>管道，前输出当后输入</td>
+                <td>内核 pipe 缓冲区</td>
+            </tr>
+            <tr>
+                <td>> 1></td>
+                <td>覆盖写 stdout 到文件</td>
+                <td>打开文件，写入</td>
+            </tr>
+            <tr>
+                <td>>></td>
+                <td>追加写 stdout 到文件</td>
+                <td>打开文件，追加</td>
+            </tr>
+            <tr>
+                <td>2></td>
+                <td>重定向 stderr</td>
+                <td>错误输出到文件</td>
+            </tr>
+            <tr>
+                <td>2>&1</td>
+                <td>stderr 和 stdout 合并</td>
+                <td>fd 复制</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你部署要先 cd、再 build、再传服务器、再重启，每次敲半天。</p>
-</div>
+    <h2>核心原理3：进程与信号原理</h2>
+    <p>你按 Ctrl+C 为什么能停掉进程？因为 Shell 给前台进程组发 SIGINT 信号，进程收到信号就退出。</p>
+    <div class="mermaid">
+flowchart TD
+    A[用户按 Ctrl+C] --> B[Shell 发 SIGINT]
+    B --> C[前台进程组]
+    C --> D[进程收到信号]
+    D --> E[默认行为 退出]
+    F[Ctrl+Z] --> G[发 SIGTSTP]
+    G --> H[进程暂停 放后台]
+         
+    </div>
+    <h3>['信号', '触发方式', '默认行为']</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>信号</th>
+                <th>触发方式</th>
+                <th>默认行为</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>SIGINT</td>
+                <td>Ctrl+C</td>
+                <td>终止进程</td>
+            </tr>
+            <tr>
+                <td>SIGTSTP</td>
+                <td>Ctrl+Z</td>
+                <td>暂停进程</td>
+            </tr>
+            <tr>
+                <td>SIGKILL</td>
+                <td>kill -9</td>
+                <td>强制杀死，不能捕获</td>
+            </tr>
+            <tr>
+                <td>SIGTERM</td>
+                <td>kill 默认</td>
+                <td>请求终止，可以捕获</td>
+            </tr>
+            <tr>
+                <td>SIGHUP</td>
+                <td>终端断开</td>
+                <td>退出，常用于 reload</td>
+            </tr>
+        </tbody>
+    </table>
 
-<p><strong>怎么解决？</strong>写成 Shell 脚本，一条命令完成所有操作。</p>
-
-<h2>2. 批量操作太麻烦</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你要改 100 个服务器的配置，一台台 SSH 上去改。</p>
-</div>
-
-<p><strong>怎么解决？</strong>写个脚本，自动批量改完所有服务器。</p>
-
-<h2>3. 定时任务怎么写</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你要每天凌晨备份数据库，手动做肯定忘。</p>
-</div>
-
-<p><strong>怎么解决？</strong>写个备份脚本，用 crontab 定时跑。</p>
-
-<h2>常用 Shell 命令</h2>
-
-<table>
-<thead><tr><th>命令</th><th>用途</th></tr></thead>
-<tbody>
-<tr><td>ls</td><td>列文件</td></tr>
-<tr><td>cd</td><td>切目录</td></tr>
-<tr><td>grep</td><td>搜索内容</td></tr>
-<tr><td>find</td><td>找文件</td></tr>
-<tr><td>xargs</td><td>批量处理</td></tr>
-</tbody></table>
-
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>脚本要加错误处理</strong>脚本开头加 set -e，出错就停，不要继续往下跑。</li>
-<li><strong>不要写太复杂的脚本</strong>Shell 适合简单任务，复杂任务用 Python。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>脚本开头一定要 #!/bin/bash，不然用默认 sh 跑可能语法不对</li>
+            <li>管道是并行执行的，不是串行，前一个没执行完后一个就开始读了</li>
+            <li>set -euo pipefail 一定要加，脚本出错就停，不要继续往下跑</li>
+            <li>kill 不要上来就 kill -9，先 kill -15 让进程优雅退出，不行再 -9</li>
+        </ul>
+    </div>
+</article>
             </main>
         </div>
     </div>
