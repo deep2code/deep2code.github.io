@@ -81,206 +81,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">HTTPS 与 CSP</h1>
+                        <h1 class="article-title">HTTPS 加密：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Web安全,网络安全,安全实践</span>
+                            <span class="meta-item">🏷️ HTTPS</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及HTTPS怎么帮你解决。</p>
 
-<h2>传输加密与安全响应头：看不见的护城河</h2>
-<p>前面五篇讲的都是"应用层"的攻防：注入、XSS、CSRF、越权、令牌。但如果传输本身就是明文，或者浏览器加载了被篡改的第三方脚本，前面所有努力都会在最后一公里被抹掉。</p>
-<p>本篇把"加密学基础 → TLS 握手 → HTTPS 部署 → 安全响应头 → CSP 完整配置"串成一条线，给出一份可以直接抄进生产环境的 nginx / Helm 基线。</p>
-
-<h2>加密学三句话与 TLS 1.3 握手</h2>
-<ul>
-<li><strong>对称加密</strong>（AES-GCM）：快，但需要双方事先共享密钥。</li>
-<li><strong>非对称加密</strong>（RSA / ECDHE）：慢，但能安全协商出会话密钥。</li>
-<li><strong>哈希 + 签名</strong>（SHA-256 / Ed25519）：证明数据没被篡改、身份没被冒充。</li>
-</ul>
-<p>TLS 1.3 把握手从 2-RTT 压到 1-RTT（0-RTT 恢复会话），并彻底移除了 RSA 密钥交换、CBC 模式、MD5/SHA1，安全性与性能都比 TLS 1.2 好一个数量级。现代服务应当只支持 TLS 1.2 + 1.3。</p>
 <div class="mermaid">
-sequenceDiagram
-    participant C as 客户端
-    participant S as 服务器
-    C->S: ClientHello (支持的 cipher、支持的曲线、随机数)
-    S-->>C: ServerHello + 证书 + 密钥交换参数 + Finished
-    Note over C,S: 1-RTT 完成密钥协商
-    C->>S: Finished (用协商出的会话密钥加密)
-    S-->>C: 加密应用数据
-    Note over C,S: 之后全部用 AES-GCM/ChaCha20 加密
-
+flowchart LR
+    A[浏览器] -->|HTTPS| B[服务器]
+    B --> C[SSL 证书]
+    C --> D[加密传输]
 </div>
 
-<h2>证书链与信任模型：浏览器凭什么相信你</h2>
-<p>HTTPS 的信任来自<strong>证书链</strong>：你的站点证书由中间 CA 签发，中间 CA 由根 CA 签发，根 CA 预装在操作系统/浏览器里。任何一环出问题（如 2011 年 DigiNotar 被攻破签发假证书），整条链就失效。运维要点：</p>
-<ul>
-<li>用 Let's Encrypt / ZeroSSL 免费签，或企业用内部 ACME；不要用自签名证书上公网。</li>
-<li>部署 <strong>fullchain</strong>（站点证书 + 中间证书），只放站点证书会导致老客户端验证失败。</li>
-<li>开启 OCSP Stapling，减少客户端在线查询 CA 的延迟与隐私泄露。</li>
-<li>监控证书过期（cert-manager + Prometheus 告警），过期 1 天就是 P0 事故。</li>
-</ul>
+<h2>1. 为什么要上 HTTPS</h2>
 
-<h2>一份可直接上线的 nginx HTTPS 基线</h2>
-<pre><code class="language-nginx"># /etc/nginx/conf.d/secure.conf
-server {
-    listen 80;
-    server_name www.example.com;
-    return 301 https://$host$request_uri;   # 80 强制跳 443
-}
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>HTTP 传输是明文，别人能看到你传的密码。</p>
+</div>
 
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name www.example.com;
+<p><strong>怎么解决？</strong>HTTPS 加密传输，内容别人看不到。</p>
 
-    # --- 证书 ---
-    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256;
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache   shared:SSL:10m;
-    ssl_session_timeout 1d;
-    ssl_session_tickets  off;               # 避免 ticket 密钥泄漏后重放
-    ssl_stapling        on;
-    ssl_stapling_verify on;
-    resolver            1.1.1.1 8.8.8.8 valid=300s;
+<h2>2. HTTPS 怎么配</h2>
 
-    # --- 安全响应头 ---
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道要上 HTTPS，不知道怎么弄。</p>
+</div>
 
-    # --- CSP（与 XSS 篇呼应）---
-    add_header Content-Security-Policy "
-        default-src 'self';
-        script-src 'self' 'nonce-{{NONCE}}' https://cdn.example.com;
-        style-src  'self' 'unsafe-inline';
-        img-src    'self' data: https:;
-        font-src   'self' https://fonts.example.com;
-        connect-src 'self' https://api.example.com;
-        frame-ancestors 'none';
-        base-uri 'self';
-        form-action 'self';
-        upgrade-insecure-requests;
-    " always;
+<p><strong>怎么解决？</strong>申请 SSL 证书，Nginx 配置 443 端口和证书路径。</p>
 
-    server_tokens off;
-    client_max_body_size 10m;
+<h2>3. 免费证书哪里来</h2>
 
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-</code></pre>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>商业证书太贵了，有没有免费的？</p>
+</div>
 
-<h2>各安全响应头逐条解释</h2>
+<p><strong>怎么解决？</strong>Let's Encrypt 提供免费证书，自动续期。</p>
+
+<h2>HTTPS 优点</h2>
+
 <table>
-<thead><tr><th>响应头</th><th>作用</th><th>错误配置的后果</th></tr></thead>
+<thead><tr><th>优点</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td><code>Strict-Transport-Security</code></td><td>强制浏览器后续只走 HTTPS</td><td>第一次访问仍可能被 SSL 剥离</td></tr>
-<tr><td><code>X-Frame-Options: DENY</code></td><td>禁止被 iframe 嵌入</td><td>点击劫持</td></tr>
-<tr><td><code>X-Content-Type-Options: nosniff</code></td><td>禁止 MIME 嗅探</td><td>伪装成图片的脚本被执行</td></tr>
-<tr><td><code>Referrer-Policy</code></td><td>控制 Referer 泄露范围</td><td>URL 里的 token 被带给第三方</td></tr>
-<tr><td><code>Permissions-Policy</code></td><td>禁用摄像头/定位/麦克风</td><td>被恶意页面调用敏感 API</td></tr>
-<tr><td><code>Content-Security-Policy</code></td><td>资源加载白名单</td><td>XSS 注入脚本直接执行</td></tr>
-</tbody>
-</table>
+<tr><td>加密</td><td>传输内容加密</td></tr>
+<tr><td>身份验证</td><td>确认服务器是真的</td></tr>
+<tr><td>完整性</td><td>数据不会被篡改</td></tr>
+</tbody></table>
 
-<h2>CSP nonce 模式：让内联脚本可审计</h2>
-<p>很多项目不敢上 CSP 是因为老页面大量内联 <code>&lt;script&gt;</code>。正确做法不是 <code>unsafe-inline</code>，而是用 <strong>nonce</strong>：每个响应生成一个随机数，只有带正确 nonce 的内联脚本才执行。</p>
-<pre><code class="language-go">// Go：每个请求生成随机 nonce，注入模板与 CSP 头
-func withCSP(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        nonce := base64.RawURLEncoding.EncodeToString(secureRandom(16))
-        w.Header().Set("Content-Security-Policy",
-            "script-src 'nonce-"+nonce+"' 'self'; "+
-            "style-src 'self' 'unsafe-inline'; "+
-            "frame-ancestors 'none'")
-        // 把 nonce 放进 request context，模板里用：
-        // &lt;script nonce="{{.Nonce}}"&gt;...&lt;/script&gt;
-        ctx := context.WithValue(r.Context(), "nonce", nonce)
-        next.ServeHTTP(w, r.WithContext(ctx))
-    })
-}
-</code></pre>
-
-<h2>Helm/Kubernetes 侧的 TLS 基线</h2>
-<pre><code class="language-yaml"># cert-manager 自动签发 + Ingress 自动续期
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: example-tls
-spec:
-  secretName: example-tls
-  dnsNames:
-    - www.example.com
-    - example.com
-  issuerRef:
-    name: letsencrypt-prod
-    kind: ClusterIssuer
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: web
-  annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      more_set_headers "Strict-Transport-Security: max-age=63072000; includeSubDomains";
-      more_set_headers "X-Frame-Options: DENY";
-      more_set_headers "X-Content-Type-Options: nosniff";
-spec:
-  tls:
-    - hosts: [www.example.com]
-      secretName: example-tls
-  rules:
-    - host: www.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service: { name: web, port: { number: 80 } }
-</code></pre>
-
-<h2>最佳实践</h2>
-
-<div class="callout callout-warning">
-<div class="callout-title">我踩过的坑：证书过期导致全站挂了 2 小时</div>
-<p>2023 年我们用 Let's Encrypt 证书，忘了配自动续期。证书到期那天早上，全站 HTTPS 握手失败，用户打不开任何页面。手动续期花了两小时。从那以后我加了两道保险：① cert-manager 自动续期；② Prometheus 监控证书过期时间，提前 14 天告警。<strong>证书过期不是小概率事件，是迟早会发生的事</strong>。</p>
-</div>
-
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li>全站 HTTPS，HTTP 一律 301 到 HTTPS；HSTS 先 <code>max-age=300</code> 观察，再升到 63072000 并申请 preload。</li>
-<li>只开 TLS 1.2/1.3，禁用 RC4/3DES/CBC/MD5/ SHA1。</li>
-<li>证书用 ACME 自动续期，配 Prometheus 监控 <code>certmanager_certificate_expiration_timestamp_seconds</code>。</li>
-<li>响应头一套配齐：HSTS / X-Content-Type-Options / X-Frame-Options / Referrer-Policy / Permissions-Policy / CSP。</li>
-<li>CSP 先 <code>Report-Only</code> 跑一周，收集报告后切强制；用 nonce 而不是 <code>unsafe-inline</code>。</li>
-<li>第三方脚本（广告、埋点、客服）能放 sandbox iframe 就放，能延迟加载就延迟；把它们的源加进 CSP 白名单。</li>
-<li>用 SSL Labs Server Test 打分，目标 A+；用 securityheaders.com 检查响应头。</li>
+<li><strong>证书要续期</strong>免费证书 90 天有效期，要自动续期。</li>
+<li><strong>HTTP 跳转 HTTPS</strong>配 80 端口自动跳 443。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：HSTS preload 是什么？有什么代价？</h3>
-<p>Preload 是把你的域名硬编码进 Chrome/Firefox/Safari 等浏览器内置列表，用户第一次访问就走 HTTPS。代价是<strong>不可逆</strong>——一旦提交，你未来几年都不能在这个域上跑 HTTP，包括临时测试环境。所以只在主域稳定、确实全 HTTPS 后再提交。</p>
-<h3>Q2：TLS 1.3 比 1.2 好在哪？可以只开 1.3 吗？</h3>
-<p>1.3 握手更快（1-RTT）、移除了不安全算法、加密了握手元数据。可以只开 1.3，但如果要兼容极老的嵌入式设备/旧 WebView，再保留 1.2。2026 年主流浏览器全部支持 1.3，新项目可以只开 1.3。</p>
-<h3>Q3：CSP 报告模式（Report-Only）和强制模式什么区别？</h3>
-<p>Report-Only 只收集违规报告、不阻断加载，用来"先观察再上线"。强制模式会真的拦截违规资源。建议先 Report-Only 跑 1~2 周，把报告里的误报清干净，再切强制。</p>
-<h3>Q4：CDN（Cloudflare/阿里云）已经开了 HTTPS，源站还要不要配 TLS？</h3>
-<p>要。CDN 到用户是一段 TLS，CDN 到源站是另一段——如果源站是 HTTP，CDN 回源就走明文，内网任何人都能窃听或篡改。正确做法是<strong>全链路 TLS</strong>，源站也配证书（可以是内网 CA 或 CDN 签发的内部证书）。</p>
-
-<h2>总结</h2>
-<p>到这里，Web 安全就走完了一圈：OWASP Top 10 给你地图、XSS 讲前端信任、CSRF/点击劫持讲跨站伪造、SQL 注入讲数据层、JWT/OAuth 讲身份、HTTPS/CSP 讲传输与部署。真正的安全不是某个银弹，而是<strong>每一层都做对一点点</strong>——输入校验、参数化、输出编码、Token 短命、HSTS、CSP、最小权限、审计日志——叠起来才是攻击者真正打不穿的体系。把这套基线带到你下一个项目里，比事后应急响应划算得多。</p>
+</div>
 
                     </div>
                 </article>
