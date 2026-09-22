@@ -83,147 +83,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">GraphQL vs REST vs gRPC</h1>
+                        <h1 class="article-title">GraphQL vs REST：从你遇到的问题出发</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ GraphQL</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>别站队，先搞清楚它们在比什么</h2>
-<p>网上一搜"GraphQL vs REST"，吵成一锅粥，两边都把对方说得一无是处。我做了五六年 API 设计，现在的看法很简单：这三者不是同一层的替代品，它们解决的是不同问题。</p>
-<p>这篇我不站任何一边，就把这些年线上压测和落地的经验摊开，最后给你一张选型决策表。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及GraphQL怎么帮你解决。</p>
 
-<h2>六维对比表</h2>
-<table>
-<thead><tr><th>维度</th><th>REST</th><th>gRPC</th><th>GraphQL</th></tr></thead>
-<tbody>
-<tr><td>数据获取效率</td><td>中：固定结构，易过量/不足</td><td>高：二进制小，但结构固定</td><td>高：客户端挑字段，零冗余</td></tr>
-<tr><td>缓存</td><td>最好：HTTP 缓存/CDN 原生</td><td>弱：HTTP/2 上需自建</td><td>中：客户端归一化缓存，HTTP 层难缓存</td></tr>
-<tr><td>类型系统</td><td>弱：靠 OpenAPI 文档约定</td><td>强：Proto 编译期校验</td><td>强：SDL 即类型即文档</td></tr>
-<tr><td>浏览器支持</td><td>原生最好</td><td>差：需 grpc-web 代理</td><td>原生好：POST 即可</td></tr>
-<tr><td>学习成本</td><td>最低</td><td>中：Proto + 代码生成</td><td>较高：SDL+resolver+性能优化</td></tr>
-<tr><td>实时推送</td><td>靠轮询/SSE</td><td>原生双向流</td><td>Subscription（WebSocket）</td></tr>
-<tr><td>错误语义</td><td>HTTP 状态码</td><td>status code + details</td><td>errors 数组，HTTP 恒 200</td></tr>
-<tr><td>典型场景</td><td>开放 API、简单 CRUD</td><td>内部微服务、高性能</td><td>多端聚合、复杂前端</td></tr>
-</tbody>
-</table>
-<p>这张表里我最想让你注意的是<strong>缓存</strong>和<strong>错误语义</strong>两行——这是 GraphQL 最容易被低估的两个坑。</p>
-
-<h2>性能特征：各自的快和慢</h2>
-<p>很多人凭印象说"gRPC 最快、REST 最慢、GraphQL 最慢"，这是没压过测。真实情况要看你测的是什么：</p>
-<ul>
-<li><strong>单条小请求</strong>：gRPC 因为 HTTP/2 多路复用 + Protobuf 二进制，序列化比 JSON 小 3~10 倍，延迟最低。REST 和 GraphQL 都是 JSON，序列化开销差不多。</li>
-<li><strong>聚合查询</strong>：GraphQL 赢。一个页面要关联数据，REST 要 N 次往返，GraphQL 一次。省的是网络往返，不是 CPU。</li>
-<li><strong>极端大报文</strong>：gRPC 赢。Protobuf 体积小，反序列化快。GraphQL JSON 文本在几百 KB 以上开始吃力。</li>
-<li><strong>缓存命中率</strong>：REST 赢。<code>GET /users/1</code> 可以被 CDN、浏览器、Nginx 层层缓存，GraphQL 的 POST 端点基本是"每次都打源站"。</li>
-</ul>
 <div class="mermaid">
 flowchart LR
-    subgraph REST[REST]
-        A1[1次请求拿固定JSON] --> A2[可能过量字段]
-    end
-    subgraph GQL[GraphQL]
-        B1[1次POST 声明字段] --> B2[零冗余 但每请求校验+解析]
-    end
-    subgraph GRPC[gRPC]
-        C1[HTTP/2 多路复用] --> C2[Protobuf 二进制 最小报文]
-    end
+    A[REST] --> B[多个端点]
+    A[GraphQL] --> C[一个端点]
+    C --> D[要什么给什么]
 </div>
-<p>给个参考量级（Apple M 系列，单服务空响应，QPS 对比）：gRPC 约 3~5 万，REST/JSON 约 1.5~2 万，GraphQL 约 1~1.5 万。但这是空响应——真实业务瓶颈都在数据库，框架这两三千 QPS 的差距线上根本无感。</p>
 
-<h2>GraphQL 的错误语义：最容易踩的认知差</h2>
-<p>REST 里 <code>404</code>、<code>500</code> 是 HTTP 层的。GraphQL 不管你业务成功失败，<strong>HTTP 状态码永远是 200</strong>，错误放在响应体的 <code>errors</code> 数组里：</p>
-<pre><code class="language-json">{
-  "errors": [
-    {
-      "message": "User not found",
-      "locations": [{ "line": 2, "column": 3 }],
-      "path": ["user"],
-      "extensions": { "code": "NOT_FOUND" }
-    }
-  ],
-  "data": { "user": null }
-}</code></pre>
-<div class="callout callout-danger">
-<div class="callout-title">别拿 HTTP 状态码判断 GraphQL 成败</div>
-我前端同事第一版封装直接看 <code>response.ok</code>，结果业务报错时他以为成功了，页面空了都不知道。GraphQL 必须解析 body 里的 <code>errors</code>，这是和 REST 最大的行为差异，封装 fetch/axios 拦截器时第一行就要写这个判断。
+<h2>1. REST 接口要开很多</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>前端要用户、订单、商品，要调三个接口。</p>
 </div>
-<p>另外注意"部分成功"：一个查询里 <code>user.name</code> 成功了，<code>user.posts</code> 报错，<code>data</code> 里仍然有 name，只是 posts 那条是 null。这种半成功语义 REST 里不存在，前端要学会处理。</p>
 
-<h2>缓存：GraphQL 先天的短板</h2>
-<p>REST 的 <code>GET /users/1</code> 天然可缓存——URL 就是 key。GraphQL 所有查询都是 <code>POST /graphql</code>，URL 都一样，CDN 不知道该缓存谁。这是 GraphQL 被诟病最多的一点。</p>
+<p><strong>怎么解决？</strong>GraphQL 一个接口，要什么数据一次取完。</p>
+
+<h2>2. REST 返回太多没用字段</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>接口返回 20 个字段，前端只用了 3 个。</p>
+</div>
+
+<p><strong>怎么解决？</strong>GraphQL 前端声明要哪些字段，只返回那些。</p>
+
+<h2>3. 为什么大部分还用 REST</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>GraphQL 这么好，为什么大部分还是用 REST？</p>
+</div>
+
+<p><strong>怎么解决？</strong>REST 简单，学习成本低，够用；GraphQL 复杂，适合需求多变的场景。</p>
+
+<h2>对比</h2>
+
 <table>
-<thead><tr><th>缓存层</th><th>REST</th><th>GraphQL</th></tr></thead>
+<thead><tr><th>对比</th><th>REST</th><th>GraphQL</th></tr></thead>
 <tbody>
-<tr><td>CDN</td><td>GET 直接缓存</td><td>需持久化查询 + 操作名缓存</td></tr>
-<tr><td>浏览器/代理</td><td>HTTP 头原生</td><td>基本不缓存 POST</td></tr>
-<tr><td>客户端</td><td>自己写</td><td>Apollo Client 归一化缓存开箱即用</td></tr>
-<tr><td>服务端</td><td>自己写</td><td>响应缓存/查询结果缓存</td></tr>
-</tbody>
-</table>
-<p>GraphQL 的解法是把缓存重心放到客户端：Apollo Client 按对象 id 归一化存，同一个 User 无论从哪个查询来都命中同一份。这个设计很香，但只对自己的前端有效——你给第三方开放 API 时，GraphQL 的缓存劣势就暴露无遗。</p>
+<tr><td>端点</td><td>多个</td><td>一个</td></tr>
+<tr><td>数据</td><td>后端决定</td><td>前端要什么给什么</td></tr>
+<tr><td>学习成本</td><td>低</td><td>高</td></tr>
+<tr><td>缓存</td><td>HTTP 缓存好</td><td>缓存麻烦</td></tr>
+</tbody></table>
 
-<h2>什么时候选什么：我的决策树</h2>
-<div class="mermaid">
-flowchart TD
-    Q1[调用方是谁?] -->|第三方/公开API| RESTA[选 REST]
-    Q1 -->|自己的服务之间| Q2[性能要求极端吗?]
-    Q1 -->|自己的前端| Q3[页面要跨多个资源聚合吗?]
-    Q2 -->|是| GRPCA[选 gRPC]
-    Q2 -->|否| RESTB[REST 也行]
-    Q3 -->|是| GQLA[选 GraphQL 网关]
-    Q3 -->|否| RESTC[简单 CRUD 用 REST 更省心]
-    style GQLA fill:#e535ab,stroke:#fff,color:#fff
-    style GRPCA fill:#2563eb,stroke:#fff,color:#fff
-    style RESTA fill:#10b981,stroke:#fff,color:#fff
-</div>
-<p>翻译成人话：</p>
-<ul>
-<li><strong>对外开放 API</strong>：REST。生态成熟、CDN 友好、第三方好接入。别用 GraphQL 硬刚。</li>
-<li><strong>内部微服务通信</strong>：gRPC。跨语言、高性能、流式支持，云原生标配。</li>
-<li><strong>自己的 App/多端 + 复杂聚合页面</strong>：GraphQL。一次查询拿全数据，前端少写胶水代码。</li>
-<li><strong>简单 CRUD 后台</strong>：REST。GraphQL 那套 schema/resolver 是过度工程。</li>
-</ul>
 <div class="callout callout-tip">
-<div class="callout-title">最舒服的组合</div>
-我团队现在的标配：对外 BFF 用 GraphQL 网关，网关内部调各微服务的 gRPC，老系统留着 REST 让网关去聚合。三种各司其职，不是二选一。
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>简单项目用 REST</strong>不要为了用 GraphQL 而用，REST 够用就好。</li>
+<li><strong>前端需求多变再用</strong>多个客户端、需求经常变的场景，GraphQL 才值得。</li>
+</ul>
 </div>
-
-<h2>代码对比：同一个"查用户订单"</h2>
-<p>看一眼三种风格的实际请求长啥样，体感差异最直接：</p>
-<pre><code class="language-bash"># REST：两次请求
-GET /users/123
-GET /users/123/orders?page=1</code></pre>
-<pre><code class="language-protobuf">// gRPC：先定义 proto
-service OrderService {
-  rpc GetUserOrders (UserRequest) returns (OrderList);
-}
-message UserRequest { string user_id = 1; }</code></pre>
-<pre><code class="language-graphql"># GraphQL：一次，字段随便挑
-query {
-  user(id: 123) {
-    name
-    orders(limit: 10) {
-      id
-      total
-      items { name price }
-    }
-  }
-}</code></pre>
-<p>注意 GraphQL 这一条查询，客户端想加个 <code>orders { createdAt }</code>，不用找后端改任何东西。这是它和前两者最本质的区别——<strong>API 的形状由调用方决定</strong>。</p>
-
-<h2>FAQ</h2>
-<p><strong>Q：GraphQL 比 REST 慢吗？</strong><br/>空请求是，但真实业务里 GraphQL 因为省往返经常更快。慢的是"每请求都要解析+校验 schema"，这个开销在高 QPS 时才明显，而且可以用持久化查询（第四篇讲）压掉。</p>
-<p><strong>Q：gRPC 能直接给浏览器用吗？</strong><br/>不能。浏览器不会讲 HTTP/2 帧，得用 grpc-web 让 Envoy/网关做一层协议转换。新项目浏览器侧我更倾向 GraphQL 或 Connect 协议。</p>
-<p><strong>Q：选了 GraphQL 以后老 REST 服务怎么办？</strong><br/>不用推翻重写。GraphQL 网关里 resolver 直接去调老的 REST 接口就行，把它包成 GraphQL 字段。渐进迁移，这是网关模式的好处。</p>
-
-<h2>我的结论</h2>
-<p>REST、gRPC、GraphQL 不是三选一的选择题，是工具箱里的三把工具。开放 API 用 REST，内部高性能通信用 gRPC，多端复杂聚合用 GraphQL。最忌讳的是"学了 GraphQL 看什么都像查询"——简单 CRUD 上 GraphQL 是给自己找性能和调试的麻烦。</p>
-<p>选定 GraphQL 之后怎么落地？下一篇我带你搭 Apollo Server 4.x，接上 DataLoader 和 React 客户端。</p>
-
-
-
 
                     </div>
                 </article>

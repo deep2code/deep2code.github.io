@@ -81,152 +81,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">GitOps 核心原则</h1>
+                        <h1 class="article-title">GitOps 入门：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ GitOps,云原生</span>
+                            <span class="meta-item">🏷️ GitOps</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-
-<h2>从 CI/CD 到 GitOps：一次部署范式的迁移</h2>
-<p>2017 年 Weaveworks 的 Alexis Richardson 提出 GitOps 一词之前，云原生团队的发布链路是这样的：CI 流水线打完镜像标签 → 手动 kubectl apply ...</p>
-<p>更隐蔽的问题是<strong>状态漂移</strong>：开发者通过 <code>kubectl edit</code> 临时改了一个副本数，Git 里的 YAML 却没有同步，下次流水线再跑又把它改回去——没人说得清集群里到底跑着什么。</p>
-<p>GitOps 的回答极其优雅：<strong>把 Git 仓库变成集群状态的唯一事实来源（Single Source of Truth）</strong>。你不再把变更"推"进集群，而是让集群里的 Agent 主动"拉"取 Git 中声明的期望状态，并持续把实际状态收敛过去。CI 只负责构建镜像和更新 Git 中的版本号，部署动作完全发生在集群内部。这条边界一旦划清，安全、审计、回滚、环境一致性全部被 Git 这一成熟工具链天然解决。</p>
-
-<h2>四大核心原则：CNCF 官方定义</h2>
-<p>CNCF GitOps WG 在 2024 年发布的白皮书里把 GitOps 归纳为四条必须同时满足的原则，缺一条都只能叫"用 Git 做发布"，不能叫 GitOps：</p>
-<ul>
-<li><strong>声明式（Declarative）</strong>：系统中所有被管理的内容（应用配置、基础设施、网络策略）都必须以声明式描述存储在 Git 中。命令式脚本（<code>kubectl run</code>、<code>sed</code> 改配置）不属于 GitOps 范畴，因为它们无法做 diff、无法审计、无法回放。</li>
-<li><strong>版本化且唯一来源（Versioned &amp; Single Source of Truth）</strong>：期望状态只存在于一个 Git 仓库，不可在多个仓库间分裂。Git 的提交历史天然提供了不可篡改的审计日志，每一次变更都有作者、时间、评审记录。</li>
-<li><strong>自动拉取（Automated Pull）</strong>：Agent 在集群内运行，主动从 Git 拉取期望状态，而不是被外部系统推送。这意味着集群不需要暴露给 CI Runner，安全边界从"谁能连集群"变成了"谁能合并 PR"。</li>
-<li><strong>持续调谐（Continuous Reconciliation）</strong>：Agent 持续对比实际状态与期望状态，任何漂移（手动改副本数、恶意篡改、故障恢复后残留）都会被自动纠正。这一点与 Kubernetes 控制器模式一脉相承。</li>
-</ul>
-
-<h2>架构原理：GitOps 控制回路</h2>
-<p>理解 GitOps 的关键是把它看作 Kubernetes 调谐循环的延伸。K8s 控制器对比"etcd 里的 spec"与"实际 Pod"；GitOps Agent 对比"Git 里的 YAML"与"集群里的资源"。两者都是电平触发、可自愈、幂等的。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及GitOps怎么帮你解决。</p>
 
 <div class="mermaid">
 flowchart LR
-    subgraph Dev[开发者侧]
-        DEV[开发提交 PR] --> REVIEW[Code Review]
-        REVIEW --> MERGE[Merge to main]
-        MERGE --> CI[CI: 构建镜像<br/>推 Registry]
-        CI --> Bump[更新 GitOps 仓库<br/>镜像版本]
-    end
-    subgraph Git[Git 仓库（唯一事实来源）]
-        REPO[(gitops-config)]
-    end
-    subgraph Cluster[K8s 集群]
-        AGENT[GitOps Agent<br/>ArgoCD / Flux]
-        AGENT -->|Apply| K8S[(K8s API)]
-        K8S -->|Watch 状态| AGENT
-    end
-    Bump --> REPO
-    AGENT -.->|Watch Pull| REPO
-    K8S -->|实际状态| AGENT
-    AGENT -->|不一致则收敛| K8S
-
+    A[Git 仓库] --> B[GitOps 工具]
+    B --> C[K8s 集群]
+    B --> D[自动同步]
 </div>
 
-<p>注意图中的关键边界：CI 流水线<strong>从不直连集群</strong>。它只做两件事——构建镜像、把新镜像 tag 写回 GitOps 仓库。集群侧的 Agent 通过 Webhook 或轮询感知到新提交，自行完成部署。这个"推拉反转"是 GitOps 安全模型的根基：攻击面从"整个 CI 系统"收缩为"一个经过 Code Review 的 PR 合并动作"。</p>
+<h2>1. K8s 部署太乱</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你用 kubectl 手动部署，谁改了配置都不知道。</p>
+</div>
+
+<p><strong>怎么解决？</strong>用 GitOps，所有配置放 Git，谁改了一目了然。</p>
+
+<h2>2. 怎么保证集群和配置一致</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>集群里的配置和 Git 里不一样了。</p>
+</div>
+
+<p><strong>怎么解决？</strong>GitOps 自动同步，发现不一样自动改回正确的。</p>
+
+<h2>3. 和 CI/CD 有什么区别</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>都是部署，GitOps 是什么？</p>
+</div>
+
+<p><strong>怎么解决？</strong>CI 是构建代码，GitOps 是部署到 K8s，是两个环节。</p>
+
+<h2>GitOps 核心</h2>
+
+<table>
+<thead><tr><th>核心</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>Git 是唯一来源</td><td>所有配置都在 Git</td></tr>
+<tr><td>自动同步</td><td>集群状态自动和 Git 对齐</td></tr>
+<tr><td>版本控制</td><td>谁改了、改了什么都有记录</td></tr>
+</tbody></table>
 
 <div class="callout callout-tip">
-<div class="callout-title">我的选型建议</div>
-<p>团队里有专职值班同学、应用数量在 20~200 之间，直接上 ArgoCD——UI 能省掉大量排查时间。如果是平台团队想把 GitOps 做成底座、所有服务统一由 YAML 描述，Flux 更轻更贴合 K8s 习惯。别迷信"哪个更流行"，问自己一句：<strong>谁每天要看部署状态？</strong> 有人看就选 ArgoCD，没人看就选 Flux。</p>
-</div>
-
-<h2>主流实现：ArgoCD vs Flux CD</h2>
-<p>两条路线都满足四大原则，但设计哲学差异很大。我做过两个团队的选型，对比如下：</p>
-<table>
-<thead><tr><th>维度</th><th>ArgoCD</th><th>Flux CD</th></tr></thead>
-<tbody>
-<tr><td>核心抽象</td><td>Application CRD</td><td>Kustomization / HelmRelease 等多 CRD</td></tr>
-<tr><td>Web UI</td><td>自带，可视化强</td><td>无独立 UI，靠 Git 看</td></tr>
-<tr><td>学习曲线</td><td>友好，值班同学能上手</td><td>陡峭，偏平台工程团队</td></tr>
-<tr><td>生态位</td><td>Argo 项目组（含 Rollouts/Workflows）</td><td>CNCF 毕业项目</td></tr>
-<tr><td>适合场景</td><td>应用数量中等、需要界面操作</td><td>把 GitOps 当底座、不需要图形界面</td></tr>
-</tbody>
-</table>
-
-<h2>实战：传统部署 vs GitOps 部署对比</h2>
-<p>先看一个典型的传统 Push 模式脚本，它把生产集群凭证烧在 CI 变量里：</p>
-
-<pre><code class="language-bash"># ❌ 传统 Push 模式：CI Runner 直连生产集群
-# 凭证来自 CI Secret，任何有仓库写权限的人都能触发
-docker build -t registry.example.com/api:$CI_COMMIT_SHA .
-docker push registry.example.com/api:$CI_COMMIT_SHA
-
-# 直接 kubectl apply 到生产 —— 集群 kubeconfig 放在 CI Secret 里
-kubectl set image deployment/api api=registry.example.com/api:$CI_COMMIT_SHA     --record -n production
-
-# 问题：1) 集群凭证泄露面大 2) 无法审计谁改了什么
-#      3) 漂移无感知 4) 回滚靠重新部署上一个版本
-</code></pre>
-
-<p>GitOps 模式下，CI 只负责产出镜像和更新配置仓库，部署由集群内 Agent 完成：</p>
-
-<pre><code class="language-yaml"># ✅ GitOps 仓库中的 application.yaml —— 唯一事实来源
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: api-production
-  namespace: argocd
-spec:
-  project: production
-  source:
-    repoURL: https://github.com/example/gitops-config.git
-    targetRevision: main
-    path: overlays/production
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: production
-  syncPolicy:
-    automated:
-      prune: true        # Git 里删掉的资源也会被清理
-      selfHeal: true     # 手动 kubectl edit 的漂移会被自动纠正
-    syncOptions:
-      - CreateNamespace=true
-</code></pre>
-
-<p>CI 流水线对应变成了纯粹的"构建 + 提 PR"：</p>
-
-<pre><code class="language-bash"># ✅ GitOps 模式：CI 不碰集群，只更新配置仓库
-docker build -t registry.example.com/api:$CI_COMMIT_SHA .
-docker push registry.example.com/api:$CI_COMMIT_SHA
-
-# 用 yq 或 sed 更新配置仓库中的镜像 tag，提一个 MR
-git clone https://github.com/example/gitops-config.git
-cd gitops-config
-yq -i '.images[0].newTag = strenv(CI_COMMIT_SHA)'     overlays/production/kustomization.yaml
-git commit -m "chore: deploy api $CI_COMMIT_SHA"
-git push origin main
-# ArgoCD Watch 到 main 分支变更，自动完成同步 —— CI 到此结束
-</code></pre>
-
-<p>对比之下，GitOps 模式的 CI 流水线完全没有集群凭证，攻击面收敛到 Git 仓库权限；每一次部署都是一次 Code Review，回滚 = <code>git revert</code>；漂移被 selfHeal 自动纠正。</p>
-
-<h2>最佳实践</h2>
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>配置与代码分仓</strong>：应用代码仓库（开发关心逻辑）和 GitOps 配置仓库（运维关心部署）分开。镜像版本通过 CI 自动写入配置仓库，避免开发和发布混在一个 PR 里互相阻塞。</li>
-<li><strong>主分支只放不可变 tag</strong>：GitOps 仓库的 main 分支应只记录具体镜像 digest（<code>@sha256:...</code>），不要用 <code>latest</code> 这类浮动 tag，否则 Agent 无法判断"该不该重新部署"。</li>
-<li><strong>禁止 kubectl 直改生产</strong>：把集群的写入权限只授予 GitOps Agent 的 ServiceAccount，开发者只能在 Git 里改 YAML。临时调试用独立命名空间，调试完立即回收。</li>
-<li><strong>用分支模型表达环境</strong>：main → staging，release-* → production。合并即部署，环境晋升靠 PR 从 main 合到 release 分支，审计天然成立。</li>
-<li><strong>把漂移监控当作一等公民</strong>：ArgoCD 的 OutOfSync 状态、Flux 的 drift detection 都应接入告警。漂移本身不一定是事故，但"漂移长期无人知晓"一定是事故。</li>
+<li><strong>配置一定要放 Git</strong>不要手动改集群配置，所有改动走 Git。</li>
+<li><strong>先从简单的开始</strong>先把一个应用用 ArgoCD 管起来，再慢慢推广。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：GitOps 和 Infrastructure as Code（Terraform）是什么关系？</h3>
-<p>两者都强调声明式 + Git 管理，但作用域不同。Terraform 管的是<strong>基础设施</strong>（VPC、数据库、负载均衡器、DNS），GitOps 管的是<strong>集群内部的工作负载</strong>。成熟的组合是：Terraform 负责"把集群建出来"，GitOps 负责"把应用装进集群"。也有团队用 Crossplane 把云资源也纳入 GitOps 模型，但那是另一层复杂度。</p>
-<h3>Q2：我的团队已经用了 CI/CD 流水线，为什么还要引入 GitOps？</h3>
-<p>CI/CD 流水线解决的是"如何自动化执行部署动作"，GitOps 解决的是"部署之后谁来保证状态不漂移、出了问题怎么快速回滚"。如果你已经遇到过"流水线成功但线上配置不对"、"有人手工改了副本数没人知道"、"回滚要重跑一遍流水线"这类问题，GitOps 就是对症下药。如果团队只有两三个服务且变更极少，现有流水线也能跑，不必过度工程化。</p>
-<h3>Q3：GitOps 适合多集群管理吗？</h3>
-<p>非常适合，这正是 GitOps 的强项。一个 Git 仓库可以声明"集群 A 跑这套、集群 B 跑那套"，每个集群各跑一个 Agent 各自收敛。跨集群的灰度发布（先在 5% 集群上验证）本质就是在 Git 里改一个副本比例。ArgoCD 的 ApplicationSet、Flux 的 Kustomization 都原生支持这种多集群模型。</p>
-<h3>Q4：GitOps 的"自动拉取"会不会有延迟？实时性够吗？</h3>
-<p>取决于实现。ArgoCD 默认每 3 分钟轮询一次 Git，也可以配置 Webhook（推送事件触发）把延迟压到秒级。对绝大多数发布场景这个粒度足够——真正需要秒级扩缩容的是 HPA/VPA，不是 GitOps。如果你需要"推完立刻看到效果"，用 Webhook + ArgoCD 的主动同步即可。</p>
-
-<h2>总结</h2>
-<p>GitOps 不是又一个 CI/CD 工具，而是一次<strong>部署责任的重新划分</strong>：CI 负责构建，Git 负责记录意图，集群内的 Agent 负责收敛状态。它把"发布"从一种需要权限的危险操作，降级为一次普通的 Code Review。理解了这一层，你再去看 ArgoCD 的 Application、Flux 的 Kustomization，就会发现它们都只是在实现同一个控制回路的不同切片。下一篇我们动手把 ArgoCD 真正装进集群，看清它内部的每一个组件在做什么。</p>
+</div>
 
                     </div>
                 </article>

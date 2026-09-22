@@ -81,137 +81,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">PostgreSQL 架构</h1>
+                        <h1 class="article-title">PostgreSQL 入门：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ PostgreSQL,关系数据库</span>
+                            <span class="meta-item">🏷️ PostgreSQL</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-
-<h2>为什么选择 PostgreSQL：一个"学院派"数据库的工业逆袭</h2>
-<p>我用 PostgreSQL 快十年了，从早期拿它当"能存 JSON 的 MySQL"，到现在新项目复杂查询、地理数据、向量检索都默认它。很多人对它的第一印象是"功能很全但不如 MySQL 流行"。</p>
-<p>它起源于伯克利 1986 年的 POSTGRES 项目，是学术界把关系模型、MVCC、半结构化数据融合等研究做成工业级系统的长期实验。今天它在事务完整性、复杂查询优化、扩展能力上依然是开源天花板，Apple、GitHub、Instagram、Spotify、拼多多都拿它当核心存储。</p>
-
-<p>MySQL 和 PostgreSQL 的本质差异，我打个比方：</p>
-<table>
-<thead><tr><th>维度</th><th>MySQL</th><th>PostgreSQL</th></tr></thead>
-<tbody>
-<tr><td>气质</td><td>瑞士军刀，默认快、简单</td><td>精密机床，要懂参数才发挥性能</td></tr>
-<tr><td>进程模型</td><td>多线程</td><td>多进程，一连接一进程</td></tr>
-<tr><td>复杂 JOIN / 聚合</td><td>够用</td><td>优化器更强</td></tr>
-<tr><td>扩展能力</td><td>有限</td><td>PostGIS / TimescaleDB / pgvector 都是扩展</td></tr>
-<tr><td>默认隔离级别</td><td>REPEATABLE READ</td><td>READ COMMITTED</td></tr>
-</tbody>
-</table>
-<p>GitHub 2019 年把核心库从 MySQL 迁到 PostgreSQL，就是这种权衡的标志性事件。</p>
-
-<h2>进程架构：一连接一后端进程</h2>
-<p>PostgreSQL 采用<strong>多进程模型</strong>（而非 MySQL 的多线程）。每个客户端连接会 fork 出一个独立的后端进程（backend process），连接断开即退出。好处是<strong>进程隔离</strong>——某个后端崩溃不会拖垮整个实例；代价是连接数受限（每个进程约占 5–10MB 内存，1000 个连接就是 5–10GB 空转内存）。</p>
-
-<div class="callout callout-danger">
-<div class="callout-title">我踩过的坑：连接数打满</div>
-<p>有次应用没配连接池，每次请求新建一个连接，高峰期 <code>max_connections=100</code> 瞬间打满，新连接全报 "too many clients already"。我一开始想直接把 max_connections 调到 1000，后来算了笔账：1000 个进程光空转就吃 5-10GB 内存，得不偿失。</p>
-<p>正确做法是前面架 PgBouncer，transaction 模式把应用侧上千连接复用到数据库侧几十个真实连接。从那以后我新项目一律先上连接池。</p>
-</div>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及PostgreSQL怎么帮你解决。</p>
 
 <div class="mermaid">
 flowchart TB
-    subgraph Client[客户端层]
-        APP[应用连接池<br/>PgBouncer]
-    end
-    subgraph PG[PostgreSQL 实例]
-        LISTEN[postmaster<br/>监听器]
-        subgraph Backends[后端进程 每连接一个]
-            B1[Backend 1]
-            B2[Backend 2]
-            B3[Backend N]
-        end
-        subgraph BG[后台辅助进程]
-            CKPT[Checkpointer]
-            WALW[WAL Writer]
-            BGW[Background Writer]
-            AUTOV[Autovacuum<br/>+ Worker]
-            LOGICAL[Wal Sender / Receiver]
-        end
-        SHM[共享内存<br/>Shared Buffers + WAL Buffers]
-    end
-    DISK[数据文件 + WAL 日志]
-    APP -->|TCP| LISTEN
-    LISTEN --> B1
-    LISTEN --> B2
-    LISTEN --> B3
-    B1 <--> SHM
-    B2 <--> SHM
-    B3 <--> SHM
-    BG --> SHM
-    SHM <--> DISK
-
+    A[应用] --> B[PostgreSQL]
+    B --> C[(稳定可靠)]
+    B --> D[功能强大]
 </div>
 
-<p>关键后台进程的职责：</p>
+<h2>1. MySQL 和 PG 选哪个</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>都是关系型数据库，选哪个？</p>
+</div>
+
+<p><strong>怎么解决？</strong>看需求，PG 功能强，MySQL 生态好，大部分场景都够用。</p>
+
+<h2>2. PG 有什么优势</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>为什么很多人推荐 PG？</p>
+</div>
+
+<p><strong>怎么解决？</strong>开源、稳定、功能全，支持复杂查询、JSON、扩展。</p>
+
+<h2>3. 新手怎么开始学 PG</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>不知道从哪下手。</p>
+</div>
+
+<p><strong>怎么解决？</strong>先装 PG，建库建表，写简单 SQL，和 MySQL 差不多。</p>
+
+<h2>PG 特点</h2>
+
+<table>
+<thead><tr><th>特点</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>开源免费</td><td>没有 Oracle 那种付费限制</td></tr>
+<tr><td>功能全</td><td>支持复杂 SQL、JSON、数组</td></tr>
+<tr><td>稳定</td><td>很多大厂生产用</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>Checkpointer</strong>：触发检查点（checkpoint），把共享内存中的脏页刷到数据文件，并在 WAL 中记录检查点位置——这是崩溃恢复的起点。</li>
-<li><strong>WAL Writer / Background Writer</strong>：把 WAL 缓冲区与脏页异步刷盘，避免在提交时同步刷盘造成延迟。</li>
-<li><strong>Autovacuum</strong>：MVCC 会产生死元组（dead tuple），Autovacuum 周期性清理空间并更新统计信息，<strong>它不是可选的，而是 PostgreSQL 正常运转的必需品</strong>。</li>
-<li><strong>WAL Sender / Receiver</strong>：主库通过 WAL 流把日志实时发给备库，是流复制的核心。</li>
+<li><strong>新手先学基础</strong>先把 SQL 基础学会，再看高级特性。</li>
+<li><strong>不要和 MySQL 比语法</strong>大部分语法差不多，个别不一样查文档就行。</li>
 </ul>
-
-<h2>核心特性：ACID、MVCC、扩展生态</h2>
-
-<div class="echart-container" id="pg-vs-mysql-compare" style="height: 320px; margin: 20px 0;"></div>
-<p>PostgreSQL 是 <strong>ACID 兼容</strong> 的标杆：原子性（Atomicity）由 WAL 保证，一致性（Consistency）由约束与触发器保证，隔离性（Isolation）由 MVCC 与锁保证，持久性（Durability）由 WAL 刷盘保证。它的隔离级别支持到<strong> Serializable Snapshot Isolation (SSI)</strong>，这是大多数开源数据库（包括 MySQL 默认 REPEATABLE READ）做不到的。</p>
-<p>另一个被低估的能力是<strong>可扩展架构</strong>：你可以自定义数据类型、操作符、索引访问方法（access method）、语言（PL/pgSQL、PL/Python、PL/Perl）。PostGIS 把它变成地理信息数据库，TimescaleDB 变成时序数据库，pgvector 变成向量数据库——<strong>这些都是扩展，而非分支</strong>，意味着核心引擎保持单一、稳定、可预测。</p>
-
-<h2>第一次连接与架构侦察</h2>
-<p>安装完成后（下一篇详述），先确认实例身份与连接方式：</p>
-
-<pre><code class="language-bash"># 连接到默认 postgres 数据库，查看版本与编译选项
-psql -h 127.0.0.1 -U postgres -d postgres -c "SELECT version();"
-psql -c "SHOW data_checksums; SHOW max_connections; SHOW shared_buffers;"
-
-# 查看当前有哪些后端进程在跑（Linux）
-ps -ef | grep postgres | grep -v grep
-</code></pre>
-
-<p>进入 psql 后，用系统视图"侦察"架构——这是 DBA 的基本功：</p>
-
-<pre><code class="language-sql">-- 查看当前所有连接与后端状态，state 为 active 的是正在执行查询的
-SELECT pid, usename, application_name, state, query_start, query
-FROM pg_stat_activity
-WHERE datname IS NOT NULL
-ORDER BY query_start;
-
--- 查看数据库大小与表空间
-SELECT datname, pg_size_pretty(pg_database_size(datname)) AS size
-FROM pg_database ORDER BY pg_database_size(datname) DESC;
-
--- 查看共享内存命中情况：blks_hit/(blks_hit+blks_read) 应 > 99%
-SELECT sum(blks_hit) AS hit, sum(blks_read) AS read,
-       round(100.0*sum(blks_hit)/nullif(sum(blks_hit+blks_read),0), 2) AS hit_ratio_pct
-FROM pg_stat_database;
-</code></pre>
-
-<p>上面 <code>pg_stat_database</code> 的命中率查询是评估 <code>shared_buffers</code> 大小是否合理的核心指标。经验值：命中率长期低于 99% 说明 shared_buffers 或操作系统页缓存不足，需要调大。</p>
-
-<h2>性能优化与最佳实践</h2>
-<ul>
-<li><strong>连接不是免费的</strong>：每个后端进程 5–10MB 基线内存 + 查询执行时的 work_mem。生产应用一律用 PgBouncer transaction 模式做连接池，把到 PostgreSQL 的实际连接数控制在几百以内。</li>
-<li><strong>让 Autovacuum 好好工作</strong>：默认参数对大表太保守，生产应调大 <code>autovacuum_max_workers</code>（4–8）、降低大表的 scale factor。监控 <code>pg_stat_user_tables.n_dead_tup</code>。</li>
-<li><strong>WAL 不要放系统盘</strong>：WAL 是顺序写，数据文件是随机读写，物理上分盘能显著提升写入吞吐。</li>
-<li><strong>选对版本</strong>：生产永远用偶数大版本（如 16、17），并至少用小版本 .3 以后的发布。</li>
-</ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：PostgreSQL 连接数上不去，报 "too many clients already" 怎么办？</h3>
-<p>这是 <code>max_connections</code> 到顶了。直接调大 <code>max_connections</code> 是错的——每个连接都占内存，调大会拖垮实例。正确做法是在前面加 PgBouncer，用 transaction 池化把应用侧几百上千连接复用到数据库侧几十个真实连接。</p>
-<h3>Q2：为什么 PostgreSQL 偶尔会有"突刺"延迟？</h3>
-<p>典型原因是检查点（checkpoint）把大量脏页一次性刷盘。调大 <code>max_wal_size</code> 让检查点间隔更长、更平滑，配合 <code>checkpoint_completion_target=0.9</code> 让刷盘分散到整个周期内，能把突刺削掉一大半。</p>
-<h3>Q3：PostgreSQL 比 MySQL 慢吗？</h3>
-<p>简单主键点查两者差距很小；纯写入密集型（无复杂查询）MySQL InnoDB 有时略快。但一旦涉及多表 JOIN、聚合、复杂过滤，PostgreSQL 的优化器与执行器通常更优。选型不要看基准测试的某一项，要看你的业务到底跑什么 SQL。</p>
-
-<h2>总结</h2>
-<p>理解 PostgreSQL 的钥匙是三件事：<strong>一连接一进程的隔离模型、共享内存+后台进程的协作方式、WAL 驱动的崩溃恢复</strong>。后续五篇会围绕安装配置、类型系统、索引优化、MVCC 事务、复制高可用逐一展开，把这套架构从"听说过"变成"能上手排障"。</p>
+</div>
 
                     </div>
                 </article>
