@@ -67,71 +67,159 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">PostgreSQL 入门：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ PostgreSQL</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及PostgreSQL怎么帮你解决。</p>
+    <header class="article-header">
+        <h1 class="article-title">PostgreSQL 深度原理：MVCC 与 WAL</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ PostgreSQL</span>
+        </div>
+    </header>
+    <p>PostgreSQL 比 MySQL 还强大，是因为它的 MVCC 实现更彻底，支持复杂查询和事务。这篇讲透 PG 底层原理。</p>
 
-<div class="mermaid">
-flowchart TB
-    A[PostgreSQL] --> B[开源]
-    B --> C[功能强大]
-    C --> D[适合复杂查询]
-</div>
+    <h2>核心原理1：MVCC 多版本并发控制</h2>
+    <p>PostgreSQL 读写不阻塞，是因为 MVCC：每一行有多个版本，读老版本，写新版本，不用加锁。</p>
+    <div class="mermaid">
+flowchart TD
+    A[一行数据] --> B[版本1 旧的]
+    A --> C[版本2 中间的]
+    A --> D[版本3 最新]
+    B -->|可见| E[读事务A]
+    D -->|可见| F[读事务B]
+         
+    </div>
+    <h3>PG vs MySQL MVCC 对比</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>对比</th>
+                <th>PostgreSQL</th>
+                <th>MySQL InnoDB</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>MVCC 实现</td>
+                <td>每行存多个版本</td>
+                <td>undo log 回滚段</td>
+            </tr>
+            <tr>
+                <td>清理</td>
+                <td>VACUUM 后台清理</td>
+                <td>Purge 线程自动清理</td>
+            </tr>
+            <tr>
+                <td>写放大</td>
+                <td>较大，更新产生新行</td>
+                <td>较小</td>
+            </tr>
+            <tr>
+                <td>长事务影响</td>
+                <td>大，老版本不清理</td>
+                <td>相对小</td>
+            </tr>
+        </tbody>
+    </table>
 
-<h2>1. MySQL 和 PG 选哪个</h2>
+    <h2>核心原理2：WAL 预写日志原理</h2>
+    <p>PostgreSQL 写数据不是直接改磁盘，是先写 WAL 日志，再改内存，崩溃了用 WAL 恢复。</p>
+    <div class="mermaid">
+flowchart LR
+    A[写请求] --> B[写 WAL 日志 磁盘]
+    B --> C[改内存页]
+    C --> D[后台异步刷盘]
+    D --> E[崩溃恢复 重放 WAL]
+         
+    </div>
+    <h3>PostgreSQL 核心组件</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>组件</th>
+                <th>作用</th>
+                <th>说明</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>WAL</td>
+                <td>预写日志</td>
+                <td>保证事务持久化，崩溃恢复</td>
+            </tr>
+            <tr>
+                <td>shared_buffers</td>
+                <td>内存缓冲池</td>
+                <td>热数据放内存，加速读写</td>
+            </tr>
+            <tr>
+                <td>VACUUM</td>
+                <td>清理死元组</td>
+                <td>MVCC 旧版本垃圾回收</td>
+            </tr>
+            <tr>
+                <td>checkpoint</td>
+                <td>检查点</td>
+                <td>把脏页刷到磁盘，缩短恢复时间</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>做项目选 MySQL 还是 PostgreSQL？</p>
-</div>
+    <h2>核心原理3：索引原理：B+树 vs GIN/GiST</h2>
+    <p>PostgreSQL 不止 B+ 树索引，还有 GIN、GiST 等多种索引，适合 JSON、数组、全文搜索、空间数据。</p>
+    <div class="mermaid">
+flowchart LR
+    A[索引类型] --> B[B+树 默认]
+    A --> C[Hash]
+    A --> D[GIN 倒排]
+    A --> E[GiST 广义搜索]
+    B --> B1[等值 范围]
+    D --> D1[JSON 数组 全文]
+    E --> E1[空间 几何]
+         
+    </div>
+    <h3>PostgreSQL 索引类型</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>索引类型</th>
+                <th>适用场景</th>
+                <th>例子</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>B+树</td>
+                <td>等值、范围查询</td>
+                <td>WHERE id = 1</td>
+            </tr>
+            <tr>
+                <td>Hash</td>
+                <td>纯等值查询</td>
+                <td>WHERE phone = "xxx"</td>
+            </tr>
+            <tr>
+                <td>GIN</td>
+                <td>JSONB、数组、全文</td>
+                <td>WHERE tags @> ['java']</td>
+            </tr>
+            <tr>
+                <td>GiST</td>
+                <td>空间数据、几何</td>
+                <td>PostGIS 地理查询</td>
+            </tr>
+        </tbody>
+    </table>
 
-<p><strong>怎么解决？</strong>简单业务 MySQL 够，复杂查询、JSON、GIS 选 PG。</p>
-
-<h2>2. PG 有什么优势</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>PostgreSQL 比 MySQL 强在哪？</p>
-</div>
-
-<p><strong>怎么解决？</strong>标准 SQL 支持好、复杂查询强、JSON 支持好、扩展丰富。</p>
-
-<h2>3. 新手怎么开始</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>想学习 PG，怎么开始？</p>
-</div>
-
-<p><strong>怎么解决？</strong>装个 PostgreSQL，建个表，写几个查询试试。</p>
-
-<h2>MySQL vs PG</h2>
-
-<table>
-<thead><tr><th>对比</th><th>MySQL</th><th>PostgreSQL</th></tr></thead>
-<tbody>
-<tr><td>定位</td><td>通用</td><td>企业级</td></tr>
-<tr><td>复杂查询</td><td>中等</td><td>强</td></tr>
-<tr><td>JSON</td><td>一般</td><td>强</td></tr>
-<tr><td>扩展</td><td>一般</td><td>丰富</td></tr>
-</tbody></table>
-
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>新手先用 MySQL</strong>新手先用 MySQL，简单，资料多。</li>
-<li><strong>复杂项目选 PG</strong>复杂业务、数据分析选 PG。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>VACUUM 一定要开自动清理，长事务会导致垃圾不回收，表膨胀</li>
+            <li>不要随便 SELECT *，PostgreSQL 存储是堆表，宽表查询慢</li>
+            <li>JSONB 比 JSON 快，建 GIN 索引后查询性能高很多</li>
+            <li>大表加索引不要直接 CREATE INDEX，用 CONCURRENTLY 不锁表</li>
+        </ul>
+    </div>
+</article>
             </main>
         </div>
     </div>

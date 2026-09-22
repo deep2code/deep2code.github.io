@@ -65,42 +65,145 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">Python</h1>
-                    </header>
-                    <div class="article-content">
-                        <p>从语言核心、CPython 内部原理、并发编程、工程化、Web 开发、常见陷阱、FastAPI 到 2026 生态选型的 8 篇深度系列文章。</p>
-                        <h2 id="articles">系列文章目录</h2>
-                <div class="series-item">
-                    <h3><a href="./core/">Python 语言核心</a></h3>
-                    <p>数据模型 / 类型注解 PEP484/526/649 / 装饰器 / 上下文管理器 / 迭代器生成器 / 魔术方法</p>
-                </div>
-                <div class="series-item">
-                    <h3><a href="./internals/">CPython 内部原理与性能优化</a></h3>
-                    <p>执行模型 / GIL 深度解析 / 引用计数+分代 GC / cProfile 与 py-spy / 向量化与 Numba 优化</p>
-                </div>
-                <div class="series-item">
-                    <h3><a href="./concurrency/">Python 并发编程</a></h3>
-                    <p>进程 vs 线程 vs 协程 / threading / multiprocessing / asyncio 深度 / 选型决策树</p>
-                </div>
-                <div class="series-item">
-                    <h3><a href="./tooling/">Python 包管理与工程化</a></h3>
-                    <p>虚拟环境 / pip→uv / pyproject.toml / 依赖锁定 / ruff·mypy·pytest / 打包发布</p>
-                </div>
-                <div class="series-item">
-                    <h3><a href="./web/">Python Web 开发</a></h3>
-                    <p>WSGI vs ASGI / FastAPI / Django / Flask / SQLAlchemy 2.0 / gunicorn+uvicorn+Nginx+Docker</p>
-                </div>
-                <div class="series-item">
-                    <h3><a href="./pitfalls/">Python 常见陷阱</a></h3>
-                    <p>8 大陷阱卡片式对照：错误写法 vs 正确写法 + 原因 + 要点</p>
-                </div>
-                <div class="series-item">
-                    <h3><a href="./ecosystem/">Python 2026 选型</a></h3>
-                    <p>3.9→3.14 时间线 / 3.12·3.13·3.14 新特性 / 现代工具链 / 生产选型建议</p>
-                </div>
-                    </div>
-                </article>
+    <header class="article-header">
+        <h1 class="article-title">Python 深度原理：GIL、GC、协程</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ Python</span>
+        </div>
+    </header>
+    <p>Python 写起来爽，但为什么多线程跑不快？为什么有 GIL？垃圾回收怎么工作的？asyncio 协程到底是什么？这篇从底层讲透 Python。</p>
+
+    <h2>核心原理1：GIL：全局解释器锁</h2>
+    <p>Python 多线程为什么 CPU 密集型跑不快？因为有 GIL，同一时刻只有一个线程执行 Python 字节码。</p>
+    <div class="mermaid">
+flowchart LR
+    A[Python 解释器] --> B{GIL 锁}
+    B --> C[线程1 执行]
+    B --> D[线程2 等待]
+    B --> E[线程3 等待]
+    C -->|时间片到| F[释放 GIL]
+    F --> G[切换到线程2]
+         
+    </div>
+    <h3>GIL 影响</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>场景</th>
+                <th>影响</th>
+                <th>解决方案</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>CPU 密集型</td>
+                <td>多线程跑不快，比单线程慢</td>
+                <td>用多进程 multiprocessing</td>
+            </tr>
+            <tr>
+                <td>IO 密集型</td>
+                <td>等待 IO 时释放 GIL，多线程还行</td>
+                <td>多线程/asyncio 都可以</td>
+            </tr>
+            <tr>
+                <td>为什么有 GIL</td>
+                <td>CPython 内存管理不是线程安全</td>
+                <td>历史原因，Java/Go 没有 GIL</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>核心原理2：垃圾回收原理</h2>
+    <p>Python 用引用计数为主，标记清除和分代回收为辅。引用计数到 0 就回收，但循环引用会漏。</p>
+    <div class="mermaid">
+flowchart TD
+    A[垃圾回收] --> B[引用计数]
+    A --> C[标记清除]
+    A --> D[分代回收]
+    B --> B1[引用数=0 立即回收]
+    C --> C1[解决循环引用]
+    D --> D1[分0/1/2代 越老越少扫描]
+         
+    </div>
+    <h3>Python 三种 GC 机制</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>回收机制</th>
+                <th>原理</th>
+                <th>触发时机</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>引用计数</td>
+                <td>每个对象记引用数，为0就回收</td>
+                <td>实时，随时</td>
+            </tr>
+            <tr>
+                <td>标记清除</td>
+                <td>从根对象遍历，不可达的回收</td>
+                <td>解决循环引用</td>
+            </tr>
+            <tr>
+                <td>分代回收</td>
+                <td>对象分三代，越老扫描越少</td>
+                <td>定期触发，提升性能</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>核心原理3：协程 asyncio 原理</h2>
+    <p>协程是用户态的轻量级线程，一个线程里跑成千上万个协程，切换不进内核，比线程轻得多。</p>
+    <div class="mermaid">
+flowchart LR
+    A[事件循环] --> B[协程1]
+    B --> C[await 等待IO]
+    C --> D[让出CPU 切换到协程2]
+    D --> E[协程2 await]
+    E --> F[IO好了 切回协程1]
+         
+    </div>
+    <h3>三种并发模型对比</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>并发模型</th>
+                <th>切换开销</th>
+                <th>适用场景</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>多进程</td>
+                <td>大，复制整个进程</td>
+                <td>CPU 密集型</td>
+            </tr>
+            <tr>
+                <td>多线程</td>
+                <td>中，内核态切换</td>
+                <td>IO 密集型</td>
+            </tr>
+            <tr>
+                <td>协程</td>
+                <td>极小，用户态切换</td>
+                <td>高并发 IO 型</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>CPU 密集型任务别用多线程，用多进程绕开 GIL</li>
+            <li>大循环里别频繁创建销毁对象，会触发频繁 GC，影响性能</li>
+            <li>协程里不要写阻塞代码，会卡住整个事件循环</li>
+            <li>循环引用虽然会回收，但大对象循环引用也占内存，注意手动 break</li>
+        </ul>
+    </div>
+</article>
             </main>
         </div>
     </div>
