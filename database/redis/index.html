@@ -91,280 +91,652 @@
         </div>
     </header>
 
-    <p>很多人用 Redis 只会 SET/GET，但不知道它为什么比 MySQL 快 100 倍，也不知道数据结构底层怎么实现的。这篇从原理讲透 Redis。</p>
+    <p>「Redis 快是因为在内存里」——这句话只答对了三分之一，而且解释不了任何线上问题。真正要搞清楚的是：单线程为什么不是瓶颈、什么操作会把它卡死、内存满了先淘汰谁、fork 一次要停多久、主从切换会不会丢数据。这篇按「线程模型 → 数据结构 → 内存管理 → 持久化 → 复制与集群 → 缓存正确性」的顺序拆开，每节都给出可以直接敲的排查命令。</p>
 
     <div class="mermaid">
-flowchart TD
-    A[Redis 为什么快] --> B[纯内存操作]
-    A --> C[单线程模型]
-    A --> D[IO 多路复用]
-    A --> E[高效数据结构]
-    C --> C1[无锁无上下文切换]
-    D --> D1[epoll/kqueue]
-    E --> E1[SDS/跳表/压缩列表]
-    </div>
-
-    <h2>核心原理一：单线程为什么还这么快？</h2>
-    <p>很多人以为单线程性能差，但 Redis 单线程却能扛 10万 QPS，原因有三个：</p>
-
-    <div class="mermaid">
-flowchart LR
-    A[网络请求] --> B[IO多路复用 epoll]
-    B --> C[事件分发]
-    C --> D[命令执行 单线程]
-    D --> E[返回结果]
-    style D fill:#ff6b6b,color:#fff
+flowchart TB
+    subgraph NET["网络层"]
+        EP["epoll / kqueue<br/>IO 多路复用"]
+        IOT["io-threads 6.0+<br/>只并行读写 socket 和协议解析"]
+    end
+    subgraph MAIN["主线程 单线程"]
+        EL["事件循环 aeMain"]
+        CMD["命令执行<br/>天然原子 无需加锁"]
+    end
+    subgraph MEM["内存层"]
+        DICT["全局 dict<br/>渐进式 rehash"]
+        EXP["expires 字典<br/>惰性 + 定期删除"]
+        EVI["maxmemory 淘汰<br/>近似 LRU / LFU"]
+    end
+    subgraph BIO["后台线程 bio"]
+        LZF["lazyfree<br/>UNLINK 异步释放大对象"]
+        FS["AOF fsync"]
+        CLOSE["关闭文件描述符"]
+    end
+    subgraph PERSIST["持久化 / 复制"]
+        RDB["RDB<br/>fork 子进程 + COW"]
+        AOF["AOF<br/>写命令追加"]
+        REPL["主从复制<br/>PSYNC + repl-backlog"]
+    end
+    EP --> IOT --> EL --> CMD
+    CMD --> DICT
+    CMD --> EXP --> EVI
+    CMD --> AOF
+    CMD -->|命令传播| REPL
+    CMD -.->|大对象释放交给后台| LZF
+    AOF -.-> FS
+    DICT -->|bgsave fork| RDB
     </div>
 
     <table>
         <thead>
             <tr>
-                <th>原因</th>
-                <th>解释</th>
-                <th>对比 MySQL</th>
+                <th>层</th>
+                <th>是否单线程</th>
+                <th>典型故障</th>
+                <th>排查入口</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>纯内存</td>
-                <td>所有数据都在内存，操作不涉及磁盘</td>
-                <td>MySQL 要读磁盘页</td>
+                <td>网络层</td>
+                <td>6.0 起可多线程</td>
+                <td>连接数打满、带宽被大 value 吃满</td>
+                <td><code>INFO clients</code>、<code>INFO stats</code> 的 <code>instantaneous_output_kbps</code></td>
             </tr>
             <tr>
+                <td>命令执行</td>
+                <td><strong>永远单线程</strong></td>
+                <td>一条 O(n) 命令把所有请求卡住</td>
+                <td><code>SLOWLOG GET 10</code></td>
+            </tr>
+            <tr>
+                <td>内存管理</td>
                 <td>单线程</td>
-                <td>没有锁竞争，没有上下文切换开销</td>
-                <td>MySQL 多线程要加锁</td>
+                <td>OOM、被动淘汰热数据、rehash 抖动</td>
+                <td><code>INFO memory</code>、<code>evicted_keys</code></td>
             </tr>
             <tr>
-                <td>IO多路复用</td>
-                <td>一个线程处理上万连接，epoll 事件驱动</td>
-                <td>MySQL 每连接一个线程</td>
+                <td>持久化</td>
+                <td>fork 子进程</td>
+                <td>fork 卡顿、COW 导致内存翻倍</td>
+                <td><code>latest_fork_usec</code>、<code>rdb_last_bgsave_status</code></td>
             </tr>
             <tr>
-                <td>高效数据结构</td>
-                <td>SDS、跳表、压缩列表，针对场景优化</td>
-                <td>B+ 树，通用型</td>
+                <td>复制</td>
+                <td>主线程传播</td>
+                <td>反复全量同步、主从延迟、脑裂丢写</td>
+                <td><code>INFO replication</code> 的 <code>master_repl_offset</code> 差值</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>核心原理一：单线程模型与事件循环</h2>
+    <p>Redis 的单线程不是「只有一个线程」，而是<strong>命令执行阶段只有一个线程</strong>。这个设计的收益是：所有命令天然原子、没有锁、没有上下文切换、数据结构实现可以极度激进（不用考虑并发安全）。</p>
+
+    <p>一次请求在事件循环里的完整路径：</p>
+
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as 客户端
+    participant K as 内核 epoll
+    participant IO as io-threads
+    participant M as 主线程
+    participant D as 内存数据
+    C->>K: 发送 GET user:1
+    K-->>M: epoll_wait 返回可读事件
+    M->>IO: 分发读任务（6.0+）
+    IO->>IO: read socket + 解析 RESP 协议
+    Note over IO: 这一步可以并行<br/>因为只是解析 不碰数据
+    IO-->>M: 解析完成，等待主线程
+    M->>D: 执行命令（单线程串行）
+    Note over M,D: 关键：这里绝不并行<br/>所以命令天然原子
+    D-->>M: 返回值
+    M->>IO: 分发写任务
+    IO->>C: write socket
+    Note over M: beforeSleep：处理 AOF fsync、<br/>过期键、客户端输出缓冲
+    M->>K: 再次 epoll_wait
+</div>
+
+    <p>正因为执行阶段串行，<strong>任何一条慢命令都会卡住整个实例</strong>。这才是 Redis 最大的风险点，也是所有「Redis 突然全部超时」事故的共同根因：</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>危险操作</th>
+                <th>复杂度</th>
+                <th>后果</th>
+                <th>正确做法</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>KEYS *</code></td>
+                <td>O(n)</td>
+                <td>百万 key 扫一遍，阻塞数秒</td>
+                <td><code>SCAN 0 MATCH pat COUNT 100</code> 游标分批</td>
+            </tr>
+            <tr>
+                <td><code>HGETALL</code> / <code>SMEMBERS</code> / <code>ZRANGE k 0 -1</code></td>
+                <td>O(n)</td>
+                <td>大集合一次性序列化，阻塞 + 打满带宽</td>
+                <td><code>HSCAN</code> / <code>SSCAN</code>，或按分页取</td>
+            </tr>
+            <tr>
+                <td><code>DEL</code> 一个几百 MB 的大 key</td>
+                <td>O(n)</td>
+                <td>释放内存也在主线程做，阻塞</td>
+                <td><code>UNLINK</code>，交给 lazyfree 后台线程</td>
+            </tr>
+            <tr>
+                <td><code>FLUSHALL</code> / <code>FLUSHDB</code></td>
+                <td>O(n)</td>
+                <td>同步清空，实例假死</td>
+                <td>加 <code>ASYNC</code> 参数</td>
+            </tr>
+            <tr>
+                <td>复杂 Lua 脚本</td>
+                <td>看脚本</td>
+                <td>脚本执行期间整实例不可用，且无法被打断</td>
+                <td>脚本只做短逻辑，绝不写循环遍历大集合</td>
+            </tr>
+            <tr>
+                <td><code>MONITOR</code></td>
+                <td>O(n) 持续</td>
+                <td>每条命令都要转发，QPS 高时吞掉大量 CPU</td>
+                <td>只在低峰短暂使用，优先用 <code>SLOWLOG</code></td>
             </tr>
         </tbody>
     </table>
 
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
-        <div class="callout-title">小知识</div>
-        <p>Redis 6.0 之后网络 IO 是多线程的，但命令执行还是单线程，所以还是不用加锁。</p>
+        <div class="callout-title">io-threads 到底提升了什么</div>
+        <p>6.0 的多线程<strong>只并行 socket 读写和协议解析</strong>，命令执行仍然串行。所以它的收益场景是「value 较大、网络 IO 占比高」——此时瓶颈本来就在内核拷贝和协议解析上。如果瓶颈是 O(n) 慢命令，把 <code>io-threads</code> 从 1 调到 8 一点用都没有。</p>
+        <p>经验值：<code>io-threads</code> 设为 CPU 核数的一半左右，通常 4 足够；超过 8 基本没有额外收益。</p>
     </div>
 
-    <h2>核心原理二：五种数据结构底层怎么实现的？</h2>
-    <p>很多人知道 Redis 有五种数据结构，但不知道每种底层用了什么数据结构，也不知道什么场景用哪种。</p>
+    <h2>核心原理二：底层编码与转换阈值</h2>
+    <p>五种数据类型只是<strong>对外的抽象</strong>，每种在内部有两套以上的编码实现：元素少的时候用「紧凑数组」省内存，超过阈值才换成「散列/跳表」保性能。知道阈值在哪，就能算出内存并预判性能拐点。</p>
 
     <div class="mermaid">
-flowchart TD
-    A[五种数据结构] --> B[String 字符串]
-    A --> C[List 列表]
-    A --> D[Hash 哈希]
-    A --> E[Set 集合]
-    A --> F[ZSet 有序集合]
-    B --> B1[SDS 动态字符串]
-    C --> C1[压缩列表/双向链表]
-    D --> D1[压缩列表/哈希表]
-    E --> E1[整数集合/哈希表]
-    F --> F1[压缩列表/跳表+哈希表]
+flowchart LR
+    S["String"] --> SDS["SDS 动态字符串<br/>int / embstr / raw"]
+    L["List"] --> QL["quicklist<br/>listpack 组成的双向链表"]
+    H["Hash"] --> HL["listpack<br/>元素少时线性存储"]
+    H --> HT["hashtable<br/>超阈值后转换"]
+    SE["Set"] --> IS["intset<br/>全整数且数量小"]
+    SE --> SL["listpack<br/>7.2+ 小的非整数集合"]
+    SE --> SH["hashtable"]
+    Z["ZSet"] --> ZL["listpack"]
+    Z --> ZS["skiplist + dict<br/>跳表管范围 dict 管 O(1) 查分"]
+    HL -->|超 128 个或单值超 64 字节| HT
+    IS -->|超 512 个或出现非整数| SH
+    ZL -->|超 128 个或单值超 64 字节| ZS
     </div>
 
     <table>
         <thead>
             <tr>
-                <th>数据结构</th>
-                <th>底层实现</th>
-                <th>时间复杂度</th>
-                <th>典型场景</th>
+                <th>类型</th>
+                <th>小数据编码</th>
+                <th>转换阈值参数</th>
+                <th>大数据编码</th>
+                <th>转换后的代价</th>
             </tr>
         </thead>
         <tbody>
             <tr>
                 <td>String</td>
-                <td>SDS 动态字符串</td>
-                <td>O(1)</td>
-                <td>缓存、计数器、分布式锁</td>
-            </tr>
-            <tr>
-                <td>List</td>
-                <td>压缩列表（小）/ 双向链表（大）</td>
-                <td>O(1) 头尾，O(n) 中间</td>
-                <td>消息队列、最新列表</td>
+                <td><code>int</code>（长整数）/ <code>embstr</code>（≤44 字节）</td>
+                <td>固定 44 字节</td>
+                <td><code>raw</code></td>
+                <td>embstr 是一次分配，raw 要两次；append 会触发转换且不回退</td>
             </tr>
             <tr>
                 <td>Hash</td>
-                <td>压缩列表（小）/ 哈希表（大）</td>
-                <td>O(1)</td>
-                <td>存对象、用户信息</td>
+                <td><code>listpack</code></td>
+                <td><code>hash-max-listpack-entries</code> 128<br/><code>hash-max-listpack-value</code> 64</td>
+                <td><code>hashtable</code></td>
+                <td>内存涨数倍（每个 entry 都有 dictEntry 开销）</td>
+            </tr>
+            <tr>
+                <td>List</td>
+                <td colspan="2"><code>quicklist</code>：本身就是 listpack 链表，<code>list-max-listpack-size</code> 控制单节点大小</td>
+                <td>—</td>
+                <td>无硬转换，但节点过大时头尾操作也会变慢</td>
             </tr>
             <tr>
                 <td>Set</td>
-                <td>整数集合（全数字）/ 哈希表</td>
-                <td>O(1)</td>
-                <td>标签、去重、共同好友</td>
+                <td><code>intset</code> / <code>listpack</code></td>
+                <td><code>set-max-intset-entries</code> 512<br/><code>set-max-listpack-entries</code> 128</td>
+                <td><code>hashtable</code></td>
+                <td>混入一个非整数元素就整体转 hashtable，内存跳变</td>
             </tr>
             <tr>
                 <td>ZSet</td>
-                <td>压缩列表（小）/ 跳表+哈希表</td>
-                <td>O(log n)</td>
-                <td>排行榜、延迟队列</td>
+                <td><code>listpack</code></td>
+                <td><code>zset-max-listpack-entries</code> 128<br/><code>zset-max-listpack-value</code> 64</td>
+                <td><code>skiplist</code> + <code>dict</code></td>
+                <td>同时维护两份结构，内存约为 listpack 的数倍</td>
             </tr>
         </tbody>
     </table>
 
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">为什么 ZSet 用跳表不用红黑树？</div>
-        <p>跳表实现简单，范围查询更友好，并发更好维护，平均效率和红黑树差不多。</p>
+    <pre><code class="language-bash"># 编码是可以直接观察的，别猜
+127.0.0.1:6379&gt; RPUSH nums 1 2 3
+127.0.0.1:6379&gt; OBJECT ENCODING nums
+"listpack"
+
+127.0.0.1:6379&gt; HSET h f1 v1
+127.0.0.1:6379&gt; OBJECT ENCODING h
+"listpack"
+# 塞进第 129 个字段
+127.0.0.1:6379&gt; OBJECT ENCODING h
+"hashtable"
+# 再删回 1 个字段，编码不会退回去 —— 转换是单向的
+127.0.0.1:6379&gt; OBJECT ENCODING h
+"hashtable"
+
+# 看单个 key 到底占多少内存
+127.0.0.1:6379&gt; MEMORY USAGE h</code></pre>
+
+    <div class="callout callout-tip">
+        <div class="callout-icon">✅</div>
+        <div class="callout-title">拿阈值换内存：把大 Hash 拆成小 Hash</div>
+        <p>存 100 万个用户对象，如果用 100 万个独立 key，每个 key 自带约 100 字节的元数据开销（dictEntry + robj + expires）。改成「按 id 取模分 1 万个 Hash，每个 Hash 放 100 个字段」，每个 Hash 都在 listpack 编码内，内存可以省到原来的几分之一。</p>
+        <p>这是 Redis 内存优化里性价比最高的一招，代价是<strong>失去了单个字段的过期能力</strong>（Hash 字段级 TTL 要 7.4+ 的 <code>HEXPIRE</code>）。</p>
     </div>
 
-    <h2>核心原理三：缓存三大问题原理</h2>
-    <p>用 Redis 最容易踩的三个坑：穿透、击穿、雪崩，每个都是不同原理。</p>
+    <div class="echart-container" id="redis-types-radar"></div>
+
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">ZSet 为什么是「跳表 + 字典」双结构</div>
+        <p>两个需求方向不同：<code>ZSCORE key member</code> 要按 member 查分数，这是哈希语义，O(1)；<code>ZRANGEBYSCORE</code> 要按分数范围扫，这是有序语义，跳表 O(log n) 定位后顺序遍历。一份结构满足不了两边，所以两份都留，member 和 score 的存储是共享的，只是索引方式不同。</p>
+        <p>至于为什么用跳表而不是红黑树：跳表的范围查询天然是「定位 + 沿最底层链表走」，不需要中序遍历；实现和调试也简单得多——这两点在工程上比理论常数更重要。</p>
+    </div>
+
+    <h2>核心原理三：过期删除与内存淘汰</h2>
+    <p>这是两套完全不同的机制，经常被混为一谈：<strong>过期删除</strong>处理「设了 TTL 且已到期」的 key，<strong>内存淘汰</strong>处理「内存到了 maxmemory」的紧急情况。前者是日常清理，后者是保命手段。</p>
 
     <div class="mermaid">
-flowchart LR
-    A[缓存三大问题] --> B[穿透]
-    A --> C[击穿]
-    A --> D[雪崩]
-    B --> B1[查不存在的数据]
-    C --> C1[热点key过期]
-    D --> D1[大量key同时过期]
-    B --> B2[布隆过滤器]
-    C --> C2[互斥锁/永不过期]
-    D --> D2[随机过期时间]
+flowchart TB
+    subgraph EXPIRE["过期删除 处理已到期的 key"]
+        LAZY["惰性删除<br/>访问 key 时才检查<br/>省 CPU 但可能长期占内存"]
+        ACTIVE["定期删除 activeExpireCycle<br/>每秒 hz=10 次<br/>每次随机抽 20 个检查"]
+        ACTIVE -->|过期比例 > 25%<br/>立刻再来一轮| ACTIVE
+        ACTIVE -->|CPU 占用上限 25%| STOP["本轮结束"]
+    end
+    subgraph EVICT["内存淘汰 内存到达 maxmemory"]
+        CHECK{"used_memory ≥ maxmemory ?"}
+        CHECK -->|否| OK["正常执行命令"]
+        CHECK -->|是| POLICY["按 maxmemory-policy 选victim"]
+        POLICY --> LRU["近似 LRU<br/>采样 maxmemory-samples 个<br/>淘汰池保留最优 16 个"]
+        POLICY --> LFU["LFU<br/>8bit 对数计数器 + 时间衰减"]
+        POLICY --> NOEV["noeviction<br/>写命令直接报错 OOM"]
+    end
+    </div>
+
+    <p>定期删除是<strong>抽样</strong>而非全扫，所以「已过期但还没被删」的 key 一定存在，<code>INFO</code> 里的 key 数量天然偏大。要精确判断内存构成，看 <code>MEMORY STATS</code> 而不是 <code>DBSIZE</code>。</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>maxmemory-policy</th>
+                <th>候选范围</th>
+                <th>淘汰依据</th>
+                <th>适用场景</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>noeviction</code>（默认）</td>
+                <td>不淘汰</td>
+                <td>内存满后写命令返回 OOM 错误，读仍可用</td>
+                <td>当数据库用（不能丢数据），但必须有内存告警</td>
+            </tr>
+            <tr>
+                <td><code>allkeys-lru</code></td>
+                <td>所有 key</td>
+                <td>最久未访问</td>
+                <td><strong>纯缓存场景的首选</strong></td>
+            </tr>
+            <tr>
+                <td><code>allkeys-lfu</code></td>
+                <td>所有 key</td>
+                <td>访问频率最低</td>
+                <td>有稳定热点、存在偶发扫描时比 LRU 更准</td>
+            </tr>
+            <tr>
+                <td><code>volatile-lru</code></td>
+                <td>仅设了 TTL 的 key</td>
+                <td>最久未访问</td>
+                <td>缓存和持久数据混在同一实例（不推荐这么混）</td>
+            </tr>
+            <tr>
+                <td><code>volatile-ttl</code></td>
+                <td>仅设了 TTL 的 key</td>
+                <td>剩余 TTL 最短</td>
+                <td>希望「快过期的先走」</td>
+            </tr>
+            <tr>
+                <td><code>allkeys-random</code> / <code>volatile-random</code></td>
+                <td>对应范围</td>
+                <td>随机</td>
+                <td>访问分布均匀无热点时，比 LRU 省 CPU</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">volatile-* 策略的致命陷阱</div>
+        <p>如果选了 <code>volatile-lru</code> 但<strong>所有 key 都没设 TTL</strong>，那候选集是空的——Redis 找不到可淘汰对象，行为等同 <code>noeviction</code>，写入直接报 OOM。这个组合在线上出现过很多次，而且从监控上看「内存满了但 evicted_keys 一直是 0」很容易被误判为淘汰失效。</p>
+        <p>纯缓存实例请直接用 <code>allkeys-lru</code>，不要依赖「每个 key 都记得设 TTL」这种人工纪律。</p>
+    </div>
+
+    <p>Redis 的 LRU 是<strong>近似</strong>的：真正的 LRU 需要一条全局链表，每次访问都要移动节点，内存和 CPU 都不划算。Redis 的做法是每个对象头里存 24 bit 的时钟，淘汰时随机采样 <code>maxmemory-samples</code>（默认 5）个 key，挑最旧的；再用一个 16 大小的淘汰池跨轮次保留候选，让结果逼近真实 LRU。</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>对比</th>
+                <th>近似 LRU</th>
+                <th>LFU</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>判定依据</td>
+                <td>最后一次访问时间</td>
+                <td>访问频率（8 bit 对数计数器）</td>
+            </tr>
+            <tr>
+                <td>抗扫描污染</td>
+                <td>差：一次批量遍历会把冷数据全刷成「最近访问」</td>
+                <td>好：只访问一次的 key 计数器很低，照样先被淘汰</td>
+            </tr>
+            <tr>
+                <td>关键参数</td>
+                <td><code>maxmemory-samples</code>（调大更准也更耗 CPU）</td>
+                <td><code>lfu-log-factor</code> 控制计数增长速度，<code>lfu-decay-time</code> 控制多久衰减一次</td>
+            </tr>
+            <tr>
+                <td>冷启动</td>
+                <td>新 key 天然最新，不会被立刻淘汰</td>
+                <td>新 key 初始计数为 5，避免刚写入就被淘汰</td>
+            </tr>
+            <tr>
+                <td>怎么选</td>
+                <td>访问模式平稳、无大批量扫描</td>
+                <td>有明确热点、又有定时任务全量扫库</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">从库不会自己删过期 key</div>
+        <p>为了保证主从一致，<strong>只有主节点执行过期删除</strong>，然后把 <code>DEL</code> 作为命令传播给从库。所以从库上一个已过期的 key 在物理上仍然存在，只是读取时会逻辑判断 TTL 并返回 nil。</p>
+        <p>这意味着：主从延迟大的时候，从库的 <code>DBSIZE</code> 会明显大于主库；用 <code>SCAN</code> 在从库上做数据统计会统计到过期 key。要精确数据就去主库查。</p>
+    </div>
+
+    <h2>核心原理四：持久化的真实丢数据窗口</h2>
+    <p>RDB 和 AOF 的选择本质上是在回答一个问题：<strong>你能接受丢多少秒的数据</strong>。下面这张图把两条路径的关键阻塞点标出来了。</p>
+
+    <div class="mermaid">
+flowchart TB
+    subgraph R["RDB 快照"]
+        R1["触发：save 规则 / BGSAVE / 主从全量同步"]
+        R2["fork 子进程<br/>阻塞点！复制页表<br/>内存越大越慢"]
+        R3["子进程遍历内存写 .rdb<br/>父进程继续服务"]
+        R4["父进程此时写数据<br/>触发 COW 复制物理页<br/>最坏内存翻倍"]
+        R1 --> R2 --> R3
+        R2 --> R4
+    end
+    subgraph A["AOF 追加"]
+        A1["命令执行成功后<br/>先写 aof_buf 内存缓冲"]
+        A2{"appendfsync 策略"}
+        A2 -->|always| A3["每条都 fsync<br/>基本不丢 但最慢"]
+        A2 -->|everysec 默认| A4["后台线程每秒 fsync<br/>最多丢 1 秒"]
+        A2 -->|no| A5["交给操作系统<br/>可能丢 30 秒"]
+        A1 --> A2
+        A6["AOF 文件膨胀 → 重写<br/>7.0 起 base + incr 多文件"]
+        A4 --> A6
+    end
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>持久化方案</th>
+                <th>丢数据窗口</th>
+                <th>恢复速度</th>
+                <th>运行时开销</th>
+                <th>适用</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>关闭持久化</td>
+                <td>全部</td>
+                <td>—</td>
+                <td>无</td>
+                <td>纯缓存且可从数据库重建（必须接受冷启动打库）</td>
+            </tr>
+            <tr>
+                <td>仅 RDB（<code>save 900 1</code>）</td>
+                <td>最多 15 分钟</td>
+                <td>最快（直接加载二进制）</td>
+                <td>fork 时抖动</td>
+                <td>可容忍分钟级丢失的缓存、定期冷备</td>
+            </tr>
+            <tr>
+                <td>仅 AOF（<code>everysec</code>）</td>
+                <td>约 1 秒</td>
+                <td>慢（要重放命令）</td>
+                <td>每秒 fsync</td>
+                <td>对数据比较在意的通用场景</td>
+            </tr>
+            <tr>
+                <td>AOF（<code>always</code>）</td>
+                <td>接近 0</td>
+                <td>慢</td>
+                <td>最大，QPS 明显下降</td>
+                <td>计数、余额这类不能丢的场景（更该考虑上数据库）</td>
+            </tr>
+            <tr>
+                <td><strong>RDB + AOF 混合</strong></td>
+                <td>约 1 秒</td>
+                <td>快（RDB 头 + 增量命令尾）</td>
+                <td>中等</td>
+                <td><strong>生产默认选它</strong>（<code>aof-use-rdb-preamble yes</code>）</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="echart-container" id="redis-persistence-compare"></div>
+
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">fork 是 Redis 最容易被忽视的停顿源</div>
+        <p><code>fork()</code> 本身不复制数据，但要复制<strong>页表</strong>，耗时与实例内存量成正比。经验量级：每 1GB 内存约 10~20ms，一个 20GB 的实例 fork 一次就可能停顿 200~400ms——这期间所有请求都在排队。</p>
+        <pre><code class="language-bash"># 上次 fork 耗时（微秒），持续 &gt; 100000 就要处理了
+redis-cli INFO stats | grep latest_fork_usec
+
+# 关闭透明大页，否则 COW 的复制单位从 4KB 变成 2MB，延迟和内存双双放大
+echo never &gt; /sys/kernel/mm/transparent_hugepage/enabled</code></pre>
+        <p>应对思路：单实例内存控制在 10GB 以内，用分片而不是堆大单机；把 bgsave 放到低峰；从库承担持久化任务，主库只管服务。</p>
+    </div>
+
+    <h2>核心原理五：复制、故障切换与脑裂</h2>
+    <p>复制的核心是一对标识：<code>replication id</code> + <code>offset</code>。从库带着这两个值发起 <code>PSYNC</code>，主库据此判断能不能只补增量——这个判断决定了是「几十毫秒的增量同步」还是「几十秒的全量 RDB 传输」。</p>
+
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant S as 从库
+    participant M as 主库
+    participant B as repl-backlog 环形缓冲
+    S->>M: PSYNC ? -1（首次，什么都没有）
+    M-->>S: +FULLRESYNC replid offset
+    M->>M: fork 子进程 bgsave 生成 RDB
+    M->>S: 传输 RDB 文件
+    Note over M,B: 传输期间的新写命令<br/>同时写进 backlog 和从库输出缓冲
+    M->>S: 追发这段增量命令
+    S->>S: 加载 RDB + 重放增量
+    Note over S,M: 进入命令传播阶段，持续同步
+    S--xM: 网络闪断
+    S->>M: PSYNC replid offset（带上断点）
+    M->>B: 检查 offset 是否还在 backlog 里
+    B-->>M: 在 → 可以部分重同步
+    M-->>S: +CONTINUE，只补这段差量
+    Note over M,S: 若 offset 已被覆盖 → 退化为全量同步<br/>这就是要调大 repl-backlog-size 的原因
+</div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>参数 / 指标</th>
+                <th>默认值</th>
+                <th>为什么要改</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>repl-backlog-size</code></td>
+                <td>1MB</td>
+                <td>太小了。写入量大时几秒就绕圈覆盖，一次网络抖动就触发全量同步，进而 fork + 传输，雪上加霜。按「峰值写入速率 × 可容忍断连秒数」估算，通常设 64MB~256MB</td>
+            </tr>
+            <tr>
+                <td><code>repl-backlog-ttl</code></td>
+                <td>3600 秒</td>
+                <td>从库断开多久后释放 backlog，一般不用改</td>
+            </tr>
+            <tr>
+                <td><code>repl-diskless-sync</code></td>
+                <td>yes（7.0+）</td>
+                <td>RDB 直接走 socket 不落盘，磁盘慢的机器收益明显</td>
+            </tr>
+            <tr>
+                <td><code>min-replicas-to-write</code></td>
+                <td>0</td>
+                <td><strong>防脑裂的关键</strong>：至少 N 个从库健康时主库才接受写入</td>
+            </tr>
+            <tr>
+                <td><code>min-replicas-max-lag</code></td>
+                <td>10 秒</td>
+                <td>与上一项配合，判定从库「健康」的延迟上限</td>
+            </tr>
+            <tr>
+                <td><code>master_repl_offset</code> 差值</td>
+                <td>监控项</td>
+                <td>主从 offset 之差就是延迟字节数，是读写分离下「读到旧数据」的直接度量</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <p>Sentinel 的故障切换分四步，每步都有坑：</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>阶段</th>
+                <th>机制</th>
+                <th>坑</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>① 主观下线 SDOWN</td>
+                <td>单个 Sentinel ping 超过 <code>down-after-milliseconds</code> 无响应</td>
+                <td>设太小会被 GC / fork 停顿误判，引发无谓切换</td>
+            </tr>
+            <tr>
+                <td>② 客观下线 ODOWN</td>
+                <td>达到 <code>quorum</code> 个 Sentinel 都认为挂了</td>
+                <td>Sentinel 必须奇数个且 ≥3，否则无法形成多数</td>
+            </tr>
+            <tr>
+                <td>③ 选举 Leader</td>
+                <td>Sentinel 之间跑类 Raft 选举，由 Leader 执行切换</td>
+                <td>Sentinel 部署在同一机房/同一宿主机，等于没有冗余</td>
+            </tr>
+            <tr>
+                <td>④ 选新主库</td>
+                <td>依次比较：<code>slave-priority</code> → 复制 offset 最大 → runid 最小</td>
+                <td>offset 最大的从库也可能落后主库，<strong>切换必然丢这部分写入</strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">脑裂：两个主库同时接受写入</div>
+        <p>主库 M 因为网络分区与 Sentinel 失联，但<strong>客户端仍能连到它</strong>。Sentinel 把从库 S 提为新主，此时集群里有两个主库在收写入。网络恢复后，老主 M 被降级为从库，它会清空自己的数据去全量同步新主——<strong>分区期间写入 M 的数据全部消失</strong>。</p>
+        <pre><code class="language-bash"># 至少 1 个从库、且延迟不超过 10 秒，主库才接受写入
+# 否则主动拒绝写，用可用性换一致性
+min-replicas-to-write 1
+min-replicas-max-lag 10</code></pre>
+        <p>注意这只是<strong>缩小</strong>窗口，不是消灭。Redis 的异步复制在理论上无法做到「不丢已确认的写」——需要强一致就别把 Redis 当唯一数据源。</p>
+    </div>
+
+    <h2>核心原理六：Cluster 分片与重定向</h2>
+    <p>Cluster 把 key 空间切成 <strong>16384 个 slot</strong>，每个节点负责一段。路由公式是 <code>CRC16(key) mod 16384</code>——不是一致性哈希，是固定槽位映射，所以扩缩容时只需搬迁 slot，不用重算全局分布。</p>
+
+    <div class="mermaid">
+flowchart TB
+    K["key: user:1001"] --> C["CRC16(key) mod 16384 = 5678"]
+    C --> R{"slot 5678 属于哪个节点"}
+    R -->|本节点持有| OK["直接返回结果"]
+    R -->|已迁到别的节点| MV["返回 MOVED 5678 ip:port<br/>客户端更新路由表并重试"]
+    R -->|正在迁移中| ASK["返回 ASK ip:port<br/>客户端本次重定向<br/>但不更新路由表"]
+    MV --> CACHE["智能客户端本地缓存 slot 映射<br/>正常请求零跳转"]
+    ASK --> ONCE["需先发 ASKING 再发命令"]
     </div>
 
     <table>
         <thead>
             <tr>
                 <th>问题</th>
-                <th>原理</th>
-                <th>现象</th>
-                <th>解决方案</th>
+                <th>答案</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>缓存穿透</td>
-                <td>查一个根本不存在的数据，缓存没有，每次都打到数据库</td>
-                <td>恶意攻击，数据库被打满</td>
-                <td>布隆过滤器 / 缓存空值</td>
+                <td>为什么是 16384 而不是 65536？</td>
+                <td>节点间心跳包要携带 slot 归属 bitmap，16384 bit = 2KB，65536 则是 8KB。Cluster 的心跳很频繁，包大小直接决定了网络开销；同时 Redis 官方认为集群规模不该超过 1000 节点，16384 够用</td>
             </tr>
             <tr>
-                <td>缓存击穿</td>
-                <td>一个热点 key 突然过期，瞬间大量请求打到数据库</td>
-                <td>数据库瞬间 QPS 飙高</td>
-                <td>互斥锁 / 热点数据永不过期</td>
+                <td>MOVED 和 ASK 的区别？</td>
+                <td>MOVED 是「永久搬走了」，客户端应更新本地路由表；ASK 是「正在搬，这个 key 暂时在那边」，只重定向本次请求，不能更新路由表——否则迁移未完成时路由会乱</td>
             </tr>
             <tr>
-                <td>缓存雪崩</td>
-                <td>大量 key 同时过期，或者 Redis 挂了</td>
-                <td>数据库整体扛不住</td>
-                <td>过期时间加随机值 / 集群高可用</td>
+                <td>为什么 <code>MGET k1 k2</code> 会报 CROSSSLOT？</td>
+                <td>多 key 命令要求所有 key 在同一 slot，否则无法在单节点原子完成。Redis 不做跨节点事务，直接拒绝</td>
+            </tr>
+            <tr>
+                <td>怎么让多个 key 落到同一 slot？</td>
+                <td>用 hash tag：只对 <code>{}</code> 内的部分做哈希。<code>{user:1001}:profile</code> 和 <code>{user:1001}:orders</code> 必然同 slot</td>
+            </tr>
+            <tr>
+                <td>Lua 脚本在 Cluster 里的限制？</td>
+                <td>脚本访问的所有 key 必须同 slot，且必须通过 <code>KEYS[]</code> 声明；在脚本里硬编码 key 名会导致路由错误</td>
+            </tr>
+            <tr>
+                <td>Cluster 和 Sentinel 怎么选？</td>
+                <td>数据量或写入量超过单机上限才上 Cluster。数据量不大只要高可用，Sentinel 更简单——Cluster 带来的多 key 限制会污染业务代码</td>
             </tr>
         </tbody>
     </table>
 
-    <h2>核心原理四：持久化 RDB vs AOF</h2>
-    <p>Redis 是内存数据库，挂了数据就没了，所以要持久化到磁盘。两种方式各有优劣。</p>
-
-    <div class="mermaid">
-flowchart TD
-    A[Redis 持久化] --> B[RDB 快照]
-    A --> C[AOF 日志]
-    B --> B1[定时全量快照]
-    B --> B2[二进制文件 体积小]
-    B --> B3[恢复快 但可能丢数据]
-    C --> C1[记录每个写命令]
-    C --> C2[文本文件 体积大]
-    C --> C3[数据更安全 恢复慢]
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">hash tag 用过头会造成数据倾斜</div>
+        <p>hash tag 很好用，但如果给一大批 key 用了同一个 tag（比如所有商品都用 <code>{product}</code>），它们会全挤进同一个 slot、同一个节点——分片直接失效，那个节点成为热点和内存瓶颈。tag 的粒度应该是「业务上必须一起操作的最小单元」，通常是单个用户、单个订单。</p>
     </div>
-
-    <table>
-        <thead>
-            <tr>
-                <th>对比项</th>
-                <th>RDB 快照</th>
-                <th>AOF 日志</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>原理</td>
-                <td>定时把内存数据快照写到磁盘</td>
-                <td>每个写命令追加到日志文件</td>
-            </tr>
-            <tr>
-                <td>数据安全性</td>
-                <td>差，可能丢最后一次快照后的数据</td>
-                <td>好，最多丢 1 秒数据</td>
-            </tr>
-            <tr>
-                <td>文件体积</td>
-                <td>小，二进制压缩</td>
-                <td>大，文本命令</td>
-            </tr>
-            <tr>
-                <td>恢复速度</td>
-                <td>快</td>
-                <td>慢，要重放命令</td>
-            </tr>
-            <tr>
-                <td>适用场景</td>
-                <td>备份、容灾</td>
-                <td>数据安全性要求高</td>
-            </tr>
-        </tbody>
-    </table>
-
-    <div class="callout callout-tip">
-        <div class="callout-icon">✅</div>
-        <div class="callout-title">生产建议</div>
-        <p>生产环境一般 RDB + AOF 同时开，RDB 做冷备，AOF 保证数据安全。</p>
-    </div>
-
-    <h2>核心原理五：主从复制原理</h2>
-    <p>Redis 高可用的基础是主从复制，主写从读，主节点挂了从节点顶上。</p>
-
-    <div class="mermaid">
-flowchart LR
-    A[客户端] --> B{读写分离}
-    B -->|写| C[Master 主节点]
-    B -->|读| D[Slave 从节点1]
-    B -->|读| E[Slave 从节点2]
-    C -->|1. 全量同步 RDB| D
-    C -->|2. 增量同步 replbacklog| D
-    C -->|2. 增量同步 replbacklog| E
-    </div>
-
-    <table>
-        <thead>
-            <tr>
-                <th>阶段</th>
-                <th>做什么</th>
-                <th>原理</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>全量同步</td>
-                <td>从节点第一次连接主节点</td>
-                <td>主节点 bgsave 生成 RDB，发给从节点加载</td>
-            </tr>
-            <tr>
-                <td>增量同步</td>
-                <td>同步过程中的新写命令</td>
-                <td>主节点把新命令写到 replbacklog 缓冲区，发给从节点</td>
-            </tr>
-            <tr>
-                <td>命令传播</td>
-                <td>后续持续同步</td>
-                <td>主节点每执行一个写命令，就发给所有从节点</td>
-            </tr>
-        </tbody>
-    </table>
 
     <h2>新手最容易踩的坑</h2>
     <div class="callout callout-danger">
