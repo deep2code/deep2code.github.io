@@ -81,176 +81,69 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">容器化部署策略</h1>
+                        <h1 class="article-title">CI/CD 部署流水线：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ 容器化,部署策略,CI/CD</span>
+                            <span class="meta-item">🏷️ CI/CD</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2 id="bg">一、从流水线到生产：发布策略决定故障半径</h2>
-<p>前面三篇文章解决的是"怎么自动构建、自动测试"，但代码通过门禁之后怎么上线，是另一个问题。传统的"停旧服务、起新服务"的一次性发布有两个致命伤：发布期间服务中断（停机），以及新版本一旦有 bug 影响全量用户。</p>
-<h2 id="dockerfile">二、容器化基础：多阶段构建与镜像瘦身</h2>
-<p>部署策略再好，地基是镜像。一个 1.2GB 的镜像不仅拉取慢，还放大了安全攻击面。多阶段构建（multi-stage build）是标准做法：<strong>用带完整工具链的镜像编译，再把产物拷到极简运行镜像</strong>，编译器、源码都不进最终镜像：</p>
-<pre><code class="language-dockerfile"># ---------- 阶段 1：构建 ----------
-FROM golang:1.22 AS builder
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-# 静态编译，去掉 CGO，最终可跑在 scratch/alpine
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/server .
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及CI/CD怎么帮你解决。</p>
 
-# ---------- 阶段 2：运行 ----------
-FROM gcr.io/distroless/static-debian12:nonroot
-WORKDIR /app
-COPY --from=builder /app/server .
-# distroless 镜像不含 shell、包管理器，攻击面极小
-USER nonroot:nonroot
-EXPOSE 8080
-ENTRYPOINT ["/app/server"]</code></pre>
-<p>效果：从约 1GB 的 golang 镜像产出约 25MB 的运行镜像。镜像越小，推送、拉取、扩容、回滚都越快。配合 <code>.dockerignore</code> 排除 node_modules、.git、本地日志，构建上下文也能大幅缩小。</p>
-<h2 id="strategies">三、四种主流部署策略原理对比</h2>
-<p>理解策略的关键是看"新旧版本如何共存、流量如何切换、出问题怎么回滚"：</p>
-<ul>
-<li><strong>滚动更新（Rolling Update）</strong>：逐批用新 Pod 替换旧 Pod。K8s Deployment 默认就是这个。无停机，但新旧版本<strong>同时在线一段时间</strong>，对前后端协议兼容性要求高（不能同时存在 v1 和 v2 的 API）。</li>
-<li><strong>蓝绿部署（Blue/Green）</strong>：同时部署两套完全独立的环境（蓝=当前生产，绿=新版本），流量一次性从蓝切到绿。切换快、回滚快（切回蓝即可），但需要双倍资源。</li>
-<li><strong>金丝雀发布（Canary）</strong>：新版本先承接一小部分流量（如 5%），观察指标无异常后逐步放大到 100%。故障影响面小，但周期长，需要完善的流量切分和监控。</li>
-<li><strong>功能开关（Feature Flag）</strong>：不切流量，新版本代码全量上线但新功能默认关闭，通过配置中心按人群开启。发布和解耦——回滚就是关开关，秒级。</li>
-</ul>
+<div class="mermaid">
+flowchart LR
+    A[代码 push] --> B[CI 阶段]
+    B --> C[构建]
+    B --> D[测试]
+    B --> E[CD 阶段]
+    E --> F[部署 dev]
+    E --> G[部署 prod]
+</div>
+
+<h2>1. 手动部署太麻烦</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你改完代码要手动 build、传服务器、重启，经常出错。</p>
+</div>
+
+<p><strong>怎么解决？</strong>CI/CD 自动化，push 完自动部署。</p>
+
+<h2>2. 怎么分阶段部署</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>怎么先部署到测试环境，验证完再上生产？</p>
+</div>
+
+<p><strong>怎么解决？</strong>流水线分阶段：build -> test -> deploy dev -> manual approve -> deploy prod。</p>
+
+<h2>3. 回滚怎么做</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>上线出问题了怎么回滚？</p>
+</div>
+
+<p><strong>怎么解决？</strong>每次部署记录版本，出问题一键回滚到上一个版本。</p>
+
+<h2>流水线阶段</h2>
 
 <table>
-<thead><tr><th>策略</th><th>停机</th><th>资源开销</th><th>回滚速度</th><th>故障影响面</th><th>适合场景</th></tr></thead>
+<thead><tr><th>阶段</th><th>做什么</th></tr></thead>
 <tbody>
-<tr><td>滚动更新</td><td>无</td><td>低</td><td>中（重新部署旧版）</td><td>渐进扩大</td><td>日常迭代、兼容性好的服务</td></tr>
-<tr><td>蓝绿部署</td><td>无</td><td>双倍</td><td>秒级（切回蓝）</td><td>切换即全量</td><td>核心交易链路、资源充足</td></tr>
-<tr><td>金丝雀发布</td><td>无</td><td>略增</td><td>快（调回权重）</td><td>小（5% 起步）</td><td>高频迭代、有监控体系</td></tr>
-<tr><td>功能开关</td><td>无</td><td>无额外</td><td>秒级（关开关）</td><td>可控（按人群）</td><td>新功能试错、灰度运营</td></tr>
-</tbody>
-</table>
+<tr><td>CI</td><td>拉代码、构建、测试</td></tr>
+<tr><td>CD</td><td>部署到对应环境</td></tr>
+</tbody></table>
 
-<div class="callout callout-warning">
-<div class="callout-title">我踩过的坑：蓝绿切换不等于零风险</div>
-<p>有次我做蓝绿部署，绿环境跑了三天测试都没问题，切流量后 5 分钟 P99 延迟从 50ms 飙到 3s。查了半天发现绿环境连的是测试数据库的只读副本，流量切过去后写入全失败。<strong>蓝绿部署前必须验证两套环境连的是同一套数据库和缓存</strong>，我后来加了个冒烟测试 stage，切流量前自动跑一遍关键读写链路。</p>
-</div>
-<div class="mermaid">
-flowchart TB
-    subgraph 蓝绿部署
-        LB1[负载均衡] --> BLUE[蓝环境 v1.0<br/>全量用户]
-        LB1 -.切换.-> GREEN[绿环境 v2.0<br/>准备就绪]
-    end
-    subgraph 金丝雀发布
-        LB2[负载均衡] --> A[v2.0 金丝雀<br/>5% 流量]
-        LB2 --> B[v1.0 稳定版<br/>95% 流量]
-        A --> C{指标观察<br/>错误率/延迟}
-        C -->|正常| D[逐步放大到 100%]
-        C -->|异常| E[切回 v1.0<br/>秒级回滚]
-    end
-    style BLUE fill:#3b82f6,color:#fff
-    style GREEN fill:#10b981,color:#fff
-    style A fill:#f59e0b,color:#fff
-</div>
-<h2 id="example1">四、实战配置 1：Kubernetes 蓝绿部署</h2>
-<p>蓝绿部署在 K8s 里就是"两套 Deployment + 一个可切换的 Service"。Service 通过 <code>selector</code> 指向哪套，流量就去哪套：</p>
-<pre><code class="language-yaml"># 蓝环境（当前生产）
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: app-blue
-spec:
-  replicas: 3
-  selector:
-    matchLabels: { app: myapp, version: blue }
-  template:
-    metadata:
-      labels: { app: myapp, version: blue }
-    spec:
-      containers:
-        - name: app
-          image: registry.example.com/myapp:v1.0
-          ports: [{ containerPort: 8080 }]
----
-# 绿环境（新版本）
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: app-green
-spec:
-  replicas: 3
-  selector:
-    matchLabels: { app: myapp, version: green }
-  template:
-    metadata:
-      labels: { app: myapp, version: green }
-    spec:
-      containers:
-        - name: app
-          image: registry.example.com/myapp:v2.0
-          ports: [{ containerPort: 8080 }]
----
-# Service 当前指向 blue；发布时只需改 selector 指向 green
-apiVersion: v1
-kind: Service
-metadata:
-  name: myapp-svc
-spec:
-  selector:
-    app: myapp
-    version: blue      # ← 切换流量：改成 green 即完成发布
-  ports:
-    - port: 80
-      targetPort: 8080</code></pre>
-<p>发布动作就是 <code>kubectl apply</code> 一个把 selector 改成 green 的 Service，流量秒级切过去；发现问题再切回 blue，回滚不需要重新部署。这比"删旧 Pod 起新 Pod"安全得多，因为两套环境始终同时存在。代价是资源翻倍——所以蓝绿通常用于核心交易链路，普通服务用滚动更新即可。</p>
-<h2 id="example2">五、实战配置 2：金丝雀发布（Nginx 权重 + 就绪检查）</h2>
-<p>没有服务网格时，用 Nginx upstream 权重做金丝雀最简单直接。新版本接 10% 流量，观察无误后逐步调大：</p>
-<pre><code class="language-nginx">upstream backend {
-    # 稳定版 v1：承接 90% 流量
-    server 10.0.0.11:8080 weight=9;
-    server 10.0.0.12:8080 weight=9;
-    # 金丝雀 v2：承接 10% 流量
-    server 10.0.0.21:8080 weight=1;
-    server 10.0.0.22:8080 weight=1;
-
-    # 健康检查：失败节点自动摘除
-    max_fails=3 fail_timeout=10s;
-}
-
-server {
-    listen 80;
-    location / {
-        proxy_pass http://backend;
-        proxy_set_header Host $host;
-        proxy_next_upstream error timeout http_502 http_503;
-    }
-}</code></pre>
-<p>自动化思路：CI/CD 部署完金丝雀实例后，监控系统拉取错误率/P99 延迟指标，连续 10 分钟达标则调用 Nginx API（或重新生成配置 reload）把 v2 权重调到 50%，再观察一轮到 100%。任何一步指标恶化，自动把权重调回 0——这就是"自动化金丝雀"。</p>
-<p>我在公司搭过一套：Prometheus 拉指标，Python 脚本判断达标后调 Nginx 接口改权重，全流程无人值守。如果用 Istio，VirtualService 的 <code>weight</code> 字段声明式完成同样的事，还能按 header/cookie 做"内部用户先走"的精准灰度。</p>
-<h2 id="rollback">六、回滚：比发布更重要的设计</h2>
-<p>再好的策略也挡不住 bug，关键是<strong>出问题多快能回到上一版</strong>。三条原则：</p>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>镜像不可变</strong>：每个版本一个独立 tag（git SHA），不要反复覆盖 latest。回滚 = 重新部署旧 tag，而不是"重新构建一版旧代码"。</li>
-<li><strong>数据库向前兼容</strong>：表结构变更必须先加列、双写、再切读、最后删旧列——任何"新版本先上线、回滚就炸数据库"的设计都是雷。</li>
-<li><strong>开关兜底</strong>：高危改动（支付链路、限流逻辑）配合 feature flag，回滚=关开关，比发版快一个数量级。</li>
+<li><strong>先自动化 CI</strong>先把自动构建测试做了，再做自动部署。</li>
+<li><strong>生产要手动确认</strong>生产环境部署前加个人工确认，不要全自动。</li>
 </ul>
-<p>K8s 里一行命令回滚：<code>kubectl rollout undo deployment/app</code>，前提是 <code>revisionHistoryLimit</code> 保留了历史 ReplicaSet。</p>
-<h2 id="practice">七、最佳实践</h2>
-<ul>
-<li><strong>资源预算前置</strong>：蓝绿要双倍副本，金丝雀要额外灰度组，发布前算好容量，别在大促时才发现升不上去。</li>
-<li><strong>兼容性窗口</strong>：滚动/金丝雀期间新旧版本并存，API 和数据库必须双向兼容至少一个版本的周期。</li>
-<li><strong>可观测性先行</strong>：金丝雀的前提是"能按版本切分监控指标"（按镜像 tag 打 label，Grafana 按版本分组看错误率）。没这个能力别做金丝雀。</li>
-<li><strong>自动化审批+自动回滚</strong>：把"观察 10 分钟指标"做成流水线的一个 stage，指标达标自动推进，恶化自动回滚，别靠人盯屏幕。</li>
-<li><strong>一次只放一个变量</strong>：灰度发布期间不要同时做配置变更、扩缩容、网络调整，否则出问题无法归因。</li>
-</ul>
-<h2 id="faq">八、常见问题 FAQ</h2>
-<h3>Q1：蓝绿和金丝雀到底选哪个？</h3>
-<p>看风险偏好和资源。蓝绿：切换瞬间完成、回滚最快，但切换即全量暴露，适合"发布频率低、对停机零容忍、资源充足"的核心系统。金丝雀：小流量试水、故障影响面小，但周期长、依赖监控完备，适合"高频迭代、用户量大、有完善可观测体系"的互联网业务。实践中常见组合：日常用滚动更新，大版本用金丝雀，核心数据库变更用蓝绿双写过渡。</p>
-<h3>Q2：灰度期间用户会话粘在旧版本怎么办？</h3>
-<p>这是金丝雀的经典坑：用户 A 第一次请求落到 v2（canary），第二次请求落到 v1，会话/状态不一致。解法：① 无状态化——会话放 Redis，任何版本都能读；② 流量粘滞——按用户 ID hash 路由，同一用户始终落到同一版本；③ 用 cookie/ header 标记灰度身份，网关层识别后保持一致。做不到这三点，金丝雀体验就是"一部分用户时不时抽风"。</p>
-<h3>Q3：镜像构建很快但发布要很久，瓶颈在哪？</h3>
-<p>发布耗时通常不在构建，而在：① 镜像太大，节点拉镜像慢——回到多阶段构建和 distroless；② Pod 启动慢（JVM 预热、数据库连接池初始化）——用 startupProbe/readinessProbe 控制接入时机，别让新 Pod 还没就绪就接流量；③ 健康检查不通过反复重启。优先测"从部署指令下达到第一个 Pod ready 的时间"，再针对性优化镜像层缓存和启动脚本。</p>
-<h2 id="summary">九、总结</h2>
-<p>CI/CD到此闭环：从概念选型到三套工具落地，再到生产部署策略。真正的交付能力不是"能自动发版"，而是<strong>"敢自动发版"——镜像可控、流量可切、故障可观测、回滚可秒级</strong>。</p>
-<p>蓝绿、金丝雀不是炫技，是把一次发布的故障半径从 100% 用户压缩到 5% 的工程手段。我以前在创业公司每周五晚上手动发版，全组提心吊胆；把这套流水线跑顺之后，发布变成了和提交代码一样日常的动作——这就是 CI/CD 的终极价值。</p>
+</div>
+
                     </div>
                 </article>
                 <nav class="article-nav">
