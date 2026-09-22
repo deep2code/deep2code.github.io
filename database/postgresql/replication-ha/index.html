@@ -82,70 +82,90 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">PostgreSQL 主从同步：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ PostgreSQL 主从</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及PostgreSQL 主从怎么帮你解决。</p>
+    <header class="article-header">
+        <h1 class="article-title">PostgreSQL 主从复制：读写分离</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ PostgreSQL</span>
+        </div>
+    </header>
+    <p>数据库读压力太大，一台主库扛不住，加从库做读写分离。主库写，从库读，性能翻倍。这篇讲 PostgreSQL 主从复制怎么配。</p>
+    <div class="mermaid">
+flowchart LR
+    A[应用] --> B{读写分离}
+    B -->|写| C[主库 Master]
+    B -->|读| D[从库 Slave 1]
+    B -->|读| E[从库 Slave 2]
+    C -->|同步| D
+    C -->|同步| E
+    </div>
 
-<div class="mermaid">
-flowchart TB
-    A[主库] --> B[写操作]
-    A --> C[同步]
-    C --> D[从库]
-    D --> E[读操作]
-</div>
+    <h2>主库读压力太大</h2>
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">你遇到的问题</div>
+        <p>所有请求都打到主库，QPS 上万，CPU 跑满。</p>
+    </div>
+    <p><strong>怎么解决？</strong>加从库做读写分离，写走主库，读走从库，读性能翻倍。</p>
+    <pre><code class="language-bash"># 主从复制原理
+主库把 WAL 日志发给从库
+从库重放 WAL，和主库保持一致
+延迟通常是毫秒级</code></pre>
 
-<h2>1. 数据库读压力大</h2>
+    <h2>主库挂了，服务停了</h2>
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">你遇到的问题</div>
+        <p>主库服务器坏了，数据库直接不可用，业务停了。</p>
+    </div>
+    <p><strong>怎么解决？</strong>加自动故障转移，主库挂了自动把从库提升为主库，几秒恢复。</p>
+    <pre><code class="language-bash"># 高可用方案
+Patroni + etcd：自动故障转移
+ repmgr：简单点的方案
+ Keepalived + VIP：最简单</code></pre>
+    <h2>主从复制方式</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>方式</th>
+                <th>原理</th>
+                <th>优点</th>
+                <th>缺点</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>流复制</td>
+                <td>实时传 WAL</td>
+                <td>延迟低</td>
+                <td>主库压力大</td>
+            </tr>
+            <tr>
+                <td>逻辑复制</td>
+                <td>逻辑解码</td>
+                <td>更灵活</td>
+                <td>配置复杂</td>
+            </tr>
+            <tr>
+                <td>快照复制</td>
+                <td>定时全量</td>
+                <td>简单</td>
+                <td>延迟高</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>数据库读请求太多，主库扛不住。</p>
-</div>
-
-<p><strong>怎么解决？</strong>做主从复制，主库写，从库读，分担压力。</p>
-
-<h2>2. 主从同步是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>主从复制是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>主库把数据变更同步到从库，从库和主库数据一致。</p>
-
-<h2>3. 怎么搭</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>PostgreSQL 怎么搭主从？</p>
-</div>
-
-<p><strong>怎么解决？</strong>主库配 wal_level，从库配 recovery.conf，连接主库。</p>
-
-<h2>模式</h2>
-
-<table>
-<thead><tr><th>模式</th><th>说明</th></tr></thead>
-<tbody>
-<tr><td>流复制</td><td>实时同步，常用</td></tr>
-<tr><td>逻辑复制</td><td>按表/数据同步</td></tr>
-</tbody></table>
-
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>主从有延迟</strong>主从同步不是实时的，有延迟，强一致要求的读要走主库。</li>
-<li><strong>从库不能写</strong>从库默认只能读，不能写。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>主从延迟是正常的，别指望完全一致，读一致性要求高的还是走主库</li>
+            <li>从库不要太多，3-5 个足够了，太多主库同步压力大</li>
+            <li>大事务会导致主从延迟突然变大，要注意拆分大事务</li>
+            <li>故障转移一定要测，别等真挂了才发现切换有问题</li>
+        </ul>
+    </div>
+</article>
                 <nav class="article-nav">
                     <a class="nav-prev" href="../mvcc-transaction/"><span class="nav-label">← 上一篇</span><span class="nav-title">MVCC 事务隔离</span></a>
                     
