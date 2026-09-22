@@ -81,162 +81,68 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">索引原理</h1>
+                        <h1 class="article-title">PostgreSQL 索引优化：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ PostgreSQL,关系数据库</span>
+                            <span class="meta-item">🏷️ PG 索引</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及PG 索引怎么帮你解决。</p>
 
-<h2>索引不是越多越好：先理解代价，再谈优化</h2>
-<p>我见过不少团队一上来就"WHERE 后面有什么就建什么索引"，半年下来一张表挂了 20 多个索引，写入慢到扛不住，查询也没快多少。</p>
-<p>PostgreSQL 给了一套挺丰富的索引家族——B-Tree、Hash、GiST、GIN、BRIN、SP-GiST——选错类型，比没有索引好不了多少。这一篇我把自己这几年调优的经验串一遍：从索引内部结构讲到 EXPLAIN ANALYZE 怎么读，帮你建立"慢查询 → 定位 → 选型 → 验证"的闭环。</p>
-
-<h2>索引家族全景</h2>
 <div class="mermaid">
 flowchart TB
-    subgraph BTree[通用 等值 范围]
-        BT[B-Tree 默认<br/>=  ＜  ＞  BETWEEN  ORDER BY]
-        H[Hash 仅等值<br/>=]
-    end
-    subgraph Compound[复合 特殊]
-        CP[复合索引<br/>多列最左前缀]
-        COV[覆盖索引 INCLUDE]
-        PART[部分索引 WHERE]
-    end
-    subgraph Special[类型专用]
-        GIN[GIN 倒排<br/>JSONB 数组 全文]
-        GIST[GiST 近似<br/>范围 几何 最近邻]
-        BRIN[BRIN 块级<br/>大表顺序列]
-    end
-    BT --> CP --> COV
-    CP --> PART
-
+    A[查询慢] --> B[explain 看执行计划]
+    B --> C{Seq Scan?}
+    C -->|是| D[加索引]
+    C -->|否| E{索引无效?}
+    E -->|是| F[优化条件]
 </div>
+
+<h2>1. PG 查询越来越慢</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>数据量上来了，PG 查询越来越慢。</p>
+</div>
+
+<p><strong>怎么解决？</strong>加合适的索引，优化查询条件。</p>
+
+<h2>2. 加了索引还是全表扫描</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>加了索引但 explain 一看还是 Seq Scan。</p>
+</div>
+
+<p><strong>怎么解决？</strong>看是不是查询条件不满足索引，或者数据量太少优化器觉得全表扫更快。</p>
+
+<h2>3. 怎么建索引</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道要建索引，但不知道建什么类型的。</p>
+</div>
+
+<p><strong>怎么解决？</strong>常用 B-Tree，模糊查询用 GIN，范围查询用 BRIN。</p>
+
+<h2>常用索引类型</h2>
 
 <table>
-<thead><tr><th>索引类型</th><th>适用场景</th><th>体积/写入开销</th><th>我什么时候用</th></tr></thead>
+<thead><tr><th>类型</th><th>适合</th></tr></thead>
 <tbody>
-<tr><td>B-Tree</td><td>等值、范围、排序</td><td>中等</td><td>90% 的 OLTP 场景默认选它</td></tr>
-<tr><td>Hash</td><td>仅等值</td><td>小</td><td>几乎不用，B-Tree 就够</td></tr>
-<tr><td>GIN</td><td>JSONB 包含、数组、全文</td><td>大，写放大明显</td><td>JSONB / 全文检索</td></tr>
-<tr><td>GiST</td><td>范围、几何、最近邻</td><td>中等</td><td>PostGIS、KNN 向量</td></tr>
-<tr><td>BRIN</td><td>超大且物理有序的表</td><td>极小（MB 级）</td><td>10 亿行的按时间日志表</td></tr>
-<tr><td>部分索引</td><td>只索引满足 WHERE 的行</td><td>小</td><td>只查活跃订单这种热点子集</td></tr>
-</tbody>
-</table>
+<tr><td>B-Tree</td><td>等值、范围查询</td></tr>
+<tr><td>GIN</td><td>全文搜索、数组</td></tr>
+<tr><td>BRIN</td><td>大表、有序列</td></tr>
+</tbody></table>
 
-<h2>B-Tree：默认且万能的选择</h2>
-<p>PostgreSQL 的 B-Tree 是平衡多路搜索树，叶子节点按键顺序排序，因此既能做等值查询（=），也能做范围查询（&gt;、&lt;、BETWEEN）与排序（ORDER BY）。绝大多数 OLTP 场景第一选择就是 B-Tree。复合索引遵循<b>最左前缀原则</b>：索引 <code>(a, b, c)</code> 能服务 <code>a</code>、<code>(a,b)</code>、<code>(a,b,c)</code> 的条件，但不能直接服务 <code>b</code> 或 <code>c</code>。</p>
-
-<pre><code class="language-sql">-- 订单表：按用户+时间高频查询
-CREATE INDEX idx_orders_user_created ON orders (user_id, created_at DESC);
-
--- 覆盖索引：把高频返回列也包进去，避免回表
-CREATE INDEX idx_orders_user_created_cover
-    ON orders (user_id, created_at DESC) INCLUDE (status, amount);
-
--- 部分索引：只索引活跃订单，体积小 80%
-CREATE INDEX idx_orders_active ON orders (user_id, created_at DESC)
-    WHERE status IN ('PENDING', 'PAID');
-
--- 唯一索引：等价 UNIQUE 约束，但允许部分唯一
-CREATE UNIQUE INDEX idx_orders_user_active
-    ON orders (user_id) WHERE status = 'PENDING';
-</code></pre>
-
-<h2>EXPLAIN ANALYZE：读懂执行计划</h2>
-<p>EXPLAIN ANALYZE 是 PostgreSQL 优化器给你看的"手术录像"——它真实执行 SQL 并打印每一步的行数估计 vs 实际、耗时、循环次数。<b>只要看到 rows 估计与 actual rows 差一个数量级以上，就说明统计信息过时了，先 ANALYZE</b>：</p>
-
-<pre><code class="language-sql">-- 分析某条慢查询
-EXPLAIN (ANALYZE, BUFFERS, VERBOSE)
-SELECT o.id, o.amount
-FROM orders o
-JOIN users u ON u.id = o.user_id
-WHERE o.status = 'PAID' AND o.created_at >= '2026-09-01'
-ORDER BY o.created_at DESC LIMIT 50;
-
--- 典型输出片段解读：
--- Limit  (cost=1.11..8823.44 rows=50 width=16) (actual time=0.083..12.441 rows=50 loops=1)
---   Buffers: shared hit=128 read=402
---   ->  Index Scan using idx_orders_user_created on orders o  (cost=0.56.....)
---        Index Cond: (created_at >= '2026-09-01')
---        Filter: (status = 'PAID')
---        Rows Removed by Filter: 1820   <-- 过滤掉的行数多说明索引没选对
---
--- 关键信号：
--- * actual time 总耗时
--- * rows vs Rows Removed：过滤比
--- * Buffers read 远大于 hit：缓存未命中，磁盘 IO 多
-</code></pre>
-
-<div class="callout callout-warning">
-<div class="callout-title">我踩过的坑：rows 估计差了 100 倍</div>
-<p>有次上线后一条报表 SQL 突然跑 40 秒，EXPLAIN ANALYZE 一看：优化器估计返回 100 行，实际扫了 12 万行，结果选错了 nested loop。原因是前一晚大批量导入后没 ANALYZE，统计信息还是老的。补一句 <code>ANALYZE orders;</code>，计划立刻变回正确的 hash join，200ms 跑完。批量导入后手动 ANALYZE 这个习惯我到现在还保留。</p>
-</div>
-
-<h2>特殊索引实战与性能对比</h2>
-<p>GIN 适合倒排类查询（JSONB 包含、数组重叠、全文检索）；BRIN 适合<b>超大且物理有序</b>的表（如按时间写入的日志表），索引只有几 MB；GiST 适合范围、几何、最近邻（KNN）：</p>
-
-<pre><code class="language-sql">-- 1) BRIN：日志表 10 亿行，索引只需 ~2MB，普通 B-Tree 要几十 GB
-CREATE INDEX idx_events_created_brin ON events USING BRIN (created_at) WITH (pages_per_range = 32);
-
--- 2) GIN 全文检索：标题/内容关键词搜索
-CREATE INDEX idx_articles_tsv ON articles USING GIN (to_tsvector('simple', title || ' ' || body));
-SELECT title FROM articles
-WHERE to_tsvector('simple', title || ' ' || body) @@ plainto_tsquery('simple', 'postgresql 索引');
-
--- 3) GiST 最近邻：geography 上找最近的 10 个门店
-CREATE INDEX idx_stores_geo ON stores USING GIST (location);
-SELECT name, location <-> ST_Point(114.05, 22.55) AS dist
-FROM stores
-ORDER BY location <-> ST_Point(114.05, 22.55)
-LIMIT 10;
-
--- 性能对比（1000 万行 orders 表，status 列）：
--- 全表扫描 Seq Scan:           actual time=0.03..4210.5  rows=120000
--- B-Tree 索引 Bitmap Index:    actual time=0.05..48.2    rows=120000
--- 覆盖索引 Index Only Scan:    actual time=0.04..6.1     rows=120000
--- 结论：覆盖索引比普通 B-Tree 快 ~8 倍，比全表扫描快 ~700 倍
-</code></pre>
-
-<h2>用 pg_stat_statements 找真正的慢查询</h2>
-<p>盲调索引是浪费时间，先让数据库告诉你哪条 SQL 最贵：</p>
-
-<pre><code class="language-sql">-- 先在 postgresql.conf 里 shared_preload_libraries='pg_stat_statements' 并重启
--- 平均总耗时 TOP10（按 total_exec_time 排序）
-SELECT round(total_exec_time::numeric, 1) AS total_ms,
-       calls,
-       round(mean_exec_time::numeric, 1) AS avg_ms,
-       left(query, 120) AS query
-FROM pg_stat_statements
-ORDER BY total_exec_time DESC
-LIMIT 10;
-
--- 重置统计（运维窗口执行）
-SELECT pg_stat_statements_reset();
-</code></pre>
-
-<h2>性能优化与最佳实践</h2>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>先 EXPLAIN 再建索引</strong>：很多"慢查询"其实是缺少 WHERE 条件、N+1、函数包裹列导致索引用不上，而不是缺索引。</li>
-<li><strong>避免对索引列包函数</strong>：<code>WHERE lower(name) = 'x'</code> 用不到 name 上的普通索引，要么用 <code>lower(name)</code> 建函数索引，要么改造谓词。</li>
-<li><strong>定期 ANALYZE</strong>：PostgreSQL 的 Autovacuum 会自动 ANALYZE，但刚大批量导入后建议手动 <code>ANALYZE 表名;</code>，否则优化器用旧统计信息选了烂计划。</li>
-<li><strong>删除冗余/重复索引</strong>：用 <code>pg_stat_user_indexes.idx_scan</code> 找出从来没被用过的索引，DROP 掉——它们只拖慢写入。</li>
-<li><strong>选择率（selectivity）决定索引价值</strong>：过滤后行数占全表 &lt; 5–10% 时索引才划算；全表 30% 以上的数据走索引反而比 Seq Scan 慢，优化器自己也会这么选，别强行 index scan。</li>
+<li><strong>不要建太多索引</strong>索引多了写操作会变慢。</li>
+<li><strong> explain 一定要看</strong>不要瞎加索引，先看执行计划。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：建了索引为什么查询还是全表扫描？</h3>
-<p>常见原因：① 过滤性太差（要返回全表 30%+ 行，优化器算出来 Seq Scan 更便宜）；② 对索引列用了函数或类型转换，<code>WHERE created_at::date = ...</code>；③ 统计信息过时，<code>ANALYZE 表;</code>；④ 索引是多列但查询没用到最左前缀。</p>
-<h3>Q2：复合索引 (a, b, c) 能服务 WHERE b = ? AND c = ? 吗？</h3>
-<p>不能直接用到前缀。但 PostgreSQL 11+ 有 <b>索引跳跃扫描（skip scan）</b>的能力有限，且不稳定。稳妥做法是按查询模式把高频列放在前面，或者为这种独立查询单独建一个 (b, c) 索引。</p>
-<h3>Q3：索引膨胀了（index bloated）怎么办？</h3>
-<p>频繁 UPDATE 的表索引会膨胀。<code>REINDEX INDEX CONCURRENTLY idx_name;</code> 在线重建锁很短（PG12+），或 <code>pg_repack</code> 同时回收表与索引空间。高峰期用 CONCURRENTLY，避免长时间锁表影响写入。</p>
-
-<h2>总结</h2>
-<p>索引优化的核心循环是：<b>pg_stat_statements 找慢 SQL → EXPLAIN ANALYZE 看执行计划 → 判断是缺索引、错索引还是统计信息问题 → 建/改索引并重新验证</b>。索引不是银弹，它是用写入成本换读取速度的权衡。下一篇我们看 PostgreSQL 如何在高并发下做到读写不互相阻塞——MVCC 与事务隔离。</p>
+</div>
 
                     </div>
                 </article>

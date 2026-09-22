@@ -81,236 +81,68 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">ELK 日志栈</h1>
+                        <h1 class="article-title">ELK 日志栈：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ 监控,可观测性,Prometheus,Grafana</span>
+                            <span class="meta-item">🏷️ ELK</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-
-<h2>ELK 是什么：从日志文件到可检索的数据湖</h2>
-<p>每个工程师都干过这件事：SSH 到某台机器，<code>grep "ERROR" /var/log/app.log</code>。单机时代没问题，微服务时代就疯了——一次请求跨 10 个服务，你得 grep 10 台机器。</p>
-<p>ELK 栈就是来终结这件事的：<strong>把所有机器的日志集中采集、统一解析、存进一个可全文检索的搜索引擎，在浏览器里一键查全量</strong>。ELK 是四个字母：<strong>E</strong>lasticsearch（存储+搜索）、<strong>L</strong>ogstash（解析管道）、<strong>K</strong>ibana（Web 界面）、外加越来越多的人把 <strong>F</strong>ilebeat（轻量采集器）也算进来，所以也叫 EFK。</p>
-
-<h2>核心概念：四个组件各司其职</h2>
-<p>四个组件各司其职，资源占用差很多：</p>
-<table>
-<thead><tr><th>组件</th><th>跑在哪</th><th>干什么</th><th>资源占用</th></tr></thead>
-<tbody>
-<tr><td>Filebeat</td><td>每台业务机</td><td>tail 日志 → 打时间戳 → 批量发送</td><td>&lt; 100MB，几乎无感</td></tr>
-<tr><td>Logstash</td><td>中心层</td><td>grok 解析、字段路由、富化</td><td>JVM，吃 CPU/内存</td></tr>
-<tr><td>Elasticsearch</td><td>集群</td><td>倒排索引存储 + 全文检索</td><td>最贵，JVM 堆 + 磁盘 IO</td></tr>
-<tr><td>Kibana</td><td>Web</td><td>Discover 查日志、Dashboard 画图</td><td>轻量</td></tr>
-</tbody>
-</table>
-
-<h2>架构原理：一条日志的完整旅程</h2>
-<p>下图展示一条 Nginx 访问日志从文件到 Kibana 的全过程。理解这条链路，是排查"为什么日志丢了"的基础：</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及ELK怎么帮你解决。</p>
 
 <div class="mermaid">
 flowchart LR
-    subgraph Host1[应用机器 A]
-        APP1[Nginx/App] --> |写文件| LOG1[(/var/log/app.log)]
-        FB1[Filebeat] -->|tail + harvester| LOG1
-    end
-    subgraph Host2[应用机器 B]
-        APP2[Nginx/App] -->|写文件| LOG2[(/var/log/app.log)]
-        FB2[Filebeat] -->|tail + harvester| LOG2
-    end
-    FB1 -->|Lumberjack 协议<br/>批量+压缩| LS[Logstash]
-    FB2 --> LS
-    LS -->|grok 解析<br/> mutate 转换| ES[Elasticsearch 集群]
-    subgraph ES集群
-        M1[Master 节点]
-        D1[(Data node 1<br/>shard)]
-        D2[(Data node 2<br/>replica)]
-    end
-    ES --> K[Kibana:5601]
-    OPS[值班/开发] -->|DSL 查询| K
-
+    A[应用日志] --> B[Filebeat]
+    B --> C[Logstash]
+    C --> D[Elasticsearch]
+    D --> E[Kibana]
 </div>
 
-<p>这条链路里有三个关键工程决策：</p>
-<ul>
-<li><strong>Filebeat 必须部署在业务机，Logstash 部署在中心层</strong>——不要把 Logstash 塞满每台机器，JVM 开销你养不起；</li>
-<li><strong>Filebeat 到 Logstash 用 Lumberjack 协议（带 acknowledgment）</strong>，网络抖动不丢日志，断点续传靠 registry 文件；</li>
-<li><strong>ES 索引按天分</strong>（<code>app-logs-2026.09.17</code>），老索引走 shrink + force merge + 冷节点，这是日志成本可控的唯一办法。</li>
-</ul>
+<h2>1. 多台服务器日志怎么查</h2>
 
-<h2>安装配置：docker-compose 全家桶</h2>
-<p>本地实验用 docker-compose 一把起，生产再拆成 K8s StatefulSet。下面是一份能跑通的最小配置：</p>
-
-<pre><code class="language-yaml"># docker-compose.yml —— 一键起 ES + Kibana + Filebeat + Logstash
-version: "3.8"
-services:
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
-    ulimits:
-      memlock: {soft: -1, hard: -1}
-    ports: ["9200:9200"]
-    volumes: ["es-data:/usr/share/elasticsearch/data"]
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.15.0
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports: ["5601:5601"]
-    depends_on: [elasticsearch]
-
-  logstash:
-    image: docker.elastic.co/logstash/logstash:8.15.0
-    volumes: ["./logstash.conf:/usr/share/logstash/pipeline/logstash.conf"]
-    ports: ["5044:5044"]
-    depends_on: [elasticsearch]
-
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.15.0
-    user: root
-    volumes:
-      - "./filebeat.yml:/usr/share/filebeat/filebeat.yml"
-      - "/var/log:/var/log:ro"
-    depends_on: [logstash]
-volumes:
-  es-data:
-</code></pre>
-
-<pre><code class="language-yaml"># filebeat.yml —— 采集本机 Nginx/应用日志，发往 Logstash
-filebeat.inputs:
-  - type: filestream
-    id: app-logs
-    paths:
-      - /var/log/app/*.log
-    fields:
-      app: order-service
-      env: prod
-    parsers:
-      - ndjson:                       # 应用输出的是结构化 JSON 日志
-          keys_under_root: true
-          add_error_key: true
-
-processors:
-  - drop_event:                       # 噪音过滤：健康检查日志直接丢弃
-      when:
-        contains:
-          message: "/healthz"
-  - add_host_metadata: ~              # 自动加 host.name / host.ip
-
-output.logstash:
-  hosts: ["logstash:5044"]
-  bulk_max_size: 1024
-  loadbalance: true
-</code></pre>
-
-<pre><code class="language-ruby"># logstash.conf —— 解析管道：grok 拆 Nginx 日志 + 按级别路由
-input {
-  beats { port => 5044 }
-}
-
-filter {
-  # 如果是 Nginx 访问日志，用 grok 拆解
-  if [fileset][module] == "nginx" {
-    grok {
-      match => { "message" => "%{HTTPD_COMBINEDLOG}" }
-    }
-    date { match => ["timestamp", "ISO8601"] }
-  }
-
-  # 错误日志加 tag，方便下游告警
-  if [level] == "ERROR" or [level] == "FATAL" {
-    mutate { add_tag => ["@error"] }
-  }
-}
-
-output {
-  elasticsearch {
-    hosts => ["http://elasticsearch:9200"]
-    index => "app-logs-%{+YYYY.MM.dd}"
-  }
-  # ERROR 级别同时发到 stderr，方便接 PagerDuty
-  if "error" in [tags] {
-    stdout { codec => rubydebug }
-  }
-}
-</code></pre>
-
-<h2>实战：在 Kibana 里查生产日志</h2>
-<p>栈跑起来后，开发/值班同学 90% 的时间都在 Kibana Discover 里写 Lucene 查询。下面是高频查询模板：</p>
-
-<pre><code class="language-bash"># 直接调 ES API 查询（CI/排障时比 Kibana 快）
-# 1) 查最近 15 分钟 order-service 的所有 ERROR
-curl -s "http://es:9200/app-logs-*/_search" -H 'Content-Type: application/json' -d '{
-  "size": 50,
-  "query": {
-    "bool": {
-      "filter": [
-        {"term": {"app": "order-service"}},
-        {"term": {"level": "ERROR"}},
-        {"range": {"@timestamp": {"gte": "now-15m"}}}
-      ]
-    }
-  },
-  "sort": [{"@timestamp": "desc"}]
-}'
-
-# 2) 按 trace_id 串起整个调用链（三支柱合体的关键查询）
-curl -s "http://es:9200/app-logs-*/_search?q=trace_id:abc123def456&amp;sort=@timestamp:asc"
-
-# 3) 每天索引自动归档：热数据 7 天，冷数据 30 天，之后删
-curl -s -XPUT "http://es:9200/_ilm/policy/logs_policy" -H 'Content-Type: application/json' -d '{
-  "policy": {
-    "phases": {
-      "hot":  {"actions": {"rollover": {"max_age": "1d", "max_size": "50gb"}}},
-      "warm": {"min_age": "7d",  "actions": {"shrink": {"number_of_shards": 1}}},
-      "cold": {"min_age": "30d", "actions": {"freeze": {}}},
-      "delete": {"min_age": "90d", "actions": {"delete": {}}}
-    }
-  }
-}'
-</code></pre>
-
-<h2>最佳实践</h2>
-<ul>
-<li><strong>日志必须结构化</strong>：JSON 输出而不是纯文本。grok 规则维护成本极高，一次 Nginx 格式升级全量重写。Go 用 <code>slog</code>、Java 用 Logback JSON encoder，从源头解决。</li>
-<li><strong>索引按天分 + ILM 生命周期</strong>：这是控制成本的唯一办法。热数据 SSD、冷数据 HDD、90 天后自动删。不要建一个 <code>app-logs</code> 大索引吃一年。</li>
-<li><strong>Mapping 前置</strong>：ES 默认会动态猜字段类型，第一次写入一个错误的映射（比如把 request_id 猜成 text）就再也改不了。生产前必须显式定义 mapping。</li>
-<li><strong>JVM 堆不超过 31GB</strong>：这是 ES 的硬约束——超过 31GB 会丢掉指针压缩，GC 反而变慢。堆大了不如加节点。</li>
-<li><strong>敏感信息绝不进日志</strong>：手机号、身份证、token 在日志出口前脱敏。GDPR/个人信息保护法都要求可删除——存在 ES 里就是定时炸弹。</li>
-<li><strong>Filebeat registry 文件挂持久卷</strong>：容器重建后从上次读完的位置继续，不重不漏。</li>
-</ul>
-
-<div class="callout callout-warning">
-<div class="callout-title">我踩过的坑：ES 动态 mapping 把 request_id 建成了 text</div>
-<p>有个新服务上线，日志里的 <code>request_id</code> 第一次写入时刚好是空字符串，ES 动态 mapping 把它猜成了 <code>text</code> 类型。后来想按 request_id 精确查 trace，发现 <code>term: {request_id: "abc123"}</code> 死活查不到——text 字段会被分词，只能用 <code>keyword</code> 子字段。</p>
-<p>从那以后所有索引都在写入前显式定义 mapping，ID 类字段一律 <code>keyword</code>。<strong>ES 的动态 mapping 是便利，也是地雷。</strong></p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你有 10 台服务器，要查个错误要一台台 SSH 上去看。</p>
 </div>
 
-<h2>常见问题 FAQ</h2>
-<h3>Q1：ELK 和 Loki 比，选哪个？</h3>
-<p>定位不同。<strong>ELK 是全文检索引擎</strong>，适合"我要在所有日志里搜 timeout"这种任意关键词查询，功能强但成本高（TB 级日志每月上万块）。<strong>Loki 是标签索引引擎</strong>，只索引 label、不索引正文，查询靠 PromQL 风格的 LogQL，成本只有 ELK 的 1/10，适合"按 trace_id/job/实例 查日志"。</p>
-<p>团队日志量 &lt; 100GB/天、查询模式固定在"按标签过滤"，选 Loki；需要全文检索、安全审计、合规留痕，选 ELK。</p>
-<h3>Q2：日志写入后查不到，怎么排查？</h3>
-<p>按链路逐段查：</p>
-<ul>
-<li>业务机 Filebeat 是否在跑：<code>filebeat test output</code>；</li>
-<li>Filebeat registry 是否在读：<code>filebeat -e -d "*"</code>；</li>
-<li>Logstash 是否收到：看 logstash 启动日志和 <code>_node/stats</code>；</li>
-<li>ES 是否接收：<code>curl es:9200/_cat/indices?v</code> 看索引大小；</li>
-<li>Kibana index pattern 是否匹配实际索引名，时间过滤器是否覆盖了写入时间。</li>
-</ul>
-<p>90% 的"丢日志"事故其实是 Kibana 时间选择器选了"最近 15 分钟"而日志写的是 UTC 时间。</p>
-<h3>Q3：ES 集群黄了/红了怎么办？</h3>
-<p>Green = 所有主分片和副本都分配好了；Yellow = 主分片在但副本没分配（单节点集群永远 Yellow，正常）；Red = 有主分片没分配，<strong>这部分数据读不出来</strong>。</p>
-<p>先 <code>GET _cluster/health?pretty</code> 看状态，再 <code>GET _cat/allocation?v</code> 看节点磁盘，再 <code>GET _cluster/allocation/explain</code> 看为什么分片没上去。常见原因：磁盘超水位（&gt; 85%）、节点掉线、分片数太多。</p>
-<h3>Q4：为什么我们的 ES 越用越慢，磁盘也涨得很快？</h3>
-<p>三个常见原因：① 没配 ILM，所有日志都堆在 hot 节点，segment 太多没 force merge；② mapping 里 <code>fielddata</code> 开了或 <code>_source</code> 没压缩；③ 日志里存了大字段（如完整 HTTP body）。先 <code>GET _cat/indices?v&amp;s=store.size:desc</code> 找最大索引，再按 ILM 策略把老索引 shrink + force merge + 迁冷节点。</p>
+<p><strong>怎么解决？</strong>用 ELK 把所有日志集中存，一个界面查所有机器的日志。</p>
 
-<h2>总结</h2>
-<p>ELK 栈的工程哲学是<strong>"采集轻量、解析集中、存储分层"</strong>：Filebeat 在业务机只做搬运，Logstash 在中心层做解析，ES 用 ILM 按时间做冷热分层。它贵，但全文检索的能力无可替代。下一篇我们看可观测性三支柱里剩下的一块——OpenTelemetry 分布式追踪，它把 Metrics 和 Logging 缝合成完整因果链。</p>
+<h2>2. 想做日志分析</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你想统计每天有多少错误，按错误类型分类。</p>
+</div>
+
+<p><strong>怎么解决？</strong>ELK 可以做日志聚合分析，做可视化面板。</p>
+
+<h2>3. ELK 太重了</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>ELK 一套要吃好几个 G 内存，小项目用不起。</p>
+</div>
+
+<p><strong>怎么解决？</strong>小项目用 Loki 更轻量，ELK 适合大项目。</p>
+
+<h2>ELK 组件</h2>
+
+<table>
+<thead><tr><th>组件</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td>Elasticsearch</td><td>存和搜索日志</td></tr>
+<tr><td>Logstash</td><td>收集和处理日志</td></tr>
+<tr><td>Kibana</td><td>查询和可视化</td></tr>
+<tr><td>Filebeat</td><td>轻量日志采集</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>索引要定期删</strong>日志占空间大，按天建索引，定期删旧的。</li>
+<li><strong>不要存太久</strong>日志一般存 7-30 天，不要存太久占空间。</li>
+</ul>
+</div>
 
                     </div>
                 </article>

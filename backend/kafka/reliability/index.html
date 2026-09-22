@@ -81,267 +81,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">消息可靠性</h1>
+                        <h1 class="article-title">Kafka 可靠性：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Kafka,可靠性,事务,消息语义</span>
+                            <span class="meta-item">🏷️ Kafka 可靠性</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Kafka 可靠性怎么帮你解决。</p>
 
-<h2 id="背景">消息可靠性的三个层次</h2>
-<p>做分布式系统绕不开一个问题：<strong>消息到底能不能不丢？</strong> 我踩过的最深的坑就是以为"Kafka 天然不丢消息"——直到生产环境 Broker 宕机，发现 ISR 里只剩一个副本，acks=all 直接卡住，业务超时雪崩。答案取决于你要的是哪种语义：</p>
-<ul>
-<li><strong>At-most-once（至多一次）</strong>：消息可能丢，但不会重复。适合日志采集、监控指标这种丢了无所谓的场景。</li>
-<li><strong>At-least-once（至少一次）</strong>：消息不丢，但可能重复。这是 Kafka 默认语义，需要消费端做幂等。</li>
-<li><strong>Exactly-Once（恰好一次）</strong>：消息不丢不重，精确一次。代价是性能开销和架构复杂度。</li>
-</ul>
-<p>大多数人说"我要消息不丢"，其实要的是 At-least-once + 消费端幂等。真正的端到端 Exactly-Once 只有在流处理场景（Kafka Streams / Flink）才真正需要。本文从生产端、Broker、消费端三个环节拆解可靠性，并给出 Exactly-Once 的完整实现方案。</p>
+<div class="mermaid">
+flowchart TB
+    A[生产端确认] --> B[Broker 持久化]
+    B --> C[消费端确认]
+    C --> D[不丢消息]
+</div>
+
+<h2>1. 消息会不会丢</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你把消息发到 Kafka，会不会半路丢了？</p>
+</div>
+
+<p><strong>怎么解决？</strong>生产端 ack=all，Broker 副本持久化，消费端手动提交 offset。</p>
+
+<h2>2. 怎么保证消息不丢</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道有风险，不知道怎么配。</p>
+</div>
+
+<p><strong>怎么解决？</strong>三个环节都要配好：生产端、Broker、消费端。</p>
+
+<h2>3. 会不会重复消费</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>消息会不会重复收到？</p>
+</div>
+
+<p><strong>怎么解决？</strong>会的，所以消费者一定要做幂等。</p>
+
+<h2>可靠性配置</h2>
+
 <table>
-<thead><tr><th>语义</th><th>是否丢消息</th><th>是否重复</th><th>典型配置</th><th>适用场景</th></tr></thead>
+<thead><tr><th>环节</th><th>配置</th></tr></thead>
 <tbody>
-<tr><td>At-most-once</td><td>可能丢</td><td>不重复</td><td>acks=0, 自动提交</td><td>日志采集、监控指标</td></tr>
-<tr><td>At-least-once</td><td>不丢</td><td>可能重复</td><td>acks=all, 手动提交</td><td>大多数业务（推荐）</td></tr>
-<tr><td>Exactly-Once</td><td>不丢</td><td>不重复</td><td>事务 API + read_committed</td><td>流处理管道</td></tr>
-</tbody>
-</table>
+<tr><td>生产端</td><td>acks=all</td></tr>
+<tr><td>Broker</td><td>副本数 ≥ 2</td></tr>
+<tr><td>消费端</td><td>手动提交 offset</td></tr>
+</tbody></table>
 
-<div class="echart-container" id="kafka-reliability-levels" style="height: 300px; margin: 20px 0;"></div>
-
-<h2 id="producer-relia">生产端可靠性：消息怎么不丢？</h2>
-<p>消息从 Producer 到 Broker，可能在这几个环节丢失：</p>
-<div class="mermaid">
-graph TD
-    A[Producer send] --> B{acks config?}
-    B -->|acks=0 no ack| C[Message may be lost]
-    B -->|acks=1 leader ack| D[Leader fails, follower not synced]
-    B -->|acks=all ISR ack| E[Safe if ISR has 2+ replicas]
-
-    E --> F{Idempotence enabled?}
-    F -->|No| G[Retry may cause duplicates]
-    F -->|Yes enable.idempotence| H[Broker deduplicates]
-
-    style C fill:#F44336,color:#fff
-    style D fill:#FF9800,color:#fff
-    style E fill:#4CAF50,color:#fff
-    style H fill:#4CAF50,color:#fff
-    style G fill:#FF9800,color:#fff
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>消费者一定要幂等</strong>重复消费是正常的，业务代码要处理。</li>
+<li><strong>不要关 acks</strong>acks=0 最快但最容易丢消息。</li>
+</ul>
 </div>
-
-<h3>关键配置组合</h3>
-<pre><code class="language-properties"># 生产端可靠性黄金组合（必须一起配）
-acks=all                        # 所有 ISR 副本确认
-enable.idempotence=true         # 幂等生产者（自动去重重试重复消息）
-retries=2147483647              # 无限重试（配合幂等是安全的）
-max.in.flight.requests.per.connection=5  # 幂等模式下允许 5（保证分区内顺序）
-delivery.timeout.ms=120000      # 2 分钟超时
-request.timeout.ms=30000
-
-# Broker 端配合
-min.insync.replicas=2           # 至少 2 个 ISR 才算写入成功
-replication.factor=3            # 3 副本</code></pre>
-
-<h3>幂等生产者原理</h3>
-<p>开启 <code>enable.idempotence=true</code> 后，Producer 会分配一个 <strong>PID（Producer ID）</strong>，每条消息带一个单调递增的 <strong>Sequence Number</strong>。Broker 端记住每个 PID + Partition 的最新 Sequence Number，如果收到重复 Sequence（重试场景），直接去重不写日志。这个机制对应用层完全透明，不需要你改代码。</p>
-<blockquote class="callout callout-warn">
-<p><strong>最大的隐患：</strong><code>unclean.leader.election.enable</code> 在 Kafka 2.8 之前默认是 true，允许从 ISR 外的副本选 Leader——这意味着未同步的消息会直接丢失。2.8+ 改为默认 false。<strong>生产环境务必显式设为 false</strong>，我见过太多因为这个默认值导致的数据事故。</p>
-</blockquote>
-<p><strong>注意</strong>：幂等只保证<strong>单会话内</strong>的去重。Producer 重启后 PID 变了，Broker 无法识别新旧 Producer 是同一个。跨会话的 Exactly-Once 需要事务 API。</p>
-
-<h2 id="consumer-relia">消费端可靠性：怎么不重复？</h2>
-<p>消费端丢消息的典型场景：<strong>自动提交 Offset + 处理失败</strong>。自动提交的 Offset 是定时提交的（默认 5 秒一次），如果消费者在两次提交之间宕机，重启后从上次提交的 Offset 开始消费——已经处理但没提交的消息会被重复消费。</p>
-
-<h3>正确的 Offset 提交策略</h3>
-<pre><code class="language-text">错误做法：自动提交 + 先提交后处理
-  enable.auto.commit=true  # 每 5 秒自动提交
-  poll() -> 处理消息 -> 崩溃
-  重启后 Offset 已提交，消息丢失
-
-正确做法：手动提交 + 处理后提交
-  enable.auto.commit=false
-  poll() -> 处理消息成功 -> commitSync()
-  处理失败 -> 不提交 -> 下次 poll 重新消费
-
-最佳实践：异步批量提交 + 同步退出
-  enable.auto.commit=false
-  poll() -> 处理消息 -> 异步提交 commitAsync()
-  退出前 -> 同步提交 commitSync()</code></pre>
-
-<h3>死信队列（DLQ）设计</h3>
-<p>有些消息无论重试多少次都处理不了（毒丸消息，比如反序列化失败的畸形数据）。正确做法是把它发到死信队列，不要阻塞主消费流程：</p>
-<pre><code class="language-go">// Go 消费者中的 DLQ 模式
-func (h *OrderHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-    for msg := range claim.Messages() {
-        var event OrderEvent
-        if err := json.Unmarshal(msg.Value, &event); err != nil {
-            // 反序列化失败 -> 发往 DLQ
-            dlqMsg := &sarama.ProducerMessage{
-                Topic: "orders.dlq",
-                Key:   msg.Key,
-                Value: msg.Value,
-                Headers: append(msg.Headers,
-                    sarama.RecordHeader{Key: []byte("dlq-reason"), Value: []byte("deserialize-error")},
-                    sarama.RecordHeader{Key: []byte("original-topic"), Value: []byte(msg.Topic)},
-                ),
-            }
-            dlqProducer.Input() <- dlqMsg
-            session.MarkMessage(msg, "") // 仍然提交 Offset，避免毒丸阻塞
-            continue
-        }
-
-        if err := processOrder(&event); err != nil {
-            // 业务失败 -> 发往 retry topic，稍后重试
-            retryMsg := &sarama.ProducerMessage{
-                Topic: "orders.retry",
-                Key:   msg.Key,
-                Value: msg.Value,
-            }
-            retryProducer.Input() <- retryMsg
-            session.MarkMessage(msg, "")
-            continue
-        }
-
-        session.MarkMessage(msg, "")
-    }
-    return nil
-}</code></pre>
-
-<h2 id="exactly-once">Exactly-Once 语义：事务 API</h2>
-<p>跨 Producer 会话、跨 Partition 的 Exactly-Once 需要 Kafka 事务 API。核心思想：把"写消息 + 提交 Offset"包装成一个原子操作——要么全部成功，要么全部回滚。</p>
-
-<div class="mermaid">
-graph TD
-    subgraph TxnProducer [Transactional Producer]
-        T1[beginTransaction] --> T2[send msg to topic-A]
-        T2 --> T3[send msg to topic-B]
-        T3 --> T4[sendOffsetToTransaction]
-        T4 --> T5{commit?}
-        T5 -->|commit| T6[All messages visible, offset committed]
-        T5 -->|abort| T7[Messages marked aborted, consumer skips]
-    end
-
-    subgraph ConsumerIso [Consumer isolation.level]
-        C1[read_uncommitted sees aborted]
-        C2[read_committed only sees committed]
-    end
-
-    style T6 fill:#4CAF50,color:#fff
-    style T7 fill:#F44336,color:#fff
-</div>
-
-<h3>Go 事务生产者示例</h3>
-<pre><code class="language-go">package main
-
-import (
-    "context"
-    "log"
-
-    "github.com/IBM/sarama"
-)
-
-func main() {
-    config := sarama.NewConfig()
-    config.Version = sarama.V3_8_0_0
-
-    // 事务生产者配置
-    config.Producer.Transaction.ID = "txn-producer-001"  // 必须全局唯一
-    config.Producer.Idempotent = true                     // 事务自动开启幂等
-    config.Producer.RequiredAcks = sarama.WaitForAll
-    config.Producer.Return.Errors = true
-
-    txnProducer, err := sarama.NewTransactionalProducer([]string{"node-1:9092"}, config)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer txnProducer.Close()
-
-    // 初始化事务（注册到 __transaction_state Topic）
-    if err := txnProducer.InitTransactions(context.Background()); err != nil {
-        log.Fatal(err)
-    }
-
-    // === 事务 1：原子写入多个 Topic ===
-    txnProducer.BeginTransaction()
-
-    _, _, err = txnProducer.SendMessage(&sarama.ProducerMessage{
-        Topic: "orders",
-        Key:   sarama.StringEncoder("order-1001"),
-        Value: sarama.StringEncoder(`{"status":"created"}`),
-    })
-    if err != nil {
-        txnProducer.AbortTransaction(context.Background())
-        log.Fatal(err)
-    }
-
-    _, _, err = txnProducer.SendMessage(&sarama.ProducerMessage{
-        Topic: "inventory",
-        Key:   sarama.StringEncoder("sku-2001"),
-        Value: sarama.StringEncoder(`{"action":"deduct","qty":1}`),
-    })
-    if err != nil {
-        txnProducer.AbortTransaction(context.Background())
-        log.Fatal(err)
-    }
-
-    // 提交事务：两条消息同时对消费者可见
-    if err := txnProducer.CommitTransaction(context.Background()); err != nil {
-        log.Fatal(err)
-    }
-    log.Println("事务提交成功")
-}</code></pre>
-
-<h3>Python 事务消费者（read_committed）</h3>
-<pre><code class="language-python">from confluent_kafka import Consumer
-
-config = {
-    'bootstrap.servers': 'node-1:9092,node-2:9092,node-3:9092',
-    'group.id': 'exactly-once-group',
-    'isolation.level': 'read_committed',  # 关键：只读取已提交事务的消息
-    'enable.auto.commit': False,
-    'auto.offset.reset': 'earliest',
-}
-
-consumer = Consumer(config)
-consumer.subscribe(['orders', 'inventory'])
-
-try:
-    while True:
-        msg = consumer.poll(timeout=1.0)
-        if msg is None:
-            continue
-        if msg.error():
-            print(f"错误: {msg.error()}")
-            continue
-
-        # 只有事务 commit 之后的消息才会被读到
-        print(f"处理: {msg.topic()} [{msg.partition()}] offset={msg.offset()}")
-
-        # 处理完后手动提交
-        consumer.commit(message=msg, asynchronous=False)
-finally:
-    consumer.close()</code></pre>
-
-<h2 id="best-practices">可靠性设计最佳实践</h2>
-<ol>
-<li><strong>黄金配置组合</strong>：Producer 端 <code>acks=all + enable.idempotence=true</code>；Broker 端 <code>replication.factor=3 + min.insync.replicas=2</code>；Consumer 端 <code>enable.auto.commit=false + 手动提交</code>。这套组合实现 At-least-once 语义，覆盖 99% 业务场景。</li>
-<li><strong>幂等消费</strong>：数据库唯一索引 + 业务去重表。消息处理前先查"这个 OrderID 处理过了吗"，处理过就跳过。这比上事务 API 简单得多。</li>
-<li><strong>DLQ 兜底</strong>：所有消费端都要有 DLQ 逻辑，毒丸消息不能阻塞主流程。DLQ 单独监控，人工介入处理。</li>
-<li><strong>事务 API 慎用</strong>：事务会带来 20~30% 的性能损耗，且只能用在 Kafka 内部（写 Kafka + 提交 Offset）。如果你的下游是数据库，事务 API 帮不上忙——这时用"本地消息表 + 最终一致性"更实际。</li>
-<li><strong>监控消息丢失率</strong>：在生产者端统计发送失败数，在 Broker 端统计 UnderReplicatedPartitions，在消费者端统计消费 lag。三个指标交叉验证。</li>
-</ol>
-
-<h2 id="FAQ">常见问题 FAQ</h2>
-<h3>Q1：什么时候真的需要 Exactly-Once？</h3>
-<p>只有流处理管道（Kafka Streams / Flink）且下游也是 Kafka 时才真正需要事务 API。因为流处理是"消费-处理-生产"的闭环，中间任何一步失败都需要原子回滚。对于"消费 Kafka → 写数据库"的场景，用本地消息表 + 幂等消费就够了——Kafka 事务管不到你的数据库。</p>
-
-<h3>Q2：消息什么时候会真的丢失？</h3>
-<p>在正确配置下（acks=all + RF=3 + min.insync.replicas=2），Kafka 几乎不会丢消息。会丢消息的错误配置包括：(1) <code>acks=0</code> 或 <code>acks=1</code> 且 RF=1；(2) Broker 刷盘策略 <code>log.flush.interval.messages=1</code> 但磁盘掉电；(3) 消费者自动提交 Offset 但处理崩溃。另外，<strong>unclean.leader.election.enable=true</strong>（默认 false）是最大的隐患——它允许从 ISR 外的副本选 Leader，会直接丢未同步的消息。</p>
-
-<h3>Q3：重复消费怎么处理？</h3>
-<p>三种方案按复杂度递增：(1) <strong>业务幂等</strong>：数据库唯一索引，重复插入报错就忽略。最简单最可靠。(2) <strong>去重表</strong>：把消息 ID 存 Redis，处理前先查。适合无唯一约束的业务。(3) <strong>事务 API</strong>：端到端 EOS，性能差、复杂度高，只在流处理场景用。90% 的场景用方案 1 就够了。</p>
-
-<h2 id="总结">总结</h2>
-<p>Kafka 的可靠性是<strong>分段保证</strong>的：生产端靠 acks+幂等，Broker 端靠副本+ISR，消费端靠手动提交+幂等处理。不要追求一步到位的 Exactly-Once，大多数业务 At-least-once + 幂等消费就足够可靠。真正需要端到端 EOS 的场景（流处理管道）再用事务 API。记住：<strong>没有完美的分布式系统，只有可观测、可恢复的系统</strong>。</p>
 
                     </div>
                 </article>

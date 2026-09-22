@@ -81,135 +81,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">pgvector 实战</h1>
+                        <h1 class="article-title">pgvector：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ pgvector,PostgreSQL</span>
+                            <span class="meta-item">🏷️ pgvector</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>为什么先讲 pgvector</h2>
-<p>如果你的团队已经在用 PostgreSQL，pgvector 是我能想到的最快上手路径——不用引入新中间件、不用学新查询语言、不用多维护一套服务，向量就是一个普通列。</p>
-<p>但 pgvector 不是万能的。它本质是个扩展，能力上限绑死在 PostgreSQL 上，数据量到千万级以上、QPS 上去之后会遇到天花板。这篇先把它讲透，什么时候该迁走，文末生产注意事项里说。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及pgvector怎么帮你解决。</p>
+
 <div class="mermaid">
 flowchart LR
-    APP[应用服务] --> SQL[一条 SQL]
-    SQL --> BTREE[B-tree: 按租户/权限过滤]
-    SQL --> HNSW[HNSW: 向量找最近邻]
-    BTREE --> OPT[优化器合并计划]
-    HNSW --> OPT
-    OPT --> ROWS[返回带详情的 Top-K 行]
-</div>
-<code>vector(1024)</code> 是写死的。哪天你想从 1024 维换到 1536 维，得加新列、重新 Embedding、回填数据、再切流量。所以立项时把模型和维度定死，别留"以后再说"。我踩过一次，全量重建 800 万条数据花了一整晚。
+    A[PostgreSQL] --> B[加 pgvector 扩展]
+    B --> C[存向量]
+    C --> D[相似度搜索]
 </div>
 
-<h2>建索引：HNSW 和 IVFFlat</h2>
-<p>没索引之前，<code>ORDER BY embedding &lt;=&gt; query</code> 是全表扫。索引建法两种，二选一（或对比后选）：</p>
-<pre><code class="language-sql">-- 方式一：HNSW，推荐默认。m 和 ef_construction 是构建参数
-CREATE INDEX idx_documents_embedding_hnsw
-    ON documents USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
+<h2>1. 想做 RAG 不想装新数据库</h2>
 
--- 方式二：IVFFlat，适合超大数据集，lists 约等于 sqrt(行数)
-CREATE INDEX idx_documents_embedding_ivf
-    ON documents USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
-
--- 查询时调 IVF 的探测数（HNSW 对应调 ef_search）
-SET ivfflat.probes = 10;      -- IVF 用
-SET hnsw.ef_search = 40;      -- HNSW 用</code></pre>
-<p>注意 <code>vector_cosine_ops</code>——这是余弦度量的索引算子。你用 L2 距离查询就得建 <code>vector_l2_ops</code>，用内积就 <code>vector_ip_ops</code>。三者必须和查询运算符一致：<code>&lt;=&gt;</code> 余弦、<code>&lt;-&gt;</code> L2、<code>&lt;#&gt;</code> 内积。</p>
-<div class="mermaid">
-flowchart TD
-    INS[插入文档] --> BULK[批量灌入向量数据]
-    BULK --> BUILD[建 HNSW/IVFFlat 索引]
-    BUILD --> ANALYZE[ANALYZE documents]
-    ANALYZE --> QRY[查询: ORDER BY embedding &lt;=&gt; q LIMIT k]
-    QRY --> CHK{EXPLAIN 是否走索引?}
-    CHK -->|Seq Scan| FIX[数据太少或参数不对，先灌数据再看]
-    CHK -->|Index Scan| OK[正常召回]
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你想用向量做搜索，但不想再装个向量数据库。</p>
 </div>
 
-<h2>Embedding 写入与检索</h2>
-<p>用 Python 把文本转成向量再写库，再做一次语义检索。我把 psycopg 异步写法也贴出来，这是生产常用姿势：</p>
-<pre><code class="language-python">import psycopg
-from sentence_transformers import SentenceTransformer
+<p><strong>怎么解决？</strong>PostgreSQL 加 pgvector 扩展，直接在 PG 里存向量做搜索。</p>
 
-model = SentenceTransformer("BAAI/bge-m3")
-DB = "postgresql://user:pass@localhost:5432/rag"
+<h2>2. 项目已经用了 PG</h2>
 
-def insert_docs(docs: list[str], tenant_id: int):
-    embs = model.encode(docs, normalize_embeddings=True)
-    rows = [(None, d, d, tenant_id, e.tolist()) for d, e in zip(docs, embs)]
-    with psycopg.connect(DB) as conn, conn.cursor() as cur:
-        cur.executemany(
-            "INSERT INTO documents(title, content, tenant_id, embedding) "
-            "VALUES (%s, %s, %s, %s)",
-            rows,
-        )
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你项目已经在用 PostgreSQL，不想再加新组件。</p>
+</div>
 
-def search(query: str, tenant_id: int, k: int = 5):
-    q = model.encode([query], normalize_embeddings=True)[0]
-    with psycopg.connect(DB) as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, content, embedding &lt;=&gt; %s AS distance
-            FROM documents
-            WHERE tenant_id = %s
-            ORDER BY embedding &lt;=&gt; %s
-            LIMIT %s
-            """,
-            (q.tolist(), tenant_id, q.tolist(), k),
-        )
-        return cur.fetchall()</code></pre>
-<p>这里有个细节：我把 <code>tenant_id</code> 过滤放在 WHERE 里，再用向量索引排序。pgvector 会先按 B-tree 把该租户的数据筛出来，再在子集上做 HNSW——这就是多租户场景的标准写法，别让它全表扫。</p>
+<p><strong>怎么解决？</strong>pgvector 就是 PG 的扩展，不用改技术栈。</p>
 
-<h2>和关系数据 JOIN：一个 SQL 的威力</h2>
-<p>pgvector 最大的杀手锏，是向量召回能直接和业务表 JOIN。比如文档属于某个栏目、某个用户，你想检索出"和问题最相关、且我有权限看的 5 条"：</p>
-<pre><code class="language-sql">SELECT d.id, d.title, c.name AS category,
-       d.embedding &lt;=&gt; %s AS distance
-FROM documents d
-JOIN categories c ON c.id = d.category_id
-JOIN document_acl a ON a.doc_id = d.id
-WHERE a.user_id = 42                 -- 我有权限
-  AND d.status = 'published'         -- 只看已发布
-ORDER BY d.embedding &lt;=&gt; %s
-LIMIT 5;</code></pre>
-<p>这种"先过滤权限再语义排序"的组合查询，你在独立向量数据库里往往要自己在应用层拼，pgvector 里就是一句 JOIN，优化器帮你选执行计划。这也是它在中小项目里无可替代的原因。</p>
+<h2>3. 什么时候要用专门的向量库</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>pgvector 够用吗？什么时候要换专门的？</p>
+</div>
+
+<p><strong>怎么解决？</strong>数据量小、并发低，pgvector 完全够用；量大了再上专门的向量库。</p>
+
+<h2>pgvector 特点</h2>
+
 <table>
-<thead><tr><th>场景</th><th>pgvector</th><th>独立向量库</th></tr></thead>
+<thead><tr><th>特点</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>向量+权限 JOIN</td><td>SQL 原生，省心</td><td>应用层自己拼</td></tr>
-<tr><td>&lt; 500 万条</td><td>性能足够</td><td>杀鸡用牛刀</td></tr>
-<tr><td>千万级以上</td><td>开始吃力</td><td>更合适</td></tr>
-<tr><td>水平扩展</td><td>弱（靠分片，麻烦）</td><td>原生分布式</td></tr>
-</tbody>
-</table>
+<tr><td>扩展</td><td>PG 的扩展，不用装新数据库</td></tr>
+<tr><td>简单</td><td>和普通 SQL 一样用</td></tr>
+<tr><td>够用</td><td>中小规模完全够用</td></tr>
+</tbody></table>
 
-<h2>生产环境注意事项</h2>
-<p>这一节是交学费换来的，重点看。</p>
-<h3>内存</h3>
-<p>HNSW 索引要常驻内存。粗算：<strong>行数 × 维度 × 4 字节</strong> 是向量本体大小，HNSW 的图结构还要再加 1.5~2 倍。1000 万条 1024 维，光向量就要约 40GB，加上图结构轻松破百 GB。给 <code>shared_buffers</code> 和 <code>work_mem</code> 留足，别把它和一堆业务挤在一个小实例上。</p>
-<h3>磁盘</h3>
-<p>建索引是个重 IO 操作。一张大表建 HNSW 索引时临时文件能翻倍磁盘占用，高峰在线上建索引会把 IO 打满。正确做法：用 <code>CREATE INDEX CONCURRENTLY</code>，或者低峰期建、用批量加载再建索引。</p>
-<pre><code class="language-sql">-- 在线建索引，不锁写
-CREATE INDEX CONCURRENTLY idx_doc_hnsw
-    ON documents USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);</code></pre>
-<h3>维度选择</h3>
-<p>别用 3072 维硬撑。pgvector 里维度每翻一倍，内存和查询成本都翻倍。中文 RAG 我建议 1024 维起步，不够再上 1536。</p>
 <div class="callout callout-tip">
-<div class="callout-title">先灌数据再建索引</div>
-空表上建索引毫无意义，而且小表优化器会直接走 Seq Scan，你测出来"索引没用"其实是数据太少。正确姿势：先批量灌入几百万条，<code>ANALYZE</code>，再建索引，最后用 EXPLAIN 确认走了 Index Scan。
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>要建向量索引</strong>数据量大了要建 ivfflat 索引，不然全表扫描很慢。</li>
+<li><strong>维度不要太高</strong>维度太高性能会下降，一般几百维合适。</li>
+</ul>
 </div>
 
-<h2>FAQ</h2>
-<p><strong>Q：pgvector 能扛多大数据量？</strong><br/>单表 500 万以内、QPS 几百，完全没问题。到千万级、亿级，延迟和内存开始吃紧，这时候考虑迁 Milvus 这类分布式方案。别在 pgvector 上硬撑分片。</p>
-<p><strong>Q：HNSW 和 IVFFlat 选哪个？</strong><br/>默认 HNSW，召回率高、参数少。只有在数据量极大、内存吃紧时才试 IVFFlat，而且记得定期重新聚类（数据分布变了 IVF 会退化）。</p>
-<p><strong>Q：pgvector 支持向量量化吗？</strong><br/>0.7+ 有 halfvec、bit、sparsevec 类型可以省空间。极致压缩要靠降维或换独立方案，pgvector 的量化能力相对有限。</p>
-
-<h2>我的结论</h2>
-<p>pgvector 是向量检索的"初恋"——上手快、生态熟、和业务数据天然融合，中小项目闭眼用。记住三件事：<strong>维度建表时定死、索引算子和查询度量对齐、HNSW 靠内存吃饭</strong>。当你单表过千万、QPS 过千、开始琢磨水平扩展时，就是时候看下一篇的选型对比了。</p>
                     </div>
                 </article>
                 <nav class="article-nav">
