@@ -81,187 +81,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Grafana 仪表盘</h1>
+                        <h1 class="article-title">Grafana：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ 监控,可观测性,Prometheus,Grafana</span>
+                            <span class="meta-item">🏷️ Grafana</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-
-<h2>Grafana 的定位：不是监控系统，是监控系统的"驾驶舱"</h2>
-<p>很多人第一次装 Grafana 的认知是"它能收集监控数据"，其实它自己什么数据都不存。Grafana 是一个纯展示层：左边连各种数据源（Prometheus、Elasticsearch、MySQL、InfluxDB、L...</p>
-<p>它的价值在于三件事：<strong>统一入口</strong>（所有系统的图在一个页面看）、<strong>灵活拼接</strong>（一个 Dashboard 跨多个数据源）、<strong>分享协作</strong>（一键链接、快照、内嵌）。2024 年 Grafana Labs 上市后，Grafana 已经是开源可观测性事实标准的展示层。</p>
-
-<h2>核心概念：DataSource / Panel / Dashboard / Variable</h2>
-<p>四个核心概念，从下到上搭起来：</p>
-<table>
-<thead><tr><th>概念</th><th>类比</th><th>关键配置</th></tr></thead>
-<tbody>
-<tr><td>DataSource</td><td>数据库连接</td><td>地址、凭据、默认时间间隔</td></tr>
-<tr><td>Panel</td><td>一张图</td><td>查询 + 可视化类型 + 阈值</td></tr>
-<tr><td>Dashboard</td><td>一整块大屏</td><td>Panel 网格 + 时间范围</td></tr>
-<tr><td>Variable</td><td>顶部下拉框</td><td>${service} 占位，切换全页联动</td></tr>
-</tbody>
-</table>
-
-<h2>架构原理：查询如何从浏览器走到后端</h2>
-<p>Grafana 是 Go 写的单体应用，内部加了一层<strong>数据源代理</strong>：浏览器不直接访问 Prometheus，而是查询发给 Grafana 后端，由后端代查 Prometheus，再把结果统一格式后返回浏览器渲染。这个设计带来三个好处：凭据集中管理、跨域问题不存在、可以做查询缓存。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Grafana怎么帮你解决。</p>
 
 <div class="mermaid">
 flowchart LR
-    U[值班工程师浏览器] --> |HTTPS| G[grafana-server:3000]
-    subgraph Grafana内部
-        AUTH[认证/组织/权限]
-        PROXY[DataSource Proxy]
-        CACHE[Query Cache]
-    end
-    G --> AUTH --> PROXY
-    PROXY --> CACHE
-    PROXY -->|PromQL| PROM[(Prometheus)]
-    PROXY -->|DSL| ES[(Elasticsearch)]
-    PROXY -->|LogQL| LOKI[(Loki)]
-    PROM --> PROXY
-    ES --> PROXY
-    LOKI --> PROXY
-    PROXY -->|JSON| U
-
+    A[Prometheus] --> B[Grafana]
+    B --> C[漂亮的监控看板]
+    B --> D[告警通知]
 </div>
 
-<p>架构上有两个生产实践要点：① <strong>Grafana 本身无状态</strong>，所有 Dashboard 存在后端数据库（SQLite/MySQL/Postgres），所以多副本部署时要挂同一个 DB；② 不要把 Grafana 暴露在公网，它一旦有未授权访问，等于把所有后端数据源的地址和凭据路径都公开了。</p>
+<h2>1. Prometheus 自带界面太丑</h2>
 
-<h2>安装与配置：Provisioning 声明式管理</h2>
-<p>手动在 UI 里点点点配 Dashboard 是 demo 做法，生产必须用 <strong>Provisioning</strong>：把数据源和 Dashboard 写成 YAML 文件挂进 Grafana 容器，启动时自动加载，Git 管理、CI 同步。下面是完整的 docker-compose + provisioning：</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>Prometheus 看指标不方便，做不了看板。</p>
+</div>
 
-<pre><code class="language-yaml"># grafana.yaml —— 数据源 provisioning，挂到 /etc/grafana/provisioning/datasources/
-apiVersion: 1
-datasources:
-  - name: Prometheus
-    type: prometheus
-    access: proxy
-    url: http://prometheus:9090
-    isDefault: true
-    editable: false
-    jsonData:
-      timeInterval: "15s"
+<p><strong>怎么解决？</strong>Grafana 接 Prometheus，做漂亮的监控看板。</p>
 
-  - name: Elasticsearch
-    type: elasticsearch
-    access: proxy
-    url: http://elasticsearch:9200
-    database: "app-logs-*"
-    jsonData:
-      esVersion: "8.0.0"
-      timeField: "@timestamp"
-</code></pre>
+<h2>2. 想让老板看监控数据</h2>
 
-<pre><code class="language-bash"># 一键起 Grafana，挂载 provisioning 目录和 Dashboards JSON
-docker run -d --name grafana \
-  -p 3000:3000 \
-  -v /opt/grafana/provisioning:/etc/grafana/provisioning \
-  -v /opt/grafana/dashboards:/var/lib/grafana/dashboards \
-  -e GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/gf_pwd \
-  -e GF_USERS_ALLOW_SIGN_UP=false \
-  -e GF_AUTH_ANONYMOUS_ENABLED=false \
-  grafana/grafana:11.2.0
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>老板要看系统运行状态，你给他看命令行？</p>
+</div>
 
-# 验证登录
-curl -s http://admin:admin@localhost:3000/api/health | python3 -m json.tool
+<p><strong>怎么解决？</strong>Grafana 做个大屏，服务器状态一目了然。</p>
 
-# 从社区导入一个现成 Dashboard（Node Exporter Full 是必装的 1860 号）
-curl -s http://admin:admin@localhost:3000/api/dashboards/uid/1860
-</code></pre>
+<h2>3. 想做自定义监控图表</h2>
 
-<h2>实战：一个生产级服务 Dashboard 的骨架</h2>
-<p>下面这段 Dashboard JSON 展示了三个关键技巧：顶部变量下拉、按变量切换的 Panel、阈值告警色。直接保存为 <code>service-overview.json</code> 挂进 dashboards 目录即可被自动加载：</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你想看某个接口的 QPS 和响应时间曲线。</p>
+</div>
 
-<pre><code class="language-json">{
-  "title": "服务总览",
-  "tags": ["service"],
-  "timezone": "browser",
-  "templating": {
-    "list": [
-      {
-        "name": "service",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(http_requests_total, service)",
-        "refresh": 1
-      },
-      {
-        "name": "route",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(http_requests_total{service=\"$service\"}, route)",
-        "includeAll": true
-      }
-    ]
-  },
-  "panels": [
-    {
-      "type": "timeseries",
-      "title": "QPS（按路由）",
-      "datasource": "Prometheus",
-      "targets": [
-        {
-          "expr": "sum by (route) (rate(http_requests_total{service=\"$service\", route=~\"$route\"}[5m]))",
-          "legendFormat": "{{route}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "red", "value": 1000}
-            ]
-          }
-        }
-      },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
-    },
-    {
-      "type": "stat",
-      "title": "当前错误率",
-      "datasource": "Prometheus",
-      "targets": [
-        {
-          "expr": "sum(rate(http_requests_total{service=\"$service\", status=~\"5..\"}[5m])) / sum(rate(http_requests_total{service=\"$service\"}[5m]))"
-        }
-      ],
-      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0}
-    }
-  ]
-}
-</code></pre>
+<p><strong>怎么解决？</strong>Grafana 拖拖拽拽就能做图表，不用写代码。</p>
 
-<h2>最佳实践</h2>
+<h2>Grafana 常用面板</h2>
+
+<table>
+<thead><tr><th>面板</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td>Graph</td><td>看趋势曲线</td></tr>
+<tr><td>Stat</td><td>看当前值</td></tr>
+<tr><td>Gauge</td><td>仪表盘</td></tr>
+<tr><td>Table</td><td>表格展示</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>Dashboard 按"角色"分层，不按"技术"分层</strong>：值班同学需要"服务健康总览"（错误率/P99/资源水位），开发同学需要"接口详情"（单接口 QPS/错误/慢查询），DBA 看数据库专属面板。不要试图做一个"所有指标都在一页"的巨型 Dashboard——那不是驾驶舱，是杂物间。</li>
-<li><strong>Panel 必须有明确的单位</strong>：Bps/req/s/ms/%，没有单位的折线图是事故现场的噪音。</li>
-<li><strong>颜色编码只表达"状态"，不表达"美观"</strong>：绿=正常、黄=警告、红=故障。不要用彩虹色区分服务，超过 5 条线的图用变量切换。</li>
-<li><strong>用快照分享，不用链接分享</strong>：链接是实时数据，事故复盘时数据已经变了；快照（Snapshot）把当时的图和查询固化下来。</li>
-<li><strong>Provisioning + Git 是唯一可持续的 Dashboard 管理方式</strong>：UI 改完随手导出 JSON 提交，杜绝"线上有 500 个 Dashboard，没人知道哪个是真的"。</li>
-<li><strong>告警不要放在 Grafana</strong>：Grafana Alerting 适合临时通知，正式告警一律 Prometheus/AlertManager，避免双份规则。</li>
+<li><strong>看板要分面板</strong>按业务、按服务分面板，不要所有指标堆一个看板。</li>
+<li><strong>告警接进去</strong>Grafana 也能配告警，和 Prometheus AlertManager 配合用。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：Grafana 能直接连 MySQL 展示业务数据吗？</h3>
-<p>能。Grafana 支持 MySQL/Postgres/SQL Server 作为数据源，你写 SQL 它渲染成图。常见用法：把订单表按天聚合出"每日 GMV 折线图"、把工单表做成"未解决工单 Top10 表格"。但注意：这种用法要给 Grafana 一个只读账号，且查询必须加时间范围 LIMIT，否则一条慢 SQL 能把业务库拖垮。</p>
-<h3>Q2：Dashboard 打开很慢，图转圈半天出不来，怎么排查？</h3>
-<p>按顺序排查：① 点开 Panel 的 Inspect → Query，看 PromQL 本身耗时；② 换 1 小时时间范围试试，跨度太大 Prometheus 扫的序列就多；③ 看浏览器 Network，是不是字体/插件加载慢；④ 多 Dashboard 同开时，Prometheus CPU 是否打满——这种情况要上 Recording Rule 预聚合。</p>
-<h3>Q3：变量下拉框里没有我想选的实例，怎么办？</h3>
-<p>变量查询是 <code>label_values(metric, label)</code>，它依赖 Prometheus 里<strong>当前时间窗口</strong>还存在的序列。实例下线超过保留时间就查不到。解决：① 把变量查询的时间范围改成"过去 24h"；② 关键环境用 <code>custom</code> 类型变量手写枚举；③ 长期停机的实例标签加个 <code>decommissioned="true"</code> 过滤掉。</p>
-<h3>Q4：Grafana 要不要开匿名访问？怎么给外部团队分享仪表盘？</h3>
-<p>生产环境<strong>不要</strong>开匿名——一旦开了等于无认证裸奔。正确做法：给外部团队建只读 Organization/团队账号、配 SSO（OAuth/OIDC），分享时用 <code>snapshot</code> 快照（数据固化、可设密码/过期时间），或用 Grafana Enterprise 的报表功能把图导出 PDF 邮件发送。</p>
-
-<div class="callout callout-danger">
-<div class="callout-title">我踩过的坑：匿名访问把数据源地址泄露了</div>
-<p>早期为了让老板方便看图，临时开了 <code>GF_AUTH_ANONYMOUS_ENABLED=true</code>，结果任何知道域名的人都能看 Dashboard，还能通过 Inspect 面板看到 Prometheus 的内部地址和查询语句。虽然 Prometheus 没暴露公网，但内网拓扑泄露了。后来立刻关掉匿名、配了 OIDC SSO，外部团队一律走只读账号。<strong>匿名访问等于把整个监控盘的目录开放给所有人。</strong></p>
 </div>
-
-<h2>总结</h2>
-<p>Grafana 的本质是<strong>"数据源无关的图表组装器"</strong>：DataSource 抽象后端、Variable 抽象服务维度、Panel 抽象可视化、Dashboard 组织布局。用 Provisioning 把它纳入 GitOps，按角色分层建 Dashboard，告警交回 Prometheus，它就是你团队最稳定的一块监控看板。下一篇我们离开指标领域，进入日志世界——ELK 栈。</p>
 
                     </div>
                 </article>
