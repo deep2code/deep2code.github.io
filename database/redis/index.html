@@ -83,164 +83,68 @@
             <main id="body-content">
 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Redis 实战：从你遇到的问题出发</h1>
+                        <h1 class="article-title">Redis：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Redis 入门</span>
+                            <span class="meta-item">🏷️ Redis</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-
-<p>你写了个商品详情页，每次打开都要查数据库，1000个用户同时刷新，数据库直接被打挂了。你想：能不能把热点数据存起来，不用每次都查数据库？</p>
-<p>或者：你想做个网站排行榜，每秒钟要更新 100 次排名，用数据库锁来做？估计库早就死了。</p>
-<p>这些问题，Redis 全能解决。这篇不讲理论，就讲你真的会遇到的问题，以及怎么用 Redis 解决。</p>
-
-<!-- 场景1：数据库扛不住了 -->
-<h2 id="problem1">场景一：数据库被热点数据打挂了</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你做了个电商网站，首页有 100 个热门商品，每个用户打开首页都要查一次数据库。大促的时候，1 万人同时打开，数据库每秒要处理 1 万次查询，CPU 直接 100%，页面开始超时。</p>
-</div>
-
-<p><strong>Redis 怎么解决？</strong>把热点商品数据提前存到 Redis 里，用户访问的时候直接从 Redis 读，不用查数据库。Redis 是内存数据库，每秒能扛 10 万次以上的读取，比 MySQL 快 100 倍。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Redis怎么帮你解决。</p>
 
 <div class="mermaid">
 flowchart LR
-    A[用户请求] --> B{Redis 有缓存?}
-    B -->|有| C[直接返回缓存数据]
-    B -->|没有| D[查 MySQL 数据库]
-    D --> E[结果写入 Redis]
+    A[请求] --> B{Redis 有数据?}
+    B -->|有| C[直接返回]
+    B -->|没有| D[查数据库]
+    D --> E[写入 Redis]
     E --> C
 </div>
 
-<pre><code class="language-python"># 伪代码：商品详情页查询
-def get_product(product_id):
-    # 先查 Redis
-    product = redis.get(f'product:{product_id}')
-    if product:
-        return product  # 直接返回，不用查数据库
-    
-    # Redis 没有，再查数据库
-    product = db.query('SELECT * FROM products WHERE id = ?', product_id)
-    
-    # 查到了，写到 Redis，下次就不用查数据库了
-    redis.setex(f'product:{product_id}', 3600, product)  # 缓存1小时
-    return product</code></pre>
-
-<p>这就是最常用的<strong>缓存模式</strong>：先查缓存，缓存没有再查数据库，查到了再写回缓存。这样 99% 的请求都直接打在 Redis 上，数据库压力瞬间小了 100 倍。</p>
-
-<!-- 场景2：排行榜怎么弄 -->
-<h2 id="problem2">场景二：你想做个实时排行榜，数据库扛不住</h2>
+<h2>1. 数据库被读请求打挂</h2>
 
 <div class="callout callout-info">
 <div class="callout-title">你遇到的问题</div>
-<p>你做了个短视频网站，要做一个"今日最热视频榜"，每秒钟有几千个点赞。你用 MySQL 来存点赞数，每次点赞都要 UPDATE 一下，还要 ORDER BY 排序取前 100 名。数据库锁都快打坏了。</p>
+<p>首页一个接口每秒被调用几万次，数据库 CPU 直接 100%。</p>
 </div>
 
-<p><strong>Redis 怎么解决？</strong>用 Redis 的 Sorted Set（有序集合），天然就是为排行榜设计的。每个视频是一个成员，点赞数是分数，自动按分数排序。</p>
+<p><strong>怎么解决？</strong>把热点数据放 Redis，内存读取，比数据库快 100 倍。</p>
 
-<pre><code class="language-bash"># 用户给视频123点了个赞
-ZINCRBY top_videos 1 video:123
+<h2>2. 排行榜怎么做</h2>
 
-# 用户又点了一个
-ZINCRBY top_videos 1 video:123
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你要实时显示点赞排行榜、播放排行榜。</p>
+</div>
 
-# 取前100名最热视频
-ZREVRANGE top_videos 0 99 WITHSCORES</code></pre>
+<p><strong>怎么解决？</strong>Redis 的 ZSet 天然适合排行榜，自动排序。</p>
+
+<h2>3. 接口限流怎么做</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你要限制每个用户每分钟最多调 100 次接口。</p>
+</div>
+
+<p><strong>怎么解决？</strong>用 Redis 计数器，每次调用加一，到了就拒绝。</p>
+
+<h2>Redis 常用数据结构</h2>
 
 <table>
-<thead><tr><th>Redis 数据结构</th><th>什么时候用</th></tr></thead>
+<thead><tr><th>结构</th><th>用途</th></tr></thead>
 <tbody>
-<tr><td>String</td><td>缓存单个值：用户信息、商品信息、配置项</td></tr>
-<tr><td>Hash</td><td>缓存对象：一个商品的多个字段，不用整个存</td></tr>
-<tr><td>List</td><td>消息队列：先进先出，简单的任务队列</td></tr>
-<tr><td>Set</td><td>去重：标签、共同好友、抽奖去重</td></tr>
-<tr><td>Sorted Set</td><td>排行榜：点赞榜、销量榜、按分数排序</td></tr>
-</tbody>
-</table>
-
-<!-- 场景3：接口被刷爆了 -->
-<h2 id="problem3">场景三：你的接口被恶意刷，服务器扛不住</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你做了个登录接口，有人写脚本一秒钟发 1000 次请求试密码，你的服务器 CPU 直接跑满，正常用户都登录不了。你想限制每个 IP 每分钟最多试 5 次。</p>
-</div>
-
-<p><strong>Redis 怎么解决？</strong>用 Redis 的计数器 + 过期时间，完美实现限流。</p>
-
-<pre><code class="language-python"># 伪代码：登录限流
-def login(ip):
-    key = f'login_attempt:{ip}'
-    
-    # 这个IP已经试了几次了？
-    attempts = redis.get(key)
-    if attempts and int(attempts) >= 5:
-        return '尝试次数太多，请10分钟后再试'
-    
-    # 次数加1，第一次的话设置10分钟过期
-    redis.incr(key)
-    redis.expire(key, 600)
-    
-    # 正常登录逻辑
-    return do_login()</code></pre>
-
-<p>现在一个 IP 一分钟最多试 5 次，多了就直接拒绝。用 Nginx 也能做限流，但 Redis 更灵活，你可以按用户 ID、按接口、按各种维度来限。</p>
-
-<!-- 场景4：分布式锁 -->
-<h2 id="problem4">场景四：多台服务器同时处理同一个任务，重复执行了</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你用了 3 台服务器跑定时任务，每天凌晨 2 点要发一次系统通知。结果 3 台服务器同时跑了这个任务，用户收到了 3 条通知。你想：能不能让这个任务同一时间只有一台服务器在跑？</p>
-</div>
-
-<p><strong>Redis 怎么解决？</strong>用 Redis 的分布式锁，保证同一时间只有一个进程能拿到锁，执行任务。</p>
-
-<pre><code class="language-python"># 伪代码：分布式锁
-def send_daily_notification():
-    # 尝试加锁，锁10分钟自动过期
-    lock_key = 'lock:daily_notification'
-    locked = redis.set(lock_key, '1', nx=True, ex=600)
-    
-    if not locked:
-        return '已经有别的服务器在跑了，我退出'
-    
-    try:
-        # 正常发通知逻辑
-        do_send_notification()
-    finally:
-        # 执行完释放锁
-        redis.delete(lock_key)</code></pre>
-
-<p>现在 3 台服务器同时启动任务，只有一台能拿到锁，其他的直接退出。用户只会收到 1 条通知。</p>
-
-<!-- 场景5：缓存雪崩 -->
-<h2 id="problem5">场景五：缓存全挂了，数据库直接被打垮</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你给所有缓存都设了 1 小时过期，结果整点的时候，所有缓存同时过期了，瞬间所有请求都打到数据库上，数据库直接挂了。</p>
-</div>
-
-<p><strong>怎么解决？</strong>不要用固定的过期时间，加一个随机数，让过期时间分散开。</p>
-
-<pre><code class="language-python"># 不要这样：所有缓存都1小时后同时过期
-redis.setex(key, 3600, value)
-
-# 要这样：过期时间加随机数，1小时左右，有的早有的晚
-redis.setex(key, 3600 + random.randint(0, 300), value)</code></pre>
-
-<p>这样缓存就不会在同一时间集中过期，请求不会瞬间全部打到数据库上。</p>
+<tr><td>String</td><td>缓存、计数器</td></tr>
+<tr><td>Hash</td><td>存对象</td></tr>
+<tr><td>List</td><td>队列、时间线</td></tr>
+<tr><td>Set</td><td>去重、共同好友</td></tr>
+<tr><td>ZSet</td><td>排行榜、延迟队列</td></tr>
+</tbody></table>
 
 <div class="callout callout-tip">
 <div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>不要把 Redis 当数据库用：</strong>Redis 是缓存，不是持久化数据库，重启可能丢数据。重要数据还是要存 MySQL。</li>
-<li><strong>不要存大 Key：</strong>一个 Key 存 1MB 以上就会变慢，拆成多个小 Key。</li>
-<li><strong>一定要设过期时间：</strong>不设过期时间，内存迟早被占满，Redis 直接挂。</li>
-<li><strong>缓存穿透：</strong>如果查一个不存在的 Key，每次都打到数据库，要把空结果也缓存一下。</li>
+<li><strong>不要把 Redis 当数据库</strong>Redis 是缓存，重要数据要持久化到数据库。</li>
+<li><strong>一定要设过期时间</strong>不设过期时间，数据永远占着内存。</li>
 </ul>
 </div>
 
