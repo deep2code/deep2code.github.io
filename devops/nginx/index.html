@@ -83,70 +83,159 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">Nginx 入门：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ Nginx</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Nginx怎么帮你解决。</p>
+    <header class="article-header">
+        <h1 class="article-title">Nginx 深度原理：为什么能扛 10 万并发？</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ Nginx</span>
+        </div>
+    </header>
+    <p>很多人用 Nginx 只会配个反向代理，但不知道为什么它能扛 10 万并发，比 Apache 高这么多，也不知道事件驱动、worker 进程模型怎么回事。这篇从底层原理讲透 Nginx。</p>
 
-<div class="mermaid">
-flowchart TB
-    A[Nginx] --> B[反向代理]
-    B --> C[负载均衡]
-    C --> D[静态文件]
-</div>
+    <h2>核心原理1：事件驱动模型：为什么这么高并发？</h2>
+    <p>Apache 一个连接一个线程，10 万连接要 10 万线程，上下文切换开销巨大。Nginx 事件驱动，一个 worker 处理上万连接。</p>
+    <div class="mermaid">
+flowchart TD
+    A[Nginx 架构] --> B[Master 进程]
+    B --> C[Worker 1]
+    B --> D[Worker 2]
+    B --> E[Worker 3]
+    C --> F[epoll 事件驱动]
+    D --> F
+    E --> F
+    F --> G[万级连接]
+         
+    </div>
+    <h3>对比 Apache</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>对比项</th>
+                <th>Apache 进程/线程</th>
+                <th>Nginx 事件驱动</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>连接模型</td>
+                <td>一连接一线程</td>
+                <td>一 worker 多连接</td>
+            </tr>
+            <tr>
+                <td>并发能力</td>
+                <td>几千就扛不住</td>
+                <td>几万到几十万</td>
+            </tr>
+            <tr>
+                <td>内存占用</td>
+                <td>每个线程几 MB</td>
+                <td>每个 worker 几 MB</td>
+            </tr>
+            <tr>
+                <td>上下文切换</td>
+                <td>频繁切换开销大</td>
+                <td>极少切换</td>
+            </tr>
+            <tr>
+                <td>适合场景</td>
+                <td>动态内容</td>
+                <td>静态资源、反向代理</td>
+            </tr>
+        </tbody>
+    </table>
 
-<h2>1. 怎么把请求转发到后端</h2>
+    <h2>核心原理2：反向代理原理：请求怎么转发的？</h2>
+    <p>反向代理就是用户访问 Nginx，Nginx 再把请求转发给后端服务器，后端返回结果再给用户。</p>
+    <div class="mermaid">
+flowchart LR
+    A[用户] -->|请求| B[Nginx]
+    B --> C{负载均衡}
+    C -->|轮询| D[后端服务器1]
+    C -->|轮询| E[后端服务器2]
+    C -->|轮询| F[后端服务器3]
+    D --> G[返回结果]
+    E --> G
+    F --> G
+    G --> B --> A
+         
+    </div>
+    <h3>负载均衡策略</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>策略</th>
+                <th>原理</th>
+                <th>适用场景</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>轮询</td>
+                <td>挨个分配</td>
+                <td>通用场景</td>
+            </tr>
+            <tr>
+                <td>权重</td>
+                <td>按权重分配</td>
+                <td>服务器性能不一样</td>
+            </tr>
+            <tr>
+                <td>ip_hash</td>
+                <td>同一个 IP 固定到同一台</td>
+                <td>需要会话保持</td>
+            </tr>
+            <tr>
+                <td>least_conn</td>
+                <td>分给连接数最少的</td>
+                <td>长连接场景</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>前端要访问后端服务，跨域。</p>
-</div>
+    <h2>核心原理3：动静分离原理</h2>
+    <p>静态资源（图片、CSS、JS）Nginx 直接返回，动态请求转发给后端应用，性能差 10 倍。</p>
+    <div class="mermaid">
+flowchart LR
+    A[请求] --> B{Nginx}
+    B -->|静态文件 .jpg/.css| C[直接读磁盘 返回]
+    B -->|动态请求 /api/*| D[转发给后端应用]
+         
+    </div>
+    <h3>动静分离优势</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>优势</th>
+                <th>说明</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>性能高</td>
+                <td>静态资源 Nginx 直接返回，不用走应用</td>
+            </tr>
+            <tr>
+                <td>省资源</td>
+                <td>应用只处理动态请求，省资源</td>
+            </tr>
+            <tr>
+                <td>可缓存</td>
+                <td>静态资源可以加 CDN，进一步加速</td>
+            </tr>
+            <tr>
+                <td>解耦</td>
+                <td>前后端分离，前端部署静态资源</td>
+            </tr>
+        </tbody>
+    </table>
 
-<p><strong>怎么解决？</strong>Nginx 配反向代理，/api 转发到后端端口。</p>
-
-<h2>2. Nginx 是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Nginx 是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>高性能 Web 服务器，做反向代理、负载均衡、静态文件。</p>
-
-<h2>3. 常用配置</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Nginx 常用配置有哪些？</p>
-</div>
-
-<p><strong>怎么解决？</strong>反向代理、负载均衡、HTTPS、静态文件服务。</p>
-
-<h2>常用功能</h2>
-
-<table>
-<thead><tr><th>功能</th><th>用途</th></tr></thead>
-<tbody>
-<tr><td>反向代理</td><td>转发请求到后端</td></tr>
-<tr><td>负载均衡</td><td>多台后端分流</td></tr>
-<tr><td>静态文件</td><td>托管前端静态文件</td></tr>
-</tbody></table>
-
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>改完 reload</strong>改完配置 nginx -s reload 生效。</li>
-<li><strong>先检查语法</strong>改配置前 nginx -t 检查语法。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+        </ul>
+    </div>
+</article>
 <nav class="article-nav">
 <span></span>
 <a class="nav-next" href="install/"><span class="nav-label">下一篇 →</span><span class="nav-title">源码安装</span></a>

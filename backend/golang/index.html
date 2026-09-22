@@ -83,70 +83,156 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">Go 语言入门：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ Go</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Go怎么帮你解决。</p>
+    <header class="article-header">
+        <h1 class="article-title">Go 深度原理：为什么云原生都用 Go？</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ Go</span>
+        </div>
+    </header>
+    <p>Docker、K8s、etcd、Istio 全是 Go 写的，为什么云原生圈都选 Go？因为它并发性能好、部署简单、编译快。这篇从底层原理讲透 Go。</p>
 
-<div class="mermaid">
-flowchart TB
-    A[Go] --> B[简洁]
-    B --> C[高性能]
-    C --> D[并发原生]
-</div>
+    <h2>核心原理1：Goroutine：为什么轻量 100 倍？</h2>
+    <p>Java 线程栈默认 1MB，开几千个就内存爆炸。Go goroutine 栈初始才 2KB，能开几十万个，切换开销极小。</p>
+    <div class="mermaid">
+flowchart TD
+    A[并发模型] --> B[Java 线程]
+    A --> C[Go Goroutine]
+    B --> B1[栈 1MB]
+    B --> B2[内核态切换]
+    B --> B3[几千就扛不住]
+    C --> C1[栈 2KB 动态扩容]
+    C --> C2[用户态调度]
+    C --> C3[几十万个没问题]
+         
+    </div>
+    <h3>对比 Java 线程</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>对比项</th>
+                <th>Java 线程</th>
+                <th>Go Goroutine</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>栈大小</td>
+                <td>1MB 固定</td>
+                <td>2KB 起步，动态伸缩</td>
+            </tr>
+            <tr>
+                <td>切换方式</td>
+                <td>内核态切换</td>
+                <td>用户态调度 M:N</td>
+            </tr>
+            <tr>
+                <td>切换开销</td>
+                <td>几微秒</td>
+                <td>几百纳秒</td>
+            </tr>
+            <tr>
+                <td>并发数量</td>
+                <td>几千</td>
+                <td>几十万</td>
+            </tr>
+            <tr>
+                <td>调度器</td>
+                <td>操作系统调度</td>
+                <td>Go 运行时自己调度</td>
+            </tr>
+        </tbody>
+    </table>
 
-<h2>1. 学什么后端语言</h2>
+    <h2>核心原理2：GMP 调度器原理</h2>
+    <p>Go 不是简单的把 goroutine 丢给内核线程，而是自己实现了 GMP 调度器，M:N 调度，几个 goroutine 在几个线程上跑。</p>
+    <div class="mermaid">
+flowchart LR
+    A[G Goroutine] --> C[P 处理器]
+    B[G Goroutine] --> C
+    C --> D[M 内核线程]
+    D --> E[OS 线程]
+    C --> F[本地队列]
+    F --> G[全局队列]
+         
+    </div>
+    <h3>GMP 组件</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>组件</th>
+                <th>含义</th>
+                <th>作用</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>G</td>
+                <td>Goroutine</td>
+                <td>要执行的任务，初始栈 2KB</td>
+            </tr>
+            <tr>
+                <td>M</td>
+                <td>内核线程</td>
+                <td>真正执行代码的 OS 线程</td>
+            </tr>
+            <tr>
+                <td>P</td>
+                <td>处理器/上下文</td>
+                <td>管理本地队列，限制并发数</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>学后端选 Java、Go 还是 Python？</p>
-</div>
+    <h2>核心原理3：Channel 原理：怎么通信的？</h2>
+    <p>Go 提倡 "不要通过共享内存来通信，而要通过通信来共享内存"，channel 就是同步通信的机制。</p>
+    <div class="mermaid">
+flowchart LR
+    A[Goroutine A] -->|data| B[Channel]
+    B -->|data| C[Goroutine B]
+    B --> D[环形缓冲区]
+    B --> E[等待队列]
+         
+    </div>
+    <h3>Channel 类型</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Channel 类型</th>
+                <th>原理</th>
+                <th>适用场景</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>无缓冲 channel</td>
+                <td>同步发送接收，直接握手</td>
+                <td>同步事件</td>
+            </tr>
+            <tr>
+                <td>有缓冲 channel</td>
+                <td>环形缓冲区，满了才阻塞</td>
+                <td>解耦生产消费</td>
+            </tr>
+            <tr>
+                <td>单向 channel</td>
+                <td>只读或只写</td>
+                <td>限制权限，安全</td>
+            </tr>
+        </tbody>
+    </table>
 
-<p><strong>怎么解决？</strong>做微服务、高并发选 Go，做企业应用选 Java，做脚本/AI 选 Python。</p>
-
-<h2>2. Go 是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Go 语言是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>Google 开源的编程语言，简洁、高性能、原生并发。</p>
-
-<h2>3. Go 有什么优势</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Go 有什么优势？</p>
-</div>
-
-<p><strong>怎么解决？</strong>编译快、部署简单（单二进制）、并发模型简单、性能好。</p>
-
-<h2>语言对比</h2>
-
-<table>
-<thead><tr><th>语言</th><th>适合</th></tr></thead>
-<tbody>
-<tr><td>Go</td><td>微服务/高并发</td></tr>
-<tr><td>Java</td><td>企业级应用</td></tr>
-<tr><td>Python</td><td>脚本/AI/快速开发</td></tr>
-</tbody></table>
-
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>做后端选 Go</strong>做云原生、微服务后端选 Go。</li>
-<li><strong>Go 很简单</strong>Go 语法很简单，比 Java 简单很多。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>goroutine 开多了也要控，不是无限开，要有 worker pool</li>
+            <li>defer 不是免费的，循环里大量 defer 会累积，注意及时释放</li>
+            <li>GC 停顿虽然短，但也要注意，大堆小对象会影响</li>
+            <li>slice 不是线程安全的，并发读写要加锁</li>
+        </ul>
+    </div>
+</article>
 
                 <nav class="article-nav">
 <span></span>
