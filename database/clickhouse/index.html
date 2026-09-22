@@ -81,70 +81,150 @@
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
                 <article class="article">
-                    <header class="article-header">
-                        <h1 class="article-title">ClickHouse 入门：从你遇到的问题出发</h1>
-                        <div class="article-meta">
-                            <span class="meta-item">🏷️ ClickHouse</span>
-                            <span class="meta-item reading-time"></span>
-                        </div>
-                    </header>
-                    <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及ClickHouse怎么帮你解决。</p>
+    <header class="article-header">
+        <h1 class="article-title">ClickHouse 深度原理：为什么OLAP这么快？</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ ClickHouse</span>
+        </div>
+    </header>
+    <p>ClickHouse 单表查询能比 MySQL 快 100 倍，是 OLAP 领域最快的开源数据库。为什么这么快？因为列式存储 + 向量化执行。这篇讲透底层原理。</p>
 
-<div class="mermaid">
-flowchart TB
-    A[ClickHouse] --> B[OLAP]
-    B --> C[列式存储]
-    C --> D[查询快]
-</div>
+    <h2>核心原理1：列式存储原理：为什么快 100 倍？</h2>
+    <p>MySQL 是行式存储，查 100 万行的 3 个字段，要把整行都读出来。ClickHouse 列式存储，每个列单独存，只读需要的列，磁盘 IO 少 10 倍。</p>
+    <div class="mermaid">
+flowchart TD
+    A[存储方式] --> B[行式存储 MySQL]
+    A --> C[列式存储 ClickHouse]
+    B --> B1[整行存在一起]
+    B --> B2[查3列要读所有列]
+    C --> C1[每列单独存]
+    C --> C2[查3列只读3列 省IO]
+         
+    </div>
+    <h3>行式 vs 列式对比</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>对比项</th>
+                <th>行式存储 MySQL</th>
+                <th>列式存储 ClickHouse</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>存储方式</td>
+                <td>一行一行存</td>
+                <td>一列一列存</td>
+            </tr>
+            <tr>
+                <td>查少量列</td>
+                <td>要读整行，IO 大</td>
+                <td>只读需要的列，IO 小 10~100 倍</td>
+            </tr>
+            <tr>
+                <td>适合场景</td>
+                <td>OLTP 单行读写</td>
+                <td>OLAP 批量统计分析</td>
+            </tr>
+            <tr>
+                <td>压缩比</td>
+                <td>低，行数据杂</td>
+                <td>高，同列数据类型一样，压缩 10 倍</td>
+            </tr>
+        </tbody>
+    </table>
 
-<h2>1. 数据分析查询太慢</h2>
+    <h2>核心原理2：向量化执行原理</h2>
+    <p>ClickHouse 不是一行一行处理，是一批一批（向量）处理，一次处理几千行，利用 CPU SIMD 指令，性能翻好几倍。</p>
+    <div class="mermaid">
+flowchart LR
+    A[行式执行] --> B[一次一行]
+    B --> C[循环 N 次]
+    D[向量化执行] --> E[一次一批 几千行]
+    E --> F[CPU SIMD 并行]
+    F --> G[快 10 倍]
+         
+    </div>
+    <h3>行式执行 vs 向量化执行</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>执行方式</th>
+                <th>原理</th>
+                <th>性能</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>行式执行</td>
+                <td>一次处理一行</td>
+                <td>慢，循环开销大</td>
+            </tr>
+            <tr>
+                <td>向量化执行</td>
+                <td>一次处理一批</td>
+                <td>快，CPU 缓存友好，SIMD 并行</td>
+            </tr>
+            <tr>
+                <td>编译执行</td>
+                <td>把 SQL 编译成机器码</td>
+                <td>进一步减少解释开销</td>
+            </tr>
+        </tbody>
+    </table>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你有几亿条日志，查询要跑几分钟。</p>
-</div>
+    <h2>核心原理3：稀疏索引原理</h2>
+    <p>ClickHouse 不是每行建索引，是稀疏索引，每 8192 行建一个标记，索引很小能放内存，查找快。</p>
+    <div class="mermaid">
+flowchart TD
+    A[稀疏索引] --> B[每8192行一个标记]
+    B --> C[索引块]
+    C --> D[标记1 → 行号 0]
+    C --> E[标记2 → 行号 8192]
+    C --> F[标记3 → 行号 16384]
+    D --> G[查范围 先定位块 再扫块]
+         
+    </div>
+    <h3>ClickHouse 索引类型</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>索引类型</th>
+                <th>原理</th>
+                <th>适用场景</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>主键索引</td>
+                <td>稀疏标记，每8192行一个</td>
+                <td>范围查询定位</td>
+            </tr>
+            <tr>
+                <td>跳数数据</td>
+                <td>跳过不需要的列</td>
+                <td>减少读取数据量</td>
+            </tr>
+            <tr>
+                <td>数据压缩</td>
+                <td>同列数据类型一致</td>
+                <td>压缩比高，省磁盘省 IO</td>
+            </tr>
+        </tbody>
+    </table>
 
-<p><strong>怎么解决？</strong>用 ClickHouse，OLAP 数据库，查询快几百倍。</p>
-
-<h2>2. CK 是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>ClickHouse 是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>开源列式 OLAP 数据库，专门做数据分析查询，快。</p>
-
-<h2>3. 什么场景用</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>什么场景适合用 CK？</p>
-</div>
-
-<p><strong>怎么解决？</strong>日志、埋点、行为数据，分析型查询。</p>
-
-<h2>CK 特点</h2>
-
-<table>
-<thead><tr><th>特点</th><th>说明</th></tr></thead>
-<tbody>
-<tr><td>列式存储</td><td>分析查询快</td></tr>
-<tr><td>向量化执行</td><td>批量处理快</td></tr>
-<tr><td>SQL 支持</td><td>支持标准 SQL</td></tr>
-</tbody></table>
-
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>不要用 CK 当 MySQL</strong>CK 不是事务数据库，不要存订单交易。</li>
-<li><strong>批量导入</strong>CK 适合批量导入，不要一条一条插。</li>
-</ul>
-</div>
-
-                    </div>
-                </article>
+    <h2>新手最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">避坑指南</div>
+        <ul>
+            <li>ClickHouse 不适合频繁单行更新删除，它是 OLAP，批量插入快，更新慢</li>
+            <li>不要建太多列，列存适合宽表但列太多也会影响性能</li>
+            <li>高基数列不要排序键，排序键要选区分度低、经常查的列</li>
+            <li>不要用 ClickHouse 当业务库，它是分析数据库，不支持事务，高并发写入不行</li>
+        </ul>
+    </div>
+</article>
             </main>
         </div>
     </div>

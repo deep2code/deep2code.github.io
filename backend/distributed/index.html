@@ -64,101 +64,129 @@
             <main id="body-content">
                 <article class="article">
     <header class="article-header">
-        <h1 class="article-title">分布式系统入门：从单机到集群</h1>
+        <h1 class="article-title">分布式事务深度原理：CAP 与最终一致性</h1>
         <div class="article-meta">
-            <span class="meta-item">🏷️ 分布式</span>
+            <span class="meta-item">🏷️ 分布式事务</span>
         </div>
     </header>
-    <p>单机扛不住了，要拆成分布式，但一拆就出各种问题：数据不一致、服务挂了、网络超时。这篇讲分布式核心概念，从为什么要拆到常见问题怎么解决。</p>
+    <p>微服务拆分后，一个操作要跨多个服务，怎么保证数据一致？CAP 理论、BASE、两阶段提交、TCC、本地消息表，这些原理要搞懂。</p>
+
+    <h2>核心原理1：CAP 理论：三选二</h2>
+    <p>分布式系统三个特性：一致性 C、可用性 A、分区容错 P，网络一定会断，P 必须要，所以只能在 C 和 A 之间选。</p>
     <div class="mermaid">
 flowchart TD
-    A[单机系统] --> B[性能瓶颈]
-    B --> C[垂直拆分]
-    C --> D[水平拆分]
-    D --> E[分布式问题]
-    E --> F[一致性]
-    E --> G[可用性]
-    E --> H[容错]
+    A[CAP] --> B[一致性 Consistency]
+    A --> C[可用性 Availability]
+    A --> D[分区容错 Partition]
+    D --> D1[网络一定会断 必须选]
+    B --> B1[强一致]
+    C --> C1[高可用]
+         
     </div>
-
-    <h2>单机扛不住了怎么办</h2>
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">你遇到的问题</div>
-        <p>用户量上来了，一台服务器 CPU 跑满，数据库也连不上了。</p>
-    </div>
-    <p><strong>怎么解决？</strong>先垂直拆分：把不同功能拆成不同服务，再水平拆分：每个服务部署多个实例。</p>
-    <pre><code class="language-bash"># 垂直拆分
-用户服务、订单服务、支付服务分开部署
-
-# 水平拆分
-用户服务部署 3 个实例，负载均衡分发</code></pre>
-
-    <h2>分布式了，数据不一致怎么办</h2>
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">你遇到的问题</div>
-        <p>下单成功了，库存没扣减，用户投诉。</p>
-    </div>
-    <p><strong>怎么解决？</strong>用分布式事务保证，或者最终一致，用消息队列异步补偿。</p>
-    <pre><code class="language-bash"># 最终一致：下单后发消息扣库存
-order_service -> mq -> inventory_service
-# 库存失败了，重试 + 人工补偿</code></pre>
-    <h2>CAP 三选二</h2>
+    <h3>CAP 组合对比</h3>
     <table>
         <thead>
             <tr>
-                <th>特性</th>
-                <th>含义</th>
-                <th>牺牲哪个</th>
-                <th>适用场景</th>
+                <th>组合</th>
+                <th>说明</th>
+                <th>常见系统</th>
             </tr>
         </thead>
         <tbody>
             <tr>
                 <td>CP</td>
-                <td>一致性 + 分区容错</td>
-                <td>可用性</td>
-                <td>金融、账务</td>
+                <td>选一致，放弃可用</td>
+                <td>Zookeeper、etcd</td>
             </tr>
             <tr>
                 <td>AP</td>
-                <td>可用性 + 分区容错</td>
-                <td>一致性</td>
-                <td>社交、Feed流</td>
+                <td>选可用，放弃强一致</td>
+                <td>Eureka、Cassandra</td>
             </tr>
             <tr>
                 <td>CA</td>
-                <td>一致性 + 可用性</td>
-                <td>分区容错</td>
-                <td>单机、小系统</td>
+                <td>没有分区，单机</td>
+                <td>单机数据库</td>
             </tr>
         </tbody>
     </table>
-    <h2>分布式常见问题</h2>
+
+    <h2>核心原理2：两阶段提交 2PC 原理</h2>
+    <p>两阶段提交：准备阶段问所有参与者，都准备好了再提交，一个失败就回滚。但同步阻塞，性能差。</p>
+    <div class="mermaid">
+flowchart LR
+    A[协调者] -->|准备| B[参与者1]
+    A -->|准备| C[参与者2]
+    B -->|同意| A
+    C -->|同意| A
+    A -->|提交| B
+    A -->|提交| C
+         
+    </div>
+    <h3>2PC 两阶段流程</h3>
     <table>
         <thead>
             <tr>
+                <th>阶段</th>
+                <th>做什么</th>
                 <th>问题</th>
-                <th>现象</th>
-                <th>解决方案</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>网络超时</td>
-                <td>请求发出去了，不知道成没成</td>
-                <td>重试 + 幂等设计</td>
+                <td>准备阶段</td>
+                <td>所有参与者预提交，锁定资源</td>
+                <td>同步阻塞</td>
             </tr>
             <tr>
-                <td>服务挂了</td>
-                <td>调用失败，接口报错</td>
-                <td>熔断 + 降级 + 兜底</td>
+                <td>提交阶段</td>
+                <td>都同意就提交，有一个不同意就回滚</td>
+                <td>协调者挂了会阻塞</td>
             </tr>
             <tr>
-                <td>数据重复</td>
-                <td>消息重复消费</td>
-                <td>幂等表，用唯一ID去重</td>
+                <td>缺点</td>
+                <td>同步阻塞，单点故障，性能差</td>
+                <td>生产很少用</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>核心原理3：最终一致性方案</h2>
+    <p>生产环境不用 2PC，用最终一致性：TCC、本地消息表、Saga，牺牲强一致，换高可用和性能。</p>
+    <div class="mermaid">
+flowchart TD
+    A[最终一致性] --> B[TCC Try-Confirm-Cancel]
+    A --> C[本地消息表]
+    A --> D[Saga 长事务]
+    B --> B1[业务层面两阶段]
+    C --> C1[本地事务+MQ 异步通知]
+    D --> D1[拆成多个本地事务 失败回滚]
+         
+    </div>
+    <h3>最终一致性方案对比</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>方案</th>
+                <th>原理</th>
+                <th>适用场景</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>TCC</td>
+                <td>Try 预留资源，Confirm 确认，Cancel 取消</td>
+                <td>资金、库存等强一致业务</td>
+            </tr>
+            <tr>
+                <td>本地消息表</td>
+                <td>本地事务写消息，异步发 MQ，消费方消费</td>
+                <td>异步场景，最常用</td>
+            </tr>
+            <tr>
+                <td>Saga</td>
+                <td>长事务拆成小事务，每步有补偿</td>
+                <td>跨服务长流程</td>
             </tr>
         </tbody>
     </table>
@@ -168,10 +196,10 @@ order_service -> mq -> inventory_service
         <div class="callout-icon">❌</div>
         <div class="callout-title">避坑指南</div>
         <ul>
-            <li>能不用分布式就不用，单机先优化到极致再说</li>
-            <li>所有远程调用都要设超时，不然一个服务挂了整个系统都卡住</li>
-            <li>重试一定要加幂等，不然重复请求会出问题</li>
-            <li>分布式事务优先选最终一致，强一致代价太大</li>
+            <li>不要追求强一致，大部分业务最终一致就够了</li>
+            <li>分布式事务一定要做幂等，网络重试会重复执行</li>
+            <li>本地消息表是最实用的方案，简单可靠，生产用得最多</li>
+            <li>TCC 成本高，Try 阶段要预留资源，只有资金类场景才用</li>
         </ul>
     </div>
 </article>
