@@ -82,179 +82,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">JVM 调优与内存管理</h1>
+                        <h1 class="article-title">JVM 调优：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Java 总览</span>
+                            <span class="meta-item">🏷️ JVM</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>JVM 调优是干什么</h2>
-<p>很多人一听 JVM 调优就头大，觉得是高深莫测的黑魔法。其实它就干两件事：让 GC 别停你太久，让内存别爆掉。线上 90% 的"Java 服务变慢了""CPU 飙高""OOM 了"，最后都落到这两件事上。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及JVM怎么帮你解决。</p>
 
-<h2>JVM 内存模型：先搞清楚内存分几块</h2>
-<p>Java 进程的内存按用途分这几块，你调参数之前必须知道每块放什么：</p>
 <div class="mermaid">
-flowchart TD
-    HEAP[堆 Heap<br/>对象实例 GC 主战场] --> YOUNG[新生代 Eden + S0 + S1]
-    HEAP --> OLD[老年代 Old Gen]
-    META[元空间 Metaspace<br/>类信息 常量]
-    STACK[虚拟机栈 每个线程<br/>栈帧 局部变量]
-    DIRECT[直接内存 Direct ByteBuffer<br/>NIO Netty 堆外]
-    NATIVE[本地方法栈 JNI]
-    style HEAP fill:#00add8,stroke:#fff,color:#fff
-    style DIRECT fill:#f59e0b,stroke:#fff,color:#fff
+flowchart TB
+    A[CPU 高/内存高] --> B[jstack/jmap 排查]
+    B --> C{GC 频繁?}
+    C -->|是| D[调堆内存、GC 参数]
+    C -->|否| E[看代码]
 </div>
-<p>重点说两个常被忽略的：</p>
-<ul>
-<li><strong>元空间（Metaspace）</strong>：JDK 8 取代了永久代，放类元信息。默认不设上限，碰到动态类生成（CGLIB 代理、Groovy、动态编译）会一直涨，最后 <code>OutOfMemoryError: Metaspace</code>。生产一定要设 <code>-XX:MaxMetaspaceSize</code>。</li>
-<li><strong>直接内存</strong>：Netty、NIO 用堆外内存做零拷贝。它不受 -Xmx 控制，受 <code>-XX:MaxDirectMemorySize</code> 管。线上 Netty 服务 OOM 但堆很空，十有八九是直接内存爆了。</li>
-</ul>
 
-<h2>GC 算法选型：G1、ZGC、Shenandoah 怎么选</h2>
-<p>到 Java 21，CMS 彻底没了，主流是这三款。我直接给结论：</p>
+<h2>1. Java 服务 CPU 突然 100%</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的 Java 服务 CPU 突然跑满了，怎么排查？</p>
+</div>
+
+<p><strong>怎么解决？</strong>用 top 找进程，jstack 看线程栈，看哪个线程在跑。</p>
+
+<h2>2. 内存溢出 OOM</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>服务跑着跑着 OOM 崩了。</p>
+</div>
+
+<p><strong>怎么解决？</strong>加 -XX:+HeapDumpOnOutOfMemoryError，出问题时 dump 内存，用 MAT 分析。</p>
+
+<h2>3. GC 太频繁</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>系统一直在 GC，业务很慢。</p>
+</div>
+
+<p><strong>怎么解决？</strong>调整堆大小，换 GC 算法，用 G1 或者 ZGC。</p>
+
+<h2>常用 JVM 参数</h2>
+
 <table>
-<thead><tr><th>GC</th><th>STW 目标</th><th>适用堆大小</th><th>特点</th><th>我推荐场景</th></tr></thead>
+<thead><tr><th>参数</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>G1</td><td>亚秒级</td><td>4GB-32GB</td><td>平衡吞吐和延迟</td><td>Java 9+ 默认，大多数服务</td></tr>
-<tr><td>ZGC</td><td>&lt;1ms（JDK 21 起）</td><td>8GB-16TB</td><td>超低延迟，堆大也稳</td><td>大堆 + 低延迟要求</td></tr>
-<tr><td>Shenandoah</td><td>&lt;10ms</td><td>大堆</td><td>RedHat 主导，并发整理</td><td>和 OpenJDK 有差异的发行版</td></tr>
-<tr><td>Parallel</td><td>秒级</td><td>小堆</td><td>吞吐优先，STW 长</td><td>批处理/非在线</td></tr>
-</tbody>
-</table>
-<div class="mermaid">
-flowchart LR
-    Q[你的场景] --> A{堆 &gt; 32GB?}
-    A -->|是| Z[ZGC 首选]
-    A -->|否| B{延迟敏感?}
-    B -->|P99 要求 &lt; 10ms| Z
-    B -->|常规在线服务| G[G1 默认就好]
-    Q --> C{批处理 不在线?}
-    C -->|是| P[Parallel 吞吐优先]
-    style G fill:#00add8,stroke:#fff,color:#fff
-    style Z fill:#10b981,stroke:#fff,color:#fff
-</div>
-<p>2026 年的结论：<strong>Java 21 上如果堆超过 8GB 或对延迟敏感，直接上 ZGC</strong>。它的 STW 已经压到亚毫秒，而且 JDK 21 之后 ZGC 已经是生产可用，不再是实验特性。</p>
+<tr><td>-Xms/-Xmx</td><td>堆初始/最大大小</td></tr>
+<tr><td>-XX:+UseG1GC</td><td>用 G1 垃圾回收器</td></tr>
+<tr><td>-XX:+HeapDumpOnOutOfMemoryError</td><td>OOM 时 dump</td></tr>
+</tbody></table>
 
-<h2>常用 JVM 参数：我背下来的一套</h2>
-<p>别抄网上的，我把每个参数为什么设讲清楚，你按自己的情况调：</p>
-<pre><code class="language-bash"># 堆大小：初始和最大设成一样，避免运行时扩容抖动
--Xms4g -Xmx4g
-
-# 元空间必须设上限
--XX:MetaspaceSize=256m
--XX:MaxMetaspaceSize=512m
-
-# GC 选择（Java 21）
--XX:+UseG1GC
-# 或大堆低延迟用 ZGC：
-# -XX:+UseZGC
-
-# G1 细节
--XX:MaxGCPauseMillis=200      # 目标停顿 200ms
--XX:G1HeapRegionSize=16m       # Region 大小
-
-# GC 日志（JDK 9+ 用统一日志）
--Xlog:gc*,gc+age=trace,safepoint:file=/var/log/gc.log:time,uptime,level,tags:filecount=10,filesize=100m
-
-# OOM 时自动 dump 堆快照，别心疼磁盘
--XX:+HeapDumpOnOutOfMemoryError
--XX:HeapDumpPath=/var/log/heapdump/
--XX:+ExitOnOutOfMemoryError
-
-# 直接内存上限
--XX:MaxDirectMemorySize=1g</code></pre>
-<div class="callout callout-danger">
-<div class="callout-title">OOM 时别光重启</div>
-线上 OOM 了，第一反应不是"重启一下就好了"，而是赶紧保留现场：Heap Dump 自动生成了没？gc.log 还在不在？重启把现场丢了，下次还会炸。-XX:+HeapDumpOnOutOfMemoryError 必须配，这是事后复盘的唯一线索。
-</div>
-
-<h2>Arthas：线上诊断神器</h2>
-<p>阿里开源的 Arthas 是我线上排障的第一工具。不用重启、不用改代码、attach 到进程就能看。几个高频命令：</p>
-<pre><code class="language-bash"># 启动
-java -jar arthas-boot.jar
-
-# 看哪些命令在慢
-monitor com.example.OrderService pay -n 5
-
-# 方法调用路径和耗时（最常用）
-trace com.example.OrderService pay '#cost &gt; 100'
-
-# 看 JVM 实时内存
-memory
-
-# 看 JVM 参数
-jvm
-
-# 方法出入参怎么了（抓一次真实调用）
-watch com.example.OrderService pay "{params, returnObj}" -x 2
-
-# 线程栈，看谁卡着
-thread -n 5</code></pre>
-<p>线上服务 P99 突然飙高，我第一件事就是 <code>trace</code> 那个接口，看哪一步慢——是数据库慢、下游 RPC 慢、还是 GC 停了。比你翻日志快十倍。</p>
-
-<h2>GC 日志分析：怎么看懂</h2>
-<p>GC 日志开了之后，别害怕，关键看几样：</p>
-<pre><code class="language-bash"># 一条典型 G1 日志（简化）
-[2026-09-18T10:00:01.123+0800][gc] GC(42) Pause Young (Normal)
-  (Evacuation Pause) 1200M-&gt;450M(4096M) 15.234ms
-# 意思：年轻代回收，堆从 1200M 降到 450M，停了 15ms</code></pre>
-<p>重点看：</p>
-<ul>
-<li><strong>回收前后堆大小</strong>：450M 是回收后存活的，如果回收后还占堆的 80% 以上，说明老年代要满了。</li>
-<li><strong>停顿时间</strong>：Young GC 几十毫秒正常，Mixed GC 几百毫秒要警惕，Full GC 秒级就是事故。</li>
-<li><strong>GC 频率</strong>：正常一分钟几次 Young GC 很健康。如果几秒一次，说明新生代太小或对象分配太快。</li>
-</ul>
-<p>工具方面，我直接用 <a href="https://gceasy.io">gceasy.io</a> 把 gc.log 拖进去，自动出图表，比肉眼分析快多了。</p>
-
-<h2>内存泄漏排查：从怀疑到定位</h2>
-<p>内存泄漏在 Java 里不是"内存不释放"，是"你以为不用了，但有引用还在"。排查流程：</p>
-<div class="mermaid">
-flowchart TD
-    SYMP[现象：堆只涨不跌 Full GC 后也不降] --> DUMP[拿到 Heap Dump]
-    DUMP --> MAT[用 Eclipse MAT 分析 Dominator Tree]
-    MAT --> BIG[找占用最大的对象]
-    BIG --> PATH[看 GC Roots 引用链 谁在持有]
-    PATH --> FIX[定位代码 修掉]
-    style DUMP fill:#00add8,stroke:#fff,color:#fff
-    style FIX fill:#dc382d,stroke:#fff,color:#fff
-</div>
-<p>常见泄漏源：</p>
-<ol>
-<li><strong>静态集合类</strong>：static Map 只 put 不 remove，对象永远被引用。</li>
-<li><strong>ThreadLocal 没 remove</strong>：线程池线程复用，ThreadLocal 里的对象永远不释放。用完一定 <code>try-finally remove()</code>。</li>
-<li><strong>未关闭的资源</strong>：Connection、InputStream 没关，被 GC Root 挂着。</li>
-<li><strong>监听器/回调注册了没反注册</strong>：事件总线、观察者模式，注销漏了。</li>
-<li><strong>缓存无界</strong>：自己写的 Map 当缓存，只加不删，最后 OOM。</li>
-</ol>
 <div class="callout callout-tip">
-<div class="callout-title">Arthas 在线看堆</div>
-没等到 OOM 也能看：<code>arthas&gt; heapdump --live /tmp/heap.hprof</code> 在线导一份堆快照，再用 MAT 打开。别在高峰期导，dump 会 STW 几秒，挑低峰做。
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>不要瞎调参数</strong>大部分情况用默认参数就行，不要一上来就调。</li>
+<li><strong>先测量再调优</strong>先看日志，找问题，再调，不要瞎猜。</li>
+</ul>
 </div>
-
-<h2>线上 OOM 事故复盘</h2>
-<p>说个我亲身经历的。去年大促前压测，一个订单服务跑着跑着直接 <code>OutOfMemoryError: Java heap space</code>，重启后几小时又炸。</p>
-<p>第一步：看 Heap Dump（幸好配了自动 dump）。用 MAT 打开，Dominator Tree 第一名是个 <code>byte[]</code>，占了堆 70%。往上追引用链——是个静态 ConcurrentHashMap，key 是订单 ID，value 是序列化的订单快照。</p>
-<p>第二步：看代码。这个 Map 是一个"订单导出临时缓存"，业务代码里导完了忘了 clear。压测批量跑了 10 万单，全堆在这个 Map 里。</p>
-<p>第三步：修复。加了 <code>@Scheduled</code> 定时清理，同时换成 Caffeine 带最大容量和过期时间的缓存。压测再跑，堆稳定在 1GB 左右。</p>
-<div class="callout callout-danger">
-<div class="callout-title">复盘教训</div>
-1）临时缓存一定用带容量上限的本地缓存（Caffeine），别用裸 Map。2）静态集合是泄漏重灾区，code review 重点查。3）压测不只是压吞吐，也要压"长时间运行内存稳不稳"——跑几小时看堆曲线。
-</div>
-
-<h2>FAQ</h2>
-<p><strong>Q：Xmx 设多大合适？</strong><br/>容器环境留 1/4 给堆外和元空间。4GB 容器设 Xmx3g。别设成容器上限，直接内存和元空间会把你挤出 OOMKilled。</p>
-<p><strong>Q：Full GC 多久一次正常？</strong><br/>正常业务服务 Full GC 应该"天级"甚至"周级"。如果一天好几次，说明老年代回收不下去，要么有泄漏，要么堆太小。</p>
-<p><strong>Q：ZGC 什么时候用？</strong><br/>堆 &gt; 8GB，或者 P99 延迟要求特别严（比如交易系统）。小堆 G1 就够，ZGC 不一定更快。</p>
-<p><strong>Q：CPU 飙高怎么查？</strong><br/>Arthas <code>thread -n 3</code> 看最忙的线程，再 <code>profiler start</code> 采 30 秒火焰图，谁占 CPU 一眼看穿。别一开始就怀疑 GC。</p>
-
-<h2>我的结论</h2>
-<p>JVM 调优的核心不是背参数，是<strong>先测量再动手</strong>。开 GC 日志、配 Heap Dump、上 Arthas，拿到你自己服务的数据，再决定调什么。盲目抄参数是最大的反模式——别人的堆大小、别人的业务模型，跟你的没关系。</p>
-<p>到 2026 年，ZGC 把大堆低延迟这个老问题解决了，G1 是默认稳妥选择，大多数服务真不用怎么调。把内存泄漏的习惯（裸 Map 当缓存、ThreadLocal 不 remove）改掉，比调十个参数都管用。</p>
-<p>这一系列 Java 文章到这就结束了。从语言新特性、Spring 原理、微服务、ORM 到 JVM 调优，希望这份地图能让你少踩我踩过的坑。</p>
-
-
-
 
                     </div>
                 </article>
