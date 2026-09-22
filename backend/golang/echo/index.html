@@ -83,244 +83,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Echo v5</h1>
+                        <h1 class="article-title">Echo 框架：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Go 语言</span>
+                            <span class="meta-item">🏷️ Echo</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>Echo 2026 年什么定位</h2>
-<p>我前两年还劝人别用 Echo，说等 Fiber/Huma 出来再换。结果 2026 年反转了——Echo v5 在 2026 年 1 月成了 latest major（2026-08 最新 v5.3.x，32.6k+ s...</p>
-<p>这篇我先给你一套生产用过的页面缓存方案，再讲 v5 升级要注意什么。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Echo怎么帮你解决。</p>
+
+<div class="mermaid">
+flowchart LR
+    A[Go] --> B[Echo]
+    B --> C[HTTP 服务]
+    B --> D[中间件]
+</div>
+
+<h2>1. Gin 和 Echo 选哪个</h2>
+
 <div class="callout callout-info">
-<div class="callout-title">核心思路</div>
-读在 Nginx、写在 Echo。Nginx 的 <code>memcached_pass</code> 负责缓存命中时的零进程读取，Echo 中间件负责未命中时把响应写回缓存。动静分离，缓存逻辑和业务解耦。
+<div class="callout-title">你遇到的问题</div>
+<p>Go 写 Web，Gin 和 Echo 哪个好？</p>
 </div>
 
-<h2>页面级缓存：Nginx + Echo + Memcached</h2>
-<p>这套方案我在线上跑过一年，QPS 从 2000 干到 8000，Go 进程 CPU 没涨——因为读请求根本不进 Go。先看整体流程：</p>
-<div class="mermaid">
-flowchart LR
-    REQ[HTTP 请求] --> LOOK[查 memcached]
-    LOOK -->|命中| HIT[直接返回缓存页]
-    LOOK -->|未命中| MISS[error_page 回源]
-    MISS --> SRC[Echo Handler 产生响应]
-    SRC --> MW[MemcacheStore 中间件]
-    MW --> SET[响应写入 memcache]
-    MW --> RESP[响应回客户端]
-    style SET fill:#00add8,stroke:#fff,color:#fff
+<p><strong>怎么解决？</strong>差不多，Gin 用的人多，Echo API 更友好，看习惯。</p>
+
+<h2>2. Echo 怎么写接口</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>想用 Echo 写个 Hello World 接口。</p>
 </div>
-<p>为什么这么拆？读侧 Nginx 扛，命中即返回，Go 进程零开销；写侧才真正跑 handler。你要是在 Go 里自己写"命中即 return"，读请求还是要进 Go 进程，白搭。</p>
 
-<h3>中间件实现</h3>
-<p>下面这个中间件包装 <code>http.ResponseWriter</code>，把 200 响应的 body 缓冲进 Memcached：</p>
-<pre><code class="language-go">import (
- "bytes"
- "net/http"
- "sync"
+<p><strong>怎么解决？</strong>new Echo，注册 get / 路由，start 跑起来。</p>
 
- "github.com/bradfitz/gomemcache/memcache"
- "github.com/labstack/echo/v4"
-)
+<h2>3. 中间件怎么用</h2>
 
-var memcacheClientMux sync.Mutex
-var memcacheClient *memcache.Client
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>怎么加日志、鉴权中间件？</p>
+</div>
 
-type middleResp struct {
- http.ResponseWriter
- isOK       bool
- key        string
- expiration int32
- bytes.Buffer
-}
+<p><strong>怎么解决？</strong>e.Use() 加全局中间件，或者路由组加。</p>
 
-var StoreErrHandler func(error)
+<h2>Gin vs Echo</h2>
 
-func (mr *middleResp) writeStore() {
- if mr.Buffer.Len() &gt; 0 {
-  err := memcacheClient.Set(&amp;memcache.Item{
-   Key:        mr.key,
-   Flags:      0,
-   Expiration: mr.expiration,
-   Value:      mr.Bytes(),
-  })
-  if StoreErrHandler != nil {
-   StoreErrHandler(err)
-  }
- }
-}
-
-func (mr *middleResp) Write(body []byte) (int, error) {
- if mr.isOK &amp;&amp; memcacheClient != nil {
-  _, err := mr.Buffer.Write(body)
-  if StoreErrHandler != nil {
-   StoreErrHandler(err)
-  }
- }
- return mr.ResponseWriter.Write(body)
-}
-
-func (mr *middleResp) WriteHeader(statusCode int) {
- mr.isOK = statusCode == http.StatusOK
- mr.ResponseWriter.WriteHeader(statusCode)
-}
-
-func MemcacheStore(server string, expireSecond int32) func(echo.HandlerFunc) echo.HandlerFunc {
- memcacheClientMux.Lock()
- defer memcacheClientMux.Unlock()
- if memcacheClient == nil {
-  memcacheClient = memcache.New(server)
- }
- return func(next echo.HandlerFunc) echo.HandlerFunc {
-  return func(c echo.Context) error {
-   resp := c.Response()
-   mr := &amp;middleResp{
-    ResponseWriter: resp.Writer,
-    // 关键：Echo 对 200 响应通常不显式调 WriteHeader
-    // isOK 默认必须 true，不然缓存永远写不进去
-    isOK:      true,
-    key:       c.Request().RequestURI,
-    expiration: expireSecond,
-   }
-   resp.Writer = mr
-   err := next(c)
-   mr.writeStore()
-   return err
-  }
- }
-}</code></pre>
-
-<h3>路由和 Nginx</h3>
-<p>main 里把中间件挂到 GET 路由上：</p>
-<pre><code class="language-go">package main
-
-import (
- "fmt"
- "math/rand"
- "net/http"
-
- "github.com/labstack/echo/v5"
-)
-
-func main() {
- e := echo.New()
- StoreErrHandler = func(err error) { e.Logger.Error(err) }
-
- e.GET("/echo/string", stringHandler, MemcacheStore("127.0.0.1:11211", 60))
- e.Logger.Fatal(e.Start(":1323"))
-}
-
-func stringHandler(c echo.Context) error {
- return c.String(http.StatusOK, fmt.Sprintf("path:%s, rand:%d",
-  c.Path(), rand.Int()))
-}</code></pre>
-<p>Nginx 侧用 <code>memcached_pass</code> 读缓存，404 时回源到 Echo：</p>
-<pre><code class="language-nginx">location /echo {
-    set $memcached_key "$request_uri";
-    memcached_pass 127.0.0.1:11211;
-    default_type   text/html;
-    error_page 404 502 504 = @echoServer;
-}
-
-location @echoServer {
-    proxy_pass   http://127.0.0.1:1323;
-}</code></pre>
-
-<h2>v5 升级：破坏性变更清单</h2>
-<p>v5 不是小修小补，是一次大重构，对 v4 项目属于"硬迁移"。版本现状：</p>
 <table>
-<thead><tr><th>版本线</th><th>状态</th><th>说明</th></tr></thead>
+<thead><tr><th>对比</th><th>Gin</th><th>Echo</th></tr></thead>
 <tbody>
-<tr><td>v5.x</td><td>主线（2026-01 起）</td><td>当前 v5.3.x，破坏性变更集中在 v5.0</td></tr>
-<tr><td>v4.x</td><td>维护尾部</td><td>安全修复到 2026-12-31，之后 EOL</td></tr>
-<tr><td>Go 版本</td><td>兼容最近四个大版本</td><td>2026-08 对应 Go 1.24 ~ 1.28</td></tr>
-</tbody>
-</table>
-<p>核心变更我浓缩成一张迁移对照表，升级时逐行看：</p>
-<table>
-<thead><tr><th>维度</th><th>Echo v4</th><th>Echo v5</th></tr></thead>
-<tbody>
-<tr><td>模块路径</td><td>labstack/echo/v4</td><td>labstack/echo/v5</td></tr>
-<tr><td>Context</td><td>接口 echo.Context</td><td>具体结构体 *echo.Context</td></tr>
-<tr><td>日志体系</td><td>自研 logger</td><td>标准库 log/slog</td></tr>
-<tr><td>跨 goroutine 复用</td><td>c.(*context).Copy()</td><td>c.Clone()</td></tr>
-<tr><td>多次 Bind</td><td>手动缓存 body</td><td>默认支持</td></tr>
-<tr><td>路由 API</td><td>隐式遍历</td><td>显式 RouteInfo/Routes</td></tr>
-<tr><td>测试辅助</td><td>手写 httptest</td><td>官方 echotest</td></tr>
-</tbody>
-</table>
-<div class="callout callout-danger">
-<div class="callout-title">最大的一刀</div>
-Context 从接口变成结构体。你所有 <code>echo.Context</code> 接口断言、自定义 Context 实现，都会编译失败。先全局把 <code>echo.Context</code> 替换成 <code>*echo.Context</code>，别的都好说。
-</div>
-<p>v5 最小示例：</p>
-<pre><code class="language-go">package main
+<tr><td>使用人数</td><td>多</td><td>中等</td></tr>
+<tr><td>API 风格</td><td>经典</td><td>更友好</td></tr>
+<tr><td>中间件</td><td>全</td><td>全</td></tr>
+</tbody></table>
 
-import (
-    "log/slog"
-    "net/http"
-
-    "github.com/labstack/echo/v5"
-)
-
-func main() {
-    e := echo.New()
-    e.Logger = slog.Default()
-
-    e.GET("/", func(c *echo.Context) error {
-        return c.JSON(http.StatusOK, echo.Map{"message": "hello v5"})
-    })
-    e.Logger.Error(e.Start(":1323").Error())
-}</code></pre>
-
-<h2>中间件洋葱模型</h2>
-<p>Echo 中间件是函数包装模型，<code>e.Use(m1, m2, m3)</code> 执行时 m1 最先进、最后出：</p>
-<div class="mermaid">
-flowchart LR
-    REQ[请求] --> M1[m1 前置]
-    M1 --> M2[m2 前置]
-    M2 --> M3[m3 前置]
-    M3 --> H[Handler]
-    H --> M3B[m3 后置]
-    M3B --> M2B[m2 后置]
-    M2B --> M1B[m1 后置]
-    M1B --> RSP[响应]
-    style H fill:#00add8,stroke:#fff,color:#fff
-</div>
-<p>和 Gin 不一样，Echo 不调 <code>Next()</code>，而是调传入的 <code>next(c)</code>。你不调 next，链就断在这。</p>
-
-<h2>Echo vs Gin 怎么选</h2>
-<table>
-<thead><tr><th>维度</th><th>Echo</th><th>Gin</th></tr></thead>
-<tbody>
-<tr><td>设计哲学</td><td>简洁、灵活</td><td>高性能、API 丰富</td></tr>
-<tr><td>Context</td><td>v5 具体结构体</td><td>结构体不可替换</td></tr>
-<tr><td>中间件</td><td>函数包装（洋葱）</td><td>递归链（Next 调用）</td></tr>
-<tr><td>生态</td><td>内置中间件丰富</td><td>第三方中间件最多</td></tr>
-<tr><td>学习曲线</td><td>平缓</td><td>中等</td></tr>
-</tbody>
-</table>
-<p>我的判断：要标准 net/http 中间件生态（oauth2、OpenTelemetry）选 Echo/Gin；追求极限吞吐且不介意脱离 net/http 兼容层再考虑 Fiber。真实项目瓶颈几乎总在数据库和下游 RPC，框架那 10% 差距你根本感知不到。</p>
-
-<h2>四个我踩过的坑</h2>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>Context 非线程安全</strong>：goroutine 里用必须 <code>c.Clone()</code>，不然请求结束 Context 被复用，数据串了。</li>
-<li><strong>中间件顺序</strong>：Logger 放最外层才能记完整耗时；Gzip 和 SSE 冲突时用 Skipper 跳过流式端点。</li>
-<li><strong>Response.Committed 后改 header 无效</strong>：要改响应头必须在 <code>next(c)</code> 之前。</li>
-<li><strong>v4 升 v5 漏改接口断言</strong>：全局搜 <code>echo.Context</code> 接口用法，全换成 <code>*echo.Context</code>。</li>
+<li><strong>选一个就行</strong>Gin 和 Echo 差不多，选一个学就行。</li>
+<li><strong>新手先 Gin</strong>Gin 资料更多，新手先学这个。</li>
 </ul>
-
-<h2>FAQ</h2>
-<p><strong>Q：v4 项目必须升 v5 吗？</strong><br/>v4 安全修复到 2026 年底，之后 EOL。新功能只在 v5 上做，长期建议规划迁移；短期先锁 v4 跑着。</p>
-<p><strong>Q：页面缓存为什么放 Nginx？</strong><br/>命中读取走 Nginx <code>memcached_pass</code>，完全不占 Go 进程，单机扛并发能力比 Go 里查缓存高一个量级。</p>
-<p><strong>Q：Echo 和 Gin 性能差很多吗？</strong><br/>基准差距 10% 以内，都在 net/http 之上。真实项目瓶颈在数据库，选哪个看团队熟悉度。</p>
-
-<h2>收口</h2>
-<p>Echo v5 用"Context 结构体化 + slog"换来更干净的 API，代价是 v4 要硬迁。工程上读路径交 Nginx、写路径交 Echo 中间件，是一套生产验证过的页面缓存范式。</p>
-<p>选型记住：要标准生态选 Echo/Gin，要极限吞吐才考虑 Fiber。</p>
-
-
+</div>
 
                     </div>
                 </article>

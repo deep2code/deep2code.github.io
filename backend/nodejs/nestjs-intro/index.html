@@ -83,258 +83,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">NestJS 架构入门</h1>
+                        <h1 class="article-title">NestJS 入门：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Node.js 总览</span>
+                            <span class="meta-item">🏷️ NestJS</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>我为什么从 Express 迁到 NestJS</h2>
-<p>2019 年我带团队做一个 SaaS 产品，Express 写了一年多，代码涨到 8 万行。问题不是写不动，是没人敢动。Service 之间互相 require，循环依赖到处都是，改一个函数要全局搜索。</p>
-<p>后来我们花了三个月迁到 NestJS。不是因为它快——它比 Express 还慢一点。是因为它<strong>逼着你把代码组织好</strong>。模块边界清晰、依赖注入自动管理、测试时 mock 一个 Provider 就行。2026 年我团队所有新后端项目都用 NestJS 11，Express 只维护老服务。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及NestJS怎么帮你解决。</p>
 
-<h2>三件套：Module、Controller、Provider</h2>
-<p>NestJS 的核心概念就三个，理解了这三个，其他都是细节。</p>
 <div class="mermaid">
-flowchart TD
-    MODULE[Module 模块<br/>组织单元，声明依赖] --> CTRL[Controller 控制器<br/>处理 HTTP 请求]
-    MODULE --> PROV[Provider 提供者<br/>Service/Repository/工厂]
-    CTRL --> PROV
-    PROV --> DB[数据库/外部服务]
-    style MODULE fill:#00add8,stroke:#fff,color:#fff
-    style CTRL fill:#10b981,stroke:#fff,color:#fff
-    style PROV fill:#f59e0b,stroke:#fff,color:#fff
+flowchart TB
+    A[NestJS] --> B[Controller]
+    B --> C[Service]
+    C --> D[Repository]
 </div>
-<ul>
-<li><strong>Controller</strong>：接收 HTTP 请求，调用 Service，返回响应。不写业务逻辑，只做协议转换。</li>
-<li><strong>Provider</strong>：就是 Service、Repository、Factory 这些。写业务逻辑，被注入到 Controller 里。</li>
-<li><strong>Module</strong>：把一组 Controller 和 Provider 打包成一个功能单元。通过 <code>imports</code> 引入别的模块，通过 <code>exports</code> 暴露自己的 Provider。</li>
-</ul>
-<p>看一个最小的 UsersModule：</p>
-<pre><code class="language-typescript">// users/users.module.ts
-import { Module } from '@nestjs/common'
-import { UsersService } from './users.service'
-import { UsersController } from './users.controller'
 
-@Module({
-  controllers: [UsersController],
-  providers: [UsersService],
-  exports: [UsersService], // 别的模块要用 UsersService 就 import 这个模块
-})
-export class UsersModule {}</code></pre>
-<pre><code class="language-typescript">// users/users.service.ts
-import { Injectable } from '@nestjs/common'
+<h2>1. Express 写大项目太乱</h2>
 
-@Injectable() // 标记这是个可注入的 Provider
-export class UsersService {
-  private users = new Map&lt;number, { id: number; name: string }&gt;()
-
-  findById(id: number) {
-    return this.users.get(id)
-  }
-
-  create(id: number, name: string) {
-    this.users.set(id, { id, name })
-    return this.users.get(id)
-  }
-}</code></pre>
-<pre><code class="language-typescript">// users/users.controller.ts
-import { Controller, Get, Param, Post, Body } from '@nestjs/common'
-import { UsersService } from './users.service'
-
-@Controller('users')
-export class UsersController {
-  constructor(private readonly users: UsersService) {}
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.users.findById(Number(id))
-  }
-
-  @Post()
-  create(@Body() body: { id: number; name: string }) {
-    return this.users.create(body.id, body.name)
-  }
-}</code></pre>
-
-<h2>依赖注入：DI 容器在背后干什么</h2>
-<p>很多人第一次看 NestJS 代码，最懵的就是构造函数里突然多了个 <code>private readonly users: UsersService</code>，然后就能直接用。谁 new 的？NestJS 的 DI 容器。</p>
-<p>启动时，NestJS 扫描所有 <code>@Module</code> 装饰器，把所有 <code>providers</code> 注册到一个 IoC 容器里。当某个 Controller 声明要依赖 <code>UsersService</code>，容器去构造一个实例传进去。这叫<strong>控制反转</strong>——你不自己 new，容器给你注入。</p>
-<div class="mermaid">
-flowchart LR
-    SCAN[启动时扫描 Module] --> REG[注册 Provider 到 IoC 容器]
-    REG --> RESOLVE[解析依赖图]
-    RESOLVE --> INST[实例化，单例默认]
-    INST --> INJECT[注入到 Controller 构造函数]
-    style REG fill:#00add8,stroke:#fff,color:#fff
-    style INST fill:#10b981,stroke:#fff,color:#fff
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>Express 写小项目简单，写大项目代码很乱。</p>
 </div>
-<p>这个机制最大的好处是<strong>测试友好</strong>。你要测 UsersController，不用连数据库，mock 一个 UsersService 就行：</p>
-<pre><code class="language-typescript">import { Test } from '@nestjs/testing'
-import { UsersController } from './users.controller'
-import { UsersService } from './users.service'
 
-describe('UsersController', () => {
-  it('findOne 返回用户', async () => {
-    // mock 一个 Service
-    const mockService = {
-      findById: (id: number) => ({ id, name: 'test' }),
-    }
+<p><strong>怎么解决？</strong>NestJS 是企业级框架，有结构，写大项目不慌。</p>
 
-    const moduleRef = await Test.createTestingModule({
-      controllers: [UsersController],
-      providers: [{ provide: UsersService, useValue: mockService }],
-    }).compile()
+<h2>2. 和 Express 比有什么好</h2>
 
-    const controller = moduleRef.get(UsersController)
-    const result = controller.findOne('1')
-    expect(result).toEqual({ id: 1, name: 'test' })
-  })
-})</code></pre>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>NestJS 比 Express 好在哪？</p>
+</div>
+
+<p><strong>怎么解决？</strong>有依赖注入、模块化、装饰器，结构清晰，适合大项目。</p>
+
+<h2>3. 新手怎么开始</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>想写 Node.js 大项目，怎么上手 NestJS？</p>
+</div>
+
+<p><strong>怎么解决？</strong>先学 TypeScript，再学 NestJS 基本概念。</p>
+
+<h2>核心概念</h2>
+
+<table>
+<thead><tr><th>概念</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>Module</td><td>模块</td></tr>
+<tr><td>Controller</td><td>处理请求</td></tr>
+<tr><td>Service</td><td>业务逻辑</td></tr>
+<tr><td>Provider</td><td>依赖注入</td></tr>
+</tbody></table>
+
 <div class="callout callout-tip">
-<div class="callout-title">DI 的三个作用域</div>
-默认是单例（SINGLETON），整个应用共享一个实例。需要每请求新建一个用 REQUEST 作用域。还有 TRANSIENT，每次注入都 new。我大部分情况用默认单例，只有带请求上下文的拦截器/守卫才用 REQUEST。
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>小项目用 Express</strong>小项目 Express 就够，不要用 NestJS 重。</li>
+<li><strong>大项目用 NestJS</strong>项目大了团队人多，用 NestJS 结构清晰。</li>
+</ul>
 </div>
-
-<h2>装饰器：NestJS 的语法糖</h2>
-<p>NestJS 重度使用 TypeScript 装饰器。<code>@Controller()</code>、<code>@Get()</code>、<code>@Injectable()</code>——这些不是魔法，就是函数，在类定义时被调用，给类加元数据。</p>
-<table>
-<thead><tr><th>装饰器</th><th>作用</th><th>用在哪</th></tr></thead>
-<tbody>
-<tr><td>@Module()</td><td>声明模块</td><td>类</td></tr>
-<tr><td>@Controller()</td><td>声明路由前缀</td><td>类</td></tr>
-<tr><td>@Get()/@Post()</td><td>声明 HTTP 方法</td><td>方法</td></tr>
-<tr><td>@Injectable()</td><td>标记可注入</td><td>类</td></tr>
-<tr><td>@Param()/@Body()/@Query()</td><td>提取请求参数</td><td>方法参数</td></tr>
-<tr><td>@UseGuards()</td><td>挂载守卫</td><td>类/方法</td></tr>
-<tr><td>@UseInterceptors()</td><td>挂载拦截器</td><td>类/方法</td></tr>
-</tbody>
-</table>
-<p>你也可以写自定义装饰器。比如从 JWT 里拿当前用户：</p>
-<pre><code class="language-typescript">import { createParamDecorator, ExecutionContext } from '@nestjs/common'
-
-export const CurrentUser = createParamDecorator(
-  (data: string | undefined, ctx: ExecutionContext) => {
-    const request = ctx.switchToHttp().getRequest()
-    const user = request.user
-    return data ? user?.[data] : user // @CurrentUser('email') 直接拿 email
-  },
-)</code></pre>
-<p>用的时候：</p>
-<pre><code class="language-typescript">@Get('profile')
-getProfile(@CurrentUser() user: { id: number; email: string }) {
-  return user
-}</code></pre>
-
-<h2>和 Angular 的关系</h2>
-<p>NestJS 作者 Kamil Mysliwiec 是 Angular 开发者。NestJS 的很多概念直接从 Angular 抄来的：Module、Component（Controller）、Service、依赖注入、RxJS 拦截器。如果你写过 Angular，NestJS 上手零成本。</p>
-<table>
-<thead><tr><th>NestJS</th><th>Angular 对应</th><th>作用</th></tr></thead>
-<tbody>
-<tr><td>@Module</td><td>@NgModule</td><td>组织代码单元</td></tr>
-<tr><td>@Controller</td><td>@Component</td><td>处理请求/视图</td></tr>
-<tr><td>@Injectable</td><td>@Injectable</td><td>可注入服务</td></tr>
-<tr><td>Guard</td><td>CanActivate</td><td>前置权限校验</td></tr>
-<tr><td>Interceptor</td><td>Interceptor</td><td>请求/响应拦截</td></tr>
-<tr><td>Pipe</td><td>Pipe</td><td>数据转换/校验</td></tr>
-</tbody>
-</table>
-<p>但别被 Angular 的包袱吓到——后端用不到模板、变更检测、Zone.js 那些。你只需要懂 DI 和装饰器，其他都是后端的事。</p>
-
-<h2>CLI 生成器：别手写样板代码</h2>
-<p>NestJS CLI 是我最喜欢的工具之一。它不是一个简单的脚手架，是一个<strong>代码生成器</strong>——一个命令生成一整套模块、控制器、服务、测试文件：</p>
-<pre><code class="language-bash"># 全局装 CLI
-npm i -g @nestjs/cli
-
-# 新建项目
-nest new my-api --package-manager pnpm
-
-# 生成一个完整模块（controller + service + module + spec）
-nest generate module users
-nest generate controller users
-nest generate service users
-# 一行搞定
-nest g resource users  # 还会生成 CRUD 路由和 DTO
-
-# 常用简写
-nest g mo users    # module
-nest g co users    # controller
-nest g s users     # service
-nest g guard auth  # guard
-nest g interceptor log # interceptor</code></pre>
-<div class="callout callout-danger">
-<div class="callout-title">手动建文件容易漏注册</div>
-我见过新手手写了个 UsersService，忘了在 module 的 providers 里声明。启动时报"Nest can't resolve dependencies"。用 CLI 生成就不会——它自动帮你把 import 和声明写好。新项目一律用 CLI，别手搓。
-</div>
-
-<h2>第一次跑通 NestJS 项目</h2>
-<pre><code class="language-bash"># 1. 装项目
-nest new nest-demo --package-manager pnpm
-cd nest-demo
-
-# 2. 生成一个 CRUD 资源
-nest g resource cats
-# 选 REST API
-
-# 3. 跑起来
-pnpm start:dev
-# 访问 http://localhost:3000/cats</code></pre>
-<p>生成的项目长这样：</p>
-<pre><code class="language-bash">src/
-├── app.module.ts        # 根模块
-├── main.ts              # 入口，创建 Nest 应用
-├── cats/
-│   ├── cats.module.ts
-│   ├── cats.controller.ts
-│   ├── cats.service.ts
-│   ├── dto/             # 数据传输对象
-│   │   ├── create-cat.dto.ts
-│   │   └── update-cat.dto.ts
-│   └── entities/
-│       └── cat.entity.ts</code></pre>
-<p><code>main.ts</code> 是入口：</p>
-<pre><code class="language-typescript">import { NestFactory } from '@nestjs/core'
-import { AppModule } from './app.module'
-
-async function bootstrap() {
-  // 默认用 Express，想换 Fastify 就用 NestFactory.createMicroservice
-  const app = await NestFactory.create(AppModule, { logger: ['error', 'warn'] })
-  app.setGlobalPrefix('api/v1')
-  app.enableCors()
-  await app.listen(3000)
-}
-bootstrap()</code></pre>
-
-<h2>中间件、守卫、拦截器、管道</h2>
-<p>NestJS 有一套自己的请求生命周期，比 Express 中间件精细得多：</p>
-<div class="mermaid">
-flowchart LR
-    REQ[请求进来] --> MW[Middleware 中间件]
-    MW --> GUARD[Guard 守卫<br/>权限校验]
-    GUARD --> PIPE[Pipe 管道<br/>数据转换/校验]
-    PIPE --> INTERCEPTOR[Interceptor 拦截器<br/>前置/后置处理]
-    INTERCEPTOR --> CTRL[Controller 处理]
-    CTRL --> INTERCEPTOR2[Interceptor 后置]
-    INTERCEPTOR2 --> RES[响应出去]
-    style GUARD fill:#dc382d,stroke:#fff,color:#fff
-    style PIPE fill:#f59e0b,stroke:#fff,color:#fff
-    style INTERCEPTOR fill:#10b981,stroke:#fff,color:#fff
-</div>
-<p>简单说：Guard 管"能不能进"，Pipe 管"参数对不对"，Interceptor 管"请求前后加点什么"。Express 中间件只能在最外层干这些事，NestJS 把它们拆开了，职责清晰。</p>
-
-<h2>FAQ</h2>
-<p><strong>Q：NestJS 性能比 Express 差多少？</strong><br/>空路由大概慢 10-20%，因为 DI 容器和装饰器元数据有开销。但真实业务瓶颈都在数据库，这点差距可以忽略。如果你的服务就是纯转发、没有业务逻辑，用 Fastify 或原生 http 模块。</p>
-<p><strong>Q：NestJS 必须用 TypeScript 吗？</strong><br/>技术上支持 JS，但没人这么写。装饰器和 DI 容器是 TS 的类型反射能力撑起来的，用 JS 等于自废武功。新项目老老实实写 TS。</p>
-<p><strong>Q：什么时候不该用 NestJS？</strong><br/>三五个接口的小服务、Serverless 函数、CLI 工具——这些场景 NestJS 太重了。用 Fastify 或 Express 直接写，启动快、部署简单。NestJS 是给中大型团队协作准备的。</p>
-<p><strong>Q：NestJS 11 有什么新东西？</strong><br/>11 版本默认支持 ESM，CLI 启动快了 40%，新增了流式响应支持。底层还是那套 DI 架构，升级平滑。</p>
-
-<h2>我的结论</h2>
-<p>NestJS 的价值不在性能，在<strong>架构纪律</strong>。它用 Module/Provider/Controller 三件套和 DI 容器，把"怎么组织代码"这件事从约定变成了强制。小项目可能觉得啰嗦，但团队超过 5 个人、代码超过 2 万行，你会感谢这些约束。</p>
-<p>2026 年我团队的标准技术栈是 NestJS 11 + TypeScript 5.8 + Prisma 6 + Pino。下一篇我们深入 TypeScript——NestJS 的地基，怎么配才不裸奔。</p>
-
-
-
 
                     </div>
                 </article>
