@@ -81,187 +81,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">ArgoCD 安装配置</h1>
+                        <h1 class="article-title">ArgoCD 安装：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ ArgoCD,Kubernetes</span>
+                            <span class="meta-item">🏷️ ArgoCD</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-
-<h2>ArgoCD 是什么：Kubernetes 原生的 GitOps 持续交付工具</h2>
-<p>ArgoCD 是一个遵循 GitOps 四大原则的 Kubernetes 声明式 GitOps 控制器，2018 年由 Intuit 开源，2020 年成为 CNCF 毕业项目。</p>
-<p>与通用 CI 工具不同，ArgoCD 的<strong>整个产品就是一个跑在 K8s 里的控制器套件</strong>——你装它不需要外部数据库，不需要独立的部署服务器，一切状态都存在 K8s 的 etcd 里。</p>
-<p>对于已经有 K8s 集群的团队，安装 ArgoCD 的成本极低：一条 <code>kubectl apply</code> 命令拉取它的 CRD 和控制器 Deployment，几分钟之内就能在浏览器里看到一个可视化的应用交付面板。这个"开箱即用"的体验正是它成为 GitOps 事实标准的原因。</p>
-
-<h2>核心架构：五大组件各司其职</h2>
-<p>很多人把 ArgoCD 当成一个单体应用，实际上它是一组微服务协作的分布式系统。理解每个组件的职责，是后续排查性能问题、做高可用部署的前提。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及ArgoCD怎么帮你解决。</p>
 
 <div class="mermaid">
-flowchart TB
-    subgraph User[用户 / 运维]
-        UI[ArgoCD Web UI]
-        CLI[argocd CLI]
-    end
-    subgraph ArgoCDNS[argocd 命名空间]
-        API[argocd-server<br/>API/网关/UI]
-        REPO[argocd-repo-server<br/>Git 克隆 + 模板渲染]
-        CTRL[argocd-application-controller<br/>调谐引擎]
-        DEX[argocd-dex<br/>SSO 代理]
-        REDIS[(argocd-redis<br/>会话/缓存)]
-    end
-    subgraph External[外部系统]
-        GIT[(Git 仓库)]
-        CLUSTER[(目标 K8s 集群)]
-    end
-    UI -->|HTTPS| API
-    CLI -->|gRPC| API
-    API <--> REDIS
-    API --> DEX
-    DEX -->|OIDC| SSO[企业 SSO]
-    CTRL -->|Watch| GIT
-    REPO -->|Clone| GIT
-    API -->|请求渲染| REPO
-    CTRL -->|Apply/Watch| CLUSTER
-    CTRL -->|状态上报| API
-
+flowchart LR
+    A[Git 仓库] --> B[ArgoCD]
+    B --> C[K8s 集群]
+    B --> D[自动同步配置]
 </div>
 
-<p>五个核心组件的职责和我生产环境的资源建议：</p>
+<h2>1. K8s 部署太麻烦</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你用 kubectl apply 一个个部署，容易错。</p>
+</div>
+
+<p><strong>怎么解决？</strong>用 ArgoCD，Git 里改配置，自动同步到 K8s。</p>
+
+<h2>2. 怎么实现 GitOps</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道 GitOps 很好，不知道怎么落地。</p>
+</div>
+
+<p><strong>怎么解决？</strong>ArgoCD 就是 K8s 上的 GitOps 工具，装完配 Git 仓库就行。</p>
+
+<h2>3. 和 Jenkins 有什么区别</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>都是 CI/CD，有什么不一样？</p>
+</div>
+
+<p><strong>怎么解决？</strong>Jenkins 是推模式，ArgoCD 是拉模式，更安全。</p>
+
+<h2>ArgoCD 特点</h2>
+
 <table>
-<thead><tr><th>组件</th><th>职责</th><th>有状态？</th><th>资源瓶颈点</th></tr></thead>
+<thead><tr><th>特点</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>argocd-server</td><td>API 网关 + Web UI，只做路由和鉴权</td><td>无</td><td>并发高时 CPU 上去</td></tr>
-<tr><td>argocd-repo-server</td><td>克隆 Git、渲染 Helm/Kustomize 成 YAML</td><td>有</td><td>CPU 密集，应用上千时暴涨</td></tr>
-<tr><td>application-controller</td><td>调谐引擎，对比期望与实际状态</td><td>有</td><td>内存密集，每个 App 占一个 watch</td></tr>
-<tr><td>argocd-dex</td><td>SSO 代理，对接 LDAP/OIDC</td><td>无</td><td>不用 SSO 可直接关</td></tr>
-<tr><td>argocd-redis</td><td>会话和 Git 仓库索引缓存</td><td>无</td><td>重启不丢功能</td></tr>
-</tbody>
-</table>
+<tr><td>GitOps</td><td>Git 是唯一事实来源</td></tr>
+<tr><td>自动同步</td><td>Git 改了自动同步</td></tr>
+<tr><td>可视化</td><td>网页看应用状态</td></tr>
+<tr><td>回滚方便</td><td>回滚就是 Git revert</td></tr>
+</tbody></table>
 
-<h2>安装配置：从一条命令到生产高可用</h2>
-<p>官方安装方式是直接 apply 一份 Kustomize base，它会创建 argocd 命名空间、安装 CRD、部署所有组件：</p>
-
-<pre><code class="language-bash"># 1. 创建命名空间并安装 ArgoCD（最新稳定版）
-kubectl create namespace argocd
-kubectl apply -n argocd -f \
-    https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-
-# 2. 观察所有 Pod 进入 Running
-kubectl get pods -n argocd -w
-
-# 3. 初始 admin 密码存在名为 argocd-initial-admin-secret 的 Secret 里
-kubectl -n argocd get secret argocd-initial-admin-secret \
-    -o jsonpath="{.data.password}" | base64 -d; echo
-
-# 4. 把 server 从 ClusterIP 改成 NodePort（生产环境用 Ingress + HTTPS）
-kubectl -n argocd patch svc argocd-server -p '{"spec":{"type":"NodePort"}}'
-</code></pre>
-
-<div class="callout callout-danger">
-<div class="callout-title">第一台 ArgoCD 我踩过的两个坑</div>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>忘了删初始 admin secret</strong>：那个 <code>argocd-initial-admin-secret</code> 里的密码是固定的随机串，很多人装完忘了删，谁拿到密码谁就能登录。我装好配完 SSO 第一件事就是 <code>kubectl delete secret argocd-initial-admin-secret -n argocd</code>。</li>
-<li><strong>UI 打开 502</strong>：90% 是因为 server 还是 ClusterIP 没暴露，或者 Ingress 没配 <code>backend-protocol: HTTPS</code>。本地先 <code>kubectl port-forward</code> 验证功能，再配 Ingress。</li>
+<li><strong>应用配置放 Git</strong>所有 K8s 配置都放 Git，不要手动改。</li>
+<li><strong>生产用自动同步</strong>自动同步，Git 改了自动部署，不要手动同步。</li>
 </ul>
 </div>
-
-<p>生产环境不能用 NodePort 裸奔，需要一个带 TLS 终止的 Ingress。下面是一个最小可用的 Ingress 配置，配合 cert-manager 自动签发证书：</p>
-
-<pre><code class="language-yaml"># argocd-ingress.yaml —— 生产环境 HTTPS 入口
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: argocd-server
-  namespace: argocd
-  annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-spec:
-  ingressClassName: nginx
-  rules:
-    - host: argocd.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: argocd-server
-                port:
-                  number: 443
-  tls:
-    - hosts:
-        - argocd.example.com
-      secretName: argocd-server-tls
-</code></pre>
-
-<p>登录后第一件事是改掉初始密码并配置 RBAC。ArgoCD 的 RBAC 模型基于 <code>ConfigMap/argocd-rbac-cm</code>，语法沿用 Casbin：</p>
-
-<pre><code class="language-bash"># 用 CLI 登录（生产环境建议配置 SSO，不要长期用本地账号）
-argocd login argocd.example.com --username admin --password '初始密码'
-
-# 修改 admin 密码
-argocd account update-password
-
-# 创建一个只允许管理 production 项目的只读角色
-argocd proj role create production prod-readonly --description "生产只读"
-argocd proj role add-policy production prod-readonly \
-    --action get --object '*' --allow
-
-# 配置 Git 仓库访问凭证（私有仓库用 deploy key 或 PAT）
-argocd repo add https://github.com/example/gitops-config.git \
-    --username gituser --password $GIT_TOKEN
-</code></pre>
-
-<h2>高可用与资源规划</h2>
-<p>默认安装是单副本的，生产环境必须开启 HA 模式。官方提供了一份 overlays：把 server、repo-server、application-controller 都扩成多副本，redis 换成哨兵模式。关键是 <strong>repo-server 和 application-controller 的资源配额</strong>——这两个组件在应用数量超过 100 个时会成为瓶颈，下面是一个推荐的生产 requests/limits：</p>
-
-<pre><code class="language-yaml"># 在 ArgoCD 的 kustomization.yaml 中 patches 覆盖
-# repo-server: CPU 密集，渲染模板吃 CPU
-- target:
-    kind: Deployment
-    name: argocd-repo-server
-  patch: |-
-    - op: replace
-      path: /spec/template/spec/containers/0/resources
-      value:
-        requests: {cpu: "500m", memory: "1Gi"}
-        limits:   {cpu: "2",    memory: "4Gi"}
-# application-controller: 内存密集，每个 Application 都要占一份 watch 连接
-- target:
-    kind: Deployment
-    name: argocd-application-controller
-  patch: |-
-    - op: replace
-      path: /spec/template/spec/containers/0/resources
-      value:
-        requests: {cpu: "1", memory: "2Gi"}
-        limits:   {cpu: "4", memory: "8Gi"}
-</code></pre>
-
-<h2>最佳实践</h2>
-<ul>
-<li><strong>把 ArgoCD 自己也用 GitOps 管起来</strong>：安装 manifest、RBAC、Ingress 都放进 Git 仓库，用一个 bootstrap Application 管理 ArgoCD 本身。这样 ArgoCD 的配置变更也走 Code Review。</li>
-<li><strong>禁用匿名访问和初始 admin 密码</strong>：装好后立刻删除 <code>argocd-initial-admin-secret</code>，配置 SSO（OIDC），用企业账号登录。本地 admin 只用于紧急恢复。</li>
-<li><strong>按团队拆 Project</strong>：ArgoCD Project 是资源隔离边界——一个团队一个 Project，限定它能访问哪些 Git 仓库、哪些命名空间、哪些资源类型。不要所有应用堆在 default Project 里。</li>
-<li><strong>限制 Application 数量</strong>：单个 ArgoCD 实例管理的 Application 建议不超过 2000。超过就拆成多实例（按环境/按团队），避免 repo-server 渲染排队拖慢同步。</li>
-<li><strong>备份 ArgoCD 配置</strong>：ArgoCD 的应用定义、项目定义都存在 etcd 里。定期 <code>argocd admin export</code> 导出全量配置到 Git，集群重建时一条 <code>argocd admin import</code> 恢复。</li>
-</ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：ArgoCD 装完 Web UI 打不开，Pod 都 Running 了还是 502？</h3>
-<p>最常见原因是忘了把 server Service 改成对外暴露的类型。默认安装 <code>argocd-server</code> 是 ClusterIP，只能集群内访问。如果你没配 Ingress，只能 <code>kubectl port-forward svc/argocd-server 8080:443 -n argocd</code> 临时访问。生产环境务必走 Ingress，并配置 <code>backend-protocol: HTTPS</code> 注解——ArgoCD server 默认监听 HTTPS。</p>
-<h3>Q2：ArgoCD 自己挂了，会影响正在运行的业务吗？</h3>
-<p>不会。ArgoCD 是一个"观察者 + 主动操作者"，它挂掉期间，已经运行的业务 Pod、Service、Ingress 都不受影响。失去的只是"自动同步"能力——Git 里有新提交，集群不会自动部署，直到 ArgoCD 恢复。这正是 GitOps 的优雅之处：控制面故障不会立刻传导到数据面。</p>
-<h3>Q3：ArgoCD 支持非 Kubernetes 的工作负载吗？</h3>
-<p>原生只支持 K8s 资源。它通过把 manifest 渲染成 YAML 然后 <code>kubectl apply</code>，本质是对 K8s API 的声明式提交。如果你要管虚拟机、数据库实例，那是 Crossplane 或 Terraform Controller 的领域，ArgoCD 可以作为上层编排器调用它们。</p>
-<h3>Q4：repo-server 经常 OOM 被 kill，怎么办？</h3>
-<p>典型症状是 Web UI 打不开某个应用的 manifest、同步报错 <code>out of memory</code>。原因是某个 Helm Chart 模板渲染时生成了巨量 YAML（比如模板里循环渲染了几千个 ConfigMap）。先把 repo-server 的内存 limit 临时调高观察，再去精简模板。长期方案是把大模板拆成多个 Application，或者用 Helm 的 <code>--set</code> 限制渲染范围。</p>
-
-<h2>总结</h2>
-<p>ArgoCD 的架构本质是"一个调谐引擎 + 一个渲染引擎 + 一个网关"。application-controller 是大脑，repo-server 是双手（负责把 Git 里的模板变成真实资源清单），server 是脸（给人看的）。安装本身不复杂，难的是生产化——HA、资源配额、RBAC、SSO。下一篇我们深入 Application CRD，看看"同步"这个动作到底是怎么一步步发生的。</p>
 
                     </div>
                 </article>

@@ -81,166 +81,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">PostgreSQL 复制高可用</h1>
+                        <h1 class="article-title">PostgreSQL 主从复制：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ PostgreSQL,关系数据库</span>
+                            <span class="meta-item">🏷️ PG 主从</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及PG 主从怎么帮你解决。</p>
 
-<h2>从单机到高可用：复制不是可选项</h2>
-<p>我吃过一次单点的亏：主库磁盘坏了，恢复了 6 小时，业务停摆到凌晨。从那以后我立了个规矩——只要上生产，复制和备份一起上。PostgreSQL 单机再快也有单点风险：磁盘坏、机房断电、误删表。</p>
-<p>生产级方案有两条主线：<b>流复制（Streaming Replication）做高可用</b>，<b>备份（pg_basebackup / pgBackRest / WAL 归档）做灾难恢复</b>。二者缺一不可——复制能扛磁盘与节点故障，但扛不住 DROP TABLE；备份能回到任意时间点（PITR），但不能秒级切换。这一篇把这两件事讲清楚，收尾在性能调优。</p>
-
-<table>
-<thead><tr><th>复制模式</th><th>提交行为</th><th>性能</th><th>丢数据风险</th><th>我的选择</th></tr></thead>
-<tbody>
-<tr><td>同步复制</td><td>等至少一个备库收到 WAL</td><td>略慢</td><td>几乎不丢</td><td>金融、对账类业务</td></tr>
-<tr><td>异步复制</td><td>主库写完就返回</td><td>快</td><td>极端情况丢少量事务</td><td>大多数互联网业务</td></tr>
-</tbody>
-</table>
-
-<h2>流复制架构</h2>
 <div class="mermaid">
 flowchart LR
-    P[主库 Primary<br/>可读写] -->|WAL 流<br/>walsender| S1[备库 Replica 1<br/>只读同步]
-    P -->|WAL 流| S2[备库 Replica 2<br/>只读同步]
-    P -->|WAL 归档| WAL[WAL 归档存储<br/>对象存储]
-    S1 -->|提升为新主| P
-    PATRONI[Patroni + etcd DCS<br/>自动故障检测与切换] -.监控.-> P
-    PATRONI -.监控.-> S1
-    PATRONI -.监控.-> S2
-
+    A[主库] -->|WAL 流复制| B[从库1]
+    A -->|WAL 流复制| C[从库2]
+    B & C --> D[读请求分流]
 </div>
 
-<p>主库把 WAL 记录通过 walsender 进程实时发给备库的 walreceiver，备库持续回放（redo）。同步复制（synchronous_commit=on）会等至少一个备库收到 WAL 才返回提交；异步复制不等待，性能高但可能丢少量事务。<b>金融级用同步，互联网业务用异步 + 监控复制延迟</b>。</p>
+<h2>1. 数据库挂了网站全挂</h2>
 
-<h2>搭建流复制</h2>
-<p>在主库创建复制账号并放行：</p>
-
-<pre><code class="language-sql">-- 主库：创建复制专用账号
-CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD 'repl_pass_strong';
--- pg_hba.conf 加一行：
--- host  replication  replicator  10.0.0.0/8  scram-sha-256
-SELECT pg_reload_conf();
-</code></pre>
-
-<p>在备库用 <code>pg_basebackup</code> 克隆主库：</p>
-
-<pre><code class="language-bash"># 备库上（数据目录为空或已清空）
-sudo -u postgres pg_basebackup \
-    -h 10.0.0.11 -U replicator -D /mnt/pgdata/17/main \
-    -Fp -Xs -P -R
-# -R 自动写入 standby.signal 与 primary_conninfo
-# 完成后启动备库
-sudo systemctl start postgresql@17-main
-
-# 验证：主库看 walsender，备库看 walreceiver
-psql -c "SELECT client_addr, state, sync_state FROM pg_stat_replication;"   # 主库
-psql -c "SELECT pg_is_in_recovery();"                                          # 备库应返回 t
-</code></pre>
-
-<h2>逻辑复制：选择性订阅</h2>
-<p>流复制是物理层面整库复制。<b>逻辑复制（Logical Replication）</b>可以按表订阅、跨大版本、甚至写到其他数据库（如 Kafka、MySQL），适合分库、灰度升级、数据汇聚：</p>
-
-<pre><code class="language-sql">-- 主库：发布要订阅的表（需 wal_level=logical）
-ALTER SYSTEM SET wal_level = 'logical';  -- 需重启
-CREATE PUBLICATION app_pub FOR TABLE orders, users;
-
--- 订阅库：创建相同结构的表并订阅
-CREATE SUBSCRIPTION app_sub
-    CONNECTION 'host=10.0.0.11 dbname=appdb user=appuser'
-    PUBLICATION app_pub;
-
--- 监控逻辑复制延迟
-SELECT pid, state, sync_state, write_lag, flush_lag
-FROM pg_stat_subscription;
-</code></pre>
-
-<h2>备份与时间点恢复（PITR）</h2>
-<p>裸 pg_basebackup 只能恢复到备份时刻；<b>WAL 连续归档 + 基础备份</b>才能恢复到任意时间点（Point-In-Time Recovery）。生产用 <code>pgBackRest</code> 管理整套链路：</p>
-
-<pre><code class="language-conf"># postgresql.conf：开启 WAL 归档到本地/对象存储
-wal_level = replica
-archive_mode = on
-archive_command = 'pgbackrest --stanza=main archive-push %p'
-archive_timeout = 300   # 每 5 分钟强制切一个 WAL 文件，避免长时间无新 WAL
-</code></pre>
-
-<pre><code class="language-bash"># pgBackRest 初始化 stanza 并做一次全量备份
-pgbackrest --stanza=main --delta stanza-create
-pgbackrest --stanza=main --type=full backup
-
-# 列出备份
-pgbackrest info
-
-# 灾难恢复：在新机器上从全量备份 + WAL 恢复到某个时间点
-pgbackrest --stanza=main --type=time --target="2026-09-17 14:30:00" restore
-</code></pre>
-
-<h2>自动故障切换：Patroni</h2>
-<p>手工 promote 备库是运维事故的重灾区。<b>Patroni + etcd</b> 是 PostgreSQL 最成熟的高可用方案：它用 DCS（分布式配置存储）选主、自动监控主库健康、主挂了自动把最优备库提升，并通过 HAProxy/PgBouncer 把应用流量切过去。</p>
-
-<div class="callout callout-danger">
-<div class="callout-title">我踩过的坑：脑裂双主</div>
-<p>早年手动做过一次主库切换，旧主其实没死，只是网络断了。我们把备库 promote 成新主，结果网络恢复后两个主同时接受写入，数据直接分叉，补救花了一整天。从那以后我再也不手动 promote，一律交给 Patroni——它靠 etcd 的租约机制，旧主拿不到锁就自动降级，从根上杜绝脑裂。</p>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的 PG 主库挂了，整个网站都用不了。</p>
 </div>
 
-<p>一份最小 patroni.yml：</p>
+<p><strong>怎么解决？</strong>搭主从复制，主库挂了切到从库。</p>
 
-<pre><code class="language-yaml">scope: pg_prod
-name: pg-node1
-restapi:
-  listen: 0.0.0.0:8008
-etcd3:
-  hosts: 10.0.0.21:2379,10.0.0.22:2379,10.0.0.23:2379
-bootstrap:
-  dcs:
-    ttl: 30
-    loop_wait: 10
-    maximum_lag_on_failover: 1048576   # 1MB
-    postgresql:
-      use_pg_rewind: true
-      parameters:
-        max_connections: 500
-        shared_buffers: 4GB
-        wal_level: replica
-</code></pre>
+<h2>2. 读请求太多主库扛不住</h2>
 
-<h2>性能调优关键参数</h2>
-<p>说完高可用，再回到单机性能。一个"合理的生产基线"（8C/32G 云主机，OLTP 混合负载）：</p>
-<pre><code class="language-conf">shared_buffers = 8GB              # 内存 25%
-effective_cache_size = 24GB       # 内存 75%，给优化器估缓存用
-work_mem = 32MB                   # 每个排序/哈希操作内存，并发高别开太大
-maintenance_work_mem = 1GB        # 建索引/vacuum 用
-max_worker_processes = 8
-max_parallel_workers_per_gather = 4
-max_parallel_maintenance_workers = 4
-random_page_cost = 1.1            # SSD/NVMe 上把随机读成本从 4 降到 1.1
-effective_io_concurrency = 200    # SSD 并发 IO 深度
-jit = off                         # 短查询 JIT 反而慢，OLTP 关
-</code></pre>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>大部分是读请求，主库压力太大。</p>
+</div>
 
-<h2>最佳实践清单</h2>
+<p><strong>怎么解决？</strong>主从架构，写走主库，读走从库。</p>
+
+<h2>3. 怎么搭主从</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道要搭，不知道怎么弄。</p>
+</div>
+
+<p><strong>怎么解决？</strong>PG 自带流复制，配置一下就行，不用第三方工具。</p>
+
+<h2>主从架构优点</h2>
+
+<table>
+<thead><tr><th>优点</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>高可用</td><td>主挂了有从库顶上</td></tr>
+<tr><td>读扩展</td><td>读请求分流到从库</td></tr>
+<tr><td>备份</td><td>从库做备份不影响主库</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>至少一主两备，跨可用区</strong>：一个同城做同步/半同步，一个异地做异步 + WAL 归档。</li>
-<li><strong>备份要定期演练恢复</strong>：没做过恢复测试的备份等于没有备份。每季度做一次 PITR 演练。</li>
-<li><strong>监控复制延迟与 WAL 归档</strong>：<code>pg_stat_replication</code> 延迟、<code>pg_stat_archiver</code> 失败次数，超过阈值告警。</li>
-<li><strong>用连接池收敛连接</strong>：无论主备，前面都加 PgBouncer transaction 池化。</li>
-<li><strong>参数调整用 ALTER SYSTEM</strong>：基线先一次调好，后续微调单独追踪。</li>
+<li><strong>要做自动切换</strong>主挂了自动切从，不要人工手动切。</li>
+<li><strong>复制有延迟</strong>主从不是实时的，写了立刻读可能读不到。</li>
 </ul>
-
-<h2>常见问题 FAQ</h2>
-<h3>Q1：主库挂了，怎么把备库提升为主？</h3>
-<p>用 Patroni 就自动完成；手工场景：确认主库确实宕了（避免脑裂），在备库执行 <code>pg_promote();</code>，然后把应用连接串切到新主。最关键的是<b>先确认旧主不会再被写</b>，否则会脑裂双主。</p>
-<h3>Q2：流复制延迟越来越大怎么办？</h3>
-<p>常见原因是备库回放慢（大查询占 IO、备库硬件差）或网络带宽打满。先看 <code>pg_stat_replication</code> 的 replay_lag 与备库 <code>iostat</code>；再检查是不是备库上跑了重分析查询拖慢了回放。必要时用 hot_standby_feedback=off 配合复制槽，但要警惕主库 WAL 堆积。</p>
-<h3>Q3：pg_basebackup 会锁住主库吗？</h3>
-<p>不会。它在主库上做的是只读一致快照，用的是在线备份协议，不阻塞业务读写。它会产生额外的 IO 与 WAL，建议在业务低峰做，并监控 <code>pg_wal</code> 目录。</p>
-
-<h2>总结</h2>
-<p>PostgreSQL 的生产闭环是：<b>单机调优打底 → 流复制做高可用 → WAL 归档做 PITR → Patroni 自动化故障切换</b>。六篇走完，你从架构原理、安装配置、类型系统、索引优化、MVCC 事务一路走到了复制高可用，已经具备独立设计与运维一套生产级 PostgreSQL 集群的能力。剩下的，就是在真实业务里把这些原则反复打磨成肌肉记忆。</p>
+</div>
 
                     </div>
                 </article>
