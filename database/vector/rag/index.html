@@ -81,172 +81,69 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">RAG 检索增强生成实战</h1>
+                        <h1 class="article-title">RAG 检索增强：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ RAG,向量数据库</span>
+                            <span class="meta-item">🏷️ RAG</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>RAG 到底在解决什么问题</h2>
-<p>大模型很聪明，但它有两个死穴：不知道你公司内部的资料，上下文窗口也装不下整个知识库。RAG（Retrieval-Augmented Generation，检索增强生成）就是给它配一个"开卷考试"——先去知识库里把最相关的...</p>
-<p>这句话背后藏着一个反直觉的事实：<strong>RAG 的答案质量，瓶颈几乎永远在检索，不在生成</strong>。检索捞错了，再强的模型也是一本正经地胡说八道。所以这一篇 80% 的篇幅在讲怎么把检索做对。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及RAG怎么帮你解决。</p>
 
-<h2>完整流程一图看清</h2>
-<div class="mermaid">
-flowchart TD
-    subgraph OFFLINE[离线建库]
-        D[原始文档] --> S[分块 Chunking]
-        S --> E[Embedding 向量化]
-        E --> VDB[('向量库')]
-        S --> BM[('BM25 倒排')]
-    end
-    subgraph ONLINE[在线问答]
-        Q[用户问题] --> QE[问题向量化]
-        QE --> HY[混合检索 向量+BM25]
-        Q --> HY
-        VDB --> HY
-        BM --> HY
-        HY --> RR[Reranker 重排序]
-        RR --> CTX[组装上下文]
-        CTX --> LLM[大模型生成]
-        LLM --> A[带引用答案]
-    end
-    style HY fill:#00add8,stroke:#fff,color:#fff
-    style RR fill:#f59e0b,stroke:#fff,color:#fff
-</div>
-
-<h2>第一步：文档分块（Chunking）</h2>
-<p>这是最容易被忽视、却最决定成败的一步。文档不能整篇直接 Embedding——太长向量会"平均化"，语义被稀释。要切成合适大小的块（chunk）。</p>
-<p>我踩过的坑：一开始按固定 512 字硬切，结果一句话被从中间劈成两半，检索出来的半句根本读不通。后来改成<strong>按语义边界切 + 保留重叠</strong>，召回率肉眼可见地涨。</p>
-<pre><code class="language-python">def split_text(text: str, chunk_size: int = 500, overlap: int = 80) -> list[str]:
-    """按字符长度分块，块之间保留 overlap 重叠，避免切断语义"""
-    chunks = []
-    start = 0
-    while start &lt; len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start = end - overlap      # 重叠窗口，上下文不丢
-    return chunks
-
-# 更稳的做法：先按句号/小标题断句，再贪心聚合成 chunk
-def split_by_paragraph(text: str, chunk_size: int = 500):
-    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
-    chunks, buf = [], ""
-    for p in paragraphs:
-        if len(buf) + len(p) &gt; chunk_size and buf:
-            chunks.append(buf)
-            buf = p
-        else:
-            buf = (buf + "\n" + p) if buf else p
-    if buf:
-        chunks.append(buf)
-    return chunks</code></pre>
-<table>
-<thead><tr><th>分块策略</th><th>chunk 大小</th><th>优点</th><th>缺点</th></tr></thead>
-<tbody>
-<tr><td>固定长度硬切</td><td>256~512</td><td>简单</td><td>易切断语义</td></tr>
-<tr><td>按段落+重叠</td><td>500~800</td><td>语义完整，我推荐</td><td>需调 overlap</td></tr>
-<tr><td>递归字符切分</td><td>动态</td><td>兼顾结构</td><td>实现略复杂</td></tr>
-<tr><td>父子分块（小检索大喂模型）</td><td>子块 200/父块 1000</td><td>召回准、上下文全</td><td>存储翻倍</td></tr>
-</tbody>
-</table>
-<div class="callout callout-danger">
-<div class="callout-title">分块大小是调出来的</div>
-别拍脑袋定 512。把你的文档按 300/500/800 三种切块分别入库，用同一组测试问题对比最终答案。我一般 500~800 字 + 15% 重叠起步，中文文档偏长一点更好。
-</div>
-
-<h2>第二步：Embedding + 向量检索</h2>
-<p>分好块，每块 Embedding 存库（上一篇 pgvector 已讲）。用户提问时把问题也向量化，去库里找最近邻。这一步单独做就够搭一个能用的 demo，但生产我会再叠两样东西。</p>
-
-<h2>第三步：混合检索（BM25 + 向量）</h2>
-<p>纯向量检索有个盲区：<strong>精确的专有名词、型号、代号</strong>。用户问"v2.3.1 版本的 known bug"，向量可能把它匹配到一段"历史版本概览"，但 BM25 能精确命中含这个版本号的那一行。反过来，纯 BM25 又不懂语义。所以生产都用混合检索：</p>
-<pre><code class="language-python">def hybrid_search(query: str, top_k: int = 20):
-    # 1) 向量检索拿语义候选
-    q_vec = model.encode([query], normalize_embeddings=True)[0]
-    vec_hits = vector_db.search(q_vec, k=top_k)      # [{"id":..,"score":..}]
-
-    # 2) BM25 拿关键词候选
-    bm_hits = bm25_index.search(query, k=top_k)
-
-    # 3) RRF 融合（Reciprocal Rank Fusion），不看原始分数只看排名
-    def rrf(hits, k=60):
-        return {h["id"]: 1 / (k + rank) for rank, h in enumerate(hits)}
-
-    scores = {}
-    for id_, s in {**rrf(vec_hits), **rrf(bm_hits)}.items():
-        scores[id_] = scores.get(id_, 0) + s
-
-    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    return fetch_docs([i for i, _ in ranked[:top_k]])</code></pre>
-<p>我用 RRF 融合而不是加权求和，因为向量余弦分数和 BM25 分数量纲完全不同，硬加权很难调；RRF 只看排名，鲁棒得多，几乎不用调参。</p>
-
-<h2>第四步：Reranker 重排序</h2>
-<p>混合检索召回 20 条，但这 20 条里真正相关的可能只有 3~5 条。直接全塞给 LLM，既浪费上下文又引入噪音。这一步用一个专门的重排序模型（比如 bge-reranker）把 query 和每条候选的真实相关性算一遍，挑出最顶的几条：</p>
-<pre><code class="language-python">from sentence_transformers import CrossEncoder
-
-reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")
-
-def rerank(query: str, docs: list[dict], top_n: int = 5):
-    pairs = [(query, d["content"]) for d in docs]
-    scores = reranker.predict(pairs)
-    ranked = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)
-    return [d for d, s in ranked[:top_n]]      # 只留最相关的 5 条</code></pre>
 <div class="mermaid">
 flowchart LR
-    CAND[召回 20 条] --> RR[Reranker 精排]
-    RR --> TOP5[留 Top-5]
-    TOP5 --> CTX[拼进 prompt]
-    style RR fill:#f59e0b,stroke:#fff,color:#fff
+    A[用户问题] --> B[向量搜索]
+    B --> C[找相关文档]
+    C --> D[拼到 Prompt]
+    D --> E[大模型回答]
 </div>
-<p>记住这个比例：<strong>召回要"宽"（20 条不怕漏），重排要"准"（最后只喂 3~5 条）</strong>。reranker 比 embedding 模型贵，所以只在小候选集上用，别拿来全库扫。</p>
 
-<h2>第五步：上下文窗口管理</h2>
-<p>重排完的片段不能无脑全塞。模型的上下文窗口是有限的，而且塞得越长，它越容易"迷失中间"（lost in the middle）——首尾看得清，中间的忽略掉。所以要做预算管理：</p>
-<pre><code class="language-python">def build_prompt(query: str, docs: list[dict], max_tokens: int = 3000):
-    used = 0
-    context_parts = []
-    for i, d in enumerate(docs, 1):
-        piece = f"[资料{i}] {d['content']}"
-        piece_tokens = len(piece) // 2        # 粗估中文 token
-        if used + piece_tokens &gt; max_tokens:
-            break
-        context_parts.append(piece)
-        used += piece_tokens
+<h2>1. 大模型不知道我公司的文档</h2>
 
-    return f"""你是一个严谨的助手，只根据下面提供的资料回答用户问题。
-如果资料里没有答案，就直接说不知道，不要编造。
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你问大模型你们公司的产品文档，它不知道。</p>
+</div>
 
-{'\n'.join(context_parts)}
+<p><strong>怎么解决？</strong>RAG 把你的文档先向量存起来，提问的时候先搜相关内容，再让大模型回答。</p>
 
-问题：{query}
-请基于以上资料回答，并在末尾用 [资料N] 标注引用来源。"""</code></pre>
+<h2>2. 大模型胡说八道</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>大模型回答问题总是瞎编。</p>
+</div>
+
+<p><strong>怎么解决？</strong>RAG 用真实文档内容做依据，减少胡说八道。</p>
+
+<h2>3. 怎么实现 RAG</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>知道概念了，不知道怎么搭。</p>
+</div>
+
+<p><strong>怎么解决？</strong>切分文档 -> 向量化 -> 存向量库 -> 提问时搜索 -> 拼 Prompt。</p>
+
+<h2>RAG 流程</h2>
+
+<table>
+<thead><tr><th>步骤</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>文档切分</td><td>把长文档切成小块</td></tr>
+<tr><td>向量化</td><td>每块转成向量</td></tr>
+<tr><td>存储</td><td>存到向量数据库</td></tr>
+<tr><td>检索</td><td>提问时搜最相关的块</td></tr>
+</tbody></table>
+
 <div class="callout callout-tip">
-<div class="callout-title">带引用是底线</div>
-一定要在 prompt 里要求模型标注引用来源（[资料1][资料3]）。这不是锦上添花——它让用户能核对答案，也是你排查"胡说八道"的唯一抓手。线上我们的 RAG 100% 都带引用。
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>文档切分要合理</strong>太大检索不准，太小没上下文，一般几百字一块。</li>
+<li><strong>向量库够用就行</strong>小项目用 pgvector 就行，不用上专门的向量库。</li>
+</ul>
 </div>
 
-<h2>一个能跑通的完整 pipeline</h2>
-<p>把上面串起来，就是最小可运行版本（向量库用之前的 pgvector 接口，这里省略连接细节）：</p>
-<pre><code class="language-python">def rag_answer(question: str) -> str:
-    # 1. 混合召回（向量 + BM25）
-    candidates = hybrid_search(question, top_k=20)
-    # 2. 重排，挑最相关 5 条
-    top_docs = rerank(question, candidates, top_n=5)
-    # 3. 控制上下文长度，组装 prompt
-    prompt = build_prompt(question, top_docs, max_tokens=3000)
-    # 4. 调大模型生成
-    answer = llm.chat(prompt)
-    return answer</code></pre>
-<p>这个骨架看着简单，但我线上知识库从"答非所问"到"用户觉得靠谱"，主要靠的就是在召回和重排这两步上反复调，而不是换更强的生成模型。</p>
-
-<h2>FAQ</h2>
-<p><strong>Q：RAG 和微调（fine-tune）选哪个？</strong><br/>事实性、时效性、要引用的场景，RAG 优先——改知识库就能更新答案，便宜可追溯。要改变模型风格、语气、特定输出格式，才考虑微调。两者也能叠加。</p>
-<p><strong>Q：为什么我的 RAG 经常漏答？</strong><br/>八成是召回没覆盖。检查分块是否把答案切碎了、混合检索是否开了、reranker 阈值是否太严。先把"召回的 20 条里有没有正确答案"打日志看清楚，再谈生成。</p>
-<p><strong>Q：reranker 一定要加吗？</strong><br/>数据量小、query 简单可以先不加，靠向量+BM25 直接喂。一旦答案质量不够、上下文紧张，加 reranker 是性价比最高的一刀。</p>
-
-<h2>我的结论</h2>
-<p>RAG 的工程价值，集中在"<strong>把对的资料以对的方式喂给模型</strong>"这条链上：<strong>分块别切碎语义、混合检索补向量的盲区、reranker 把噪声挡在上下文外、prompt 控制长度并强制带引用</strong>。这套组合我在多个知识库项目里验证过，比单纯堆更大的模型有效得多。下一篇专门讲向量检索的性能调优——数据量上去后，速度和召回怎么兼顾。</p>
                     </div>
                 </article>
                 <nav class="article-nav">

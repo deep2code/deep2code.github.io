@@ -82,161 +82,67 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">ClickHouse 架构与核心特性</h1>
+                        <h1 class="article-title">ClickHouse 架构：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ ClickHouse,架构</span>
+                            <span class="meta-item">🏷️ CK 架构</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>先回答一个问题：它为什么快</h2>
-<p>很多人被 ClickHouse 的速度惊到之后，第一反应是"是不是硬件堆出来的"。真不是。我在一台 16C64G 的普通云主机上，单机压过一亿行的表，GROUP BY 依然几百毫秒。它快是架构层面的选择，不是堆料。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及CK 架构怎么帮你解决。</p>
 
-<h2>列式存储：和行存到底差在哪</h2>
-<p>传统 MySQL InnoDB 是行存——一行的所有字段（id、user_id、event_time、url、status） physically 存在一起。你想统计"过去一天所有请求的平均响应时间"，行存引擎得把每一行的 user_id、url、status 这些你根本不关心的字段也从磁盘读出来，只为了取 response_time 那一列。</p>
-<p>列式存储反过来：同一列的数据连续存放。读 response_time 就只读 response_time 这一列，其他列根本不碰。一亿行里你只查 3 列，磁盘 IO 直接省掉 90%+。</p>
-<table>
-<thead><tr><th>对比维度</th><th>行存（MySQL InnoDB）</th><th>列存（ClickHouse）</th></tr></thead>
-<tbody>
-<tr><td>物理存储</td><td>一行所有字段连续</td><td>一列所有值连续</td></tr>
-<tr><td>聚合查询 IO</td><td>要读所有列</td><td>只读涉及的列</td></tr>
-<tr><td>压缩效果</td><td>差（字段类型混杂）</td><td>极好（同列同类型）</td></tr>
-<tr><td>单行点查</td><td>快</td><td>要读多列合并，慢</td></tr>
-<tr><td>写入</td><td>随机写，支持更新</td><td>批量顺序写，不擅长随机更新</td></tr>
-<tr><td>典型场景</td><td>事务、点查、业务库</td><td>分析、聚合、报表</td></tr>
-</tbody>
-</table>
-<p>压缩这块得多说一句。同一列里放的都是同类型数据——比如一个 UInt64 的时间戳列，或者一串状态码字符串。重复值多、类型一致，通用压缩算法（LZ4、ZSTD）压起来效果极好。我实测日志数据原始 1TB，压完常常只剩 100~150GB。磁盘省了，更重要的是内存里能缓存更多数据。</p>
-
-<div class="mermaid">
-flowchart LR
-    subgraph 行存储
-        R1[row1: id=1 uid=100 t=10:00]
-        R2[row2: id=2 uid=101 t=10:01]
-        R3[row3: id=3 uid=100 t=10:02]
-    end
-    subgraph 列存储
-        C1[id 列: [1,2,3]]
-        C2[uid 列: [100,101,100]]
-        C3[t 列: [10:00,10:01,10:02]]
-    end
-    style C1 fill:#f0682a,stroke:#fff,color:#fff
-    style C2 fill:#f0682a,stroke:#fff,color:#fff
-    style C3 fill:#f0682a,stroke:#fff,color:#fff
-</div>
-
-<h2>向量化执行引擎：一次喂饱 CPU</h2>
-<p>这是 ClickHouse 和传统数据库执行引擎最大的区别。MySQL 那种火山模型（Volcano）是一行一行地拉取、一行一行地算——每一行都要走一遍函数调用、类型分发，CPU 大部分时间花在"函数调用开销"上，真正算数的时间没多少。</p>
-<p>ClickHouse 用的是<strong>向量化执行</strong>：把一列切成一批一批的块（block，默认约 65536 行），整块整块地处理。一个加法函数不是"一个数加一个数"，而是"一整列加一整列"，底层可以用 SIMD 指令一次算 4~8 个值，循环开销被摊薄。</p>
 <div class="mermaid">
 flowchart TB
-    subgraph 火山模型
-        L1[取一行] --> F1[函数调用]
-        F1 --> L2[取下一行]
-        L2 --> F2[函数调用]
-        F2 --> L3[...]
-    end
-    subgraph 向量化模型
-        B1[取一批 65536 行] --> V1[SIMD 批量计算]
-        V1 --> B2[取下一批]
-        B2 --> V2[SIMD 批量计算]
-    end
-    style V1 fill:#f0682a,stroke:#fff,color:#fff
+    A[Server] --> B[MergeTree 引擎]
+    B --> C[列存]
+    B --> D[稀疏索引]
+    B --> E[向量化执行]
 </div>
-<p>配合列式存储，数据进 CPU L1/L2 缓存也是成块的，缓存命中率极高。这就是"批量处理 + CPU 缓存"为什么快的核心——不是单个运算变快，而是<strong>把能并行的都并行、能缓存的都缓存</strong>，硬件利用率拉满。</p>
 
-<h2>MergeTree 家族：ClickHouse 的灵魂</h2>
-<p>ClickHouse 的表引擎有一大堆，但 99% 的生产场景你只用 <code>MergeTree</code> 及其家族。理解 MergeTree 就理解了 ClickHouse。</p>
-<p>核心机制是这样的：你插入一批数据，它先写进一个"数据部分（part）"，这个 part 是按 <code>ORDER BY</code> 排序好的、不可变的。后台有个 merge 线程，不断把多个小 part 合并成大 part。名字 MergeTree 就是这么来的——数据像树一样合并生长。</p>
-<ul>
-<li><strong>ORDER BY</strong>：决定数据在 part 内的物理排序，也是稀疏主键索引的依据。排序键选得好，查询能跳过大量数据。</li>
-<li><strong>数据 part 不可变</strong>：写进来就不改了，更新/删除本质是"标记 + 后台 merge 时清理"。这跟 Lucene 的段思想很像。</li>
-<li><strong>稀疏索引</strong>：不是每行都建索引，而是每"索引粒度"（默认 8192 行）记一条索引项。索引极小，能全放内存。</li>
-</ul>
-<p>家族成员我列个表，建表时知道选谁：</p>
+<h2>1. 为什么 ClickHouse 这么快</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>都是数据库，为什么 CK 查亿级数据只要几秒？</p>
+</div>
+
+<p><strong>怎么解决？</strong>列存 + 向量化执行 + 稀疏索引，三个加起来就快了。</p>
+
+<h2>2. MergeTree 是什么</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>CK 最常用的引擎，什么意思？</p>
+</div>
+
+<p><strong>怎么解决？</strong>MergeTree 是 CK 的核心表引擎，数据按主键排序，后台合并数据。</p>
+
+<h2>3. 为什么不适合更新删除</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>CK 为什么更新删除很慢？</p>
+</div>
+
+<p><strong>怎么解决？</strong>列存设计，更新删除要重写数据，所以不适合频繁改。</p>
+
+<h2>CK 核心特点</h2>
+
 <table>
-<thead><tr><th>引擎</th><th>特点</th><th>什么时候用</th></tr></thead>
+<thead><tr><th>特点</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>MergeTree</td><td>基础引擎，带主键/分区/索引</td><td>默认选择，绝大多数场景</td></tr>
-<tr><td>ReplacingMergeTree</td><td>按排序键去重，保留最新版本</td><td>需要按主键保留最新一条</td></tr>
-<tr><td>SummingMergeTree</td><td>合并时对数值列预聚合</td><td>明细表上做预汇总</td></tr>
-<tr><td>AggregatingMergeTree</td><td>合并时完成 GROUP BY 状态聚合</td><td>物化视图的聚合底表</td></tr>
-<tr><td>CollapsingMergeTree</td><td>用 sign 标记行折叠</td><td>有删改流的场景</td></tr>
-<tr><td>VersionedCollapsingMergeTree</td><td>按版本号折叠</td><td>有序删改流</td></tr>
-</tbody>
-</table>
-<div class="callout callout-danger">
-<div class="callout-title">第一个大坑：ReplacingMergeTree 不实时去重</div>
-<p>很多人以为建了 ReplacingMergeTree，重复 key 立刻只剩一条。错。去重只在<strong>后台 merge 两个 part 时</strong>才发生。在 merge 发生前，同一个 key 可能还存在多份。所以你查询如果不加 <code>FINAL</code> 或者用 <code>GROUP BY</code>，会读到重复数据。生产上我习惯在查询层用 <code>GROUP BY</code> 取最新版本，而不是依赖 <code>FINAL</code>（<code>FINAL</code> 会拖慢查询）。</p>
-</div>
+<tr><td>列存</td><td>按列存，查几列快</td></tr>
+<tr><td>向量化</td><td>批量处理数据</td></tr>
+<tr><td>稀疏索引</td><td>索引小，占内存少</td></tr>
+</tbody></table>
 
-<h2>分区与分片：数据怎么拆开</h2>
-<p>ClickHouse 有两个容易搞混的概念：<strong>分区（Partition）</strong>和<strong>分片（Shard）</strong>。</p>
-<ul>
-<li><strong>分区</strong>：单机上的逻辑切割，通常按天或月。<code>PARTITION BY toYYYYMM(event_time)</code>。查询带时间条件时能只扫相关分区，跳过其他分区的数据。分区是"读优化"。</li>
-<li><strong>分片</strong>：把数据横向分布到多台机器上，每个分片存一部分数据，彼此独立。分片是"横向扩展"，靠分布式表（Distributed engine）路由查询。</li>
-</ul>
-<div class="mermaid">
-flowchart TB
-    subgraph 集群 3 分片各 2 副本
-        subgraph Shard1
-            P1[分区 202609]
-            P2[分区 202608]
-        end
-        subgraph Shard2
-            Q1[分区 202609]
-            Q2[分区 202608]
-        end
-        subgraph Shard3
-            R1[分区 202609]
-            R2[分区 202608]
-        end
-    end
-    DIST[Distributed 分布式表] --> Shard1
-    DIST --> Shard2
-    DIST --> Shard3
-    style DIST fill:#f0682a,stroke:#fff,color:#fff
-</div>
-<p>副本（Replica）是每个分片里的主备，靠 ZooKeeper / Keeper 同步 part。生产部署我一般建议 2 副本起步，3 节点奇数个便于故障切换。分区别拆太细——按天分区是甜点，按小时分区在数据量大时反而会产生太多小 part，拖慢 merge。</p>
-
-<h2>主从复制：怎么保证高可用</h2>
-<p>ClickHouse 的复制是<strong>异步多主</strong>模型：同一个 part 在多个副本上都能写，写任意副本都会通过 Keeper 把 part 分发到其他副本。它不像 MySQL 那样严格主从，而是"每个副本都能接读写"。</p>
 <div class="callout callout-tip">
-<div class="callout-title">复制的真相：异步、不保证强一致</div>
-<p>复制是异步的。你写完一个副本立刻去读另一个副本，可能读不到刚写的数据。对日志/埋点这种场景无所谓，对"写了立刻要查到"的业务要注意。我团队的做法是读请求就近路由到写入的那个副本，或者在应用层接受几秒延迟。</p>
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>不要做 OLTP</strong>它是 OLAP 数据库，不要用来存订单交易。</li>
+<li><strong>不要频繁更新删除</strong>写少读多的场景用，频繁改的不适合。</li>
+</ul>
 </div>
-
-<h2>和传统行存 DBMS 的本质差异</h2>
-<p>很多人拿 MySQL 的思路去理解 ClickHouse，结果处处碰壁。本质差异在于：MySQL 优化的是"高并发随机读写"，ClickHouse 优化的是"低并发大批量扫描"。它俩根本不是一个物种。</p>
-<pre><code class="language-sql">-- MySQL 思路：单行读写，事务
-UPDATE orders SET status = 'paid' WHERE id = 12345;
-
--- ClickHouse 思路：批量分析，聚合
-SELECT toStartOfHour(event_time) AS hour,
-       count() AS pv,
-       uniqExact(user_id) AS uv
-FROM events
-WHERE event_time >= '2026-09-01'
-GROUP BY hour
-ORDER BY hour;</code></pre>
-<p>上面这条 SQL 在 ClickHouse 里是它的主场——扫描几亿行，按小时聚合，毫秒到秒级返回。换成 MySQL 跑同样的，要么慢到超时，要么把缓冲池打爆。</p>
-
-<h2>为什么快：三要素总结</h2>
-<ol>
-<li><strong>压缩</strong>：列存 + LZ4/ZSTD，磁盘 IO 砍一个数量级，page cache 能缓存更多热数据。</li>
-<li><strong>批量处理</strong>：向量化引擎按 block 处理，函数调用开销摊薄，SIMD 并行算数。</li>
-<li><strong>CPU 缓存友好</strong>：数据连续存储、顺序扫描，L1/L2 缓存命中率远高于行存随机访问。</li>
-</ol>
-<p>再加上稀疏主键索引（只存索引项不存行指针）、分区裁剪（不扫无关分区）、零 SQL 解析开销（ClickHouse 的 SQL parser 很轻），这些叠在一起，就是它在 OLAP 场景一骑绝尘的原因。</p>
-
-<h2>FAQ</h2>
-<p><strong>Q：ClickHouse 能替代 MySQL 做业务库吗？</strong><br/>不能。它没有真正的事务（24.x 后有实验性事务但不成熟）、单行 UPDATE/DELETE 极重、不擅长点查。业务读写留在 MySQL/PG，分析交给 ClickHouse。</p>
-<p><strong>Q：MergeTree 和 ReplacingMergeTree 怎么选？</strong><br/>大多数情况直接用 MergeTree。只有当你确实需要"同一个 key 只保留最新版本"（比如维度表缓慢变化）时才用 ReplacingMergeTree，而且要接受它不实时去重、查询要配合 GROUP BY。</p>
-<p><strong>Q：分区按天还是按月？</strong><br/>看数据量。单表每天数据量在千万行级以下，按天分区；一天就几亿行，按小时；数据量小（一天几十万行）按月也行。核心原则是：单个分区别太大（建议 10~50GB）也别太小（别搞出成百上千个分区）。</p>
-
-<h2>我的结论</h2>
-<p>ClickHouse 的快不是黑科技，是一套<strong>为分析场景量身定做的取舍</strong>：牺牲掉单行更新和事务，换来列式存储、向量化执行和极致压缩。理解了 MergeTree 的"排序 part + 后台合并"模型，你后面学建表、写查询、做优化都会有底。下一篇我们就动手建表、导数据，把这套架构落到实处。</p>
-
 
                     </div>
                 </article>
