@@ -81,149 +81,68 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">向量检索性能优化</h1>
+                        <h1 class="article-title">向量数据库性能：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ 向量数据库,性能优化</span>
+                            <span class="meta-item">🏷️ 向量性能</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>性能优化的核心矛盾</h2>
-<p>向量检索性能调优，本质是在三个变量间做权衡：召回率（recall）、延迟（latency）、资源占用（内存/CPU）。你把 recall 从 90% 拉到 99%，延迟可能翻三倍；你想把内存砍半，recall 又掉一截。</p>
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及向量性能怎么帮你解决。</p>
+
 <div class="mermaid">
-flowchart TD
-    A[召回率 recall] --- B[延迟 latency]
-    B --- C[资源占用 内存/CPU]
-    C --- A
-    A -.提高.-> B
-    B -.降低.-> A
-    style A fill:#00add8,stroke:#fff,color:#fff
-    style B fill:#f59e0b,stroke:#fff,color:#fff
-    style C fill:#dc382d,stroke:#fff,color:#fff
+flowchart TB
+    A[向量搜索慢] --> B{数据量多大?}
+    B -->|小| C[pgvector 就够]
+    B -->|大| D[上专门向量库]
+    D --> E[HNSW/IVF 索引]
 </div>
 
-<h2>第一板斧：维度选择与降维</h2>
-<p>维度是线性成本——1024 维和 3072 维，存储和计算差 3 倍。所以降维是性价比最高的优化。两条路：</p>
-<p><strong>一是选支持降维的 Embedding 模型</strong>。OpenAI 的 <code>text-embedding-3-large</code> 支持 Matryoshka 截断，直接取前 N 维，1024 维取前 512，召回损失很小。</p>
-<p><strong>二是 PCA 降维</strong>。把高维向量投影到更低维子空间。注意：PCA 要用历史数据训练出投影矩阵，<strong>查询向量也要用同一个矩阵变换</strong>，否则空间不一致。</p>
-<pre><code class="language-python">import numpy as np
-from sklearn.decomposition import PCA
+<h2>1. 向量搜索太慢</h2>
 
-# 离线：用历史向量训练投影矩阵
-train = np.load("train_embeddings.npy")     # (N, 1024)
-pca = PCA(n_components=256).fit(train)
-
-# 入库：降维后再存
-reduced = pca.transform(train)               # (N, 256)
-
-# 查询：同一个矩阵变换 query
-def encode_query(q_vec):
-    return pca.transform(q_vec.reshape(1, -1))[0]</code></pre>
-<div class="callout callout-danger">
-<div class="callout-title">PCA 不是免费的</div>
-降维能省一半内存和查询时间，但 recall 会有损失。我建议先用 Matryoshka 截断（零成本），不够再上 PCA。别一上来就把 1024 砍到 128，先测 recall，很多业务 512 维就够。
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>你的向量库数据量大了，搜索要几秒。</p>
 </div>
 
-<h2>第二板斧：索引参数调优</h2>
-<p>HNSW 和 IVF 各有几个关键旋钮，调对了延迟能差好几倍。先把这些参数记住：</p>
+<p><strong>怎么解决？</strong>加向量索引，HNSW 或者 IVF，快很多。</p>
+
+<h2>2. pgvector 能撑多大</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>pgvector 最多能存多少向量？</p>
+</div>
+
+<p><strong>怎么解决？</strong>百万级完全够用，千万级要看情况。</p>
+
+<h2>3. 什么时候要换专门向量库</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>什么时候 pgvector 不够用？</p>
+</div>
+
+<p><strong>怎么解决？</strong>亿级向量、高并发、要求毫秒级响应，再上专门向量库。</p>
+
+<h2>索引类型</h2>
+
 <table>
-<thead><tr><th>索引</th><th>参数</th><th>作用</th><th>调大的影响</th></tr></thead>
+<thead><tr><th>索引</th><th>特点</th><th>适合</th></tr></thead>
 <tbody>
-<tr><td>HNSW</td><td>m</td><td>每个节点连接数（构建期定）</td><td>图更密，recall 升，内存升</td></tr>
-<tr><td>HNSW</td><td>ef_construction</td><td>建图时的搜索宽度</td><td>建图质量高，构建慢</td></tr>
-<tr><td>HNSW</td><td>ef_search</td><td>查询时的搜索宽度</td><td>recall 升，查询变慢</td></tr>
-<tr><td>IVF</td><td>lists</td><td>聚类簇数</td><td>一般取 sqrt(行数)</td></tr>
-<tr><td>IVF</td><td>nprobe</td><td>查询扫几个簇</td><td>recall 升，查询变慢</td></tr>
-</tbody>
-</table>
-<p>实战调优就两步：先固定 m/ef_construction（建图时定，m=16、ef_construction=128 是我的常用起点），然后在<strong>线上压测里调 ef_search 或 nprobe</strong>，画出 recall-延迟曲线，选你业务能接受的那个点。</p>
-<pre><code class="language-python"># HNSW：调 ef_search，找到 recall 和延迟的平衡点
-for ef in [16, 32, 64, 128, 256]:
-    db.set_param("hnsw.ef_search", ef)
-    recall, p99 = measure_recall_and_latency(queries, ground_truth)
-    print(f"ef_search={ef}: recall={recall:.3f}, p99={p99:.1f}ms")
+<tr><td>Flat</td><td>精确搜索</td><td>小数据量</td></tr>
+<tr><td>IVFFlat</td><td>聚类索引</td><td>中等数据量</td></tr>
+<tr><td>HNSW</td><td>图索引</td><td>大数据量、高要求</td></tr>
+</tbody></table>
 
-# IVF：调 nprobe，逻辑一样
-for nprobe in [1, 5, 10, 20, 50]:
-    db.set_param("ivf.nprobe", nprobe)</code></pre>
 <div class="callout callout-tip">
-<div class="callout-title">ef_search 别默认</div>
-默认 ef_search 往往偏小，你上线即"安全但不快"或"快但漏召回"。我每次上线都必画这条 recall-延迟曲线，再定参数。这是最被低估的一步。
-</div>
-
-<h2>第三板斧：量化（PQ/SQ/binary）</h2>
-<p>量化是把向量压缩存内存，是"内存不够、QPS 上不去"时的杀手锏。三种常见程度：</p>
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>SQ（标量量化）</strong>：把 float32 压成 int8，体积缩 4 倍，recall 损失很小。性价比之王，先试它。</li>
-<li><strong>PQ（乘积量化）</strong>：把向量切成多段分别聚类，体积能缩 10~30 倍，但 recall 损失更大，需要重排序补偿。</li>
-<li><strong>Binary（二值化）</strong>：压成 0/1，体积缩 32 倍，用汉明距离，速度极快，recall 损失最大，适合对精度不敏感的粗筛。</li>
+<li><strong>先从 pgvector 开始</strong>小项目用 pgvector，简单够用，不要一开始就上复杂的。</li>
+<li><strong>维度不要太高</strong>维度越高搜索越慢，一般几百维合适。</li>
 </ul>
-<table>
-<thead><tr><th>量化方式</th><th>压缩比</th><th>recall 损失</th><th>速度</th><th>我的建议</th></tr></thead>
-<tbody>
-<tr><td>无（float32）</td><td>1x</td><td>无</td><td>基准</td><td>小数据集</td></tr>
-<tr><td>SQ8</td><td>4x</td><td>很小</td><td>快</td><td>默认首选</td></tr>
-<tr><td>PQ</td><td>10~30x</td><td>中等</td><td>很快</td><td>大数据量+重排</td></tr>
-<tr><td>Binary</td><td>32x</td><td>大</td><td>极快</td><td>粗筛/海量初筛</td></tr>
-</tbody>
-</table>
-<p>注意：量化通常配合"先量化粗筛、再用原始向量精排"的两阶段策略。光靠量化后的距离排序，recall 不够；粗筛出候选再用原向量重排，才是标准做法。</p>
-
-<h2>第四板斧：分层检索</h2>
-<p>当数据量上亿、单索引扛不住，就做分层：<strong>第一层用最轻的索引（binary/PQ）从全量快速筛出几百条候选，第二层用精确索引在候选里精排</strong>。这和 RAG 里"粗召回+重排"是一个思路，只是搬到了向量层。</p>
-<div class="mermaid">
-flowchart LR
-    Q[查询向量] --> L1[第一层: binary/PQ 全量粗筛 候选 500]
-    L1 --> L2[第二层: HNSW 精确 精排 Top-10]
-    L2 --> OUT[返回结果]
-    style L1 fill:#dc382d,stroke:#fff,color:#fff
-    style L2 fill:#00add8,stroke:#fff,color:#fff
 </div>
 
-<h2>过滤与召回率的权衡</h2>
-<p>前面选型那篇提过，这里展开。带过滤的向量查询（"某租户/某时间范围内找相似"）有个大坑：<strong>ANN 索引是为全量建的，过滤后候选集被切碎，图上可能根本没有可达路径</strong>，recall 暴跌。</p>
-<p>两种做法权衡：</p>
-<ul>
-<li><strong>先过滤再向量搜索</strong>（pre-filter）：在过滤后的子集上做 ANN。子集小的时候准，但子集大了要重新扫。</li>
-<li><strong>先向量再过滤</strong>（post-filter）：全量 ANN 捞出一批再过滤。简单，但过滤掉一半候选可能一个不剩。</li>
-</ul>
-<div class="callout callout-danger">
-<div class="callout-title">多租户别一个大索引</div>
-我们一个多租户产品吃过亏：所有租户共用一个 HNSW 索引，按 tenant_id 过滤后小租户在图上几乎捞不到东西，recall 掉到 50%。后来改成<strong>大租户独立索引、小租户合并索引</strong>，问题解决。过滤比例极端时，按租户/分片拆索引往往更稳。
-</div>
-
-<h2>监控指标：盯什么</h2>
-<p>调优不能靠感觉，上线后至少盯这三个指标：</p>
-<table>
-<thead><tr><th>指标</th><th>含义</th><th>健康线（参考）</th></tr></thead>
-<tbody>
-<tr><td>QPS</td><td>每秒查询数</td><td>看你的 SLA，持续压测水位</td></tr>
-<tr><td>P50/P99 延迟</td><td>中位/尾延迟</td><td>P99 要单独看，别只看平均</td></tr>
-<tr><td>Recall@k</td><td>召回率</td><td>定期用评测集回归，别让它悄悄掉</td></tr>
-<tr><td>缓存命中率</td><td>热点查询命中</td><td>热点问题可加一层缓存</td></tr>
-</tbody>
-</table>
-<p>我一般单独维护一个<strong>黄金评测集</strong>（几百组 query + 标准答案），每次改索引参数、换模型、更新数据后都跑一遍 recall。很多线上事故不是"变慢"，而是"召回率悄悄掉了"，用户感觉答非所问但你没报警。</p>
-
-<h2>常见性能坑清单</h2>
-<ol>
-<li><strong>没走索引</strong>：小表测试全走 Seq Scan，上线前先灌数据再 EXPLAIN。</li>
-<li><strong>度量和索引不匹配</strong>：余弦查询配了 L2 索引，等于没索引。</li>
-<li><strong>维度拉满</strong>：上来 3072 维，内存和延迟翻倍，先砍到 1024 试。</li>
-<li><strong>ef_search/nprobe 用默认值</strong>：没画 recall-延迟曲线，拍脑袋上线。</li>
-<li><strong>过滤打碎索引</strong>：多租户/强过滤场景 recall 暴跌，要按租户拆索引。</li>
-<li><strong>在线建大索引</strong>：高峰期 CREATE INDEX 把 IO 打满，用 CONCURRENTLY 或低峰建。</li>
-<li><strong>不做 recall 回归</strong>：改完参数只看延迟，recall 掉了都不知道。</li>
-</ol>
-
-<h2>FAQ</h2>
-<p><strong>Q：延迟和召回率到底怎么选？</strong><br/>先定业务底线：RAG 我一般要 recall@10 &gt; 90%，P99 &lt; 200ms。在这个约束下画曲线，参数往延迟最低那档靠。别追求 99% recall，那是另一个量级的成本。</p>
-<p><strong>Q：量化后 recall 掉多少算正常？</strong><br/>SQ8 掉 1~2% 以内算正常；PQ 掉 5~10% 要靠精排补；binary 掉得多，只适合粗筛。用你的评测集实测，别信厂商数字。</p>
-<p><strong>Q：热点查询慢怎么办？</strong><br/>在向量库前面加一层语义缓存——把高频 query 的向量和结果缓存起来，相似 query 直接命中。我们一个问答系统靠这个把 P99 砍了 40%。</p>
-
-<h2>我的结论</h2>
-<p>向量检索性能优化是一套组合拳：<strong>维度先砍（降维）、参数后调（ef_search/nprobe）、内存不够再量化（SQ 优先）、海量数据上分层检索、多租户按过滤拆索引</strong>。但一切优化的前提是——你有一个能量化 recall 和延迟的评测集。没有它，所有调参都是盲人摸象。</p>
-<p>这也是向量数据库系列的收尾。从 Embedding 入门、pgvector 上手、选型对比、RAG 实战，到这篇性能调优，一条完整的链路就齐了。剩下的就是在自己的业务里，把这套东西跑起来、测出来、再调下去。</p>
                     </div>
                 </article>
                 <nav class="article-nav">
