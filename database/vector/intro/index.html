@@ -81,115 +81,68 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">向量数据库与 Embedding 入门</h1>
+                        <h1 class="article-title">向量数据库入门：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ 向量数据库,Embedding</span>
+                            <span class="meta-item">🏷️ 向量数据库</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>先搞懂：什么是向量嵌入</h2>
-<p>我刚接触这玩意儿的时候，把它想成了"给文本编个号"。错。向量嵌入（Embedding）不是编号，是把一段文本投影到一个高维语义空间里，变成一串浮点数。关键特性就一个：<strong>语义相近的文本，向量在空间里距离也近</strong>。</p>
-<p>举个直观例子，"手机没电了"和"电池快用完了"字面重合度很低，但在向量空间里它们挤在一起；而"手机没电了"和"诺基亚卖了多少年"虽然都有"手机"，距离却很远。这就是它比关键词搜索强的地方——它理解的是意思，不是词。</p>
-<pre><code class="language-python"># 用 BGE-M3 把两段文本压成向量
-from sentence_transformers import SentenceTransformer
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及向量数据库怎么帮你解决。</p>
 
-model = SentenceTransformer("BAAI/bge-m3")
-texts = ["手机没电了", "电池快用完了", "今天点了份外卖"]
-embs = model.encode(texts, normalize_embeddings=True)
-
-print(embs.shape)          # (3, 1024)
-print(embs[0][:8])         # 一串浮点数，比如 [ 0.012, -0.034, ...]
-
-# 归一化后，点积 == 余弦相似度
-import numpy as np
-sim = embs[0] @ embs[1]
-print(f"两段相似文本余弦相似度: {sim:.3f}")   # 通常 &gt; 0.8</code></pre>
-<p>注意我特意加了 <code>normalize_embeddings=True</code>。归一化之后向量长度是 1，点积就等于余弦相似度，后面数据库里算起来也快。这个细节后面会反复用到。</p>
-
-<h2>Embedding 模型怎么选</h2>
-<p>2026 年我常用的就这几家，别被 MTEB 排行榜上几十个模型看花了眼：</p>
-<table>
-<thead><tr><th>模型</th><th>维度</th><th>部署方式</th><th>语种</th><th>适合场景</th></tr></thead>
-<tbody>
-<tr><td>OpenAI text-embedding-3-large</td><td>3072（可降到 256~1024）</td><td>仅 API</td><td>多语</td><td>海外业务、不想自己部署</td></tr>
-<tr><td>BGE-M3</td><td>1024</td><td>开源自部署</td><td>中英双强</td><td>国内业务、要私有化、要长文本</td></tr>
-<tr><td>Cohere Embed v4</td><td>1536~1024</td><td>API</td><td>多语</td><td>和 Cohere 生态绑定</td></tr>
-<tr><td>开源小模型（如 bge-small）</td><td>384</td><td>自部署</td><td>中/英</td><td>资源紧张、对精度要求不极致</td></tr>
-</tbody>
-</table>
-<div class="callout callout-danger">
-<div class="callout-title">维度不是越高越好</div>
-很多人默认拉满 3072 维。但维度越高，存储和计算成本是线性上涨的，1024 维和 3072 维在 RAG 里的召回差距往往没你想的大。我现在内部中文业务一律 BGE-M3 的 1024 维，先跑通再用真实评测集决定要不要升维。
-</div>
-<p>选模型还有个容易忽略的点：<strong>查询和入库必须用同一个模型</strong>。你用 A 模型把文档入库，再用 B 模型给用户问题算向量，那就是鸡同鸭讲，相似度全乱。换模型 = 全量重建索引，这个成本要在立项时就算清楚。</p>
-
-<h2>三种相似度算法：别用错了</h2>
-<p>向量之间"远近"有三种常见度量，选错了结果会完全不对：</p>
-<pre><code class="language-python">import numpy as np
-
-def cosine(a, b):                       # 余弦相似度
-    return a @ b / (np.linalg.norm(a) * np.linalg.norm(b))
-
-def euclidean(a, b):                     # 欧氏距离
-    return np.linalg.norm(a - b)
-
-def dot(a, b):                           # 内积
-    return a @ b</code></pre>
-<ul>
-<li><strong>余弦相似度</strong>：只看方向不看长度。RAG 文本检索默认选这个，因为你关心语义方向，不关心句子长短带来的向量模长差异。</li>
-<li><strong>欧氏距离（L2）</strong>：真实物理距离，长度和方向都管。适合图像、特征空间这种向量模长本身有意义的场景。</li>
-<li><strong>内积（IP）</strong>：归一化向量上等价于余弦，未归一化时模长会参与。部分推荐系统用它。</li>
-</ul>
 <div class="mermaid">
-flowchart TD
-    A[选定度量] --> B{向量是否归一化?}
-    B -->|是| C[余弦 == 内积，二选一即可]
-    B -->|否| D{业务看什么?}
-    D -->|语义方向| E[余弦相似度]
-    D -->|几何位置/图像| F[欧氏距离 L2]
-    D -->|推荐/打分| G[内积 IP]
-</div> <div class="callout callout-danger"> <div class="callout-title">度量和索引必须对齐</div> pgvector 建索引时要指定 <code>vector_cosine_ops</code> / <code>vector_l2_ops</code>，和你查询用的度量不一致，索引根本不生效，会退化成全表扫。我踩过一次——建索引时偷懒用了默认 L2，查询用余弦，结果慢得要死还召回率低，排查了半天才发现是这个。 </div>  <p style="color:red;font-size:20px">测试段落：你能看到我吗？</p> <h2>ANN 近似最近邻：为什么不全表扫</h2> <p>假设库里有 1000 万条 1024 维向量。一次查询要和全部 1000 万条算距离，每次 1024 次乘法，那就是 100 亿次浮点运算——单机几百毫秒，并发直接崩。全表扫（精确最近邻 KNN）只适合小数据集做验证。</p> <p>ANN（Approximate Nearest Neighbor）的思路是<strong>牺牲一点点召回率，换数量级的速度</strong>。它不保证找到真正最近的，但找回来的候选里 95% 以上是对的，对 RAG 这种场景完全够用。下面这张图是整个流程：</p> <div class="mermaid">
-flowchart LR
-    Q[查询向量] --> IDX[ANN 索引粗排]
-    IDX --> CAND[候选 Top-N]
-    CAND --> RESCORE[精确距离重排]
-    RESCORE --> TOPK[最终 Top-K]
+flowchart TB
+    A[文本/图片] --> B[Embedding 向量化]
+    B --> C[存入向量库]
+    C --> D[相似度搜索]
+    D --> E[RAG/推荐]
 </div>
 
-<h2>HNSW 和 IVF：两大索引原理</h2>
-<p>这两个是 2026 年你绕不开的索引结构，我用大白话讲：</p>
-<p><strong>HNSW（分层可导航小世界图）</strong>：想象一张地铁线路图。有高速的高架线（顶层，节点少、跳得远）和站站停的地面线（底层，节点密）。查询时先在顶层用贪心快速跳到目标附近，再逐层下降细化。它召回率高、延迟稳定，是现在大多数生产系统的默认选择，代价是要把整个图常驻内存。</p>
-<p><strong>IVF（倒排文件）</strong>：先把所有向量用 K-Means 聚成 N 个簇（比如 1000 个）。查询时不遍历全部，只算落在最近的 <code>nprobe</code> 个簇里的向量。<code>nprobe</code> 越大越准但越慢，这是个可调旋钮。它省内存，但聚类质量直接决定天花板，且数据分布变了要重新聚类。</p>
+<h2>1. 做 RAG 怎么存向量</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>做 AI RAG，Embedding 后的向量存哪？</p>
+</div>
+
+<p><strong>怎么解决？</strong>用向量数据库，专门存向量，做相似度搜索。</p>
+
+<h2>2. 向量数据库是什么</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>向量数据库是什么？</p>
+</div>
+
+<p><strong>怎么解决？</strong>专门存和检索向量的数据库，支持相似度搜索。</p>
+
+<h2>3. 常用向量库</h2>
+
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>常用向量数据库有哪些？</p>
+</div>
+
+<p><strong>怎么解决？</strong>PGVector（PostgreSQL 扩展）、Milvus、Pinecone、Chroma。</p>
+
+<h2>对比</h2>
+
 <table>
-<thead><tr><th>维度</th><th>HNSW</th><th>IVF</th></tr></thead>
+<thead><tr><th>向量库</th><th>特点</th><th>适合</th></tr></thead>
 <tbody>
-<tr><td>召回率</td><td>高（95%+ 容易做到）</td><td>依赖 nprobe 和聚类质量</td></tr>
-<tr><td>查询延迟</td><td>稳定，亚毫秒</td><td>随 nprobe 波动</td></tr>
-<tr><td>内存占用</td><td>高（图结构常驻）</td><td>较低</td></tr>
-<tr><td>构建速度</td><td>较慢</td><td>快</td></tr>
-<tr><td>动态增删</td><td>友好</td><td>一般，易退化</td></tr>
-<tr><td>我的建议</td><td>中小规模默认选它</td><td>超大规模、内存紧张时考虑</td></tr>
-</tbody>
-</table>
-<p>实际生产里，Milvus 这些系统还会在 IVF/HNSW 之上再加<strong>量化（PQ/SQ）</strong>，把向量压成几个字节再存内存，那是性能优化那篇的话题。</p>
+<tr><td>PGVector</td><td>PG 扩展</td><td>已有 PG 项目</td></tr>
+<tr><td>Milvus</td><td>专业开源</td><td>大规模生产</td></tr>
+<tr><td>Chroma</td><td>轻量</td><td>本地开发</td></tr>
+</tbody></table>
 
-<h2>向量数据库 vs 传统数据库</h2>
-<p>新手最常问：MySQL/PostgreSQL 存个 float 数组不行吗？为什么非要上向量数据库？区别在三个地方：</p>
-<ol>
-<li><strong>有没有 ANN 索引</strong>：传统数据库只能全表扫算距离，数据量一大就垮。向量数据库有 HNSW/IVF 这种专用索引。</li>
-<li><strong>向量是一等公民</strong>：批量写入、向量维度对齐、近似查询语法，都是内置的。你在 MySQL 里自己拼算距离，写起来痛苦还慢。</li>
-<li><strong>过滤能力</strong>：生产检索经常要"先按租户/时间/权限过滤，再在结果里找最相似的"。好的向量数据库会把元数据过滤和向量检索融合优化，而不是先过滤再全扫。</li>
-</ol>
-<p>但话说回来，向量数据库不是要你丢掉关系数据库。我现在的架构通常是<strong>pgvector 或 Milvus 负责向量召回，MySQL/PostgreSQL 负责业务数据和 JOIN</strong>，召回出 ID 再回关系库捞详情。下一篇 pgvector 就是教你怎么把这两件事合在一个库里干。</p>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
+<ul>
+<li><strong>小项目用 PGVector</strong>小项目不用单独搭向量库，PostgreSQL 装个 PGVector 扩展就行。</li>
+<li><strong>向量维度要统一</strong>所有向量维度要和 Embedding 模型一致。</li>
+</ul>
+</div>
 
-<h2>FAQ</h2>
-<p><strong>Q：向量维度到底怎么定？</strong><br/>先用模型默认维度跑通，再拿你的真实评测集对比 384/768/1024/1536 维的召回率。别一上来 3072，存储成本是真金白银。</p>
-<p><strong>Q：换 Embedding 模型要重新入库吗？</strong><br/>要。不同模型的向量空间完全不同，没法混用。上线前就想清楚用哪个模型，换模型等于全量重建。</p>
-<p><strong>Q：ANN 的召回率 95% 够用吗？</strong><br/>RAG 场景够用——检索 Top-10，真正相关的那几条基本都在里面。但如果你做精确去重、人脸 1:N 这种，要把 recall 调到 99%+，参数得往保守调。</p>
-
-<h2>我的结论</h2>
-<p>入门这篇记住三件事就行：<strong>Embedding 把语义变成向量、相似度度量要和索引对齐、ANN 是用召回率换速度</strong>。BGE-M3 + 1024 维 + 余弦相似度 + HNSW，是我 2026 年做中文 RAG 的安全默认组合。下一篇我们直接上手，用 PostgreSQL + pgvector 把这套东西真跑起来。</p>
                     </div>
                 </article>
                 <nav class="article-nav">
