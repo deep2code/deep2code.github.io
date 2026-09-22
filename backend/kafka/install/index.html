@@ -81,281 +81,66 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Kafka 安装部署</h1>
+                        <h1 class="article-title">Kafka 安装：从你遇到的问题出发</h1>
                         <div class="article-meta">
-                            <span class="meta-item">🏷️ Kafka,部署运维,KRaft</span>
+                            <span class="meta-item">🏷️ Kafka 安装</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
+<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Kafka 安装怎么帮你解决。</p>
 
-<h2 id="背景">部署 Kafka 前的思考</h2>
-<p>很多人把 Kafka 部署想得很简单——下载 tar 包、改几个配置、启动脚本。但生产环境的 Kafka 部署是一件系统工程：JVM 堆大小、页缓存预留、磁盘选择（SSD/NVMe）、文件描述符限制、swap 关闭、时间...</p>
-<p><strong>为什么选 KRaft 而不是 ZooKeeper？</strong> Kafka 3.x 开始 KRaft（Kafka Raft）已经生产可用，4.0 之后彻底移除 ZooKeeper。KRaft 把 Controller 元数据直接存在 Kafka 内部 Topic <code>__cluster_metadata</code> 中，省去了单独维护 ZK 集群的复杂度，启动速度从分钟级降到秒级，Controller 故障切换从 20~40 秒降到 3~5 秒。新项目直接上 KRaft，老项目用内置工具迁移。</p>
-
-<h2 id="硬件规划">生产级硬件与 OS 要求</h2>
-<table>
-<thead><tr><th>资源</th><th>最低要求</th><th>生产推荐</th></tr></thead>
-<tbody>
-<tr><td>CPU</td><td>4 核</td><td>16 核+（高吞吐场景）</td></tr>
-<tr><td>内存</td><td>8GB</td><td>32GB+，堆内存 6~8GB，其余留给页缓存</td></tr>
-<tr><td>磁盘</td><td>500GB HDD</td><td>NVMe SSD，TBW 等级，JBOD 多块</td></tr>
-<tr><td>网络</td><td>千兆</td><td>万兆（跨机房建议 RDMA 或 25GbE）</td></tr>
-<tr><td>OS</td><td>CentOS 7+ / Ubuntu 20.04+</td><td>Ubuntu 22.04 LTS / Rocky 9</td></tr>
-</tbody>
-</table>
-
-<h3>OS 层关键调优</h3>
-<pre><code class="language-bash"># 1. 关闭 swap（避免 Kafka 进程被换出到磁盘）
-sudo swapoff -a
-sudo sed -i '/swap/d' /etc/fstab
-
-# 2. 提升文件描述符上限（Kafka 每个分区多个文件）
-sudo tee -a /etc/security/limits.conf << 'EOF'
-kafka  -  nofile  655360
-kafka  -  nproc   655360
-EOF
-
-# 3. 虚拟内存参数
-sudo sysctl -w vm.swappiness=1
-sudo sysctl -w vm.max_map_count=262144
-
-# 4. 磁盘调度算法（NVMe 建议 none/mq-deadline）
-echo none | sudo tee /sys/block/nvme0n1/queue/scheduler
-
-# 5. 时间同步（副本同步依赖时钟）
-sudo timedatectl set-ntp true</code></pre>
-
-<h2 id="集群架构">三节点 KRaft 集群拓扑</h2>
-<p>生产环境最小推荐 3 个 Broker，既能容忍 1 台宕机，又有足够的副本分布空间。KRaft 模式下，Controller 角色和 Broker 角色可以混部（小集群）或独立部署（大集群）：</p>
 <div class="mermaid">
-graph TB
-    subgraph KafkaCluster [Kafka Cluster KRaft Mode]
-        subgraph N1 [node-1]
-            R1[Broker + Controller]
-        end
-        subgraph N2 [node-2]
-            R2[Broker + Controller]
-        end
-        subgraph N3 [node-3]
-            R3[Broker + Controller]
-        end
-    end
-
-    subgraph ClientLayer
-        CLI[CLI Tools]
-        PROD[Producers]
-        CONS[Consumers]
-    end
-
-    CLI -->|9092| R1
-    CLI -->|9092| R2
-    CLI -->|9092| R3
-    PROD -->|9092| R1
-    PROD -->|9092| R2
-    PROD -->|9092| R3
-    CONS -->|9092| R1
-    CONS -->|9092| R2
-    CONS -->|9092| R3
-
-    R1 <-.->|KRaft Raft: 9093| R2
-    R2 <-.->|KRaft Raft: 9093| R3
-    R1 <-.->|KRaft Raft: 9093| R3
-
-    style R1 fill:#2196F3,color:#fff
-    style R2 fill:#2196F3,color:#fff
-    style R3 fill:#2196F3,color:#fff
+flowchart LR
+    A[下载 Kafka] --> B[启动 Zookeeper]
+    B --> C[启动 Kafka]
+    C --> D[创建 Topic]
 </div>
 
-<h2 id="安装步骤">二进制包安装步骤</h2>
-<h3>1. 下载与解压</h3>
-<pre><code class="language-bash">cd /opt
-wget https://archive.apache.org/dist/kafka/3.8.0/kafka_2.13-3.8.0.tgz
-tar -xzf kafka_2.13-3.8.0.tgz
-ln -s kafka_2.13-3.8.0 kafka
+<h2>1. 怎么装 Kafka</h2>
 
-# 创建 kafka 用户
-sudo useradd -r -m -d /home/kafka kafka
-sudo chown -R kafka:kafka /opt/kafka*</code></pre>
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>想自己装个 Kafka 试试，不知道怎么弄。</p>
+</div>
 
-<h3>2. 格式化存储目录（KRaft 首次必须）</h3>
-<pre><code class="language-bash">sudo -u kafka /opt/kafka/bin/kafka-storage.sh format   -t $(/opt/kafka/bin/kafka-storage.sh random-uuid)   -c /opt/kafka/config/kraft/server.properties</code></pre>
-<p><strong>注意</strong>：<code>kafka-storage.sh format</code> 只在首次部署时执行。重复 format 会清空元数据，导致集群无法启动。</p>
-<blockquote class="callout callout-warn">
-<p><strong>血泪教训：</strong>有次帮同事排查集群起不来的问题，查了半小时发现他手抖在三台机器上都跑了 format——因为三台用的同一个 cluster-id 但 format 后元数据不一致，Controller 选举直接挂掉。后来只能清掉所有 <code>log.dirs</code> 重新初始化。<strong>format 命令在生产上只执行一次，执行前先确认这台机器是不是全新部署。</strong></p>
-</blockquote>
+<p><strong>怎么解决？</strong>最快用 Docker 装，一条命令启动，不用搞环境。</p>
 
-<h3>3. server.properties 关键配置</h3>
-<pre><code class="language-properties"># ===== 基础标识 =====
-node.id=1
-process.roles=broker,controller
-controller.quorum.voters=1@node-1:9093,2@node-2:9093,3@node-3:9093
+<h2>2. Zookeeper 是什么</h2>
 
-# ===== 监听器 =====
-listeners=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-advertised.listeners=PLAINTEXT://node-1:9092
-listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-controller.listener.names=CONTROLLER
-inter.broker.listener.name=PLAINTEXT
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>启动 Kafka 还要 Zookeeper？</p>
+</div>
 
-# ===== 存储 =====
-log.dirs=/data/kafka/1,/data/kafka/2,/data/kafka/3
-num.network.threads=8
-num.io.threads=16
-num.recovery.threads.per.data.dir=2
+<p><strong>怎么解决？</strong>老版本 Kafka 用 Zookeeper 管集群，新版本 KRaft 不用了。</p>
 
-# ===== Topic 默认 =====
-auto.create.topics.enable=false
-default.replication.factor=3
-min.insync.replicas=2
-num.partitions=6
+<h2>3. 装好了怎么用</h2>
 
-# ===== 日志保留 =====
-log.retention.hours=168
-log.segment.bytes=1073741824
-log.retention.check.interval.ms=300000
+<div class="callout callout-info">
+<div class="callout-title">你遇到的问题</div>
+<p>装完了怎么发消息收消息？</p>
+</div>
 
-# ===== 组协调与事务 =====
-offsets.topic.replication.factor=3
-transaction.state.log.replication.factor=3
-transaction.state.log.min.isr=2
-group.initial.rebalance.delay.ms=3000
+<p><strong>怎么解决？</strong>用命令行创建 Topic，生产发送，消费接收，先跑通流程。</p>
 
-# ===== 网络 =====
-socket.send.buffer.bytes=102400
-socket.receive.buffer.bytes=102400
-socket.request.max.bytes=104857600
-max.connections.per.ip=1000</code></pre>
+<h2>常用命令</h2>
 
-<h3>4. systemd 服务管理</h3>
-<pre><code class="language-bash">sudo tee /etc/systemd/system/kafka.service << 'EOF'
-[Unit]
-Description=Apache Kafka
-After=network.target
+<table>
+<thead><tr><th>操作</th><th>命令</th></tr></thead>
+<tbody>
+<tr><td>创建 Topic</td><td>kafka-topics.sh --create --topic xxx --bootstrap-server localhost:9092</td></tr>
+<tr><td>发消息</td><td>kafka-console-producer.sh --topic xxx --bootstrap-server localhost:9092</td></tr>
+<tr><td>收消息</td><td>kafka-console-consumer.sh --topic xxx --from-beginning --bootstrap-server localhost:9092</td></tr>
+</tbody></table>
 
-[Service]
-Type=simple
-User=kafka
-Group=kafka
-ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties
-ExecStop=/opt/kafka/bin/kafka-server-stop.sh
-Restart=on-failure
-RestartSec=10
-LimitNOFILE=655360
-LimitNPROC=655360
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now kafka
-sudo systemctl status kafka</code></pre>
-
-<h2 id="Docker部署">Docker Compose 三节点集群</h2>
-<p>如果只是开发测试，用 Docker Compose 更快：</p>
-<pre><code class="language-yaml">version: '3'
-services:
-  kafka-1:
-    image: apache/kafka:3.8.0
-    hostname: kafka-1
-    ports: ["9092:9092"]
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
-    volumes:
-      - kafka-data-1:/var/kafka/data
-
-  kafka-2:
-    image: apache/kafka:3.8.0
-    hostname: kafka-2
-    ports: ["9094:9092"]
-    environment:
-      KAFKA_NODE_ID: 2
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
-    volumes:
-      - kafka-data-2:/var/kafka/data
-    depends_on: [kafka-1]
-
-  kafka-3:
-    image: apache/kafka:3.8.0
-    hostname: kafka-3
-    ports: ["9095:9092"]
-    environment:
-      KAFKA_NODE_ID: 3
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9092
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
-    volumes:
-      - kafka-data-3:/var/kafka/data
-    depends_on: [kafka-1]
-
-volumes:
-  kafka-data-1:
-  kafka-data-2:
-  kafka-data-3:</code></pre>
-
-<h2 id="验证集群">集群健康验证</h2>
-<pre><code class="language-bash"># 查看集群 Broker 列表
-/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server node-1:9092
-
-# 创建测试 Topic（3 分区 3 副本）
-/opt/kafka/bin/kafka-topics.sh --bootstrap-server node-1:9092   --create --topic test-topic --partitions 3 --replication-factor 3
-
-# 查看 Topic 详情（重点看 ISR 列）
-/opt/kafka/bin/kafka-topics.sh --bootstrap-server node-1:9092   --describe --topic test-topic
-
-# 期望输出中 ISR 列应该是 (1,2,3) 或类似完整副本列表
-# 如果 ISR 少于副本数，说明有副本未同步，需要排查磁盘/网络问题</code></pre>
-
-<h2 id="JVM调优">JVM 堆大小怎么定？</h2>
-<p>Kafka 官方文档有一个常被误解的建议：<strong>堆内存不要超过 6~8GB</strong>。原因是 Kafka 重度依赖 OS 页缓存，JVM 堆太大反而挤压页缓存。我第一次部署 Kafka 时傻乎乎地给了 16GB 堆，结果大促时频繁 Full GC，吞吐直接砍半。后来按这个原则把堆降到 6GB，留给页缓存，吞吐立刻回升。经验值：</p>
+<div class="callout callout-tip">
+<div class="callout-title">新手最容易踩的坑</div>
 <ul>
-<li><strong>堆内存</strong>：6GB（用 G1GC），通过 <code>KAFKA_HEAP_OPTS="-Xms6g -Xmx6g"</code> 设置</li>
-<li><strong>页缓存</strong>：把堆之外的所有内存都留给 OS。32GB 机器，堆 6GB，页缓存约 26GB</li>
-<li><strong>G1GC 调优</strong>：<code>-XX:MaxGCPauseMillis=20</code>、<code>-XX:InitiatingHeapOccupancyPercent=35</code></li>
+<li><strong>新手用 Docker 装</strong>不要自己搞环境，Docker 一条命令最快。</li>
+<li><strong>先跑通 Hello World</strong>先创建个 Topic，发收消息试试，跑通了再搞复杂的。</li>
 </ul>
-
-<h2 id="最佳实践">生产部署检查清单</h2>
-<ul>
-<li>✅ 至少 3 个 Broker，副本因子 3，<code>min.insync.replicas=2</code></li>
-<li>✅ 关闭 swap，调整 vm.swappiness=1</li>
-<li>✅ 磁盘用 NVMe SSD，多块盘用 JBOD（<code>log.dirs</code> 逗号分隔）</li>
-<li>✅ 监控：JVM GC、UnderReplicatedPartitions、OfflineReplicaCount、ActiveControllerCount</li>
-<li>✅ 日志：Kafka 自身日志级别设为 WARN，应用日志单独收集</li>
-<li>✅ 备份：用 MirrorMaker 2 做跨机房/跨集群灾备</li>
-<li>✅ 安全：生产环境必须开 SASL/SCRAM 或 mTLS，不要用 PLAINTEXT</li>
-</ul>
-
-<h2 id="FAQ">常见问题 FAQ</h2>
-<h3>Q1：Kafka 集群最少需要几个 Broker？</h3>
-<p>开发环境 1 个够了。生产环境最低 3 个——2 个虽然能做副本，但 <code>min.insync.replicas=2</code> 时挂 1 台就不可写，且 Controller 选举需要多数派，2 节点无法容忍任何节点宕机。3 节点能容忍 1 台宕机，Controller 选举 Raft 多数派为 2。更大规模建议 5+ 节点，方便滚动重启和扩缩容。</p>
-
-<h3>Q2：JBOD（多块盘）和 RAID 0 怎么选？</h3>
-<p><strong>强烈推荐 JBOD</strong>。Kafka 自己就是冗余系统（副本机制），不需要磁盘级 RAID。JBOD 模式下每块盘挂了只影响该盘上的 Partition，其他盘继续服务；RAID 0 一块盘挂了整个 RAID 组报废。JBOD 还有一个优势：Kafka 会把 Partition 均匀分配到各盘，单盘故障不影响全局。</p>
-
-<h3>Q3：ZooKeeper 模式怎么迁移到 KRaft？</h3>
-<p>Kafka 3.8+ 提供了 <code>kafka-zookeeper-migration.sh</code> 工具，支持在线滚动迁移。核心步骤：(1) 先在 ZK 集群上配置 KRaft controller quorum；(2) 逐台把 Broker 切换为 KRaft 模式；(3) 然后关闭 ZK 集群。整个过程不需要停机。但如果是旧版本（2.x），建议直接搭新 KRaft 集群，用 MirrorMaker 2 同步数据过去，比原地迁移更稳妥。</p>
-
-<h2 id="总结">总结</h2>
-<p>部署生产级 Kafka，我踩过的坑比装过的机器还多。核心不是安装本身，而是<strong>资源规划 + OS 调优 + 配置规范 + 监控覆盖</strong>。KRaft 模式去掉了 ZooKeeper 这个重量级依赖，让 Kafka 集群的部署和运维变得轻盈。</p>
-<p>记住三个数字：<strong>3 节点起步、副本因子 3、min.insync.replicas=2</strong>，这是大多数中小团队生产部署的安全底线。下一篇我们进入客户端编程实战，用 Go 和 Python 写真正生产可用的生产者和消费者。</p>
+</div>
 
                     </div>
                 </article>
