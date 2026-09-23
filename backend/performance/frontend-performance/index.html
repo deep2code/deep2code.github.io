@@ -388,3 +388,269 @@ gzip_types text/plain text/css text/xml application/javascript application/json 
     </tbody>
 </table>
 <p>HTTP/2 真正解决的是应用层队头阻塞，但它跑在 TCP 上，<strong>一旦丢包，TCP 层的队头阻塞会把同一连接上的所有流一起卡住</strong>，这在弱网下反而比多连接的 HTTP/1.1 更糟。HTTP/3 把传输换成 QUIC，流之间相互独立，并且把连接建立压缩到更少的往返，所以它的收益集中在<strong>移动网络、弱网、丢包率高的链路</strong>，在稳定的内网或优质固网上提升有限。决定要不要上 HTTP/3 之前，先看真实用户监控里移动网络与高丢包用户的占比。</p>
+
+<h2>资源提示与 Early Hints：让浏览器提前动手</h2>
+<p>浏览器要等到解析完 HTML 才知道需要哪些资源，而这些资源可能还要先做 DNS 与握手。资源提示的作用就是<strong>把这些等待提前或并行掉</strong>，它们由后端下发，属于后端能直接控制的范围。</p>
+<table>
+    <thead>
+        <tr>
+            <th>提示</th>
+            <th>做什么</th>
+            <th>省掉什么</th>
+            <th>滥用的后果</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>dns-prefetch</td>
+            <td>提前解析域名</td>
+            <td>DNS 解析时间</td>
+            <td>几乎无害，但对已建连的域名无意义</td>
+        </tr>
+        <tr>
+            <td>preconnect</td>
+            <td>提前完成 DNS 加 TCP 加 TLS</td>
+            <td>跨地域时能省掉一百毫秒级的握手</td>
+            <td>只对确定要用的关键域名用，最多两三个；预连接后长时间不用等于浪费连接</td>
+        </tr>
+        <tr>
+            <td>preload</td>
+            <td>以指定优先级提前下载确定要用的资源</td>
+            <td>资源被发现的等待时间</td>
+            <td>preload 了首屏用不到的资源，会和关键资源抢带宽，反而让 LCP 变差</td>
+        </tr>
+        <tr>
+            <td>prefetch</td>
+            <td>空闲时下载「下一步可能用到」的资源</td>
+            <td>下一次导航的等待</td>
+            <td>在移动网络上消耗用户流量，命中率低时纯浪费</td>
+        </tr>
+        <tr>
+            <td>103 Early Hints</td>
+            <td>在最终响应之前先发一个信息响应，携带 preload 与 preconnect 指示</td>
+            <td>服务端处理的那段时间被用来下载关键资源</td>
+            <td>需要 CDN 与客户端支持；提示错了等于提前下载了没用的东西</td>
+        </tr>
+    </tbody>
+</table>
+<pre><code class="language-html">&lt;!-- 资源提示的正确用法：只对首屏关键路径上的资源用，顺序也有讲究 --&gt;
+&lt;!-- 1) 对首屏必用的第三方域名预连接。crossorigin 必须与实际请求一致，否则会建两条连接 --&gt;
+&lt;link rel="preconnect" href="https://cdn.example.com" crossorigin&gt;
+&lt;!-- 2) 对不确定会用、但可能用到的域名只做 DNS 预解析，成本远低于预连接 --&gt;
+&lt;link rel="dns-prefetch" href="https://analytics.example.com"&gt;
+&lt;!-- 3) 预加载首屏关键资源：LCP 那张主图、首屏字体、关键 CSS --&gt;
+&lt;link rel="preload" href="/assets/hero.9f3c1a2b.avif" as="image" fetchpriority="high"&gt;
+&lt;link rel="preload" href="/assets/inter.4b2c8d1e.woff2" as="font" type="font/woff2" crossorigin&gt;
+&lt;!-- 4) 非首屏图片交给浏览器懒加载，并且务必给宽高，避免布局偏移 --&gt;
+&lt;img src="/assets/list-1.7c3a9b21.webp" width="320" height="180" loading="lazy" decoding="async" alt="列表缩略图"&gt;</code></pre>
+<pre><code class="language-http">HTTP/1.1 103 Early Hints
+Link: &lt;/assets/app.9f3c1a2b.css&gt;; rel=preload; as=style
+Link: &lt;/assets/hero.9f3c1a2b.avif&gt;; rel=preload; as=image
+Link: &lt;https://cdn.example.com&gt;; rel=preconnect
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Cache-Control: no-cache
+ETag: "b3f1c9e2"
+Vary: Accept-Encoding
+Content-Encoding: br
+
+（HTML 响应体。上面那个 103 响应在服务端还在查数据库时就已经发出，
+ 浏览器利用这段时间把 CSS 与主图下载了，等 200 到达时资源已在本地。）</code></pre>
+
+<h2>接口设计对前端指标的影响：后端最该改的一条</h2>
+<p>如果只让我给后端提一条前端性能建议，就是这条：<strong>首屏需要的数据一次返回，不要让前端串行请求三次。</strong>浏览器到服务端的一次往返在移动网络下动辄一两百毫秒，而服务端之间的往返通常不到一毫秒——把串行编排从浏览器挪到服务端，是两个数量级的差距。</p>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as 浏览器
+    participant G as BFF 或聚合层
+    participant A as 用户服务
+    participant B as 内容服务
+    participant C as 推荐服务
+    Note over U,C: 改造前 浏览器串行请求三次 后两次还依赖前一次返回的 ID
+    U->>A: 取用户信息 往返 180ms
+    A-->>U: 返回 含 userId
+    U->>B: 用 userId 取内容 往返 180ms
+    B-->>U: 返回
+    U->>C: 取推荐 往返 180ms
+    C-->>U: 返回
+    Note over U,C: 首屏数据就绪约 540ms 全部落在 LCP 关键路径上
+    Note over U,C: 改造后 一次请求 服务端内部并行
+    U->>G: 取首屏聚合数据 一次往返 180ms
+    par 服务端内部并行 单跳零点几毫秒
+        G->>A: 取用户
+    and
+        G->>B: 取内容
+    and
+        G->>C: 取推荐
+    end
+    G-->>U: 一次返回首屏所需的全部字段
+    Note over U,G: 首屏数据就绪约 200ms 省掉两次公网往返
+</div>
+<p>要注意别走到另一个极端：聚合接口不等于「把所有数据都塞进来」。<strong>聚合的是首屏必需的字段，不是整页数据</strong>，否则响应体膨胀会把省下来的往返又吃回去。另外聚合接口的失败语义要设计好：非关键部分（比如推荐位）失败时应返回空并降级，而不是让整个首屏接口 500。服务端内部怎么并行、怎么控制并发与超时预算见<a href="../api-optimization/">接口性能优化</a>；接口的字段规范、版本演进与分页约定见站内<a href="../../api-design/">API 设计</a>。</p>
+
+<h2>渲染模式与图片：成本与收益对照</h2>
+<table>
+    <thead>
+        <tr>
+            <th>模式</th>
+            <th>首屏速度</th>
+            <th>SEO</th>
+            <th>服务端成本</th>
+            <th>交互延迟</th>
+            <th>适用场景</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>CSR 纯客户端渲染</td>
+            <td>最慢：要先下载并执行 JS 再请求数据</td>
+            <td>依赖爬虫执行 JS，风险较高</td>
+            <td>最低，只发静态文件</td>
+            <td>首次交互前有空白期，之后很快</td>
+            <td>登录后的管理后台、重交互应用</td>
+        </tr>
+        <tr>
+            <td>SSR 服务端渲染</td>
+            <td>快：首字节即带内容</td>
+            <td>好</td>
+            <td>最高：每次请求都要在服务端渲染，CPU 与内存都吃</td>
+            <td>注水完成前交互无响应，注水成本要算进 INP</td>
+            <td>首屏与 SEO 关键、内容个性化的页面</td>
+        </tr>
+        <tr>
+            <td>SSG 构建时生成</td>
+            <td>最快：可直接由 CDN 边缘返回</td>
+            <td>最好</td>
+            <td>最低：构建期一次性付出</td>
+            <td>与 SSR 类似</td>
+            <td>文档、博客、营销页等内容不常变的页面</td>
+        </tr>
+        <tr>
+            <td>SSG 加增量再生成</td>
+            <td>接近 SSG</td>
+            <td>最好</td>
+            <td>低：按需在后台重新生成</td>
+            <td>与 SSR 类似</td>
+            <td>内容会变但不要求秒级实时的页面</td>
+        </tr>
+    </tbody>
+</table>
+<p>关于 SSR 的成本，有两个后端必须知道的点。第一，<strong>SSR 把前端的渲染成本搬到了你的服务器上</strong>，它是 CPU 密集型的，流量上涨时机器数增长比纯 API 服务快得多，而且渲染过程里如果串行调用了下游，那就是把主干篇里的排队问题原封不动搬到了渲染层。第二，<strong>SSR 必须配缓存</strong>：能按 URL 缓存的整页缓存放 CDN，个性化部分用片段缓存或在边缘做拼装，否则一个爬虫就能把渲染集群打满。</p>
+<p>图片通常是首屏最大的字节来源，因此也是 LCP 的主要抓手。四件事按收益排序：<strong>按设备下发合适尺寸</strong>（给手机发 2000 像素宽的图是最常见的浪费）、<strong>用现代格式</strong>（WebP 比 JPEG 小约三成，AVIF 更小但编码更慢，按客户端支持协商下发）、<strong>非首屏图片懒加载</strong>、<strong>用 CDN 的图片处理服务按参数实时裁剪与转码</strong>而不是在业务代码里做。同时务必让接口返回图片的宽高，前端才能预留位置，这是后端能为 CLS 做的唯一一件事。</p>
+
+<h2>监控与反模式</h2>
+<p>真实用户监控（RUM）与合成监控解决的是不同问题，缺一不可：<strong>合成监控可复现、噪声小，适合做变更前后对比和 CI 门禁；真实用户监控反映线上真实分布，适合定目标和验证收益</strong>。只看实验室分数最常见的结局是「分数 95 但用户说慢」，因为实验室用的是固定机型与网络，而你的用户有一半在低端安卓加移动网络上。</p>
+<pre><code class="language-bash"># 缓存与压缩配置的验收命令，每次改完都跑一遍
+# 1) 静态资源：应看到 max-age=31536000 与 immutable，且有 content-encoding
+curl -sI -H 'Accept-Encoding: br,gzip' https://www.example.com/assets/app.9f3c1a2b.js \
+  | grep -iE 'cache-control|content-encoding|vary|etag|age|x-cache'
+
+# 2) HTML：应看到 no-cache，且第二次请求能拿到 304
+curl -sI https://www.example.com/ | grep -iE 'cache-control|etag'
+curl -sI -H 'If-None-Match: "b3f1c9e2"' https://www.example.com/ | head -1   # 期望 304
+
+# 3) 看首字节构成，判断慢在握手还是服务端（跨地域时重点看 tls 与 ttfb 的差）
+curl -o /dev/null -s -w 'dns=%{time_namelookup} tcp=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n' \
+  https://www.example.com/
+
+# 4) 确认没有对图片视频开压缩（content-encoding 不应出现）
+curl -sI -H 'Accept-Encoding: br,gzip' https://www.example.com/assets/hero.avif | grep -i content-encoding
+
+# 5) 验证 CDN 命中率：x-cache 或 age 头。命中率低先查缓存键里是否混入了无关参数
+curl -sI 'https://www.example.com/assets/app.9f3c1a2b.js?utm_source=abc' | grep -iE 'x-cache|age'</code></pre>
+<table>
+    <thead>
+        <tr>
+            <th>反模式</th>
+            <th>后果</th>
+            <th>正确做法</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>静态资源文件名不带内容哈希</td>
+            <td>无法配长缓存，每次发版只能靠改查询参数或等过期，用户反复下载相同内容</td>
+            <td>构建产物一律带内容哈希，配一年 max-age 加 immutable</td>
+        </tr>
+        <tr>
+            <td>HTML 配了长 max-age</td>
+            <td>发版后新版本迟迟不生效，强缓存不发请求，刷新也救不回来</td>
+            <td>HTML 一律 no-cache，靠 ETag 拿 304</td>
+        </tr>
+        <tr>
+            <td>对图片、视频、压缩包开 gzip</td>
+            <td>体积几乎不变，纯烧 CPU，高 QPS 下拖慢所有响应</td>
+            <td>压缩只对文本类型开启，并设置最小长度阈值</td>
+        </tr>
+        <tr>
+            <td>压缩不设 Vary</td>
+            <td>共享缓存把压缩响应发给不支持的客户端，页面乱码或变成下载</td>
+            <td>开启 Vary 并在 CDN 上确认按编码分别缓存</td>
+        </tr>
+        <tr>
+            <td>首屏数据让前端串行请求多个接口</td>
+            <td>每次都是一整个公网往返，直接抬高 LCP</td>
+            <td>提供首屏聚合接口，服务端内部并行</td>
+        </tr>
+        <tr>
+            <td>CDN 缓存键包含无关参数</td>
+            <td>带不同营销参数的同一资源各占一份缓存，命中率极低，回源被打满</td>
+            <td>缓存键忽略无关查询参数，只保留影响响应内容的参数</td>
+        </tr>
+        <tr>
+            <td>登录态响应配了 public</td>
+            <td>用户私有数据被共享缓存存下并发给其他人，这是安全事故不只是性能问题</td>
+            <td>带认证的响应一律 private 或 no-store</td>
+        </tr>
+        <tr>
+            <td>只看实验室数据不看真实用户数据</td>
+            <td>分数很高但用户抱怨慢，因为差的那部分用户被平均掉了</td>
+            <td>合成监控做门禁，真实用户监控按分位数并分组看</td>
+        </tr>
+        <tr>
+            <td>preload 了首屏用不到的资源</td>
+            <td>与关键资源抢带宽，LCP 反而变差</td>
+            <td>只预加载 LCP 元素与首屏字体等确定会用的资源</td>
+        </tr>
+    </tbody>
+</table>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+        <li>把 no-cache 当成不缓存来用：本来能拿 304 省掉响应体，结果每次全量下载。</li>
+        <li>HTML 配 max-age=3600：发版后一小时内用户都在旧版本上，还可能去加载已经被删掉的旧资源，页面直接白屏。</li>
+        <li>静态资源配了长 max-age 但文件名不带哈希：改了内容用户拿不到，只能改域名或加时间戳绕过。</li>
+        <li>配了长 max-age 却没加 immutable：用户每次刷新都为每个资源发一次 304 校验，弱网下几十个往返。</li>
+        <li>对 JPEG、MP4、zip 开 gzip：体积不降，CPU 白烧，高峰期把网关拖慢。</li>
+        <li>开了压缩但没开 Vary：CDN 把 br 编码的响应发给不支持的客户端，页面乱码。</li>
+        <li>为了并发把静态资源拆到五六个域名上：每个域名都要 DNS 加 TCP 加 TLS，在 HTTP/2 下纯亏。</li>
+        <li>沿用 HTTP/1.1 时代的合并策略打成一个大包：改一行代码全量缓存失效，用户重下几百 KB。</li>
+        <li>把图片内联成 base64 放进 CSS：体积涨三分之一，还让整个 CSS 无法长期缓存。</li>
+        <li>preconnect 用了一长串域名：连接建了却用不上，浪费客户端资源，移动端更明显。</li>
+        <li>做了流式渲染但反向代理开了响应缓冲：响应被攒完才下发，首字节时间一点没变。</li>
+        <li>SSR 不加缓存：一次爬虫抓取就能把渲染集群 CPU 打满，进而拖垮所有页面。</li>
+        <li>给手机下发桌面尺寸的大图：首屏字节数翻几倍，LCP 直接超标。</li>
+        <li>接口不返回图片宽高：前端无法预留空间，图片加载完页面整体跳动，CLS 变差。</li>
+        <li>CDN 缓存键带上了营销参数：同一个资源被拆成成千上万份缓存，命中率极低。</li>
+        <li>给带登录态的接口配 public 缓存：把用户数据缓存到 CDN 并串给别人，这是事故不是优化。</li>
+    </ul>
+</div>
+
+                    </div>
+                </article>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <p>© 2026 资深码农. 保留所有权利。</p>
+        </div>
+    </footer>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "backend";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>
