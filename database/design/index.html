@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../images/logo.jpeg">
-    <title>数据库设计 - 资深码农</title>
+    <title>范式与反范式：数据库设计的取舍 - 资深码农</title>
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="数据库设计实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="description" content="从三类更新异常讲清范式的本质：1NF 到 BCNF 各消除哪种函数依赖，为什么业务表做到 3NF 就够；反范式的四种手段（冗余字段、合并表、汇总表、冷热拆分）各自的适用信号、维护义务与一致性风险；冗余字段三种同步方式的不一致窗口；主键方案六维对照、外键取舍、软删除的真实代价与字段设计规范，附可直接用的表设计评审清单。">
     <meta name="keywords" content="数据库设计,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/design/">
-    <meta property="og:title" content="数据库设计 - 资深码农">
-    <meta property="og:description" content="数据库设计实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta property="og:title" content="范式与反范式：数据库设计的取舍 - 资深码农">
+    <meta property="og:description" content="从三类更新异常讲清范式的本质：1NF 到 BCNF 各消除哪种函数依赖，为什么业务表做到 3NF 就够；反范式的四种手段（冗余字段、合并表、汇总表、冷热拆分）各自的适用信号、维护义务与一致性风险；冗余字段三种同步方式的不一致窗口；主键方案六维对照、外键取舍、软删除的真实代价与字段设计规范，附可直接用的表设计评审清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/design/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="数据库设计 - 资深码农">
-    <meta name="twitter:description" content="数据库设计实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="twitter:title" content="范式与反范式：数据库设计的取舍 - 资深码农">
+    <meta name="twitter:description" content="从三类更新异常讲清范式的本质：1NF 到 BCNF 各消除哪种函数依赖，为什么业务表做到 3NF 就够；反范式的四种手段（冗余字段、合并表、汇总表、冷热拆分）各自的适用信号、维护义务与一致性风险；冗余字段三种同步方式的不一致窗口；主键方案六维对照、外键取舍、软删除的真实代价与字段设计规范，附可直接用的表设计评审清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "数据库设计：从你遇到的问题出发：先简单设计？", "acceptedAnswer": {"@type": "Answer", "text": "不要一开始设计很复杂，先跑起来。"}}, {"@type": "Question", "name": "数据库设计：从你遇到的问题出发：留扩展字段？", "acceptedAnswer": {"@type": "Answer", "text": "预留几个备用字段，后面加不用改表。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "业务表一定要满足第三范式吗？", "acceptedAnswer": {"@type": "Answer", "text": "把 3NF 当默认起点而不是可选项。3NF 的要求只是「非主键列不要依赖另一个非主键列」，满足它几乎不增加成本，却能消掉插入、更新、删除三类异常里最常见的那一类。真正需要权衡的是从 3NF 往回退，也就是反范式：那是在明确知道读写比、同步责任人和不一致窗口的前提下做的决定。BCNF 及更高的范式只在一张表存在多个互相重叠的候选键时才和 3NF 有差别，普通的「自增主键加一个业务唯一键」结构基本不会违反 BCNF，工程上可以不管。"}}, {"@type": "Question", "name": "反范式和干脆不做范式有什么区别？", "acceptedAnswer": {"@type": "Answer", "text": "区别在于你知不知道哪些列是冗余的，以及谁负责让它们保持同步。反范式的正确顺序是：先按范式拆出事实的唯一存放点，再有意识地、有记录地把某些列复制出去，并在表注释和设计文档里写明这是冗余列、源表是谁、同步方式是什么、允许多大的不一致窗口。不做范式则是一开始就把多个事实塞进一张宽表，没人说得清哪一列是权威值。前者出问题时能一键重建，后者出问题时连正确答案都找不回来。"}}, {"@type": "Question", "name": "冗余字段怎么保证和源表一致？", "acceptedAnswer": {"@type": "Answer", "text": "只有三种落地方式，按不一致窗口从小到大排：同一个事务里双写，窗口为零，但事务变大且跨库时不可用；订阅变更事件异步回填，窗口等于消费延迟，通常在百毫秒到秒级，消息丢了就永久不一致；定时任务全量或增量对账修复，窗口等于调度周期。工程上的常见做法是异步回填加定时对账双保险，对账的价值不是当主同步手段，而是兜住前两种的漏洞，并给出一个可观测的差异行数指标。另外还有一类冗余根本不需要同步，就是快照语义的列，例如订单上记录的下单时价格，它按定义就不该跟随源表变化。"}}, {"@type": "Question", "name": "主键该用自增 ID 还是雪花 ID，能不能用业务字段？", "acceptedAnswer": {"@type": "Answer", "text": "单库单表选自增，写入永远追加在索引末尾且主键最短；需要分库分表或需要在写库之前就拿到 ID，选雪花这类趋势递增的分布式 ID；对外暴露的场景再额外挂一个不可推测的业务编号，不要直接把自增值放进 URL。业务字段做主键几乎总会后悔：手机号会换绑，身份证号会有补录和纠错，商品编码规则会随业务调整，而主键一变就要同步所有引用它的表。把业务唯一性交给唯一索引，把行标识交给一个无业务含义的代理键，这两件事分开做。"}}, {"@type": "Question", "name": "生产环境该不该用数据库外键约束？", "acceptedAnswer": {"@type": "Answer", "text": "分场景。内部管理系统、配置类数据、写入量低但数据正确性要求高的库，建外键，让数据库兜住应用的缺陷，省下大量脏数据排查时间。高并发的核心交易表不建：外键会在父表上加额外的锁、带来隐式的检查开销，级联删除的影响范围难以预估，而且一旦分库分表，跨库外键根本无法成立。不建外键的代价是必须有补偿机制，删除父行时在应用层显式处理子行，并且定期跑孤儿行扫描，否则应用层保证只是一句口号。"}}, {"@type": "Question", "name": "软删除为什么被说成反模式，有什么替代方案？", "acceptedAnswer": {"@type": "Answer", "text": "软删除有三笔容易被低估的账。第一，此后每一条查询都必须带上未删除条件，漏一处就是数据泄露或统计错误，而这个条件是纯人工纪律。第二，唯一索引会失效：同一个编码删了又建就会撞唯一键，只能把唯一索引改成包含删除标记的联合唯一，或者用部分唯一索引。第三，表会无限增长，已删数据和活跃数据挤在同一批数据页里，影响所有查询的缓存命中。替代方案是归档表：删除时把整行搬到结构相同的归档表并记录操作人和时间，主表保持只装活跃数据，需要恢复或审计时去归档表查。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -69,152 +69,550 @@
             <span class="meta-item">🏷️ 数据库设计</span>
         </div>
     </header>
-    <p>为什么要分表？为什么三范式有时候要打破？什么时候加冗余？这篇讲透数据库设计底层原理。</p>
+    <p>数据库设计里的绝大多数争论，最后都能归到同一个问题：<strong>同一份事实，在库里存几遍</strong>。存一遍，修改时只改一处，数据永远不会自相矛盾，代价是查询要把散落在多张表里的行拼回来；存多遍，一次查询就能拿全，代价是你从此背上「让这几份副本保持同步」的债务。范式与反范式不是两种审美风格，而是这条取舍线的两端。这篇讲清楚这条线该画在哪里，以及画错之后会以什么形式还债。</p>
 
-    <h2>核心原理1：第一第二第三范式</h2>
-    <p>范式是为了减少数据冗余，避免更新异常。1NF 原子性，2NF 消除部分依赖，3NF 消除传递依赖。</p>
+    <h2>范式到底在解决什么：三类更新异常</h2>
+    <p>「范式是为了消除冗余」这句话只说对了一半。冗余本身不可怕，磁盘很便宜；真正致命的是冗余带来的<strong>更新异常</strong>——同一个事实存在多个位置，任何一次不完整的写入都会让数据库进入自相矛盾的状态，而数据库自己无法判断哪一份才是对的。把一张典型的「员工兼部门」宽表摊开，三类异常同时暴露出来。</p>
+
+    <pre><code class="language-sql">-- 反面教材：一行同时描述了「员工」和「部门」两个互相独立的事实
+CREATE TABLE emp_dept (
+  emp_id      BIGINT        NOT NULL,
+  emp_name    VARCHAR(64)   NOT NULL,
+  dept_id     INT           NOT NULL,   -- 下面三列完全由 dept_id 决定，和 emp_id 无关
+  dept_name   VARCHAR(64)   NOT NULL,
+  dept_owner  VARCHAR(64)   NOT NULL,
+  dept_budget DECIMAL(14,2) NOT NULL,
+  PRIMARY KEY (emp_id)
+);
+
+-- 研发部有 300 名员工，于是「研发部叫研发部」这个事实在库里存了 300 遍。
+-- 插入异常：新成立的数据平台部还没招到人，这张表里无处登记该部门。
+-- 更新异常：部门改名要 UPDATE 300 行，改到第 200 行时连接断开，
+--           库里于是同时存在两个部门名，且无法判断哪个是权威值。
+-- 删除异常：最后一名员工离职，DELETE 掉这行的同时，部门预算信息一起消失。</code></pre>
+
     <div class="mermaid">
-flowchart TD
-    A[数据库设计范式] --> B[1NF 字段原子性]
-    A --> C[2NF 消除部分依赖]
-    A --> D[3NF 消除传递依赖]
-    B --> B1[一个字段不可分]
-    C --> C1[非主键完全依赖主键]
-    D --> D1[非主键不依赖其他非主键]
-         
+flowchart TB
+    subgraph W["宽表 emp_dept 一行描述两个事实"]
+        R1["emp_id / emp_name<br/>dept_id / dept_name / dept_owner / dept_budget"]
+    end
+    subgraph AB["三类更新异常"]
+        I["插入异常<br/>无员工的部门无法登记"]
+        U["更新异常<br/>改名要改 N 行 改漏即矛盾"]
+        D["删除异常<br/>删最后一行连带丢失部门事实"]
+    end
+    subgraph FX["范式化拆解后"]
+        E["employee 表<br/>只保留 dept_id 引用"]
+        DP["department 表<br/>部门事实的唯一存放点"]
+    end
+    R1 --> I
+    R1 --> U
+    R1 --> D
+    I --> DP
+    U --> DP
+    D --> DP
+    R1 --> E
+    E --> DP
     </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>异常</th>
+                <th>触发操作</th>
+                <th>库里会出现什么</th>
+                <th>根因</th>
+                <th>拆表后为什么消失</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>插入异常</td>
+                <td>登记一个还没有员工的部门</td>
+                <td>只能插一行 emp_id 为 0 的假员工，后续统计全错</td>
+                <td>部门事实寄生在员工行上，没有独立生存空间</td>
+                <td>department 表可以独立插入，与员工无关</td>
+            </tr>
+            <tr>
+                <td>更新异常</td>
+                <td>部门改名或换负责人</td>
+                <td>N 行要一起改，中途失败留下两个版本的部门名</td>
+                <td>同一事实存了 N 份，一致性靠一次大事务的原子性硬扛</td>
+                <td>事实只有一份，一行 UPDATE 天然原子</td>
+            </tr>
+            <tr>
+                <td>删除异常</td>
+                <td>删除部门里最后一名员工</td>
+                <td>部门预算、负责人信息随之消失，无法恢复</td>
+                <td>两个事实的生命周期被强行绑在一起</td>
+                <td>两张表生命周期独立，删员工不影响部门</td>
+            </tr>
+            <tr>
+                <td>统计口径衍生问题</td>
+                <td>按部门名做分组统计</td>
+                <td>同一部门被拆成两组，报表数字对不上</td>
+                <td>冗余列上没有任何唯一性约束可以保护</td>
+                <td>按 dept_id 分组，名称从单一来源关联取得</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>1NF 到 BCNF：同一张表逐步拆</h2>
+    <p>范式的定义都是围绕<strong>函数依赖</strong>展开的：如果知道了 A 的值就能唯一确定 B 的值，就说 B 函数依赖于 A。范式做的事情就是逐级赶走「不该出现在这张表里」的依赖。用一张订单明细宽表演示，它一次踩满了三级。</p>
+
+    <pre><code class="language-sql">-- 起点：一张什么都往里塞的订单明细表
+CREATE TABLE order_item_bad (
+  order_id    BIGINT NOT NULL,
+  sku_id      BIGINT NOT NULL,
+  sku_name    VARCHAR(128),   -- 只依赖 sku_id，不依赖联合主键全部 → 违反 2NF
+  sku_tags    VARCHAR(255),   -- 存 '手机,数码,5G' 这种逗号串      → 违反 1NF
+  buyer_id    BIGINT,         -- 依赖 order_id
+  buyer_city  VARCHAR(32),    -- order_id 定 buyer_id，buyer_id 定 city → 违反 3NF
+  qty         INT,
+  unit_price  DECIMAL(10,2),  -- 注意：这是「下单时快照」，不是冗余，见后文
+  PRIMARY KEY (order_id, sku_id)
+);
+
+-- 第一步 → 1NF：逗号串拆成 sku_tag 关联表（sku_id, tag_id），
+--   这样才可能对 tag 建索引、做等值过滤、加约束。
+-- 第二步 → 2NF：sku_name 搬到 sku 表。判断口诀是「这列是不是只靠联合主键
+--   的一部分就能决定」。注意 2NF 只在联合主键下才有意义，单列主键的表
+--   天然满足 2NF；网上大量「这张表不满足 2NF」的例子其实说的是 3NF。
+-- 第三步 → 3NF：buyer_city 删掉，需要时经 buyer_id 关联 user 表。
+--   传递依赖的特征是「一个非主键列决定了另一个非主键列」。</code></pre>
+
     <table>
         <thead>
             <tr>
                 <th>范式</th>
-                <th>要求</th>
-                <th>解决的问题</th>
+                <th>赶走哪种依赖</th>
+                <th>违反时的典型症状</th>
+                <th>怎么自查</th>
+                <th>业务表要不要做</th>
             </tr>
         </thead>
         <tbody>
             <tr>
                 <td>1NF</td>
-                <td>字段原子，不可再分</td>
-                <td>字段存多个值</td>
+                <td>列内还藏着结构</td>
+                <td>逗号分隔存多值，查询只能模糊匹配，索引完全用不上</td>
+                <td>有没有列必须在应用里切分才能用</td>
+                <td>必须。唯一例外是明确当作整体读写的 JSON 扩展列</td>
             </tr>
             <tr>
                 <td>2NF</td>
-                <td>非主键完全依赖主键，不部分依赖</td>
-                <td>部分依赖导致冗余</td>
+                <td>对联合主键的部分函数依赖</td>
+                <td>关联表里混进维度表属性，改一次名要改成千上万行</td>
+                <td>逐列问「只用主键的一部分能不能决定它」</td>
+                <td>必须，但只有联合主键的表才需要检查</td>
             </tr>
             <tr>
                 <td>3NF</td>
-                <td>非主键不传递依赖其他非主键</td>
-                <td>传递依赖导致冗余</td>
+                <td>非主键列之间的传递函数依赖</td>
+                <td>用户表存部门名、订单表存用户当前手机号，源头一改就全脏</td>
+                <td>画一遍列之间的箭头，看有没有箭头不从主键出发</td>
+                <td>默认必须，退出要有明确理由和同步方案</td>
             </tr>
             <tr>
                 <td>BCNF</td>
-                <td>每个决定因素都是候选键</td>
-                <td>主属性对候选键依赖</td>
+                <td>决定因素本身不是候选键的依赖</td>
+                <td>仅在存在多个互相重叠的候选键时出现，如一门课固定一位老师的排课表</td>
+                <td>列出所有候选键，检查每个决定因素是否都是候选键</td>
+                <td>基本不用管，正常的代理主键加业务唯一键结构很难违反</td>
+            </tr>
+            <tr>
+                <td>4NF 及以上</td>
+                <td>多值依赖、连接依赖</td>
+                <td>学术构造的例子，生产表结构里几乎不会自然出现</td>
+                <td>无需自查</td>
+                <td>不用管</td>
             </tr>
         </tbody>
     </table>
 
-    <h2>核心原理2：为什么要反范式？</h2>
-    <p>范式越高，表越多，查询要 join，性能差。生产环境经常加冗余字段，用空间换时间，减少 join。</p>
-    <div class="mermaid">
-flowchart LR
-    A[范式 多表] --> B[查询要 JOIN]
-    B --> C[性能差]
-    D[反范式 加冗余] --> E[一张表存]
-    E --> F[不用 JOIN 查询快]
-         
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">被广泛误传的两点</div>
+        <p>第一，「2NF 要求非主键列完全依赖主键」这句话对单列主键的表是废话，它永远成立，所以拿单列主键表举 2NF 反例的说法是错的。第二，<strong>3NF 和 BCNF 的差别只在一张表有多个重叠候选键时才显现</strong>。你的表如果是「自增 id 做主键，外加一个业务唯一索引」，做到 3NF 通常就已经满足 BCNF，不必再花时间推导。把精力放在识别传递依赖上，回报率高得多。</p>
     </div>
+
+    <h2>反范式的四种手段与它们的维护义务</h2>
+    <p>范式化会把一个业务对象拆散到多张表，查询就要关联。关联本身不慢，慢的是「深分页加多表关联加排序字段跨表」这种组合，以及分库分表之后关联根本做不了。这时才轮到反范式上场。反范式只有四种手段，每一种都同时引入一份维护义务，把这三列摆在一起看才能做决定。</p>
+
     <table>
         <thead>
             <tr>
-                <th>对比</th>
-                <th>范式设计</th>
-                <th>反范式设计</th>
+                <th>手段</th>
+                <th>适用信号</th>
+                <th>引入的维护义务</th>
+                <th>一致性风险</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>冗余</td>
-                <td>少</td>
-                <td>多</td>
+                <td>冗余字段<br/>把关联表的少数列复制过来</td>
+                <td>列表页每行都要展示它，读写比大于 10 比 1，源字段变更频率低（商品名、单位、类目名）</td>
+                <td>源表更新时必须回填，需要一次性回填脚本、一条同步通道、一个对账任务</td>
+                <td>中。漏掉一个写入入口就长期不一致，且没有任何约束能发现</td>
             </tr>
             <tr>
-                <td>查询性能</td>
-                <td>慢，要 join</td>
-                <td>快，单表查</td>
+                <td>合并表<br/>把一对一或极小的一对多内联</td>
+                <td>两张表总是一起查一起写，且从表行数固定很小（用户与用户设置）</td>
+                <td>列变多后所有全列查询都变贵，从表原有的唯一约束要重新表达</td>
+                <td>低。合并后事实仍只有一份，主要代价是行变宽</td>
             </tr>
             <tr>
-                <td>更新性能</td>
-                <td>快，改一处</td>
-                <td>慢，要改多处</td>
+                <td>汇总表与预计算<br/>把计数和求和落成物化行</td>
+                <td>统计口径稳定、可接受分钟级延迟，或计数被高频读取（商家今日成交额、帖子回复数）</td>
+                <td>需要可重跑且幂等的重算任务；口径变更时要能整体回刷</td>
+                <td>低到中。属于派生数据，随时可从明细重建，这是它最大的优点</td>
             </tr>
             <tr>
-                <td>一致性</td>
-                <td>强一致</td>
-                <td>最终一致</td>
-            </tr>
-            <tr>
-                <td>适用场景</td>
-                <td>写多读少</td>
-                <td>读多写少</td>
+                <td>冷热拆分<br/>大字段或历史数据另存</td>
+                <td>行里有长文本或二进制但极少读取；或近三个月数据承担 99% 查询</td>
+                <td>访问路径变两步，归档任务要保证先复制后删除且可中断续跑</td>
+                <td>低。同一行只在一处，风险集中在搬迁过程的重复与漏搬</td>
             </tr>
         </tbody>
     </table>
 
-    <h2>核心原理3：分库分表原理</h2>
-    <p>单表数据量到千万级，索引大查询慢，就要分库分表。垂直拆按业务拆，水平拆按数据拆。</p>
     <div class="mermaid">
-flowchart TD
-    A[分库分表] --> B[垂直拆分]
-    A --> C[水平拆分]
-    B --> B1[按业务拆库]
-    B --> B2[用户库 订单库]
-    C --> C1[按数据拆表]
-    C --> C2[按 user_id 哈希分16张表]
-         
+flowchart TB
+    subgraph NZ["范式化核心区：事实的唯一存放点"]
+        U["user 用户主表"]
+        P["product 商品主表"]
+        O["order 订单主表"]
+        OI["order_item 订单明细"]
+    end
+    subgraph RD["受控冗余区：每列都有登记的同步责任人"]
+        R1["order.buyer_name<br/>下单时快照 永不回改"]
+        R2["order_item.sku_name 与 unit_price<br/>下单时快照 事故高发区"]
+        R3["user.order_count<br/>同事务自增"]
+    end
+    subgraph AG["派生数据区：可随时从明细重建"]
+        S1["shop_daily_stat 商家日汇总<br/>凌晨批量重算"]
+        S2["订单列表检索视图<br/>放在搜索引擎里"]
+    end
+    subgraph CD["冷数据区"]
+        H1["order_archive 两年前订单<br/>按月分区 只读"]
+    end
+    U --> O
+    P --> OI
+    O --> R1
+    OI --> R2
+    O --> R3
+    OI --> S1
+    O --> S2
+    O --> H1
     </div>
+
+    <div class="callout callout-tip">
+        <div class="callout-icon">✅</div>
+        <div class="callout-title">关键洞察</div>
+        <p>反范式不是「不做范式」，而是<strong>先做到范式，再有意识地、有记录地引入受控冗余</strong>。两者的产物在表结构上可能长得一样，区别只在三个问题上：哪些列是冗余的？每个冗余列的权威来源是谁？谁负责让它们同步、允许多大滞后？答得出来叫设计，答不出来叫技术债。最低成本的落地方式就是写进列注释，例如 <code>COMMENT '冗余自 product.name，商品改名后由消息回填，容忍 5 秒'</code>。</p>
+    </div>
+
+    <h2>冗余字段怎么同步：三种方式与不一致窗口</h2>
+    <p>先区分两种长得很像、语义却完全相反的列。<strong>快照列</strong>按定义就不该跟随源表变化：订单明细里的 <code>unit_price</code> 记的是下单那一刻的价格，商品后来涨价降价都与它无关，它根本不需要同步。<strong>冗余列</strong>才是要同步的那种：订单上冗余的 <code>buyer_name</code> 本意是展示买家当前昵称，源表一改它就该跟着改。把快照当成冗余去「修复」，是一类真实发生过的严重事故。</p>
+
+    <div class="mermaid">
+sequenceDiagram
+    participant APP as 应用
+    participant SRC as product 源表
+    participant ORD as order 冗余列
+    participant MQ as 变更消息队列
+    participant JOB as 定时对账任务
+    APP->>SRC: 事务内 UPDATE 商品名
+    APP->>ORD: 同事务 UPDATE 冗余列
+    Note over SRC,ORD: 方式一 同事务双写<br/>窗口为零 代价是事务变大 跨库不可用
+    APP->>SRC: UPDATE 后立即提交
+    SRC->>MQ: 投递行变更事件
+    MQ->>ORD: 消费者按主键回填
+    Note over MQ,ORD: 方式二 异步消息<br/>窗口等于消费延迟 百毫秒到秒级 消息丢失则永久不一致
+    JOB->>SRC: 按更新时间增量扫描源表
+    JOB->>ORD: 比对差异并修复
+    Note over JOB,ORD: 方式三 定时对账<br/>窗口等于调度周期 真正价值是兜住前两种的漏洞
+    </div>
+
     <table>
         <thead>
             <tr>
-                <th>拆分方式</th>
-                <th>原理</th>
+                <th>同步方式</th>
+                <th>不一致窗口</th>
+                <th>失败模式</th>
+                <th>写路径开销</th>
                 <th>适用场景</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>垂直分库</td>
-                <td>按业务拆成多个库</td>
-                <td>业务边界清晰</td>
+                <td>同事务更新</td>
+                <td>零</td>
+                <td>冗余行过多时锁持有时间变长，极端情况触发锁等待超时甚至死锁</td>
+                <td>高，事务内多一次或多次写</td>
+                <td>冗余行数确定且很少（百行以内），两表同库</td>
             </tr>
             <tr>
-                <td>垂直分表</td>
-                <td>把宽表字段拆成多表</td>
-                <td>冷热字段分离</td>
+                <td>异步消息回填</td>
+                <td>消费延迟，正常百毫秒到秒级，积压时可到分钟级</td>
+                <td>消息丢失、消费者长期报错、乱序导致旧值覆盖新值</td>
+                <td>低，主事务不受影响</td>
+                <td>冗余行数大或跨库跨服务，业务能容忍短暂不一致</td>
             </tr>
             <tr>
-                <td>水平分库</td>
-                <td>同一个表数据分到多个库</td>
-                <td>单库数据量太大</td>
-            </tr>
-            <tr>
-                <td>水平分表</td>
-                <td>同一个库拆成多个表</td>
-                <td>单表数据量太大</td>
+                <td>定时对账修复</td>
+                <td>调度周期，通常 5 分钟到 1 天</td>
+                <td>全表扫描压垮从库；对账逻辑本身写错，把正确值改坏</td>
+                <td>零，但占用批量窗口资源</td>
+                <td>作为兜底始终要有；单独使用仅限对时效完全不敏感的展示字段</td>
             </tr>
         </tbody>
     </table>
+
+    <pre><code class="language-sql">-- 1) 同事务双写：务必封装成唯一的修改入口，禁止任何地方裸写 product.name
+START TRANSACTION;
+UPDATE product SET name = ?, updated_at = NOW(3) WHERE id = ?;
+-- 只回填「进行中」的订单，已完成订单按快照语义保持原值
+UPDATE order_item SET sku_name = ?, updated_at = NOW(3)
+ WHERE sku_id = ? AND order_status IN (0, 1);
+COMMIT;
+
+-- 2) 增量对账：只扫源表最近变更过的行，避免全表比对
+--    product.updated_at 上要有索引；窗口取调度间隔的 2 倍，容忍时钟与延迟
+SELECT oi.id, oi.sku_name AS stale_value, p.name AS truth
+  FROM product p
+  JOIN order_item oi ON oi.sku_id = p.id
+ WHERE p.updated_at &gt;= NOW() - INTERVAL 10 MINUTE
+   AND oi.order_status IN (0, 1)
+   AND oi.sku_name &lt;&gt; p.name
+ LIMIT 1000;   -- 分批，永远不要用一条 SQL 扫全表
+
+-- 3) 把差异行数打成监控指标。对账的意义在于「差异数长期为 0」这条曲线，
+--    一旦抬头就说明有写入入口绕过了同步通道，而不是等用户来投诉。</code></pre>
+
+    <h2>决策路径：这个字段该不该冗余</h2>
+    <p>「加个冗余字段吧」这句话在评审会上出现时，要能在三十秒内判断该不该点头。下面这条路径把判断拆成几个可回答的问题，顺序很重要：先确认收益（是不是高频且必须），再确认语义（是快照还是冗余），再确认成本（源列变不变、能不能同一事务），最后才选同步方式。</p>
+
+    <div class="mermaid">
+flowchart TB
+    S["提案 把 A 表的某列冗余到 B 表"] --> Q1{"B 表的高频查询<br/>是否每行都要这个值"}
+    Q1 -- 否 --> N1["不冗余<br/>需要时关联或应用层二次查询"]
+    Q1 -- 是 --> Q2{"该列读写比<br/>是否大于 10 比 1"}
+    Q2 -- 否 --> N1
+    Q2 -- 是 --> Q3{"语义是否为下单时快照<br/>即本来就不该跟随源表"}
+    Q3 -- 是 --> Y0["直接落列<br/>写入时赋值 此后永不回改"]
+    Q3 -- 否 --> Q4{"源列是否几乎不变<br/>如单位 类目 枚举名"}
+    Q4 -- 是 --> Y1["冗余 只需一次性回填脚本<br/>加一个低频对账"]
+    Q4 -- 否 --> Q5{"业务能否容忍秒级不一致"}
+    Q5 -- 否 --> Q6{"两表是否同库<br/>可放进同一事务"}
+    Q6 -- 是 --> Y2["同事务双写<br/>并收敛成唯一写入口"]
+    Q6 -- 否 --> N2["放弃冗余<br/>改用缓存或聚合查询服务"]
+    Q5 -- 是 --> Y3["异步消息回填<br/>必须配定时对账兜底"]
+    </div>
+
+    <h2>主键与外键：两个最贵的早期决策</h2>
+    <p>主键选错的代价不是性能，而是<strong>迁移成本</strong>——它会被所有引用它的表、所有缓存键、所有对外接口固化下来。下表是四类方案的横向对照。至于「主键长度如何放大每一个二级索引」「随机主键为什么造成页分裂和写放大」这类存储层机制，站内《MySQL 深度原理》篇已经从 B+ 树和聚簇索引层面推演过，这里只取结论。</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>方案</th>
+                <th>有序性</th>
+                <th>索引写放大</th>
+                <th>跨库唯一</th>
+                <th>可推测性</th>
+                <th>什么时候选它</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>单库自增 BIGINT</td>
+                <td>严格递增</td>
+                <td>最小，8 字节且写入永远追加在索引末尾</td>
+                <td>否</td>
+                <td>高，能被遍历、能推测业务规模</td>
+                <td>单库单表默认选它，对外另给一个不可推测的编号</td>
+            </tr>
+            <tr>
+                <td>雪花类分布式 ID</td>
+                <td>趋势递增，同毫秒内不保序</td>
+                <td>小，8 字节且基本是追加写</td>
+                <td>是</td>
+                <td>中，能从 ID 反推大致时间</td>
+                <td>需要分库分表，或写库之前就要拿到 ID</td>
+            </tr>
+            <tr>
+                <td>UUID v4</td>
+                <td>完全随机</td>
+                <td>大，16 字节且随机插入引起页分裂</td>
+                <td>是</td>
+                <td>低</td>
+                <td>只在无中心协调的离线场景考虑，不建议做聚簇主键</td>
+            </tr>
+            <tr>
+                <td>业务字段（手机号、编码）</td>
+                <td>无规律</td>
+                <td>大，字符串通常更长且被所有二级索引带上</td>
+                <td>取决于业务规则</td>
+                <td>高，直接泄露业务信息</td>
+                <td>基本不选，改为代理键加唯一索引</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <p>业务字段做主键的痛点要等业务规则变化时才会引爆：手机号会换绑，身份证号存在补录与纠错，商品编码规则会因为新增品类而重排。主键一变，所有引用它的子表、所有缓存、所有已发出的对外单号都要跟着动，而这类改造几乎没有安全的回滚路径。正确做法是职责分离——<strong>行标识用无业务含义的代理键，业务唯一性交给唯一索引</strong>，两者互不干扰。</p>
+
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">外键要不要用：分场景，不要一刀切</div>
+        <p>内部管理系统、配置与字典类数据、写入量低而正确性要求高的库，<strong>建外键</strong>：让数据库兜住应用的缺陷，能省下大量排查脏数据的时间。高并发核心交易表<strong>不建</strong>：外键带来父表上的额外加锁与隐式检查，级联删除的影响范围难以预估，而且一旦分库分表，跨库外键根本无法成立。关键是要认清不建外键的真实代价：「应用层保证」如果没有配套的孤儿行扫描任务和显式的父子删除处理，它就只是一句口号，最终表现为报表里永远对不上的那几百行。</p>
+    </div>
+
+    <h2>软删除的代价与字段设计规范</h2>
+    <p>软删除是被讨论最多、被低估最严重的设计。它有三笔账：<strong>第一，此后每条查询都必须带上 <code>deleted = 0</code></strong>，漏一处就是数据泄露或统计错误，而这个条件完全靠人工纪律，没有任何机制强制；<strong>第二，唯一索引失效</strong>，同一个编码删了再建就会撞唯一键；<strong>第三，表无限增长</strong>，已删行和活跃行挤在相同的数据页里，拉低所有查询的缓存命中率。</p>
+
+    <pre><code class="language-sql">-- MySQL 方案：把「删除时刻」编进唯一索引，同一 code 可以被反复删除
+ALTER TABLE coupon
+  ADD COLUMN deleted_at BIGINT NOT NULL DEFAULT 0
+      COMMENT '0 表示未删除，删除时写入毫秒时间戳',
+  ADD UNIQUE KEY uk_code_deleted (code, deleted_at);
+-- 逻辑删除：UPDATE coupon SET deleted_at = UNIX_TIMESTAMP(NOW(3)) * 1000 WHERE id = ?
+-- 常见错误：用 is_deleted 布尔列做联合唯一，同一个 code 只能删一次，第二次撞重复键
+
+-- PostgreSQL 方案更干净：部分唯一索引，只对未删除行生效
+CREATE UNIQUE INDEX uk_coupon_code_alive ON coupon (code) WHERE deleted_at IS NULL;
+
+-- 推荐的替代方案：归档表。主表只装活跃数据，删除即搬迁
+CREATE TABLE coupon_archive LIKE coupon;
+ALTER TABLE coupon_archive
+  ADD COLUMN archived_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  ADD COLUMN archived_by VARCHAR(64) NOT NULL DEFAULT '';
+-- 同一事务内先复制后删除：
+--   INSERT INTO coupon_archive (...) SELECT ... FROM coupon WHERE id = ?
+--   DELETE FROM coupon WHERE id = ?
+-- 收益：主表查询不再需要任何删除条件，唯一索引恢复正常语义，审计信息更完整</code></pre>
+
+    <table>
+        <thead>
+            <tr>
+                <th>规范</th>
+                <th>具体做法</th>
+                <th>不这么做的后果</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>默认 NOT NULL</td>
+                <td>除了「未知」和「空」确实语义不同的列，全部 NOT NULL 并给默认值</td>
+                <td>NULL 参与比较和聚合的规则与直觉不符，按列计数会跳过 NULL，等值条件永远匹配不到 NULL 行</td>
+            </tr>
+            <tr>
+                <td>时间列必备</td>
+                <td>每张表都有 created_at 与 updated_at，精度到毫秒，updated_at 自动更新</td>
+                <td>无法做增量同步和增量对账，也无法回答「这行什么时候变过」</td>
+            </tr>
+            <tr>
+                <td>状态用小整数</td>
+                <td>TINYINT 加列注释写清每个取值，应用侧用枚举，数据库侧可加 CHECK</td>
+                <td>字符串存状态会出现大小写与拼写不一致；数据库 ENUM 则加值要 DDL、删值几乎不可能</td>
+            </tr>
+            <tr>
+                <td>金额与精度</td>
+                <td>DECIMAL 存金额并统一到最小货币单位，禁止 FLOAT 与 DOUBLE</td>
+                <td>浮点累加产生分位误差，对账永远差几分钱且无法复现</td>
+            </tr>
+            <tr>
+                <td>大字段分离</td>
+                <td>长文本、JSON、二进制与高频更新的热字段不放同一张表</td>
+                <td>行变宽导致每页装的行数骤减，顺序扫描与缓存效率同时下降</td>
+            </tr>
+            <tr>
+                <td>不留预留字段</td>
+                <td>禁止 ext1 到 ext5 这类占位列，需要扩展用 JSON 列或新表</td>
+                <td>预留字段一定会被不同业务混用，三个月后没人知道 ext3 存的是什么，且无法加约束和索引</td>
+            </tr>
+            <tr>
+                <td>命名与类型一致</td>
+                <td>同一含义的列在所有表里同名同类型，如 user_id 全站统一 BIGINT UNSIGNED</td>
+                <td>类型不一致导致关联时隐式转换、索引失效；名字不一致让新人反复问「这两个是同一个东西吗」</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>表设计评审清单</h2>
+    <p>把这张表贴在评审文档末尾，逐条打勾。它能在十分钟内拦住绝大多数上线后要付代价的设计。</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>检查项</th>
+                <th>不通过的典型表现</th>
+                <th>上线后的代价</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>每张表能用一句话说清它存什么事实</td>
+                <td>说明里出现「也可以存」「顺便放」</td>
+                <td>表会长成谁都不敢改的宽表</td>
+            </tr>
+            <tr>
+                <td>有没有传递依赖残留</td>
+                <td>列注释写着「同某表的某字段」但没说同步方式</td>
+                <td>源表一改就出现长期脏数据</td>
+            </tr>
+            <tr>
+                <td>每个冗余列都登记了来源与同步方式</td>
+                <td>注释只是列名的复述</td>
+                <td>出问题时无法判断哪个值是权威的</td>
+            </tr>
+            <tr>
+                <td>主键是代理键，业务唯一性由唯一索引表达</td>
+                <td>用业务编码或手机号做主键</td>
+                <td>业务规则一变就要全站迁移</td>
+            </tr>
+            <tr>
+                <td>写入路径是否唯一收口</td>
+                <td>多个服务各自直接更新同一张表</td>
+                <td>冗余列永远同步不全</td>
+            </tr>
+            <tr>
+                <td>三年后的行数与单行字节估算过</td>
+                <td>没有估算</td>
+                <td>要么过早分库分表，要么等到告警才动手</td>
+            </tr>
+            <tr>
+                <td>查询模式列出来了，且每条都能走索引</td>
+                <td>只有表结构没有查询清单</td>
+                <td>索引后补，且极易补成互相重叠的冗余索引</td>
+            </tr>
+            <tr>
+                <td>删除与归档策略明确</td>
+                <td>默认软删除，无归档计划</td>
+                <td>表无限增长，查询条件长期靠人工纪律维持</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <p>索引本身怎么设计、列顺序怎么排、无用索引怎么识别和下线，站内《索引优化》篇有完整的三步骤和治理流程；分片键怎么选、分片算法怎么挑、扩容迁移怎么做，站内《分库分表》篇讲了决策与落地全流程。本篇只负责把「一份事实存几遍」这个问题的答案确定下来。</p>
 
     <h2>新手最容易踩的坑</h2>
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
         <div class="callout-title">避坑指南</div>
         <ul>
-            <li>范式不是越高越好，生产环境读多写少要适当反范式加冗余</li>
-            <li>分库分表前先确认是不是真的需要，千万级单表 MySQL 还能扛，别上来就分</li>
-            <li>水平分表选分片键很重要，选不好会有数据倾斜</li>
-            <li>分库分表后分布式 ID 一定要用，不能用自增 ID</li>
+            <li>把订单明细里的 <code>unit_price</code> 当成需要同步的冗余列，写了个「修复脚本」按当前商品价回刷，历史订单金额集体变化——这是把快照语义误当冗余的真实事故，快照列必须在注释里显式标注「禁止回填」。</li>
+            <li>用逗号串存多值（<code>tags = '手机,数码,5G'</code>），后来要按标签筛选只能做模糊匹配，全表扫描而且会把「数码相机」一起匹配进来。</li>
+            <li>软删除只加了 <code>is_deleted</code> 布尔列，同一个 code 删了再建撞唯一键；改成 <code>(code, is_deleted)</code> 联合唯一后第二次删除又撞键，必须用时间戳或部分唯一索引。</li>
+            <li>预留了 ext1 到 ext5，半年后三个业务混用同一列存了三种格式，既不能建索引也不能加约束，清理时无法判断哪行属于谁。</li>
+            <li>状态列用了数据库 ENUM，需要加新状态时发现要改表，删旧值则牵动历史数据，最后只能永远保留废弃值。</li>
+            <li>关联列类型不一致，一边 BIGINT 一边 VARCHAR，关联时发生隐式类型转换导致索引失效，而 SQL 本身看不出任何问题。</li>
+            <li>用 DOUBLE 存金额，对账长期差几分钱，差额还随数据量变化无法复现。</li>
+            <li>冗余字段只在「主流程」里同步，忘了后台管理页面和运营批量工具也能改源表，于是不一致只在特定入口产生，排查数周。</li>
+            <li>异步回填没做乱序保护，同一行的两次变更被乱序消费，旧值覆盖新值；回填时要带上源表的 updated_at 或版本号做条件更新。</li>
+            <li>把长文本详情和高频更新的库存计数放在同一张表，每次扣减库存都要搬动整行，写吞吐远低于预期。</li>
+            <li>建了外键还配了级联删除，某次运营删掉一条父配置，级联带走几十万子行，且没有任何提示。</li>
+            <li>没有 <code>updated_at</code>，后来要做增量同步和增量对账时发现无从下手，只能全表比对。</li>
         </ul>
     </div>
 </article>

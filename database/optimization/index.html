@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../images/logo.jpeg">
-    <title>数据库性能优化 - 资深码农</title>
+    <title>数据库性能优化：瓶颈定位顺序与优化手段的投入产出 - 资深码农</title>
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="数据库优化实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="description" content="从定位瓶颈开始讲数据库优化：先用应用侧与数据库侧的耗时差判断问题是否真在数据库，再区分全局慢与单条慢，按 CPU、IO、锁三条分支收敛；给出八种优化手段的收益倍数、实施成本、风险与可逆性对照，单表行数与 QPS 的量级直觉，连接池大小经验公式与调错后果，字段类型对树高的影响，长期基线指标清单，以及一次只改一个变量的验证纪律和几类典型假优化。">
     <meta name="keywords" content="数据库性能优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/optimization/">
-    <meta property="og:title" content="数据库性能优化 - 资深码农">
-    <meta property="og:description" content="数据库优化实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta property="og:title" content="数据库性能优化：瓶颈定位顺序与优化手段的投入产出 - 资深码农">
+    <meta property="og:description" content="从定位瓶颈开始讲数据库优化：先用应用侧与数据库侧的耗时差判断问题是否真在数据库，再区分全局慢与单条慢，按 CPU、IO、锁三条分支收敛；给出八种优化手段的收益倍数、实施成本、风险与可逆性对照，单表行数与 QPS 的量级直觉，连接池大小经验公式与调错后果，字段类型对树高的影响，长期基线指标清单，以及一次只改一个变量的验证纪律和几类典型假优化。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/optimization/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="数据库性能优化 - 资深码农">
-    <meta name="twitter:description" content="数据库优化实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="twitter:title" content="数据库性能优化：瓶颈定位顺序与优化手段的投入产出 - 资深码农">
+    <meta name="twitter:description" content="从定位瓶颈开始讲数据库优化：先用应用侧与数据库侧的耗时差判断问题是否真在数据库，再区分全局慢与单条慢，按 CPU、IO、锁三条分支收敛；给出八种优化手段的收益倍数、实施成本、风险与可逆性对照，单表行数与 QPS 的量级直觉，连接池大小经验公式与调错后果，字段类型对树高的影响，长期基线指标清单，以及一次只改一个变量的验证纪律和几类典型假优化。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "数据库优化：从你遇到的问题出发：先找瓶颈再优化？", "acceptedAnswer": {"@type": "Answer", "text": "不要瞎优化，先定位慢在哪。"}}, {"@type": "Question", "name": "数据库优化：从你遇到的问题出发：索引不是越多越好？", "acceptedAnswer": {"@type": "Answer", "text": "索引多了写变慢，只建查询用到的。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "怎么判断接口变慢到底是不是数据库的问题？", "acceptedAnswer": {"@type": "Answer", "text": "对比两个数字：应用侧埋点记录的「从申请连接到拿到结果集」耗时，和数据库侧统计的语句执行耗时。如果应用侧是两秒而数据库侧平均只有几毫秒，问题就不在数据库，而在连接池排队、GC 暂停、代理层排队或网络。只有两个数字基本一致时，才说明时间真的花在数据库内部。很多所谓的数据库故障最终查出来是连接池上限太小、被几条慢语句占满了全部连接，导致后面的请求在应用进程里排队。"}}, {"@type": "Question", "name": "连接池大小设多少合适，调大 max_connections 有用吗？", "acceptedAnswer": {"@type": "Answer", "text": "经验公式是：连接池大小约等于 CPU 核数乘二再加上有效磁盘数。八核加一块 NVMe 大概就是 17 到 20 个连接，这个数字比大多数人直觉里的要小得多。连接不是越多越好，每个连接在数据库侧对应一个线程，线程数远超核数时收益为负，因为上下文切换和锁竞争的开销会吃掉吞吐。盲目调大 max_connections 并不能提升处理能力，只是把排队从应用侧挪到数据库侧，还顺带放大了内存占用和雪崩时的爆炸半径。"}}, {"@type": "Question", "name": "数据库优化应该按什么顺序动手？", "acceptedAnswer": {"@type": "Answer", "text": "按投入产出比从高到低：先改 SQL 写法和补齐索引，这两项成本最低、收益常常是十倍以上且完全可回滚；再看表结构和字段类型是否让单行过胖；然后才是加缓存、读写分离、参数调优。垂直拆分和水平分片放在最后，因为它们引入的复杂度是单向不可逆的，一旦分片，跨片 join、跨片事务、跨片分页、全局唯一 ID 全都要重做业务代码。顺序反了的典型后果是：花三个月做了分库分表，上线后发现瓶颈其实是一条缺索引的语句。"}}, {"@type": "Question", "name": "单表多少行就必须分表，两千万行是硬线吗？", "acceptedAnswer": {"@type": "Answer", "text": "两千万行不是硬线，只是一个流传很广的经验值。真正决定性能的是索引和热数据能不能装进内存，以及单行有多宽。一张只有几个整型列的表，一亿行照样跑得很稳；一张每行几 KB、带大文本字段的表，五百万行就可能拖垮缓冲池命中率。判断标准应该换成：缓冲池命中率是否开始明显下降、单次点查是否稳定在毫秒级、写入时索引维护是否已经成为瓶颈。在考虑分片之前，先问归档、分区、冷热分离能不能解决。"}}, {"@type": "Question", "name": "字段类型选大一点留余量，为什么会影响查询性能？", "acceptedAnswer": {"@type": "Answer", "text": "因为数据是按页组织的，页的大小固定，单行越宽，一个页里装的行就越少，扫描同样多的行就要读更多页，索引树也可能因此多一层。把本该是四字节整型的自增主键写成八字节，或者用 36 字节的字符串存 UUID 主键，代价会被所有二级索引放大，因为二级索引的叶子节点都要存一份主键值。此外无序的字符串主键会导致页分裂和随机写，进一步放大写入成本。留余量的正确做法是评估真实取值范围，而不是一律用最大类型。"}}, {"@type": "Question", "name": "为什么只看平均耗时的优化基线是无效的？", "acceptedAnswer": {"@type": "Answer", "text": "平均耗时会把长尾完全抹平。一万次三毫秒的查询混进十次三秒的查询，平均值只从三毫秒涨到六毫秒，看起来毫无异常，但用户侧已经出现明显卡顿，而且这十次很可能正是引发连接池耗尽的源头。基线至少要记录 P95 和 P99，同时配上扫描行数、返回行数、缓冲池命中率这些能解释原因的量。只有耗时没有扫描量的基线，优化后无法判断收益来自你的改动还是来自当天流量下降。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,66 +64,322 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">数据库优化：从你遇到的问题出发</h1>
+                        <h1 class="article-title">数据库性能优化：瓶颈定位顺序与优化手段的投入产出</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ 数据库优化</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及数据库优化怎么帮你解决。</p>
+<p>绝大多数「数据库优化」做错的地方不在技术细节，而在顺序。收到告警就去加索引、加缓存、讨论分库分表，是典型的从手段出发而不是从瓶颈出发。这篇不讲 B+ 树和 MVCC 这些原理，那些在站内 MySQL 深度原理篇里已经展开过；这篇讲的是一套可执行的排查顺序：怎么先排除数据库之外的因素，怎么区分全局慢和单条慢，怎么按投入产出比决定动手方向，以及怎么验证你的优化真的有效。</p>
+
+<h2>先证明这真的是数据库的问题</h2>
+
+<p>一次查询从业务线程发出到拿到结果，中间要经过应用进程、网络、可能存在的代理层，最后才进入数据库内部。任何一段都可能是耗时的大头，而只有最后一段是数据库的责任。</p>
 
 <div class="mermaid">
 flowchart TB
-    A[查询慢] --> B[慢查询日志]
-    B --> C[explain 执行计划]
-    C --> D[加索引/优化 SQL]
+    subgraph APP["应用进程内"]
+        A1["业务线程向连接池申请连接"]
+        A2["ORM 拼 SQL 与结果集反射映射"]
+        A3["JVM 或运行时 GC 暂停"]
+    end
+    subgraph NET["网络与代理层"]
+        N1["应用到代理的 RTT"]
+        N2["代理层排队：ShardingSphere-Proxy 或 ProxySQL"]
+        N3["代理到数据库的 RTT"]
+    end
+    subgraph DB["数据库内部"]
+        D1["解析、权限校验、优化器选计划"]
+        D2["等行锁或等元数据锁 MDL"]
+        D3["执行：扫索引页、回表取行"]
+        D4["排序或临时表，可能落盘"]
+        D5["结果集编码并分批回传"]
+    end
+    A1 --> A2
+    A3 --> A1
+    A2 --> N1
+    N1 --> N2
+    N2 --> N3
+    N3 --> D1
+    D1 --> D2
+    D2 --> D3
+    D3 --> D4
+    D4 --> D5
 </div>
 
-<h2>1. 查询越来越慢</h2>
+<p>判断的方法很朴素：<strong>拿应用侧埋点的耗时和数据库侧统计的执行耗时做差</strong>。应用侧的埋点要包住「申请连接」这一步，数据库侧用语句摘要统计的平均执行时间。如果应用侧 2 秒、数据库侧 3 毫秒，这 1997 毫秒就不在数据库里，继续在数据库上找原因是白费功夫。最常见的误判源是连接池。</p>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>一开始很快，数据量上来了查询要 10 秒。</p>
+<div class="mermaid">
+sequenceDiagram
+    participant T as 业务线程
+    participant P as 连接池 上限 10
+    participant DB as 数据库
+    participant M as 监控
+    T->>P: 申请连接
+    Note over P: 10 个连接被几条慢语句全部占用<br/>新请求在应用进程内排队
+    P-->>T: 等待 2000ms 后拿到连接
+    T->>DB: 按主键点查
+    DB-->>T: 3ms 返回
+    T->>M: 上报接口耗时 2003ms
+    DB->>M: 上报语句平均耗时 3ms
+    Note over M: 应用说慢，数据库说不慢<br/>差值全在连接池排队上
 </div>
 
-<p><strong>怎么解决？</strong>先开慢查询日志，找最慢的 SQL，再 explain 看执行计划。</p>
+<p>这张图想说清一件反直觉的事：<strong>连接池耗尽的现场，数据库侧的所有指标都可能是健康的</strong>。CPU 不高、慢查询数不多、平均耗时正常，因为真正的慢语句只有那么几条，它们把连接占住了，而被拖累的成千上万次快查询全都排在应用进程里，压根没到数据库。这时候扩容数据库毫无用处。</p>
 
-<h2>2. 怎么加索引</h2>
+<h2>全局慢还是单条慢：第一个分叉</h2>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>知道查询慢，不知道加什么索引。</p>
+<p>确认问题在数据库内部之后，下一个判断决定了后面所有动作：是所有语句都慢了，还是只有特定语句慢。全局慢指向资源和并发，单条慢指向执行计划。两者的排查工具完全不同，混在一起查就会得出「加了索引还是慢」这类结论。</p>
+
+<div class="mermaid">
+flowchart TB
+    S["接口 P99 明显恶化"] --> Q1{"应用侧耗时与数据库侧<br/>执行耗时是否接近"}
+    Q1 -->|"差值很大"| OUT["瓶颈在数据库之外：<br/>连接池排队、GC、代理层、网络"]
+    Q1 -->|"基本一致"| Q2{"是全部语句变慢<br/>还是个别语句变慢"}
+    Q2 -->|"个别语句"| ONE["查执行计划与返回行数<br/>进入慢查询治理闭环"]
+    Q2 -->|"全局变慢"| Q3{"主机资源哪一项先到顶"}
+    Q3 -->|"CPU 高、IO 低"| CPU["扫描行数或排序量过大<br/>先砍扫描量，别先加机器"]
+    Q3 -->|"IO 高"| Q4{"缓冲池命中率是否低于 99%"}
+    Q3 -->|"两项都不高"| LOCK["查活跃事务与锁等待<br/>大概率是行锁或 MDL 阻塞"]
+    Q4 -->|"命中率低"| MEM["工作集超内存：<br/>加内存、归档冷数据、收窄单行"]
+    Q4 -->|"命中率正常"| WR["写放大：redo 刷盘、binlog 同步、双写"]
+    CPU --> ONE
+    LOCK --> ONE
 </div>
 
-<p><strong>怎么解决？</strong>where 条件、order by、group by 的字段加索引。</p>
+<p>这里有个容易忽略的读数细节：<strong>看并发压力要看正在执行的线程数，不是已建立的连接数</strong>。连接数上千但正在执行的只有两三个，说明数据库很闲；反过来正在执行的线程数长期高于 CPU 核数，就说明数据库内部已经在排队了，这时任何新语句的延迟都会被放大。下面这组命令是全局慢的第一轮分诊。</p>
 
-<h2>3. 索引建了为什么不用</h2>
+<pre><code class="language-bash"># 1) 每秒采样一次，重点看 Threads_running（正在执行），而不是 Threads_connected（已连接）
+#    Threads_running 长期大于 CPU 核数，说明数据库内部已在排队
+mysqladmin -uroot -p -i1 -r ext | grep -E 'Threads_running|Threads_connected|Slow_queries'
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>明明建了索引，查询还是不走。</p>
-</div>
+# 2) 主机侧同时看 IO 压力：%util 接近 100 且 await 上升，说明磁盘是瓶颈
+iostat -x 1 5
 
-<p><strong>怎么解决？</strong>看是不是索引失效了，或者优化器觉得全表扫更快。</p>
+# 3) 确认不是 swap 在拖后腿：数据库进程一旦被换出，延迟会出现无法解释的尖刺
+vmstat 1 5</code></pre>
 
-<h2>优化手段</h2>
+<pre><code class="language-sql">-- 4) 当前在跑什么：state 列直接告诉你卡在哪个阶段
+--    Sending data 通常是在扫行，Copying to tmp table 是临时表
+--    Waiting for table metadata lock 是被 DDL 卡住
+SELECT id, user, db, command, time, state, LEFT(info, 120) AS sql_head
+FROM information_schema.processlist
+WHERE command NOT IN ('Sleep', 'Daemon') AND time &gt; 1
+ORDER BY time DESC;
+
+-- 5) 缓冲池命中率：低于 99% 说明热数据装不进内存
+--    这种情况下加索引的收益远不如加内存或归档冷数据
+SELECT ROUND((1 - r.v / q.v) * 100, 4) AS hit_pct
+FROM
+  (SELECT variable_value + 0 AS v FROM performance_schema.global_status
+   WHERE variable_name = 'Innodb_buffer_pool_reads') r,
+  (SELECT variable_value + 0 AS v FROM performance_schema.global_status
+   WHERE variable_name = 'Innodb_buffer_pool_read_requests') q;
+
+-- 6) 有没有长事务扛着不提交：长事务会阻塞 purge，让 undo 膨胀、让别人等锁
+SELECT trx_id, trx_state, trx_started,
+       TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS run_sec,
+       trx_rows_locked, trx_rows_modified, LEFT(trx_query, 100) AS q
+FROM information_schema.innodb_trx
+ORDER BY run_sec DESC;</code></pre>
+
+<h2>按投入产出排序的优化手段</h2>
+
+<p>所有手段都能提升性能，区别在于每单位收益要付出多少成本和风险。下面这张表的排序就是建议的动手顺序，收益倍数是常见量级而非保证值，风险一列比收益一列更值得读。</p>
 
 <table>
-<thead><tr><th>手段</th><th>效果</th></tr></thead>
+<thead><tr><th>手段</th><th>典型收益倍数</th><th>实施成本</th><th>主要风险</th><th>可逆性</th></tr></thead>
 <tbody>
-<tr><td>加索引</td><td>查询快几十倍</td></tr>
-<tr><td>优化 SQL</td><td>减少全表扫</td></tr>
-<tr><td>分库分表</td><td>数据量大了拆分</td></tr>
-<tr><td>加缓存</td><td>热点数据放 Redis</td></tr>
-</tbody></table>
+<tr><td>改写 SQL：去掉无用 join、拆 OR、消除隐式转换、分批处理</td><td>2 到 100 倍，扫描量降一个数量级很常见</td><td>低，改代码不改结构</td><td>改写后语义不等价，尤其是 NULL 参与比较和 join 类型变化</td><td>完全可逆</td></tr>
+<tr><td>补齐或修正索引</td><td>10 到 1000 倍，从全表扫变成点查</td><td>低到中，大表加索引要走 Online DDL</td><td>写入变慢、优化器可能选错新索引、加索引期间主从延迟</td><td>可逆，删掉即可</td></tr>
+<tr><td>调整表结构与字段类型：收窄类型、拆大字段、冷热分离</td><td>1.5 到 5 倍，来自单页装更多行</td><td>中，需要 DDL 与数据迁移</td><td>类型收窄可能溢出、拆表后所有读写路径都要改</td><td>较难逆，需再次 DDL</td></tr>
+<tr><td>加缓存：Redis 或本地缓存</td><td>10 到 100 倍，取决于命中率</td><td>中，要处理失效与一致性</td><td>缓存与库不一致、击穿与雪崩、缓存宕机后数据库被瞬间打满</td><td>可逆但要留降级开关</td></tr>
+<tr><td>读写分离</td><td>读吞吐可线性扩展，写吞吐不变</td><td>中，需要路由与延迟容忍设计</td><td>复制延迟导致写后读不到、强一致场景必须强制走主库</td><td>可逆</td></tr>
+<tr><td>参数调优：缓冲池、刷盘策略、并发控制</td><td>1.2 到 3 倍，个别错配场景可达 10 倍</td><td>低，但部分参数需重启</td><td>刷盘策略放松会丢数据，缓冲池调过大触发 OOM</td><td>可逆</td></tr>
+<tr><td>垂直拆分：按业务拆库、大字段拆副表</td><td>2 到 5 倍，主要是降低单库压力</td><td>高，跨库 join 全部要改成应用层聚合</td><td>原本的单库事务变成跨库事务</td><td>基本不可逆</td></tr>
+<tr><td>水平分片：分库分表</td><td>容量与写入上限随分片数线性扩展</td><td>极高，数据迁移加业务改造</td><td>跨片 join、跨片事务、跨片分页、全局唯一 ID 全部失效</td><td>单向不可逆</td></tr>
+</tbody>
+</table>
 
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>先找瓶颈再优化</strong>不要瞎优化，先定位慢在哪。</li>
-<li><strong>索引不是越多越好</strong>索引多了写变慢，只建查询用到的。</li>
-</ul>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">分库分表永远是最后一步</div>
+    <p>前面七项做错了可以改回来，分片做错了改不回来。分片一旦落地，分片键就固化进了所有查询，跨片能力的缺失会永久留在业务代码里，而且这份复杂度会被之后每一个新需求继续放大。判断是否该走到这一步的唯一标准是：归档、分区、垂直拆分、缓存、读写分离全部试过且明确不够，而不是「单表快到两千万行了」。完整决策路径见站内分库分表篇。</p>
+</div>
+
+<h2>容量与性能的量级直觉</h2>
+
+<p>没有量级直觉就无法判断当前数字是否异常。下面这些区间对应的是常见云主机配置（8 到 16 核、32 到 64 GB 内存、NVMe SSD）上的中等宽度表。<strong>这些数字强依赖硬件、单行宽度和访问模式，只能当作判断「是否需要深究」的触发器，真正的基线必须靠自己压测得出。</strong></p>
+
+<table>
+<thead><tr><th>维度</th><th>通常没问题</th><th>开始要警惕</th><th>决定这个数字的真正因素</th></tr></thead>
+<tbody>
+<tr><td>单表行数</td><td>千万级以内</td><td>数千万行以上且无法归档</td><td>不是行数本身，而是索引与热数据能否装进缓冲池</td></tr>
+<tr><td>单表数据加索引体积</td><td>小于缓冲池的一半</td><td>超过物理内存</td><td>工作集大小，冷数据占多数时总体积大也无妨</td></tr>
+<tr><td>单实例点查 QPS</td><td>几千到几万</td><td>接近数万且 CPU 打满</td><td>每次查询的扫描行数，扫得少才谈得上高 QPS</td></tr>
+<tr><td>单实例写 TPS</td><td>数千</td><td>上万且伴随复制延迟</td><td>二级索引数量、刷盘策略、单事务大小</td></tr>
+<tr><td>主键点查延迟</td><td>亚毫秒到数毫秒</td><td>持续超过 10 毫秒</td><td>缓冲池命中率，未命中就是一次磁盘随机读</td></tr>
+<tr><td>单条 OLTP 查询扫描行数</td><td>数百行以内</td><td>上万行</td><td>索引选择性与过滤条件能否下推</td></tr>
+<tr><td>单条查询返回行数</td><td>几十到几百</td><td>上万行</td><td>业务分页设计，返回十万行本身就是设计问题</td></tr>
+<tr><td>活跃连接（正在执行）</td><td>小于 CPU 核数</td><td>持续大于核数的两倍</td><td>线程上下文切换与内部锁竞争</td></tr>
+<tr><td>复制延迟</td><td>亚秒级</td><td>持续数秒以上</td><td>大事务、从库回放并行度、从库配置弱于主库</td></tr>
+</tbody>
+</table>
+
+<h2>连接池是最容易被忽视的瓶颈</h2>
+
+<p>连接池配置几乎没人认真算过，默认值一路带到生产，出问题时的第一反应又是调大。这里有一个反直觉但经过大量实践验证的结论：<strong>连接池越大，吞吐往往越低</strong>。原因是数据库的并行处理能力由 CPU 核数和磁盘并发度决定，超出这个上限的连接只会排队，而排队发生在数据库侧的代价比发生在应用侧更高，因为每个连接都对应一个线程和一份会话内存。</p>
+
+<p>可用的起点公式是：<strong>连接池大小 ≈ CPU 核数 × 2 + 有效磁盘数</strong>。8 核加一块 NVMe 得到 17，这个数字比大多数人写在配置里的 100、200 小一个数量级。公式里乘二是为了填补线程等待 IO 的空隙，加磁盘数是为了利用存储的并发能力。如果应用有多个实例，要用「单实例池大小 × 实例数」去核对数据库侧的连接上限，这一步经常被漏掉，导致扩容应用实例时把数据库连接打满。</p>
+
+<table>
+<thead><tr><th>参数</th><th>常见默认</th><th>调错的后果</th><th>建议做法</th></tr></thead>
+<tbody>
+<tr><td><code>maximumPoolSize</code>（HikariCP）</td><td>10</td><td>调到 200 后吞吐反而下降，数据库侧线程上下文切换吃掉大量 CPU</td><td>按核数公式算出起点再压测微调，宁小勿大</td></tr>
+<tr><td><code>connectionTimeout</code></td><td>30 秒</td><td>太长会让应用线程池被全部占满，故障从数据库蔓延成应用整体不可用</td><td>设成 1 到 3 秒，快速失败并触发降级</td></tr>
+<tr><td><code>maxLifetime</code></td><td>30 分钟</td><td>大于服务端 <code>wait_timeout</code> 时池里留着已被关闭的死连接，表现为随机报连接已关闭</td><td>设成比 <code>wait_timeout</code> 小 30 秒以上</td></tr>
+<tr><td><code>max_connections</code>（数据库侧）</td><td>151</td><td>调大只是把排队从应用挪到数据库，还提高了内存占用上限和雪崩风险</td><td>设成所有实例池大小之和再留两成余量，并预留超级用户连接</td></tr>
+<tr><td><code>wait_timeout</code></td><td>28800 秒</td><td>太长会让异常断开的会话长期占着连接和可能持有的锁</td><td>缩短到数百秒，并与连接池 <code>maxLifetime</code> 对齐</td></tr>
+<tr><td><code>innodb_thread_concurrency</code></td><td>0（不限制）</td><td>高并发内部争用严重时，不限制反而更慢</td><td>默认保持 0，只在确认存在内部争用时按核数附近取值试验</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-properties"># HikariCP 生产配置示例：数据库 8 核 + 1 块 NVMe，应用共 4 个实例
+# 池大小 = 8*2 + 1 = 17，四个实例合计 68 个连接，数据库侧 max_connections 设 100 足够
+spring.datasource.hikari.maximum-pool-size=17
+# 最小空闲与最大保持一致，避免流量突增时现场建连接带来的延迟尖刺
+spring.datasource.hikari.minimum-idle=17
+# 拿不到连接就快速失败，把压力挡在应用层而不是让线程无限等待
+spring.datasource.hikari.connection-timeout=2000
+# 必须小于服务端 wait_timeout（这里假设为 600 秒），否则会拿到已被服务端关掉的死连接
+spring.datasource.hikari.max-lifetime=570000
+# 泄漏检测：超过 5 秒未归还就打印持有连接的堆栈，用来定位忘记关闭连接的代码
+spring.datasource.hikari.leak-detection-threshold=5000
+# 单条语句的客户端读超时兜底，防止一条慢语句长期占住池里的连接
+spring.datasource.hikari.data-source-properties.socketTimeout=5000</code></pre>
+
+<h2>表结构设计对性能的影响</h2>
+
+<p>表结构的影响是乘数级的：它决定了每个页能装多少行，从而决定同样的扫描要读多少页，也影响索引树的高度。这部分的底层原理（页组织、聚簇索引、二级索引叶子存主键）详见站内 MySQL 深度原理篇，这里只给设计层面的结论。</p>
+
+<table>
+<thead><tr><th>设计选择</th><th>常见误用</th><th>性能后果</th><th>建议</th></tr></thead>
+<tbody>
+<tr><td>主键类型</td><td>用 36 字节字符串存 UUID 当主键</td><td>每个二级索引叶子都要存一份主键，索引整体膨胀数倍；无序值导致页分裂和随机写</td><td>用自增整型或有序 ID；确实要用 UUID 则存成 16 字节二进制并保证前缀有序</td></tr>
+<tr><td>整型宽度</td><td>所有 ID 一律 <code>BIGINT</code>，状态位也用 <code>INT</code></td><td>单行变宽，页内行数变少，扫描放大</td><td>按真实取值范围选；状态、类型这类小枚举用 <code>TINYINT</code></td></tr>
+<tr><td>字符串长度</td><td><code>VARCHAR(255)</code> 一把梭</td><td>声明长度影响排序和临时表的内存预估，可能让内存临时表提前转磁盘</td><td>按业务上限声明；索引长字符串时改用前缀索引</td></tr>
+<tr><td>大字段</td><td>富文本、JSON、base64 图片放在主表</td><td>行溢出带来额外页跳转；<code>SELECT *</code> 会把大量无用数据读进缓冲池，挤掉真正的热数据</td><td>拆到副表按主键关联，主表只留元信息</td></tr>
+<tr><td>可空列</td><td>所有列都允许 NULL</td><td>额外的 NULL 标记位，统计信息与区分度受影响，<code>NOT IN</code> 这类谓词语义出乎意料</td><td>能给默认值就设 <code>NOT NULL</code>，语义上确实需要「未知」时才用 NULL</td></tr>
+<tr><td>浮点与金额</td><td>金额用 <code>FLOAT</code> 或 <code>DOUBLE</code></td><td>精度丢失导致对账不平，等值比较失效进而查不到数据</td><td>用 <code>DECIMAL</code> 或整型存最小货币单位</td></tr>
+<tr><td>冷热混存</td><td>三年历史数据和当天数据在同一张表</td><td>热数据被冷数据挤出缓冲池，命中率下降，所有查询一起变慢</td><td>按时间归档或分区，让热分区常驻内存</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-sql">-- 表体检：找出单行过宽、以及索引比数据还大的表
+-- avg_row_len 明显偏大的表要检查是不是塞了大字段
+SELECT table_name,
+       table_rows,
+       ROUND(data_length  / 1024 / 1024) AS data_mb,
+       ROUND(index_length / 1024 / 1024) AS index_mb,
+       ROUND(index_length / NULLIF(data_length, 0), 2) AS idx_data_ratio,
+       avg_row_length AS avg_row_len
+FROM information_schema.tables
+WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
+ORDER BY data_length + index_length DESC
+LIMIT 20;
+
+-- 列体检：把声明长度远超实际使用长度的字符串列收窄
+-- 收窄 VARCHAR 能直接减少排序与临时表的内存预估，降低落盘概率
+SELECT column_name, column_type, is_nullable, character_maximum_length
+FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'orders'
+ORDER BY ordinal_position;</code></pre>
+
+<h2>没有基线就没有优化</h2>
+
+<p>「优化后快了」如果没有基线支撑，就无法区分是你的改动生效了还是当天流量下降了。下面这份清单是需要长期采集的最小集合，采集间隔 10 到 15 秒，保留至少 30 天以便和上个月做同比。</p>
+
+<table>
+<thead><tr><th>指标</th><th>取值来源</th><th>健康参考</th><th>异常时指向什么</th></tr></thead>
+<tbody>
+<tr><td>QPS 与 TPS</td><td><code>Questions</code>、<code>Com_commit</code> 的增量</td><td>与业务曲线同形</td><td>突增看是否有重试风暴，突降看是否已经卡住</td></tr>
+<tr><td>语句延迟 P95 与 P99</td><td>应用侧埋点加语句摘要统计</td><td>P99 在个位数毫秒到数十毫秒</td><td>P99 涨而平均不涨，说明长尾集中在少数语句</td></tr>
+<tr><td>慢查询数量</td><td><code>Slow_queries</code> 的增量</td><td>接近 0</td><td>非零就要看摘要，并确认是否有新语句上线</td></tr>
+<tr><td>活跃线程数</td><td><code>Threads_running</code></td><td>小于 CPU 核数</td><td>持续高于核数说明内部排队，延迟会被放大</td></tr>
+<tr><td>连接数与拒绝数</td><td><code>Threads_connected</code>、<code>Connection_errors_max_connections</code></td><td>连接数平稳，拒绝数为 0</td><td>拒绝数非零说明连接上限已被打满</td></tr>
+<tr><td>缓冲池命中率</td><td><code>Innodb_buffer_pool_read_requests</code> 与 <code>Innodb_buffer_pool_reads</code></td><td>高于 99%</td><td>下降说明工作集超内存或有大扫描在冲刷缓冲池</td></tr>
+<tr><td>行锁等待</td><td><code>Innodb_row_lock_time_avg</code>、<code>Innodb_row_lock_waits</code></td><td>接近 0</td><td>上升说明存在热点行更新或长事务</td></tr>
+<tr><td>临时表落盘占比</td><td><code>Created_tmp_disk_tables</code> 比 <code>Created_tmp_tables</code></td><td>低于一成</td><td>偏高说明大量排序或分组无法用索引完成</td></tr>
+<tr><td>复制延迟</td><td><code>Seconds_Behind_Master</code> 或 GTID 差值</td><td>亚秒级</td><td>上升说明存在大事务或从库回放能力不足</td></tr>
+<tr><td>磁盘利用率与 await</td><td>主机侧 <code>iostat</code></td><td>利用率有余量，await 稳定</td><td>打满说明存储是瓶颈，此时任何 SQL 优化的收益都会被掩盖</td></tr>
+</tbody>
+</table>
+
+<h2>优化的验证纪律</h2>
+
+<p>验证纪律的核心只有一句：<strong>一次只改一个变量</strong>。同时改索引、改 SQL、调参数，收益无法归因，出问题也无法快速定位是哪一项引起的。完整流程建议固化成下面这个状态机，每次优化都走一遍。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    state "采集并留档基线" as Baseline
+    state "提出单一变量假设" as Hypo
+    state "同量级影子库验证" as Shadow
+    state "灰度放量到小比例流量" as Canary
+    state "回滚并复盘" as Rollback
+    state "全量生效" as Full
+    state "更新基线数值" as Rebase
+    [*] --> Baseline
+    Baseline --> Hypo
+    Hypo --> Shadow
+    Shadow --> Hypo: 收益不足预期的一半
+    Shadow --> Canary: 收益可复现且无回退
+    Canary --> Rollback: P99 或错误率恶化
+    Rollback --> Hypo
+    Canary --> Full: 观察满一个完整业务周期
+    Full --> Rebase
+    Rebase --> [*]
+    note right of Baseline
+        必须同时留档 QPS 与 P99 与扫描行数与缓冲池命中率
+        只记平均耗时的基线等于没有基线
+    end note
+</div>
+
+<p>其中「同量级影子库」是最容易被跳过也最容易翻车的一步。在只有几万行测试数据的库上，任何执行计划都很快，优化器的选择也和生产完全不同，测出来的结论经常是反的。影子库的数据量和数据分布必须接近生产，至少要保证被优化表的行数在同一个数量级、被索引列的区分度接近真实值。</p>
+
+<h2>几类典型的假优化</h2>
+
+<table>
+<thead><tr><th>现象</th><th>为什么是假优化</th><th>怎么做才算真</th></tr></thead>
+<tbody>
+<tr><td>在测试库把查询从 800ms 优化到 20ms</td><td>测试库数据量不足，热数据全在内存，生产上的磁盘随机读成本完全没有体现</td><td>在同量级、同分布的库上验证，同时对比扫描行数而不只看耗时</td></tr>
+<tr><td>平均耗时从 6ms 降到 5ms，宣布优化完成</td><td>平均值掩盖长尾，真正伤害用户的是那百分之一的秒级查询</td><td>以 P99 作为验收指标，并单独观察最慢的若干条语句</td></tr>
+<tr><td>某条 SQL 优化了 50 倍，但接口 P99 没变</td><td>这条语句本来就不是瓶颈，对总耗时的贡献可忽略</td><td>按「单次耗时乘调用次数」排序找真正的大头，方法见站内慢查询治理篇</td></tr>
+<tr><td>加了缓存后数据库 QPS 下降，认为问题解决</td><td>只是把负载推迟了，缓存集中失效或缓存宕机时数据库会被瞬时打满</td><td>压测缓存全失效场景下数据库是否还撑得住，并准备限流与降级</td></tr>
+<tr><td>把 <code>long_query_time</code> 从 1 秒调回 10 秒，慢查询数归零</td><td>指标漂亮了，问题一条没修</td><td>阈值只在定位阶段临时调整，长期保持在能暴露问题的水平</td></tr>
+<tr><td>一次性改了索引、SQL、参数三处，整体变快了</td><td>无法归因，其中可能有一项是负收益，被另外两项掩盖</td><td>拆成三次独立验证，每次留档</td></tr>
+<tr><td>压测时用固定参数反复查同一条数据</td><td>结果全部来自缓存，测出的是内存命中而不是真实混合负载</td><td>用接近真实分布的参数集，并把写入混合进来</td></tr>
+</tbody>
+</table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+        <li>看到告警先加索引，没先确认应用侧与数据库侧的耗时差。结果索引加了一堆，真正的连接池排队问题原封不动。</li>
+        <li>用 <code>Threads_connected</code> 判断数据库忙不忙。连接数上千而正在执行的只有两个，数据库其实很闲；该看的是 <code>Threads_running</code>。</li>
+        <li>把连接池调到 200 想「抗住并发」。数据库线程数远超核数后吞吐反降，现象是所有语句一起慢，看起来像数据库整体不行了。</li>
+        <li>连接池 <code>maxLifetime</code> 大于服务端 <code>wait_timeout</code>。线上随机报连接已关闭，重试一次又好了，查半天找不到规律。</li>
+        <li>忘记按应用实例数换算总连接数。扩容应用实例时把 <code>max_connections</code> 打满，新老实例一起连不上。</li>
+        <li>在数据量不足的测试库上验收优化。生产上执行计划变了，优化器挑了另一个索引，效果与测试完全相反。</li>
+        <li>只用平均耗时做基线。P99 从 200ms 恶化到 3s 时平均值几乎看不出变化，告警一声不响。</li>
+        <li>一次性改多个变量后上线。整体变好了但其中一项是负收益，两个月后流量结构一变就集中爆发。</li>
+        <li>字段类型一律取最大值「留余量」。单行变宽让页内行数减半，同样的范围扫描要多读一倍的页。</li>
+        <li>大字段留在主表并习惯 <code>SELECT *</code>。一次列表查询把几十 MB 富文本读进缓冲池，把真正的热数据挤出去，全库跟着变慢。</li>
+        <li>历史数据一直留在热表里不归档。表本身还能查，但缓冲池命中率一路下滑，最后表现为「没有任何改动却越来越慢」。</li>
+        <li>为了让慢查询指标好看而调大 <code>long_query_time</code>。指标归零，问题在下一次大促原样爆出来。</li>
+        <li>直接跳到分库分表。三个月改造上线后发现瓶颈其实是一条缺索引的语句，而分片带来的复杂度已经撤不回去了。</li>
+    </ul>
 </div>
 
                     </div>

@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>PostgreSQL 复制高可用 - 资深码农</title>
+    <title>PostgreSQL 复制与故障切换：同步级别、复制槽、pg_rewind 与 Patroni - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="流复制/逻辑复制搭建、pg_basebackup 与 pgBackRest 备份恢复、Patroni 自动故障切换，以及 shared_buffers/work_mem 等关键参数性能调优方法论。">
+        <meta name="description" content="物理流复制的从库是字节级副本，不能有不同索引也不能写；synchronous_commit 的五档里 on 只保证 WAL 落到从库磁盘，要写后立刻可读只有 remote_apply。本文讲清同步复制如何把主库搞挂、复制槽如何撑爆磁盘、热备查询冲突的三种取舍、逻辑复制不复制 DDL 与序列值的后果、读写分离一致性的三种解法，以及切换后旧主为什么必须 pg_rewind。">
     <meta name="keywords" content="PostgreSQL 复制高可用,PostgreSQL,关系数据库,PostgreSQL">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -27,8 +27,8 @@
     <meta name="Google-Extended" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/postgresql/replication-ha/">
     <!-- Open Graph -->
-    <meta property="og:title" content="PostgreSQL 复制高可用 - 资深码农">
-    <meta property="og:description" content="流复制/逻辑复制搭建、pg_basebackup 与 pgBackRest 备份恢复、Patroni 自动故障切换，以及 shared_buffers/work_mem 等关键参数性能调优方法论。">
+    <meta property="og:title" content="PostgreSQL 复制与故障切换：同步级别、复制槽、pg_rewind 与 Patroni - 资深码农">
+    <meta property="og:description" content="物理流复制的从库是字节级副本，不能有不同索引也不能写；synchronous_commit 的五档里 on 只保证 WAL 落到从库磁盘，要写后立刻可读只有 remote_apply。本文讲清同步复制如何把主库搞挂、复制槽如何撑爆磁盘、热备查询冲突的三种取舍、逻辑复制不复制 DDL 与序列值的后果、读写分离一致性的三种解法，以及切换后旧主为什么必须 pg_rewind。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/postgresql/replication-ha/">
     <meta property="og:site_name" content="资深码农">
@@ -38,18 +38,18 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="PostgreSQL 复制高可用 - 资深码农">
-    <meta name="twitter:description" content="流复制/逻辑复制搭建、pg_basebackup 与 pgBackRest 备份恢复、Patroni 自动故障切换，以及 shared_buffers/work_mem 等关键参数性能调优方法论。">
+    <meta name="twitter:title" content="PostgreSQL 复制与故障切换：同步级别、复制槽、pg_rewind 与 Patroni - 资深码农">
+    <meta name="twitter:description" content="物理流复制的从库是字节级副本，不能有不同索引也不能写；synchronous_commit 的五档里 on 只保证 WAL 落到从库磁盘，要写后立刻可读只有 remote_apply。本文讲清同步复制如何把主库搞挂、复制槽如何撑爆磁盘、热备查询冲突的三种取舍、逻辑复制不复制 DDL 与序列值的后果、读写分离一致性的三种解法，以及切换后旧主为什么必须 pg_rewind。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="PostgreSQL,关系数据库">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 复制高可用","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"流复制/逻辑复制搭建、pg_basebackup 与 pgBackRest 备份恢复、Patroni 自动故障切换，以及 shared_buffers/work_mem 等关键参数性能调优方法论。","url":"https://www.yijunjun.asia/database/postgresql/replication-ha/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/replication-ha/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 复制与故障切换：同步级别、复制槽、pg_rewind 与 Patroni","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"物理流复制的从库是字节级副本，不能有不同索引也不能写；synchronous_commit 的五档里 on 只保证 WAL 落到从库磁盘，要写后立刻可读只有 remote_apply。本文讲清同步复制如何把主库搞挂、复制槽如何撑爆磁盘、热备查询冲突的三种取舍、逻辑复制不复制 DDL 与序列值的后果、读写分离一致性的三种解法，以及切换后旧主为什么必须 pg_rewind。","url":"https://www.yijunjun.asia/database/postgresql/replication-ha/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/replication-ha/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "PostgreSQL 复制高可用", "item": "https://www.yijunjun.asia/database/postgresql/replication-ha/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "PostgreSQL 主从同步：从你遇到的问题出发：主从有延迟？", "acceptedAnswer": {"@type": "Answer", "text": "主从同步不是实时的，有延迟，强一致要求的读要走主库。"}}, {"@type": "Question", "name": "PostgreSQL 主从同步：从你遇到的问题出发：从库不能写？", "acceptedAnswer": {"@type": "Answer", "text": "从库默认只能读，不能写。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "synchronous_commit 设成 on 之后，为什么写完还是从从库读不到？", "acceptedAnswer": {"@type": "Answer", "text": "因为 on 只保证 WAL 已经 fsync 到从库磁盘，不保证从库已经回放。那条 WAL 可能还排在回放队列里，而回放是单进程串行的。要做到提交返回时从库立刻能读到，只有 remote_apply 这一档，代价是提交延迟直接等于回放延迟，写入吞吐会明显下降。更常见的工程解法是关键读走主库，或者写完拿到 LSN 让读请求带着它去从库比较回放位置。"}}, {"@type": "Question", "name": "为什么配了同步复制反而把主库搞挂了？", "acceptedAnswer": {"@type": "Answer", "text": "如果只配一个同步从库且没有候补，这个从库一挂，主库会挂起所有提交无限期等待确认，不是报错而是卡住，连接池在几秒内打满，表现和主库宕机一模一样。正确做法是候选数严格大于要求确认数，比如两个从库配 ANY 1，并且监控里要有同步从库数量少于要求数的告警。已经卡住时的应急手段是把 synchronous_standby_names 改成空串再执行 pg_reload_conf，这是秒级生效且不需要重启的。"}}, {"@type": "Question", "name": "复制槽为什么会撑爆主库磁盘，怎么防？", "acceptedAnswer": {"@type": "Answer", "text": "复制槽的作用是让主库记住消费者位置，在对方确认之前绝不删除对应的 WAL。代价是一个长期下线的从库留下的槽会让 WAL 无限堆积，直到 pg_wal 撑满磁盘、数据库停止写入，这是 PG 生产环境最常见的磁盘满停库原因。防护是 PG 13 起的 max_slot_wal_keep_size，超过限制后宁可让槽失效也不撑爆主库，同时监控 pg_replication_slots 的 safe_wal_size 和 wal_status 字段。逻辑槽还会额外压住系统目录的死元组回收。"}}, {"@type": "Question", "name": "从库上的查询被取消，报 conflict with recovery 怎么处理？", "acceptedAnswer": {"@type": "Answer", "text": "这是恢复冲突：主库 VACUUM 清掉的元组对应的 WAL 要在从库回放，而从库上有长查询的快照还需要它们。三种取舍：把 max_standby_streaming_delay 设大甚至设成负一，代价是回放挂起、主从延迟变大；保持默认 30 秒，代价是长查询被取消，应用要能重试；或者从库开 hot_standby_feedback，让从库把最老快照上报主库抑制 VACUUM，代价是主库表膨胀。最健康的做法是给从库设 statement_timeout 并把长查询拆小。"}}, {"@type": "Question", "name": "逻辑复制和物理复制该怎么选，逻辑复制有哪些坑？", "acceptedAnswer": {"@type": "Answer", "text": "需要跨大版本、只同步部分表、目标端可写或多源汇聚时才用逻辑复制，其余情况物理流复制更简单可靠。逻辑复制的坑集中在四处：完全不复制 DDL，发布端加列而订阅端没加会直接中断复制，正确顺序是先订阅端后发布端；不复制序列值，切换前必须手工 setval 否则主键冲突；表必须有主键或显式设置 REPLICA IDENTITY，否则更新和删除无法定位行；初始同步默认全表拷贝，大表上耗时长还会拖住复制槽。"}}, {"@type": "Question", "name": "切换之后，旧主库为什么不能直接当新主库的从库？", "acceptedAnswer": {"@type": "Answer", "text": "因为 promote 会让新主库的时间线递增，而旧主库在失联前可能已经写入并落盘了一些从未传出去的 WAL，它的历史领先于新主，两者在分叉点之后是两条不同的历史。直接挂上去轻则报时间线不匹配拒绝启动，重则数据静默不一致。必须先用 pg_rewind 按新主的历史裁掉分叉后的本地改动，前提是源库开了 wal_log_hints 或数据校验和并且旧主先干净关闭过一次；不满足前提就只能重做基础备份。另外物理复制槽不会跟随切换，新主上要重建。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -88,81 +88,576 @@
             <span class="meta-item">🏷️ PostgreSQL</span>
         </div>
     </header>
-    <p>数据库读压力太大，一台主库扛不住，加从库做读写分离。主库写，从库读，性能翻倍。这篇讲 PostgreSQL 主从复制怎么配。</p>
+    <p>PG 的复制只有两种：物理流复制传的是 WAL 字节，从库是主库的<strong>逐字节副本</strong>；逻辑复制传的是解码后的行变更，粒度到表。两者的能力边界、失效模式和运维风险完全不同，而绝大多数「配了高可用反而更不可用」的事故，都出在同步复制的可用性陷阱、复制槽撑爆磁盘、以及切换后旧主库不能直接当从库这三件事上。</p>
+
+    <h2>物理流复制：从库是字节级副本</h2>
+    <p>链路是三个进程接力：主库的 <strong>walsender</strong> 把 WAL 流发出去，从库的 <strong>walreceiver</strong> 收下来写进本地 <code>pg_wal</code>，再由 <strong>startup 进程</strong>（持续处于恢复状态）回放。注意回放是<strong>单进程串行</strong>的，虽然 PG 15 起部分场景能并行预取，但主库多个并发写入会话产生的 WAL，在从库上是一条线回放——这是主从延迟在写入高峰期突然拉大的根本原因，和网络带宽往往无关。</p>
+    <p>因为传的是字节而不是逻辑变更，物理复制有一组无法绕过的硬限制：<strong>从库不能有和主库不同的索引</strong>（索引页也是 WAL 的一部分）、<strong>从库完全不可写</strong>（连临时表都不行，PG 14 之前连 <code>CREATE TEMP TABLE</code> 都会报错）、<strong>不能只复制部分表</strong>、<strong>主从大版本必须完全一致</strong>。想要这些能力就只能用逻辑复制。</p>
     <div class="mermaid">
-flowchart LR
-    A[应用] --> B{读写分离}
-    B -->|写| C[主库 Master]
-    B -->|读| D[从库 Slave 1]
-    B -->|读| E[从库 Slave 2]
-    C -->|同步| D
-    C -->|同步| E
+sequenceDiagram
+    autonumber
+    participant C as 客户端
+    participant B as 主库 backend
+    participant WS as 主库 walsender
+    participant WR as 从库 walreceiver
+    participant SU as 从库 startup 进程
+    participant Q as 从库上的查询
+    C->>B: COMMIT
+    B->>B: WAL 记录写入本地并 fsync
+    B->>WS: 唤醒 walsender 推送新的 WAL
+    WS->>WR: 流式发送 WAL 字节 协议是 COPY 的扩展
+    WR->>WR: 写入从库 pg_wal 并 fsync
+    WR-->>WS: 回报 flush 位置 这是 flush_lag 的来源
+    SU->>SU: 单进程串行回放 WAL 到数据页
+    SU-->>WR: 回报 replay 位置 这是 replay_lag 的来源
+    Note over SU,Q: 回放要改的页正被从库的长查询读着<br/>就产生恢复冲突 二者只能牺牲一个
+    WR-->>WS: hot_standby_feedback 打开时<br/>顺带上报从库最老快照 xmin
+    WS-->>B: 同步复制下 backend 在此之前一直挂着等确认
+    B-->>C: 返回 COMMIT 成功
     </div>
+    <pre><code class="language-properties"># ---------- 主库 postgresql.conf ----------
+wal_level = replica                  # 逻辑复制则需要 logical，改这个要重启
+max_wal_senders = 10                 # 每个从库和每次 pg_basebackup 各占一个
+wal_keep_size = 1GB                  # 没有复制槽时的兜底保留量，PG 13 前叫 wal_keep_segments
+max_slot_wal_keep_size = 64GB        # PG 13+ 必设：槽最多拖住这么多 WAL，超了宁可让槽失效也不撑爆磁盘
+archive_mode = on                    # 归档是 PITR 的前提，也是复制中断后的补救手段
+archive_command = 'pgbackrest --stanza=main archive-push %p'   # 失败会让 WAL 一直堆积，必须配监控
 
-    <h2>主库读压力太大</h2>
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">你遇到的问题</div>
-        <p>所有请求都打到主库，QPS 上万，CPU 跑满。</p>
-    </div>
-    <p><strong>怎么解决？</strong>加从库做读写分离，写走主库，读走从库，读性能翻倍。</p>
-    <pre><code class="language-bash"># 主从复制原理
-主库把 WAL 日志发给从库
-从库重放 WAL，和主库保持一致
-延迟通常是毫秒级</code></pre>
+# 同步复制：不配 synchronous_standby_names 时 synchronous_commit 的 remote_* 档位没有意义
+synchronous_commit = on              # 见下一节的五档对照
+synchronous_standby_names = 'ANY 1 (s1, s2)'   # 两个候选里任意一个确认即可，避免单点挂起
 
-    <h2>主库挂了，服务停了</h2>
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">你遇到的问题</div>
-        <p>主库服务器坏了，数据库直接不可用，业务停了。</p>
-    </div>
-    <p><strong>怎么解决？</strong>加自动故障转移，主库挂了自动把从库提升为主库，几秒恢复。</p>
-    <pre><code class="language-bash"># 高可用方案
-Patroni + etcd：自动故障转移
- repmgr：简单点的方案
- Keepalived + VIP：最简单</code></pre>
-    <h2>主从复制方式</h2>
+# ---------- 从库 postgresql.conf ----------
+primary_conninfo = 'host=10.0.0.1 port=5432 user=repl password=xxx application_name=s1'
+                                     # application_name 必须和 synchronous_standby_names 里的名字对上
+primary_slot_name = 'slot_s1'        # 用槽保证主库不提前删 WAL
+hot_standby = on                     # 允许从库接受只读查询，PG 10 起默认就是 on
+hot_standby_feedback = on            # 让主库知道从库最老快照，代价是主库表膨胀，见热备冲突一节
+max_standby_streaming_delay = 30s    # 回放被查询挡住时最多等 30 秒，超时就取消查询
+# 存在 standby.signal 文件才会以从库身份启动，PG 12 起 recovery.conf 已合并进 postgresql.conf</code></pre>
+
+    <h2>同步级别五档：丢数据窗口与延迟代价</h2>
+    <p><code>synchronous_commit</code> 的取值不是「开关」，而是五个位置不同的确认点。理解它的唯一正确方式是问：<strong>COMMIT 返回成功时，数据最远到了哪里？</strong></p>
     <table>
         <thead>
             <tr>
-                <th>方式</th>
-                <th>原理</th>
-                <th>优点</th>
-                <th>缺点</th>
+                <th>取值</th>
+                <th>COMMIT 返回时数据在哪</th>
+                <th>丢数据窗口</th>
+                <th>延迟代价</th>
+                <th>适用场景</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>流复制</td>
-                <td>实时传 WAL</td>
-                <td>延迟低</td>
-                <td>主库压力大</td>
+                <td><code>off</code></td>
+                <td>只在主库内存的 WAL buffer 里</td>
+                <td>主库崩溃丢最近约三倍 <code>wal_writer_delay</code>（默认 200ms）的已提交事务</td>
+                <td>最低，写入吞吐可翻数倍</td>
+                <td>可重放的日志、埋点、批量导入；<strong>不会损坏数据，只会丢最近提交</strong></td>
             </tr>
             <tr>
-                <td>逻辑复制</td>
-                <td>逻辑解码</td>
-                <td>更灵活</td>
-                <td>配置复杂</td>
+                <td><code>local</code></td>
+                <td>主库磁盘已 fsync</td>
+                <td>主库整机损坏则丢全部未复制部分</td>
+                <td>一次本地 fsync</td>
+                <td>配了同步从库但某些事务不想等远端时，按会话单独设</td>
             </tr>
             <tr>
-                <td>快照复制</td>
-                <td>定时全量</td>
-                <td>简单</td>
-                <td>延迟高</td>
+                <td><code>remote_write</code></td>
+                <td>从库进程已 <code>write()</code>，但<strong>还没 fsync</strong></td>
+                <td>从库操作系统崩溃会丢；仅从库进程崩溃不丢</td>
+                <td>一次网络往返</td>
+                <td>愿意用一点风险换延迟的折中档</td>
+            </tr>
+            <tr>
+                <td><code>on</code>（默认）</td>
+                <td>从库 <code>pg_wal</code> 已 fsync</td>
+                <td>主从同时损坏才丢</td>
+                <td>一次网络往返加从库 fsync</td>
+                <td>绝大多数需要零丢失的场景</td>
+            </tr>
+            <tr>
+                <td><code>remote_apply</code></td>
+                <td>从库<strong>已回放完成</strong>，查询立刻能读到</td>
+                <td>同 <code>on</code></td>
+                <td>最高，要等串行回放；主从延迟直接转化为提交延迟</td>
+                <td>读写分离下要求「写完立刻能在从库读到」时唯一的数据库侧解法</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>这里有个被反复误解的点：<strong><code>on</code> 只保证 WAL 落到了从库磁盘，不保证从库已经回放</strong>。所以在 <code>synchronous_commit = on</code> 下写完立刻去从库读，照样可能读不到——因为那条 WAL 还排在回放队列里。要「立刻可读」只有 <code>remote_apply</code>，而它会把从库的回放速度变成主库的提交速度上限。</p>
+    <p><code>synchronous_standby_names</code> 有两种语法，选错会直接影响可用性：<code>FIRST 1 (s1, s2)</code> 表示<strong>优先等 s1</strong>，只有 s1 不可用才轮到 s2；<code>ANY 1 (s1, s2)</code> 表示<strong>任意一个确认即可</strong>。生产上除非有明确的机房优先级需求，一律用 <code>ANY</code>，它的可用性明显更好。</p>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">同步复制的可用性陷阱：把主库搞挂的经典姿势</div>
+        <p>只配一个同步从库、且没有候补时，<strong>这个从库一挂，主库会挂起所有提交无限期等待</strong>——不是报错，是卡住，连接池在几秒内打满，表现和主库宕机一模一样。这就是「为了更可靠而配了同步复制，结果可用性反而下降」的完整因果。正确配置有三条：候选数要严格大于要求确认数（比如两个从库配 <code>ANY 1</code>）；用 <code>ANY</code> 而不是 <code>FIRST</code>；并且监控里必须有「同步从库数量少于要求数」这一条告警。真的遇到从库挂了主库卡住，应急手段是把 <code>synchronous_standby_names</code> 改成空串再 <code>pg_reload_conf()</code>，这是<strong>秒级生效且不需要重启</strong>的，先救可用性。</p>
+    </div>
+
+    <h2>复制槽：保证不丢 WAL，也能撑爆你的磁盘</h2>
+    <p>复制槽的作用是让主库<strong>记住每个消费者的位置，在对方确认之前绝不删除对应的 WAL</strong>。没有槽时，从库断连时间稍长，主库就可能已经回收了它需要的 WAL 段，从库只能报 <code>requested WAL segment has already been removed</code>，然后重做基础备份。</p>
+    <p>代价是对称的：<strong>一个长期下线的从库留下的槽，会让主库的 WAL 无限堆积，直到 <code>pg_wal</code> 撑爆磁盘，数据库停止写入。</strong>这是 PG 生产环境最常见的「磁盘满导致停库」原因，而且下线的那台机器往往已经被人忘了。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>槽类型 / 场景</th>
+                <th>它拖住什么</th>
+                <th>风险</th>
+                <th>必配的防护</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>物理槽，从库在线</td>
+                <td>WAL 段回收</td>
+                <td>正常，延迟内可控</td>
+                <td>监控 <code>safe_wal_size</code></td>
+            </tr>
+            <tr>
+                <td>物理槽，从库长期下线</td>
+                <td>WAL 无限堆积</td>
+                <td><strong>撑爆 <code>pg_wal</code>，主库停止写入</strong></td>
+                <td><code>max_slot_wal_keep_size</code>（PG 13+），超限后槽变 <code>lost</code>，宁可让从库重建也不让主库挂</td>
+            </tr>
+            <tr>
+                <td>逻辑槽</td>
+                <td>WAL 回收 <strong>加上</strong> 系统目录的死元组回收（<code>catalog_xmin</code>）</td>
+                <td>除了磁盘，还会让系统表持续膨胀</td>
+                <td>同上，另外逻辑槽<strong>不会自动跨版本升级</strong>，大版本升级前要处理</td>
+            </tr>
+            <tr>
+                <td>槽 + <code>hot_standby_feedback</code></td>
+                <td>主库的死元组回收水位</td>
+                <td>主库表膨胀，元凶却在从库上</td>
+                <td>从库设 <code>statement_timeout</code>，别让长查询把主库 xmin 拉住</td>
+            </tr>
+            <tr>
+                <td>忘记删除的临时槽</td>
+                <td>同物理槽</td>
+                <td><code>pg_basebackup</code> 异常中断可能留下槽</td>
+                <td>定期巡检 <code>pg_replication_slots</code> 里 <code>active = false</code> 的条目</td>
+            </tr>
+        </tbody>
+    </table>
+    <pre><code class="language-sql">-- 1. 复制槽健康检查：safe_wal_size 是 PG 13+ 才有的关键字段
+-- safe_wal_size 为负数或接近 0，意味着这个槽马上就要失效（或者已经在撑爆磁盘）
+SELECT slot_name, slot_type, active,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS 落后WAL量,
+       pg_size_pretty(safe_wal_size)                                     AS 还能拖多少,
+       wal_status,        -- reserved / extended / unreserved / lost
+       xmin, catalog_xmin -- 非空说明它在压着主库的死元组回收
+FROM   pg_replication_slots
+ORDER  BY pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) DESC;
+
+-- 2. 三种延迟的区别：这是判断「延迟到底卡在哪」的唯一依据
+--    write_lag  = 发到从库并 write 完成的耗时（网络问题看这个）
+--    flush_lag  = 从库 fsync 完成的耗时（从库磁盘慢看这个）
+--    replay_lag = 从库回放完成的耗时（回放单进程跟不上时这个会远大于前两者）
+SELECT application_name, client_addr, state,
+       sync_state,                       -- async / potential / sync / quorum
+       pg_size_pretty(pg_wal_lsn_diff(sent_lsn, replay_lsn)) AS 待回放字节,
+       write_lag, flush_lag, replay_lag
+FROM   pg_stat_replication;
+
+-- 3. 从库侧看自己落后多久：注意主库空闲时这个值会持续增长，属于正常现象
+SELECT pg_is_in_recovery()                                        AS 是从库,
+       pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn(),
+       now() - pg_last_xact_replay_timestamp()                     AS 回放时间落后;
+
+-- 4. 读写分离的强一致读：写完拿到 LSN，再让从库等到追上为止
+-- 主库执行完写事务后取当前位置
+SELECT pg_current_wal_insert_lsn();       -- 假设得到 3/AB120F80
+-- 从库上判断是否已追上，没追上就退避重试或回退到主库读
+SELECT pg_last_wal_replay_lsn() &gt;= '3/AB120F80'::pg_lsn AS 可以读了;
+
+-- 5. 兜底告警：同步从库数量少于要求数时必须告警，否则主库会在从库挂掉时静默卡住
+SELECT current_setting('synchronous_standby_names') AS 配置,
+       count(*) FILTER (WHERE sync_state IN ('sync', 'quorum')) AS 当前同步从库数
+FROM   pg_stat_replication;</code></pre>
+
+    <h2>热备查询冲突：从库的长查询与 WAL 回放互相为敌</h2>
+    <p>从库既要回放主库传来的 WAL，又要服务只读查询，这两件事会在同一个页上撞车：主库上 VACUUM 清掉了某些死元组，这条 WAL 传到从库要回放，但从库上有个长查询的快照还需要看到那些元组。PG 只能二选一，选择权由 <code>max_standby_streaming_delay</code> 控制。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>策略</th>
+                <th>配置</th>
+                <th>牺牲什么</th>
+                <th>表现</th>
+                <th>适用</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>优先保查询</td>
+                <td><code>max_standby_streaming_delay</code> 设大（如 10min）或 <code>-1</code> 无限等</td>
+                <td><strong>主从延迟</strong></td>
+                <td>回放挂起，从库越落后，切换时 RPO 越差</td>
+                <td>专职报表从库，且不承担故障切换职责</td>
+            </tr>
+            <tr>
+                <td>优先保延迟</td>
+                <td><code>max_standby_streaming_delay = 30s</code>（默认 30s）</td>
+                <td><strong>查询会被杀</strong></td>
+                <td>报 <code>canceling statement due to conflict with recovery</code>，应用必须能重试</td>
+                <td>承担切换职责的从库，默认就该这样</td>
+            </tr>
+            <tr>
+                <td>从源头减少冲突</td>
+                <td>从库 <code>hot_standby_feedback = on</code></td>
+                <td><strong>主库表膨胀</strong></td>
+                <td>从库把最老快照 xmin 上报主库，主库 VACUUM 不再清理从库还需要的元组</td>
+                <td>读多且查询较长的从库，但要接受主库膨胀并监控它</td>
+            </tr>
+            <tr>
+                <td>彻底隔离</td>
+                <td>从库设 <code>statement_timeout</code>，长查询拆小或走物化视图</td>
+                <td>业务要改</td>
+                <td>冲突概率大幅下降</td>
+                <td>最健康的做法，前三种都是补丁</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>要特别注意 <code>hot_standby_feedback</code> 的连带效应：它把从库的膨胀压力<strong>转移到了主库</strong>。见过不少案例是主库表持续膨胀、查遍主库找不到长事务，元凶其实是某台从库上跑了半小时的报表。排查时要看主库 <code>pg_replication_slots</code> 的 <code>xmin</code> 字段。</p>
+
+    <h2>逻辑复制：能力换限制</h2>
+    <p>逻辑复制走的是逻辑解码：<code>pgoutput</code> 插件把 WAL 还原成行级变更，按发布订阅关系投递。它解锁了物理复制做不到的事，也带来一组必须提前知道的限制。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>维度</th>
+                <th>物理流复制</th>
+                <th>逻辑复制</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>复制粒度</td>
+                <td>整个实例，所有数据库一起</td>
+                <td><strong>按表</strong>，可以只发布几张表、甚至只发布 <code>INSERT</code></td>
+            </tr>
+            <tr>
+                <td>跨版本</td>
+                <td>主从大版本必须一致</td>
+                <td><strong>可以跨大版本</strong>，这是零停机大版本升级的主流路径</td>
+            </tr>
+            <tr>
+                <td>目标端可写</td>
+                <td>完全只读</td>
+                <td>可写，可有额外的索引和表，可做双向与多源汇聚</td>
+            </tr>
+            <tr>
+                <td>DDL</td>
+                <td>自动跟随（本来就是字节复制）</td>
+                <td><strong>完全不复制 DDL</strong>，加列必须先在订阅端加，否则复制直接中断</td>
+            </tr>
+            <tr>
+                <td>序列值</td>
+                <td>跟随</td>
+                <td><strong>不复制</strong>，切换前必须手工 <code>setval</code>，否则新主库主键冲突</td>
+            </tr>
+            <tr>
+                <td>对表的要求</td>
+                <td>无</td>
+                <td>需要主键，或显式设 <code>REPLICA IDENTITY FULL</code>，否则 <code>UPDATE</code>/<code>DELETE</code> 无法定位行</td>
+            </tr>
+            <tr>
+                <td>初始化</td>
+                <td><code>pg_basebackup</code> 物理拷贝</td>
+                <td>默认全表 <code>COPY</code>，大表上耗时长且会拖住槽，可用 <code>copy_data = false</code> 加手工初始化</td>
+            </tr>
+            <tr>
+                <td>大事务</td>
+                <td>流式跟随</td>
+                <td>PG 14 之前要等事务提交才开始解码，大事务会造成延迟尖刺；PG 14 起支持 <code>streaming</code></td>
+            </tr>
+            <tr>
+                <td>TRUNCATE 与大对象</td>
+                <td>跟随</td>
+                <td><code>TRUNCATE</code> 需 PG 11+，大对象（large object）<strong>始终不复制</strong></td>
+            </tr>
+        </tbody>
+    </table>
+    <pre><code class="language-sql">-- ============ 发布端（源库，wal_level = logical）============
+CREATE PUBLICATION pub_orders FOR TABLE orders, order_items;
+-- 也可以只发布部分操作，或者 PG 15+ 的行过滤与列过滤
+CREATE PUBLICATION pub_insert_only FOR TABLE audit_log WITH (publish = 'insert');
+CREATE PUBLICATION pub_cn FOR TABLE users (id, name, region) WHERE (region = 'cn');  -- PG 15+
+
+-- 没有主键的表必须显式指定行标识，否则 UPDATE 与 DELETE 会报错中断复制
+ALTER TABLE legacy_table REPLICA IDENTITY FULL;      -- 整行做标识，代价是 WAL 变大
+-- 更好的做法是补一个唯一非空索引再指定它
+ALTER TABLE legacy_table REPLICA IDENTITY USING INDEX legacy_table_uk;
+
+-- ============ 订阅端（目标库，表结构要先自己建好）============
+CREATE SUBSCRIPTION sub_orders
+  CONNECTION 'host=10.0.0.1 dbname=app user=repl password=xxx'
+  PUBLICATION pub_orders
+  WITH (copy_data = true, streaming = on);   -- streaming 需要 PG 14+，避免大事务延迟尖刺
+
+-- 监控：初始同步进度与复制状态
+SELECT subname, srrelid::regclass AS 表, srsubstate  -- i 初始化 d 拷贝中 s 同步完 r 正常流式
+FROM   pg_subscription_rel r JOIN pg_subscription s ON s.oid = r.srsubid;
+SELECT subname, received_lsn, latest_end_lsn, last_msg_receipt_time
+FROM   pg_stat_subscription;
+
+-- 复制中断的典型修复：目标端缺列或有冲突数据时，先修结构再跳过冲突事务
+ALTER SUBSCRIPTION sub_orders DISABLE;
+-- 在订阅端补上缺失的列，然后（PG 15+ 可用 skip_lsn 精确跳过）
+ALTER SUBSCRIPTION sub_orders SKIP (lsn = '3/AB120F80');
+ALTER SUBSCRIPTION sub_orders ENABLE;
+
+-- 切换到新库之前，务必同步所有序列值，这一步漏了必然主键冲突
+SELECT setval('orders_id_seq', (SELECT max(id) FROM orders) + 1000);</code></pre>
+
+    <h2>读写分离的一致性：写完立刻读读不到</h2>
+    <p>这不是 bug，是异步复制的定义。主库提交返回时，从库可能还没收到那条 WAL，更可能还没回放完。任何「先写后跳转到详情页」的流程都会撞上它。三种解法各有代价，选哪个取决于业务能接受什么。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>解法</th>
+                <th>实现方式</th>
+                <th>代价</th>
+                <th>适用</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>关键读走主库</td>
+                <td>DAO 层按操作类型路由，写后读、支付、对账一律走主库</td>
+                <td>主库读压力回来一部分</td>
+                <td><strong>首选</strong>。最简单、最可控，80% 的场景到这里就够了</td>
+            </tr>
+            <tr>
+                <td>按 LSN 等从库追上</td>
+                <td>写事务后取 <code>pg_current_wal_insert_lsn()</code> 带给客户端，读请求带着它，从库比较 <code>pg_last_wal_replay_lsn()</code>，没追上就退避或回落主库</td>
+                <td>实现复杂，多一次往返；等待期间延迟不可控</td>
+                <td>读远大于写、又必须保证单调读的场景</td>
+            </tr>
+            <tr>
+                <td>会话粘滞</td>
+                <td>同一用户在写操作后的 N 秒内固定读主库</td>
+                <td>N 取大了主库压力回流，取小了仍可能读旧数据</td>
+                <td>快速上线的折中方案，本质是概率性保证</td>
+            </tr>
+            <tr>
+                <td><code>synchronous_commit = remote_apply</code></td>
+                <td>数据库侧保证提交返回时从库已回放</td>
+                <td><strong>提交延迟等于回放延迟</strong>，写入吞吐显著下降</td>
+                <td>写少读多且强一致要求硬的小库；写密集库上会成为瓶颈</td>
             </tr>
         </tbody>
     </table>
 
-    <h2>新手最容易踩的坑</h2>
+    <h2>故障切换：timeline 分叉与 pg_rewind</h2>
+    <p><code>pg_ctl promote</code> 把从库提升为主库时，PG 会<strong>递增 timeline ID</strong>（从 1 变成 2），并写一个 <code>.history</code> 文件记录分叉点。timeline 的存在是为了防止两条不同的历史被混起来用——这也直接导致了切换演练里最容易翻车的一步。</p>
+    <p><strong>旧主库恢复后不能直接当新主库的从库。</strong>原因是旧主库在失联前可能已经写入并落盘了一些 WAL，而这些 WAL 从来没传到新主库。它的历史<strong>领先于</strong>新主库，二者在分叉点之后是两条不同的历史。直接挂上去，轻则报 timeline 不匹配拒绝启动，重则数据静默不一致。必须先用 <code>pg_rewind</code> 把旧主库回退到分叉点，或者干脆重做基础备份。</p>
+    <div class="mermaid">
+stateDiagram-v2
+    [*] --> 主库A_timeline1
+    主库A_timeline1 --> 从库B_跟随T1: B 流式复制 A 的 WAL
+    主库A_timeline1 --> A失联: 机房网络中断或宕机
+    从库B_跟随T1 --> 新主库B_timeline2: 执行 pg_ctl promote 时间线递增
+    A失联 --> 旧主A_数据可能领先: A 落盘过未传出的 WAL
+    旧主A_数据可能领先 --> 脑裂风险: 直接拉起 A 且 VIP 未切换干净
+    旧主A_数据可能领先 --> pg_rewind回退: 按 B 的时间线历史裁掉分叉后的改动
+    pg_rewind回退 --> A作为从库跟随B: 从分叉点开始重新拉取 timeline2 的 WAL
+    旧主A_数据可能领先 --> 重做基础备份: rewind 失败或不满足前提时的兜底
+    重做基础备份 --> A作为从库跟随B
+    新主库B_timeline2 --> A作为从库跟随B: 只有到这一步切换才算真正完成
+    note right of pg_rewind回退
+        前提是源库开了 wal_log_hints 或 data checksums
+        并且旧主必须先干净关闭一次
+        rewind 会丢弃旧主分叉后的本地改动
+    end note
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>切换步骤</th>
+                <th>命令或动作</th>
+                <th>最容易翻车的点</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>0. 确认旧主真的下线</td>
+                <td>断电、隔离网络、或停容器（fencing）</td>
+                <td><strong>不做隔离就切换等于制造脑裂</strong>，两个都能写是最坏的结果，事后无法自动合并</td>
+            </tr>
+            <tr>
+                <td>1. 选延迟最小的从库</td>
+                <td>比较各从库 <code>pg_last_wal_replay_lsn()</code></td>
+                <td>随手挑一台可能丢掉更多事务；异步复制下 RPO 就是这个差值</td>
+            </tr>
+            <tr>
+                <td>2. 等它回放完已收到的 WAL</td>
+                <td>对比 <code>pg_last_wal_receive_lsn()</code> 与 <code>pg_last_wal_replay_lsn()</code></td>
+                <td>没放完就 promote 会白丢已经收到的事务</td>
+            </tr>
+            <tr>
+                <td>3. 提升</td>
+                <td><code>pg_ctl promote</code> 或 <code>SELECT pg_promote()</code></td>
+                <td>timeline 递增，其他从库的 <code>primary_conninfo</code> 必须一起改指向新主</td>
+            </tr>
+            <tr>
+                <td>4. 切换流量</td>
+                <td>改 VIP、DNS 或连接池（PgBouncer / HAProxy）指向</td>
+                <td>应用连接池不重连；DNS TTL 太长；<strong>只改一半导致部分写仍打向旧主</strong></td>
+            </tr>
+            <tr>
+                <td>5. 其他从库重新指向</td>
+                <td>改 <code>primary_conninfo</code> 并重启，必要时 <code>pg_rewind</code></td>
+                <td>其他从库的 timeline 也可能落在分叉前，需要 <code>recovery_target_timeline = 'latest'</code></td>
+            </tr>
+            <tr>
+                <td>6. 旧主重新加入</td>
+                <td><code>pg_rewind</code> 或重做基础备份</td>
+                <td>直接挂上去必定失败或不一致；<code>pg_rewind</code> 要求源库开了 <code>wal_log_hints</code> 或数据校验和，且旧主先干净关闭过一次</td>
+            </tr>
+            <tr>
+                <td>7. 复制槽与同步配置</td>
+                <td>在新主库重建槽、重设 <code>synchronous_standby_names</code></td>
+                <td><strong>物理槽不会跟随切换</strong>（PG 17 才支持槽同步），忘了重建会在下一次故障时暴露</td>
+            </tr>
+        </tbody>
+    </table>
+    <pre><code class="language-bash"># ---------- 切换演练脚本（务必先在预发环境跑通）----------
+# 步骤 1：挑延迟最小的从库，并确认已收到的 WAL 都回放完了
+psql -h standby1 -Atc "SELECT pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn()"
+
+# 步骤 2：提升。pg_promote 可以在 SQL 里做，返回后需要轮询确认已退出恢复状态
+psql -h standby1 -Atc "SELECT pg_promote(wait =&gt; true, wait_seconds =&gt; 60)"
+psql -h standby1 -Atc "SELECT pg_is_in_recovery()"   # 必须返回 f 才算提升成功
+psql -h standby1 -Atc "SELECT timeline_id FROM pg_control_checkpoint()"  # 应该已经加一
+
+# 步骤 3：旧主库回退后再加入。前提检查一个都不能少
+#   a) 旧主必须先干净关闭：pg_ctl -D $PGDATA stop -m fast
+#   b) 源库（新主）需要 wal_log_hints = on 或初始化时开了 data checksums
+#   c) 先用 --dry-run 确认它打算做什么，再真跑
+pg_ctl -D /var/lib/pgsql/data stop -m fast
+pg_rewind --target-pgdata=/var/lib/pgsql/data \
+          --source-server="host=standby1 port=5432 user=postgres dbname=postgres" \
+          --progress --dry-run
+pg_rewind --target-pgdata=/var/lib/pgsql/data \
+          --source-server="host=standby1 port=5432 user=postgres dbname=postgres" \
+          --progress
+# rewind 之后 primary_conninfo 需要指向新主，并创建 standby.signal
+touch /var/lib/pgsql/data/standby.signal
+pg_ctl -D /var/lib/pgsql/data start
+
+# 兜底方案：rewind 前提不满足或失败，就重做基础备份（大库耗时以小时计，要提前评估）
+pg_basebackup -h standby1 -U repl -D /var/lib/pgsql/data \
+              -Fp -Xs -P -R -C --slot=slot_old_primary
+#   -Xs 流式取 WAL，避免备份期间 WAL 被回收
+#   -R  自动生成 primary_conninfo 与 standby.signal
+#   -C --slot 顺便创建复制槽，避免备份完成前 WAL 被删
+
+# 演练结束前务必检查：新主库上的复制槽是否都重建了
+psql -h standby1 -Atc "SELECT slot_name, active FROM pg_replication_slots"</code></pre>
+
+    <h2>自动切换：为什么不要自己写脚本</h2>
+    <p>自动切换的难点从来不是「检测到主库挂了就 promote」，而是<strong>如何在网络分区下确保只有一个节点认为自己是主库</strong>。这需要一个外部的、有共识能力的仲裁者，以及对旧主的隔离手段。自己写的脚本通常只解决了检测，于是把偶发的网络抖动变成了永久的数据分叉。</p>
+    <div class="mermaid">
+flowchart TB
+    subgraph DCS["分布式配置存储 提供共识与 leader 租约"]
+        E1["etcd 节点 1"]
+        E2["etcd 节点 2"]
+        E3["etcd 节点 3"]
+    end
+    subgraph N1["节点 A"]
+        P1["Patroni 进程<br/>持有 leader key 并周期续租"]
+        D1["PostgreSQL 主库"]
+    end
+    subgraph N2["节点 B"]
+        P2["Patroni 进程<br/>watch leader key"]
+        D2["PostgreSQL 从库"]
+    end
+    subgraph ENTRY["接入层"]
+        HA["HAProxy 或 PgBouncer<br/>按 Patroni REST 健康检查路由"]
+    end
+    P1 -->|"续租成功才保持主库身份"| DCS
+    P2 -->|"租约过期则发起选举"| DCS
+    P1 -->|"续租失败时主动降级自己"| D1
+    P2 -->|"赢得选举后执行 promote"| D2
+    HA -->|"只把写流量发给返回 200 的 primary 端点"| P1
+    HA -->|"读流量按 replica 端点分发"| P2
+    DCS -->|"etcd 自身失去多数派时<br/>所有节点降级为只读 宁可不可用也不脑裂"| N1
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>方案</th>
+                <th>仲裁机制</th>
+                <th>脑裂防护</th>
+                <th>运维成本</th>
+                <th>评价</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Patroni + etcd</strong></td>
+                <td>DCS 里的 leader 租约，续租失败自己降级</td>
+                <td>强：失去多数派时主动降级为只读</td>
+                <td>中，需要维护 etcd 集群</td>
+                <td><strong>当前事实标准</strong>，云厂商的托管 PG 大多也是这套思路</td>
+            </tr>
+            <tr>
+                <td>repmgr</td>
+                <td>节点间投票加 witness 节点</td>
+                <td>中等，依赖 <code>fencing</code> 脚本配置正确</td>
+                <td>低，部署简单</td>
+                <td>适合小规模、结构简单的环境</td>
+            </tr>
+            <tr>
+                <td>pg_auto_failover</td>
+                <td>独立的 monitor 节点</td>
+                <td>中等，<strong>monitor 自身是单点</strong></td>
+                <td>低</td>
+                <td>上手最快，但要为 monitor 再做高可用</td>
+            </tr>
+            <tr>
+                <td>Keepalived 加 VIP 脚本</td>
+                <td>只有 VRRP，没有数据层共识</td>
+                <td><strong>弱：网络分区时两侧都可能持有 VIP</strong></td>
+                <td>低</td>
+                <td>只适合做流量入口，不要用它决定谁是主库</td>
+            </tr>
+            <tr>
+                <td>自研脚本</td>
+                <td>通常是「ping 不通就 promote」</td>
+                <td><strong>几乎没有</strong></td>
+                <td>看起来最低，实际最高</td>
+                <td>抖动一次就产生两个主库，而 PG 没有任何自动合并分叉的手段</td>
+            </tr>
+        </tbody>
+    </table>
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">自动切换不是「越快越好」</div>
+        <p>把故障检测阈值调得过于灵敏，结果是一次 GC 停顿、一次网络抖动就触发切换，而每次切换都要付出连接中断、缓存冷启动、其他从库重新指向的代价。成熟做法是把检测窗口设在<strong>十秒量级</strong>，并且区分「主库进程没了」和「主库响应慢」——后者往往不该切。另外 Patroni 的 <code>maximum_lag_on_failover</code> 必须设：它限制候选从库允许落后的字节数，避免为了尽快恢复可用性而选了一个落后很多的从库，把 RPO 悄悄放大。</p>
+    </div>
+
+    <h2>最容易踩的坑</h2>
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
-        <div class="callout-title">避坑指南</div>
+        <div class="callout-title">这些坑每条都有真实事故对应</div>
         <ul>
-            <li>主从延迟是正常的，别指望完全一致，读一致性要求高的还是走主库</li>
-            <li>从库不要太多，3-5 个足够了，太多主库同步压力大</li>
-            <li>大事务会导致主从延迟突然变大，要注意拆分大事务</li>
-            <li>故障转移一定要测，别等真挂了才发现切换有问题</li>
+            <li><strong>只配一个同步从库</strong>：它一挂，主库挂起所有提交无限期等待，表现和主库宕机一样。候选数必须大于要求确认数，并且用 <code>ANY</code> 而不是 <code>FIRST</code>。</li>
+            <li><strong>以为 <code>synchronous_commit = on</code> 就能写后立刻从从库读到</strong>：它只保证 WAL 落到从库磁盘，不保证已回放。要立刻可读只有 <code>remote_apply</code>。</li>
+            <li><strong>下线从库却不删复制槽</strong>：主库 WAL 无限堆积直到磁盘满、数据库停写。PG 13+ 必须设 <code>max_slot_wal_keep_size</code> 兜底。</li>
+            <li><strong>不监控 <code>safe_wal_size</code></strong>：只看磁盘使用率往往来不及，等发现时已经只剩几 GB。</li>
+            <li><strong>在从库开了 <code>hot_standby_feedback</code> 却不管从库长查询</strong>：主库表持续膨胀而主库上查不到长事务，元凶在从库。要看主库 <code>pg_replication_slots.xmin</code>。</li>
+            <li><strong>把 <code>max_standby_streaming_delay</code> 设成 <code>-1</code> 图省事</strong>：回放会被长查询无限挂起，从库越落后，真出故障时 RPO 越差。</li>
+            <li><strong>用主从延迟的秒数当唯一指标</strong>：主库空闲时 <code>pg_last_xact_replay_timestamp()</code> 的差值会持续增长，这是正常现象。要同时看 LSN 字节差和 <code>replay_lag</code>。</li>
+            <li><strong>混淆三种 lag</strong>：<code>write_lag</code> 大是网络问题，<code>flush_lag</code> 大是从库磁盘问题，<code>replay_lag</code> 大是回放单进程跟不上，三者的修法完全不同。</li>
+            <li><strong>切换后把旧主库直接挂成从库</strong>：它的历史可能领先于新主，必须先 <code>pg_rewind</code> 或重做基础备份。而 <code>pg_rewind</code> 要求源库开了 <code>wal_log_hints</code> 或数据校验和——这个前提要在<strong>建库时</strong>就准备好，事后开启需要重启甚至重建。</li>
+            <li><strong>切换时不隔离旧主</strong>：VIP 或连接池只切了一半，两边都在写，事后无法自动合并。fencing 是切换流程的第 0 步而不是可选项。</li>
+            <li><strong>忘了切换后重建复制槽</strong>：物理槽不会跟随切换（PG 17 才有槽同步），漏了这一步会在下一次故障时才暴露。</li>
+            <li><strong>用逻辑复制做主备却忘了序列值</strong>：逻辑复制不复制序列，切换后新主的自增主键会从旧值开始，必然主键冲突。切换前必须 <code>setval</code>。</li>
+            <li><strong>逻辑复制的订阅端先加了列或改了表结构顺序</strong>：DDL 不被复制，发布端加列后订阅端缺列会直接中断复制，正确顺序是<strong>先订阅端、后发布端</strong>。</li>
+            <li><strong>给没有主键的表做逻辑复制</strong>：<code>UPDATE</code> 与 <code>DELETE</code> 无法定位行，复制会报错停住。必须补主键或设 <code>REPLICA IDENTITY</code>。</li>
+            <li><strong>用 Keepalived 加脚本当自动切换方案</strong>：VRRP 没有数据层共识，网络分区时两侧都可能认为自己是主。要么上 Patroni，要么就人工切换加演练。</li>
         </ul>
     </div>
 </article>

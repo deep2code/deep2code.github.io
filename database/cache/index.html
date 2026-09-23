@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../images/logo.jpeg">
-    <title>缓存架构 - 资深码农</title>
+    <title>缓存的收益与代价：命中率算式、四项成本与读写模式选型 - 资深码农</title>
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="缓存入门实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="description" content="把缓存当架构组件来算账：平均耗时等于命中率乘缓存耗时加未命中率乘回源耗时，命中率从 90% 到 99% 让回源降到十分之一，再往上边际收益迅速衰减；同时讲清一致性窗口、内存成本、故障面放大、调试复杂度四项代价，什么情况下不该加缓存，Cache-Aside 与 Read/Write-Through 与 Write-Behind 的一致性责任归属，三层缓存的乘性命中率，Key 命名与版本化、TTL 抖动与逻辑过期、缓存粒度陷阱，以及命中率很高但数据库压力没下降的排查路径。">
     <meta name="keywords" content="缓存架构,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/cache/">
-    <meta property="og:title" content="缓存架构 - 资深码农">
-    <meta property="og:description" content="缓存入门实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta property="og:title" content="缓存的收益与代价：命中率算式、四项成本与读写模式选型 - 资深码农">
+    <meta property="og:description" content="把缓存当架构组件来算账：平均耗时等于命中率乘缓存耗时加未命中率乘回源耗时，命中率从 90% 到 99% 让回源降到十分之一，再往上边际收益迅速衰减；同时讲清一致性窗口、内存成本、故障面放大、调试复杂度四项代价，什么情况下不该加缓存，Cache-Aside 与 Read/Write-Through 与 Write-Behind 的一致性责任归属，三层缓存的乘性命中率，Key 命名与版本化、TTL 抖动与逻辑过期、缓存粒度陷阱，以及命中率很高但数据库压力没下降的排查路径。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/cache/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="缓存架构 - 资深码农">
-    <meta name="twitter:description" content="缓存入门实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="twitter:title" content="缓存的收益与代价：命中率算式、四项成本与读写模式选型">
+    <meta name="twitter:description" content="把缓存当架构组件来算账：平均耗时等于命中率乘缓存耗时加未命中率乘回源耗时，命中率从 90% 到 99% 让回源降到十分之一，再往上边际收益迅速衰减；同时讲清一致性窗口、内存成本、故障面放大、调试复杂度四项代价，什么情况下不该加缓存，Cache-Aside 与 Read/Write-Through 与 Write-Behind 的一致性责任归属，三层缓存的乘性命中率，Key 命名与版本化、TTL 抖动与逻辑过期、缓存粒度陷阱，以及命中率很高但数据库压力没下降的排查路径。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "缓存入门：从你遇到的问题出发：缓存要设过期？", "acceptedAnswer": {"@type": "Answer", "text": "缓存一定要设过期，不要永久存。"}}, {"@type": "Question", "name": "缓存入门：从你遇到的问题出发：先写数据库再删缓存？", "acceptedAnswer": {"@type": "Answer", "text": "更新数据先写数据库，再删缓存。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "缓存命中率提到多少才够，99.9% 值得追吗？", "acceptedAnswer": {"@type": "Answer", "text": "先看回源请求的绝对量而不是看百分比。命中率 90% 时有 10% 的请求打到数据库，提到 99% 后回源量降到原来的十分之一，这是一次数量级的改善，非常值得投入。但从 99% 提到 99.9%，回源量再降十倍，绝对值可能只从每秒 100 次降到每秒 10 次，而数据库本来就能轻松承受这个量级。为了这 0.9% 你往往要加大内存、延长 TTL、引入预热和热点探测，一致性窗口也随之变长。判断标准很简单：把当前回源 QPS 和数据库的安全水位比一下，如果回源已经远低于水位，命中率就不是瓶颈，该去优化那部分回源查询本身。"}}, {"@type": "Question", "name": "什么情况下不应该加缓存？", "acceptedAnswer": {"@type": "Answer", "text": "四种情况。一是写多读少，每次写都要失效缓存，缓存几乎总是空的，只是白白多了一跳和一致性风险。二是数据几乎不重复访问，比如按唯一订单号查明细、按用户导出报表，没有复用就没有命中率。三是业务不能读到旧值，余额、库存、风控额度这类必须走数据库或数据库原子操作。四是回源查询本来就很快，单行主键查询在缓冲池命中时只有零点几毫秒，加一层网络往返的分布式缓存收益极小甚至更慢。遇到慢查询先看执行计划，不要用缓存去盖住没建索引的问题，否则缓存一失效数据库立刻被打挂。"}}, {"@type": "Question", "name": "Cache-Aside、Read/Write-Through、Write-Behind 到底怎么选？", "acceptedAnswer": {"@type": "Answer", "text": "区别在于谁负责一致性以及失败时会发生什么。Cache-Aside 由应用代码自己读缓存、回源、写缓存、失效缓存，缓存挂了可以直接降级回源，绝大多数互联网业务用它，代价是一致性逻辑散落在各处。Read/Write-Through 把读写都交给缓存层代理，应用只面对一个接口，一致性由缓存组件保证，但缓存层变成了写路径上的强依赖，它不可用业务就写不进去。Write-Behind 先写缓存立刻返回，再异步批量回写数据库，吞吐最高，但缓存进程崩溃时队列里没落库的写会永久丢失，只适合计数器、点赞数、浏览量这类可以容忍少量丢失的数据。"}}, {"@type": "Question", "name": "为什么每个缓存 key 都必须设过期时间？", "acceptedAnswer": {"@type": "Answer", "text": "因为过期时间是所有一致性机制失效之后的最后一道防线。删缓存可能失败，消息队列可能积压或丢消息，订阅 binlog 的组件可能挂掉，发失效广播的机器可能刚好网络分区，这些情况下唯一还能自动纠正脏数据的机制就是过期。没有 TTL 的脏数据会永久存在直到有人手工清理，而这类故障往往在几周后才由用户投诉暴露。另外 TTL 还顺带解决内存回收问题：没有 TTL 的冷数据只能靠淘汰策略被动挤出去，那已经是内存到顶的时刻，命中率早就在下滑了。建议在基准 TTL 之上叠加随机抖动，避免同批写入的 key 在同一秒集体过期。"}}, {"@type": "Question", "name": "缓存列表查询结果为什么是个陷阱？", "acceptedAnswer": {"@type": "Answer", "text": "因为列表缓存的失效粒度和数据变更的粒度不匹配。缓存一个分页列表时，key 里通常带了筛选条件、排序方式和页码，这意味着同一份底层数据散落在成百上千个 key 里；而任何一条记录的新增、修改、删除都可能影响其中任意一个 key 的内容和顺序，你没有办法准确知道该删哪些。常见的妥协是给整个列表加一个命名空间版本号，数据一变就递增版本号让全部列表缓存整体失效，代价是命中率被写入频率直接压低。更稳妥的做法是分成 ID 列表缓存加按 ID 的对象缓存两层，列表层给很短的 TTL，对象层给长 TTL，这样写入只需精确失效单个对象。"}}, {"@type": "Question", "name": "命中率很高但数据库压力没有下降，是什么原因？", "acceptedAnswer": {"@type": "Answer", "text": "通常是三种情况。第一种是命中率被大量轻量请求摊薄了：总体命中 99%，但那 1% 未命中恰好是最重的聚合查询，数据库的压力来自耗时而不是次数，这时要按 key 前缀分别统计命中率和回源耗时，把慢的那部分单独治理。第二种是热点集中：访问量压在极少数 key 上，这些 key 命中得很好，但长尾数据每次都回源，回源绝对量并没有降。第三种是数据库压力根本不来自读：写入、大事务、统计任务或者重试风暴，这些跟缓存无关。排查顺序是先看回源 QPS 的绝对值有没有变，再看数据库慢日志里的语句是不是回源路径上的那条。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,67 +64,338 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">缓存入门：从你遇到的问题出发</h1>
+                        <h1 class="article-title">缓存的收益与代价：命中率算式、四项成本与读写模式选型</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ 缓存</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及缓存怎么帮你解决。</p>
+<p>这篇不讲 Redis 怎么实现，只讲一件事：<strong>该不该加缓存，以及加了之后你要长期承担什么</strong>。缓存是架构里少见的「立刻见效、代价延后支付」的组件——上线当天 p99 降一个数量级，半年后你才会在一个诡异的数据不一致工单里第一次意识到自己买了什么。Redis 本身的单线程模型、编码转换阈值、淘汰算法、持久化与复制细节，详见站内 Redis 深度原理，这篇只谈缓存作为架构组件的收益模型与成本结构。</p>
 
-<div class="mermaid">
-flowchart LR
-    A[请求] --> B{缓存有?}
-    B -->|有| C[直接返回]
-    B -->|没有| D[查数据库]
-    D --> E[写缓存]
-    E --> C
-</div>
+<h2>先把收益算成一个式子</h2>
 
-<h2>1. 查询太慢了</h2>
+<p>关于缓存的争论大多能靠一个算式终结：</p>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>一个列表页查数据库要 2 秒，用户都跑了。</p>
-</div>
+<pre><code>平均耗时 = 命中率 × 缓存耗时 + (1 - 命中率) × 回源耗时
+回源 QPS = 总 QPS × (1 - 命中率)</code></pre>
 
-<p><strong>怎么解决？</strong>加缓存，热点数据放内存，快很多。</p>
-
-<h2>2. 缓存是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>缓存是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>把热点数据放内存里，直接读内存，比读磁盘快很多。</p>
-
-<h2>3. 什么时候用缓存</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>什么时候该用缓存？</p>
-</div>
-
-<p><strong>怎么解决？</strong>读多写少、热点数据、不需要实时一致的数据。</p>
-
-<h2>缓存策略</h2>
+<p>代入真实量级：分布式缓存一次读取大约 0.5 毫秒（其中网络往返占主要部分），一次需要回表、带几个关联的数据库查询大约 20 毫秒，总 QPS 一万。</p>
 
 <table>
-<thead><tr><th>策略</th><th>说明</th></tr></thead>
+<thead><tr><th>命中率</th><th>平均耗时</th><th>回源 QPS</th><th>相比上一档的改善</th><th>工程判断</th></tr></thead>
 <tbody>
-<tr><td>Cache Aside</td><td>最常用（读穿透写删除）</td></tr>
-<tr><td>Read Through</td><td>读穿透</td></tr>
-<tr><td>Write Through</td><td>写穿透</td></tr>
+<tr><td>0%（无缓存）</td><td>20 ms</td><td>10000</td><td>基线</td><td>数据库已经在冒烟</td></tr>
+<tr><td>50%</td><td>10.3 ms</td><td>5000</td><td>回源减半</td><td>缓存粒度或 TTL 有明显问题</td></tr>
+<tr><td>90%</td><td>2.5 ms</td><td>1000</td><td>回源降到十分之一</td><td>合格线，大多数业务的起点</td></tr>
+<tr><td>99%</td><td>0.7 ms</td><td>100</td><td>回源再降到十分之一</td><td>投入产出最好的一段</td></tr>
+<tr><td>99.9%</td><td>0.52 ms</td><td>10</td><td>平均耗时只再降 0.18 ms</td><td>边际收益接近于零</td></tr>
 </tbody></table>
 
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>缓存要设过期</strong>缓存一定要设过期，不要永久存。</li>
-<li><strong>先写数据库再删缓存</strong>更新数据先写数据库，再删缓存。</li>
-</ul>
+<p>看最后两行：<strong>命中率从 90% 到 99%，回源从每秒 1000 次降到 100 次，这是数据库从「危险」到「闲置」的跨越；从 99% 到 99.9%，回源从 100 降到 10，而数据库本来就不在乎这个量级</strong>。平均耗时的改善更是从 1.8 毫秒缩到 0.18 毫秒，用户完全感知不到。但为了这最后的 0.9%，你通常要把内存翻倍、TTL 延长数倍、引入预热和热点探测，一致性窗口同步变长，故障面同步变大。</p>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">命中率不是目标，回源绝对量才是</div>
+    <p>定容量和 TTL 时，正确的问法不是「命中率能不能再高一点」，而是「当前回源 QPS 距离数据库安全水位还有多远」。回源已经远低于水位时命中率就不再是瓶颈，接下来该优化的是那部分回源查询本身（索引与执行计划详见站内 MySQL 深度原理），而不是继续堆缓存。</p>
+</div>
+
+<h2>加缓存要付的四笔账</h2>
+
+<table>
+<thead><tr><th>代价</th><th>具体表现</th><th>量级</th><th>能否消除</th></tr></thead>
+<tbody>
+<tr><td>一致性窗口</td><td>数据库已改、缓存还是旧值的那段时间，用户会读到旧数据</td><td>正常毫秒级；失效动作失败时等于剩余 TTL</td><td>不能消除，只能压缩概率和时长</td></tr>
+<tr><td>内存成本</td><td>内存单价约为同容量 SSD 的数十倍，且缓存要留 25% 以上余量给碎片和峰值</td><td>缓存 10% 的热数据往往就吃掉一个数据库实例级别的预算</td><td>不能，只能选对热数据</td></tr>
+<tr><td>故障面变大</td><td>缓存抖动或整体不可用时全部读流量压到数据库，而数据库容量是按「有缓存」规划的</td><td>回源 QPS 可能在一秒内涨 10 到 100 倍</td><td>只能靠降级限流缓解</td></tr>
+<tr><td>调试复杂度</td><td>同一请求在不同实例、不同缓存层可能拿到不同结果，线上问题不再可稳定复现</td><td>排查一个「只有部分用户看到旧数据」的问题通常要半天以上</td><td>只能靠可观测性缓解</td></tr>
+</tbody></table>
+
+<p>第三笔账最容易被低估。很多团队上线缓存后顺手把数据库实例降配，或者业务量涨了三倍却没扩数据库，理由是「反正命中率 99%」。这时候缓存就成了单点：它一挂，数据库面对的是<strong>它从未承受过的全量流量</strong>，而且是在缓存全空、每个请求都要回源的最坏状态下。这类事故的典型形态是缓存恢复后数据库仍然起不来——重启的数据库要同时面对堆积的连接和空缓存。</p>
+
+<h2>什么情况下不该加缓存</h2>
+
+<table>
+<thead><tr><th>场景</th><th>为什么缓存无效甚至有害</th><th>该做什么</th></tr></thead>
+<tbody>
+<tr><td>写多读少</td><td>每次写都要失效，缓存长期处于空态，命中率极低，却完整承担了一致性风险</td><td>直接读库；要抗读峰值时用从库分担</td></tr>
+<tr><td>数据几乎不重复访问</td><td>按唯一订单号查明细、按用户导出报表，每个 key 只被读一次，缓存纯粹是额外一跳</td><td>优化查询本身；必要时做结果文件化</td></tr>
+<tr><td>不能读到旧值</td><td>余额、库存、风控额度、券剩余量，读旧值直接造成资金损失或超卖</td><td>读库或用数据库原子更新加条件判断</td></tr>
+<tr><td>回源本来就很快</td><td>单行主键查询在缓冲池命中时只有 0.1 到 0.3 毫秒，比一次跨网络的缓存读还快</td><td>什么都不做；真慢就先查执行计划</td></tr>
+<tr><td>数据总量很小</td><td>几万行的配置表数据库自己就全缓存住了，再加一层只是重复</td><td>用进程内缓存或干脆不缓存</td></tr>
+<tr><td>用缓存盖慢查询</td><td>缓存掩盖了没建索引的事实，一旦冷启动或缓存故障，数据库立刻被打挂</td><td>先修索引，再考虑缓存</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+flowchart TB
+    S{"读写比是否大于 10 比 1"} -->|否| N1["不加缓存<br/>写多读少时<br/>缓存只增加失效成本"]
+    S -->|是| A{"同一份数据是否会被重复读取"}
+    A -->|否| N2["不加缓存<br/>没有复用就没有命中率"]
+    A -->|是| B{"业务能否容忍秒级旧值"}
+    B -->|否| N3["不加缓存<br/>余额与库存要读最新值<br/>走数据库原子操作"]
+    B -->|是| C{"回源查询是否已经足够快"}
+    C -->|是| N4["先优化索引与执行计划<br/>主键单行查询加缓存收益很小"]
+    C -->|否| D{"缓存全挂时数据库能否顶住"}
+    D -->|否| N5["先补降级与限流<br/>再上缓存"]
+    D -->|是| Y["加缓存<br/>并配 TTL 兜底与命中率监控"]
+</div>
+
+<h2>三种读写模式：区别在于谁负责一致性</h2>
+
+<table>
+<thead><tr><th>模式</th><th>读路径</th><th>写路径</th><th>谁保证一致性</th><th>写失败时</th><th>缓存不可用时</th></tr></thead>
+<tbody>
+<tr><td>Cache-Aside（旁路）</td><td>应用读缓存，未命中自己回源并写回</td><td>应用写库，然后删缓存</td><td>应用代码</td><td>删缓存失败就留下脏数据，必须重试加 TTL 兜底</td><td>可直接降级回源，业务不中断</td></tr>
+<tr><td>Read-Through</td><td>应用只调缓存层，未命中由缓存层回源并填充</td><td>不涉及</td><td>缓存层组件</td><td>回源失败向上抛错</td><td>读路径直接失败，除非组件自带降级</td></tr>
+<tr><td>Write-Through</td><td>同 Read-Through</td><td>应用写缓存层，缓存层同步写库后才返回</td><td>缓存层组件</td><td>库写失败则整个写操作失败，缓存不留脏值</td><td>写路径直接失败，缓存成了强依赖</td></tr>
+<tr><td>Write-Behind（回写）</td><td>读缓存，缓存即权威副本</td><td>写缓存立刻返回，异步批量回写库</td><td>缓存层加回写队列</td><td>回写失败需重试队列，否则数据永久丢失</td><td>未回写的数据全部丢失</td></tr>
+</tbody></table>
+
+<p>选择逻辑很直接：<strong>Cache-Aside 把一致性责任和降级能力都交给应用</strong>，代价是逻辑散落、每个新接口都可能写错一遍，但它是唯一能在缓存全挂时继续服务的模式，所以互联网业务基本都用它。Read/Write-Through 把责任收敛进组件（本地缓存库、ORM 二级缓存、部分云托管缓存网关都是这个模型），代码干净，但缓存进入了写路径的关键链条。</p>
+
+<p>Write-Behind 值得单独说：它的吞吐最高，因为把 N 次随机写合并成一次批量写，非常适合计数器、点赞数、播放量。但它的真实语义是<strong>缓存成了数据源，数据库退化成异步备份</strong>。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    participant App as 应用
+    participant C as 缓存层
+    participant Q as 回写队列
+    participant DB as 数据库
+    App->>C: 写入计数加一
+    C->>Q: 记录待回写
+    C-->>App: 立刻返回成功
+    Note over C,DB: 此刻数据库仍是旧值<br/>任何绕过缓存的直连查询都会读到旧数据
+    App->>C: 读取计数
+    C-->>App: 返回新值 读写都走缓存所以自洽
+    Note over Q: 缓存进程在这里崩溃<br/>队列中未落库的写全部永久丢失
+    Q->>DB: 定时批量合并回写
+    DB-->>Q: 落库成功
+</div>
+
+<h2>三层缓存与命中率的乘性效应</h2>
+
+<div class="mermaid">
+flowchart TB
+    subgraph EDGE["接入层"]
+        R["请求进入"]
+    end
+    subgraph LOCAL["进程内本地缓存"]
+        L1["Caffeine 或 ristretto<br/>延迟约 100 纳秒<br/>容量 MB 级"]
+    end
+    subgraph REMOTE["分布式缓存"]
+        L2["Redis 集群<br/>延迟约 0.5 毫秒<br/>容量 GB 到 TB 级"]
+    end
+    subgraph STORE["持久化层"]
+        L3["数据库缓冲池<br/>延迟约 0.2 毫秒"]
+        L4["磁盘或云盘<br/>延迟毫秒到十毫秒"]
+    end
+    R --> L1
+    L1 -->|未命中 40%| L2
+    L2 -->|未命中 4%| L3
+    L3 -->|未命中 1%| L4
+    L2 -.->|回填本地| L1
+    L3 -.->|回填分布式| L2
+</div>
+
+<p>关键在于<strong>各层未命中率是相乘的</strong>：本地缓存命中 60%，剩下的 40% 交给分布式缓存，分布式再命中 90%，那么真正落到数据库的只有 40% 乘 10% 等于 4%。单看每一层的命中率都不算高，合起来整体命中率已经到 96%。这也解释了为什么加一层命中率只有 50% 的本地缓存就能把分布式缓存的负载直接砍半——对<strong>热点 key</strong> 尤其有效，因为热点天然会被最靠前的那一层吃掉。多级缓存的完整层次和失效难度取舍，见本专题的多级缓存与拓扑一篇。</p>
+
+<h2>Key 设计：命名空间、版本号、基数控制</h2>
+
+<table>
+<thead><tr><th>规则</th><th>反例</th><th>正例</th><th>不遵守的后果</th></tr></thead>
+<tbody>
+<tr><td>分层命名空间，冒号分隔，业务前缀在最左</td><td><code>10086</code></td><td><code>user:profile:10086</code></td><td>无法按前缀统计命中率、无法批量排查、多业务 key 互相覆盖</td></tr>
+<tr><td>结构变更用版本号，不复用旧 key</td><td>改了字段还用 <code>user:profile:10086</code></td><td><code>user:profile:v2:10086</code></td><td>灰度期间新旧代码反序列化互相失败，报错量突增</td></tr>
+<tr><td>需要整体失效的维度带上版本号</td><td>逐个删几千个列表 key</td><td><code>item:list:v7:cat3:p1</code>，改版本号即全量失效</td><td>失效漏删，脏数据活到 TTL 结束</td></tr>
+<tr><td>不把高基数可变参数拼进 key</td><td><code>search:kw=手机&amp;page=3&amp;ts=1727000000</code></td><td>参数白名单化，时间戳这类一律剔除</td><td>key 基数爆炸，每个 key 只被读一次，内存被一次性数据占满</td></tr>
+<tr><td>单个 value 控制在几十 KB 内</td><td>把 5 MB 的商品全量详情整体缓存</td><td>拆成主信息、图片列表、长描述三个 key</td><td>大 key 拖慢整个缓存节点，排查手法见站内 Redis 深度原理</td></tr>
+<tr><td>key 长度适度</td><td>把整段 SQL 或 JSON 参数当 key</td><td>对参数做哈希后取 16 位十六进制</td><td>key 本身占用可能超过 value，且日志里不可读</td></tr>
+</tbody></table>
+
+<h2>TTL 是最后一道防线</h2>
+
+<p>这句话值得反复强调：<strong>删缓存会失败、消息队列会积压、订阅 binlog 的组件会挂、发广播的机器会被网络分区，这些情况下唯一还能自动纠正脏数据的机制就是过期</strong>。没有 TTL 的脏数据会一直存在，直到有人手工清理，而这类问题通常在几周后才由用户投诉暴露。</p>
+
+<table>
+<thead><tr><th>TTL 策略</th><th>怎么设</th><th>解决什么</th><th>副作用</th></tr></thead>
+<tbody>
+<tr><td>基准 TTL 兜底</td><td>按业务容忍度取 5 分钟到 24 小时，一律不允许无 TTL</td><td>失效机制全部失灵时的自愈</td><td>TTL 越长，最坏情况下脏数据存活越久</td></tr>
+<tr><td>随机抖动</td><td>基准值加上 0 到 20% 的随机量</td><td>避免同批写入的 key 在同一秒集体过期形成回源尖峰</td><td>几乎没有，应当默认开启</td></tr>
+<tr><td>逻辑过期</td><td>value 内存一个业务过期时间，物理 TTL 设得更长；读到逻辑过期先返回旧值再异步重建</td><td>极热 key 永不出现「无值可返回」的瞬间</td><td>一定会返回一小段时间的旧值，且要防止重复重建</td></tr>
+<tr><td>空值短 TTL</td><td>不存在的数据也缓存，但只留 30 到 60 秒</td><td>挡住对不存在 key 的反复回源</td><td>数据补录后要等这段时间才能读到</td></tr>
+<tr><td>按访问续期</td><td>读命中时刷新 TTL</td><td>让真正的热数据常驻</td><td>脏数据也会被一起续命，风险高，需与一致性方案配合</td></tr>
+</tbody></table>
+
+<p>下面这段 Cache-Aside 实现把上面几条都落进去了，包含空值缓存、随机抖动、本进程内并发收敛，以及缓存故障时的降级路径：</p>
+
+<pre><code class="language-go">package repo
+
+import (
+    "context"
+    "encoding/json"
+    "errors"
+    "math/rand"
+    "strconv"
+    "time"
+
+    "github.com/redis/go-redis/v9"
+    "golang.org/x/sync/singleflight"
+)
+
+const (
+    baseTTL = 10 * time.Minute // 基准 TTL，一律不允许为 0：它是所有失效机制失灵后唯一的自愈手段
+    jitter  = 2 * time.Minute  // 抖动上限，避免同批 key 在同一秒集体过期
+    nullTTL = 30 * time.Second // 空值缓存必须短，否则数据补录后要等很久才可见
+    nullVal = "\x00NULL"       // 用不可能出现在正常 JSON 里的前缀做哨兵，避免和真实值混淆
+)
+
+var sf singleflight.Group
+
+func (r *Repo) GetUser(ctx context.Context, id int64) (*User, error) {
+    key := "user:profile:v2:" + strconv.FormatInt(id, 10)
+
+    raw, err := r.rdb.Get(ctx, key).Result()
+    switch {
+    case err == nil &amp;&amp; raw == nullVal:
+        return nil, ErrNotFound // 命中空值缓存，直接返回，挡住对不存在数据的反复回源
+    case err == nil:
+        var u User
+        if json.Unmarshal([]byte(raw), &amp;u) == nil {
+            return &amp;u, nil
+        }
+        // 反序列化失败说明缓存里是上一个版本的结构，按未命中处理并覆盖掉
+    case !errors.Is(err, redis.Nil):
+        // 缓存故障不要直接返回错误，降级回源；但这条路径必须有回源侧限流，
+        // 否则缓存整体不可用时全量流量会直接压垮数据库
+        r.metric.Inc("cache_error")
+        return r.loadFromPrimary(ctx, id)
+    }
+
+    // singleflight 把同一 key 的并发回源收敛成一次，挡住本进程内的击穿；
+    // 跨实例收敛需要分布式锁，见本专题一致性与失效一篇
+    v, err, _ := sf.Do(key, func() (any, error) {
+        // 必须读主库：读从库拿到的旧值一旦写进缓存，脏数据存活时间就等于 TTL，
+        // 远远长于主从延迟本身，这是最容易被忽略的一致性漏洞
+        u, err := r.loadFromPrimary(ctx, id)
+        ttl := baseTTL + time.Duration(rand.Int63n(int64(jitter)))
+        if errors.Is(err, ErrNotFound) {
+            r.rdb.Set(ctx, key, nullVal, nullTTL)
+            return nil, err
+        }
+        if err != nil {
+            return nil, err // 回源失败不写缓存，否则会把一次抖动固化成几十秒不可用
+        }
+        b, _ := json.Marshal(u)
+        r.rdb.Set(ctx, key, b, ttl)
+        return u, nil
+    })
+    if err != nil {
+        return nil, err
+    }
+    return v.(*User), nil
+}</code></pre>
+
+<p>一个缓存条目的完整生命周期，以及其中唯一会读到旧值的状态：</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> 未建立
+    未建立 --> 重建中: 首次请求未命中
+    重建中 --> 有效: 回源成功并写入带抖动的 TTL
+    重建中 --> 未建立: 回源失败不写入
+    有效 --> 陈旧: 数据库已变更但失效动作还没生效
+    陈旧 --> 未建立: 删除成功或消息重试成功
+    陈旧 --> 未建立: 删除彻底失败但 TTL 到期兜底
+    有效 --> 未建立: TTL 到期或被内存淘汰
+    note right of 陈旧
+        这是唯一会读到旧值的状态
+        正常情况窗口等于失效动作的延迟
+        失效彻底失败时窗口等于剩余 TTL
+    end note
+</div>
+
+<h2>缓存粒度：为什么列表缓存是个陷阱</h2>
+
+<table>
+<thead><tr><th>粒度</th><th>适用</th><th>失效精度</th><th>主要问题</th></tr></thead>
+<tbody>
+<tr><td>整对象（一个 key 存完整 JSON）</td><td>绝大多数按 ID 读的场景</td><td>精确，写哪条删哪条</td><td>字段多时每次都传输全量，浪费带宽</td></tr>
+<tr><td>字段级（Hash 的每个 field）</td><td>对象很大但只读少数字段</td><td>精确</td><td>不能对单个 field 设 TTL，只能整个 key 一起过期</td></tr>
+<tr><td>查询结果集（列表、分页）</td><td>筛选条件收敛且数据几乎不变</td><td>几乎无法精确失效</td><td>任意一条数据变更都可能影响内容或顺序，你无法知道该删哪些 key</td></tr>
+<tr><td>ID 列表加对象缓存两层</td><td>推荐的列表方案</td><td>对象层精确，列表层靠短 TTL</td><td>一次读要两轮交互，需用批量命令合并</td></tr>
+</tbody></table>
+
+<p>列表缓存的根本矛盾是<strong>失效粒度和变更粒度不匹配</strong>：key 里带了筛选条件、排序方式和页码，同一份底层数据散落在成百上千个 key 里，而任何一条记录的增删改都可能影响其中任意一个。妥协方案有两种：一是给列表加命名空间版本号，数据一变就整体失效，代价是命中率被写入频率直接压低；二是只缓存 ID 列表并给很短的 TTL（比如 10 到 30 秒），详情走对象缓存的长 TTL，这样写入只需精确失效单个对象。<strong>不要试图精确维护列表缓存，那条路上没有正确答案。</strong></p>
+
+<h2>命中率监控与「压力没降」的排查</h2>
+
+<pre><code class="language-promql"># 整体命中率：分子是命中数，分母是总查询数
+sum(rate(cache_get_total{result="hit"}[5m]))
+  / sum(rate(cache_get_total[5m]))
+
+# 按 key 前缀拆分命中率，定位到底是哪个业务的缓存没做好
+# 只看整体命中率会被高频轻量请求彻底掩盖问题
+sum by (keyspace) (rate(cache_get_total{result="hit"}[5m]))
+  / sum by (keyspace) (rate(cache_get_total[5m]))
+
+# 回源 QPS 的绝对值，判断缓存是否真的生效，比命中率百分比更可信
+sum by (keyspace) (rate(cache_miss_total[5m]))
+
+# 命中与未命中的 p99 分开看，合在一起会被高命中率抹平，看不出回源有多慢
+histogram_quantile(0.99,
+  sum by (le, result) (rate(cache_get_duration_seconds_bucket[5m])))</code></pre>
+
+<pre><code class="language-bash"># 单 key 真实内存开销，不要凭结构体大小估算
+redis-cli MEMORY USAGE user:profile:v2:10086
+# 输出单位是字节，已含 key 本身、对象头、编码开销和字典项开销。
+# 经验值：200 字节的 JSON 存成 String，实际占用通常在 300 到 400 字节之间。
+
+# 服务端命中率（累计值，重启后归零，不是瞬时值）
+redis-cli INFO stats | grep -E 'keyspace_hits|keyspace_misses'
+# 注意这个比例不等于业务命中率：业务把空值缓存也算命中，
+# 而服务端只看 key 是否存在，两者可以差出好几个百分点。
+
+# 容量是否已经在被动淘汰
+redis-cli INFO memory | grep -E 'used_memory_human|maxmemory_human|mem_fragmentation_ratio'
+redis-cli INFO stats | grep evicted_keys
+# evicted_keys 持续增长说明容量不够，命中率会被动下滑，
+# 这时先扩容，不要先去调 TTL。淘汰策略细节见站内 Redis 深度原理。</code></pre>
+
+<p>遇到「命中率 99% 但数据库压力没降」，按这个顺序查：</p>
+
+<table>
+<thead><tr><th>可能原因</th><th>怎么确认</th><th>怎么处理</th></tr></thead>
+<tbody>
+<tr><td>未命中的那 1% 恰好是最重的查询</td><td>按 keyspace 拆开看回源耗时 p99，对比数据库慢日志</td><td>单独治理这类查询，或给它们更长的 TTL 与逻辑过期</td></tr>
+<tr><td>热点集中，长尾数据每次回源</td><td>统计 key 访问分布，看前 1% 的 key 占了多少访问量</td><td>接受长尾回源，或按访问分布重新规划容量</td></tr>
+<tr><td>数据库压力不来自读</td><td>看读写 QPS 拆分、大事务、后台统计任务</td><td>与缓存无关，去查写路径和批量任务</td></tr>
+<tr><td>穿透被空值缓存计为命中</td><td>单独埋点统计空值命中占比</td><td>命中率指标要把空值命中拆出来看</td></tr>
+<tr><td>一次请求回源多次</td><td>看单请求的回源次数分布</td><td>改成批量回源，用一次 IN 查询替代循环</td></tr>
+</tbody></table>
+
+<h2>容量与淘汰：只说结论</h2>
+
+<p>内存预估的实操公式是 <code>所需内存 = 热数据条数 × 单条实测开销 × 1.3</code>。那个 1.3 是给碎片、复制缓冲区和峰值留的余量，按「刚好够」配置的缓存在流量峰值会直接开始淘汰。热数据条数怎么定取决于访问分布：幂律分布下 20% 的数据承载 80% 的访问，缓存 20% 就够；接近均匀分布时缓存几乎无效，这种情况应该重新审视要不要加缓存。</p>
+
+<p>淘汰策略的选择结论：<strong>把缓存当纯缓存用就选 allkeys-lru 或 allkeys-lfu，绝不要用 noeviction</strong>（内存满后写入直接报错，等于缓存变只读）；访问模式里有周期性全量扫描时优先 LFU，因为 LRU 会被一次扫描冲刷掉全部热数据。近似 LRU 的采样实现、LFU 计数器衰减、过期删除的具体机制，详见站内 Redis 深度原理，这里不重复。</p>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+        <li><strong>有 key 没 TTL</strong>：任何一个没有过期时间的 key 都是定时炸弹，失效机制一旦失灵脏数据就永久存在。上线检查清单里应该有「新增缓存写入是否都带 TTL」这一条。</li>
+        <li><strong>把命中率当 KPI</strong>：为了把 99% 提到 99.9% 去延长 TTL，换来的是一致性窗口成倍变长，而数据库根本不在乎那点回源。</li>
+        <li><strong>加了缓存就给数据库降配</strong>：数据库容量必须按「缓存全挂」规划，至少要能靠限流降级活下来，否则缓存从优化项变成单点。</li>
+        <li><strong>回源读从库</strong>：从库的旧值被写进缓存后，脏数据存活时间等于 TTL，而不是主从延迟。缓存回源必须读主库，或确认从库已追上。</li>
+        <li><strong>用缓存盖慢查询</strong>：没建索引的语句加了缓存看起来好了，但冷启动、发版清缓存、缓存故障时会同时暴露，而且是在最糟的时刻。</li>
+        <li><strong>精确维护列表缓存</strong>：分页列表的 key 组合是爆炸性的，任何一条数据变更都可能影响任意 key，写不出正确的失效逻辑。用版本号整体失效或 ID 列表加短 TTL。</li>
+        <li><strong>可变参数直接拼进 key</strong>：时间戳、随机数、未白名单化的查询参数进了 key，就会产生海量只读一次的 key，内存被占满、真正的热数据被挤出去。</li>
+        <li><strong>击穿只用了本进程锁</strong>：<code>singleflight</code> 或 <code>synchronized</code> 只能收敛单实例并发，50 个实例同时回源还是 50 次。跨实例收敛得用分布式锁。</li>
+        <li><strong>回源失败也写缓存</strong>：把超时或异常当成「查不到」写进空值缓存，会把一次网络抖动固化成几十秒的业务不可用。</li>
+        <li><strong>整批缓存同一时刻过期</strong>：批量预热或批量写入用固定 TTL，会在未来某一秒同时失效，形成一个精确的回源尖峰。TTL 必须带随机抖动。</li>
+        <li><strong>缓存故障直接把错误抛给用户</strong>：缓存是优化手段不是数据源，读失败应当降级回源；但降级路径必须自带限流，否则就是把缓存故障放大成数据库故障。</li>
+        <li><strong>没有按业务维度拆命中率</strong>：整体命中率是被高频轻量请求平均出来的，一个命中率只有 30% 的重查询在总体指标里完全看不见。</li>
+    </ul>
 </div>
 
                     </div>

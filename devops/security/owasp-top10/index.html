@@ -83,7 +83,7 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">OWASP Top 10 入门：从你遇到的问题出发</h1>
+                        <h1 class="article-title">OWASP Top 10 2021 风险清单与上线自查表</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ OWASP Top 10</span>
                             <span class="meta-item reading-time"></span>
@@ -172,3 +172,338 @@ sequenceDiagram
         DB-->>SVC: 0 行
         SVC-->>U: 404 不泄露资源是否存在
     end
+</div>
+
+<table>
+<thead><tr><th>校验放在哪里</th><th>典型写法</th><th>为什么会失效</th><th>结论</th></tr></thead>
+<tbody>
+<tr><td>网关 / 鉴权中间件</td><td>只校验 token 签名与角色</td><td>不掌握数据归属关系，无法判断资源属主</td><td>必要但不充分</td></tr>
+<tr><td>请求参数</td><td>前端传 <code>user_id</code>，服务端直接使用</td><td>参数完全可篡改，等于把鉴权交给客户端</td><td><strong>严重错误</strong></td></tr>
+<tr><td>Service 层内存判断</td><td>先按 ID 查出来，再在内存里比较属主</td><td>能防住，但重构或新增查询路径时极易漏写，批量接口尤其容易</td><td>可用但脆弱</td></tr>
+<tr><td>SQL / ORM 查询条件</td><td><code>WHERE id = ? AND user_id = ?</code></td><td>基本不会被绕过，除非手写 SQL 绕开统一封装</td><td><strong>推荐</strong></td></tr>
+<tr><td>数据库行级安全</td><td>PostgreSQL RLS，按 session 变量过滤</td><td>需要连接池按用户设置变量，连接复用时容易串号</td><td>多租户场景可选，成本较高</td></tr>
+</tbody></table>
+
+<pre><code class="language-go">// 反例：只按主键查，任何登录用户都能遍历 ID 拿到别人的订单
+func (h *Handler) GetOrderBad(c *gin.Context) {
+    id := c.Param("id")
+    order, _ := h.repo.FindByID(c, id) // 缺少归属条件
+    c.JSON(200, order)
+}
+
+// 正例：把「资源归属」下推到 SQL，由数据库保证过滤
+const qOrder = `SELECT id, user_id, amount, status
+                FROM orders WHERE id = ? AND user_id = ? AND tenant_id = ?`
+
+func (h *Handler) GetOrder(c *gin.Context) {
+    // 身份只从服务端解析出的 token 取，绝不读 query 或 body 里的 user_id
+    uid, tid := auth.UserIDFromCtx(c), auth.TenantIDFromCtx(c)
+    id := c.Param("id")
+
+    var o Order
+    err := h.db.QueryRowContext(c, qOrder, id, uid, tid).
+        Scan(&amp;o.ID, &amp;o.UserID, &amp;o.Amount, &amp;o.Status)
+
+    // 关键：越权与不存在都返回 404。
+    // 若越权返 403、不存在返 404，攻击者能靠状态码差异枚举出哪些 ID 真实存在
+    if errors.Is(err, sql.ErrNoRows) {
+        c.JSON(404, gin.H{"code": "NOT_FOUND"})
+        return
+    }
+    if err != nil {
+        // 不要把 err.Error() 直接返给前端，可能带库名表名
+        log.Error("query order failed", "err", err, "order_id", id)
+        c.JSON(500, gin.H{"code": "INTERNAL"})
+        return
+    }
+    c.JSON(200, o)
+}
+</code></pre>
+
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">这个方案会在什么情况下失效</div>
+    <p>归属条件下推只能防住「按 ID 取单条」。真正容易漏的是三类场景：<strong>批量接口</strong>（前端传 ID 数组，服务端用 <code>IN</code> 查询却只校验了第一个）、<strong>导出与报表</strong>（走另一套 SQL，常由数据团队维护，完全没接鉴权上下文）、<strong>消息队列消费者</strong>（没有 HTTP 上下文，习惯性用管理员身份操作任意数据）。这三处建议在 DAO 层强制要求传入租户与用户上下文，缺失时直接报错退出，而不是默默放过。</p>
+</div>
+
+<h2>A02 加密失败：不只是「没上 HTTPS」</h2>
+
+<p>2021 版把这项从「敏感数据泄露」改名为「加密机制失效」，是为了强调这是<strong>原因</strong>而不是结果。实际排查按四个维度看：存储是否加密、传输是否加密、算法是否还安全、密钥放在哪里。前三项容易查，最后一项最常出事——密钥硬编码在代码里、写在配置文件里提交进仓库、或者留在镜像层里被 <code>docker history</code> 翻出来。</p>
+
+<div class="mermaid">
+flowchart TB
+    S["敏感字段落库前先问三个问题"] --> Q1{"业务是否需要还原原文"}
+    Q1 -->|不需要 只做比对| H["单向慢哈希<br/>bcrypt cost 10 至 12 或 argon2id<br/>每条独立 salt"]
+    Q1 -->|需要还原| Q2{"是否需要按该字段精确查询"}
+    Q2 -->|需要| B["密文列加盲索引列<br/>HMAC 确定性摘要用于等值查询"]
+    Q2 -->|不需要| E["AES-256-GCM 加密列<br/>随机 nonce 不复用"]
+    H --> Q3{"是否会在日志或响应里回显"}
+    B --> Q3
+    E --> Q3
+    Q3 -->|会| M["脱敏输出<br/>只保留前 3 后 4 位"]
+    Q3 -->|不会| OK["落库完成"]
+</div>
+
+<table>
+<thead><tr><th>数据类型</th><th>正确处理</th><th>常见错误做法</th><th>错误的后果</th></tr></thead>
+<tbody>
+<tr><td>登录密码</td><td>bcrypt（cost 10 至 12）或 argon2id，逐条 salt</td><td>MD5 / SHA1 / SHA256 加全局固定盐</td><td>通用 GPU 每秒可算数十亿次 SHA256，泄库后弱口令几分钟内被还原</td></tr>
+<tr><td>手机号 / 身份证号</td><td>AES-256-GCM 加密列，配 HMAC 盲索引支持等值查询</td><td>明文列，靠「数据库有账号密码」来保护</td><td>一次 SQL 注入或运维误导出即全量泄露，属于合规红线</td></tr>
+<tr><td>银行卡号</td><td>只存后四位，原文交由支付通道 token 化</td><td>存全量卡号，CVV 也一起存</td><td>直接违反 PCI DSS，CVV 在任何情况下都不允许落库</td></tr>
+<tr><td>会话 token</td><td>存哈希值，校验时哈希后比对</td><td>明文存 Redis 并打进日志</td><td>日志系统权限通常比数据库宽松，等于会话可被内部人员冒用</td></tr>
+<tr><td>加密密钥</td><td>KMS 或 Vault 运行时下发，支持轮转与审计</td><td>写在配置文件里，或硬编码进镜像</td><td><code>git log</code> 与 <code>docker history</code> 都能翻出来，且轮转成本极高</td></tr>
+<tr><td>服务间内部流量</td><td>mTLS，或至少单向 TLS</td><td>「都在内网所以明文 HTTP」</td><td>攻击者横向移动后可直接抓包拿全量业务数据，零信任的典型反例</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">加盐的 SHA256 不等于安全</div>
+    <p>「加了盐就防彩虹表了」这句话没错，但它解决的不是主要问题。密码哈希的核心诉求是<strong>慢</strong>：bcrypt 在 cost=12 时单次计算约 250 毫秒量级，而 SHA256 是纳秒量级，两者抗离线爆破的能力差好几个数量级。盐只防批量预计算，不防针对单个用户的定向爆破。所以密码必须用专为此设计的慢哈希（bcrypt、scrypt、argon2id），而不是「通用哈希加点料」。HMAC-SHA256 的正确用途是盲索引和消息认证，不是存密码。</p>
+</div>
+
+<h2>A05 安全配置错误：默认值就是攻击面</h2>
+
+<p>这一类的特点是<strong>代码完全正确，但环境把门开着</strong>。它也是唯一能靠自动化基线检查大面积消灭的一类。经验上最容易出事的是「开发环境的便利设置被带到生产」——调试开关、管理端点、宽松的跨域、详细错误页，在开发机上都是提效工具，进了生产就是入口。</p>
+
+<table>
+<thead><tr><th>配置项</th><th>危险默认值或常见写法</th><th>被利用后的后果</th><th>加固方式</th></tr></thead>
+<tbody>
+<tr><td>框架调试模式</td><td><code>DEBUG=True</code>、<code>app.debug</code> 保持开启</td><td>异常页返回源码片段、SQL、环境变量；部分框架还带可执行控制台</td><td>按环境注入配置，生产强制关闭并在启动时断言</td></tr>
+<tr><td>管理与诊断端点</td><td>Actuator 全量暴露、Go 的 pprof 挂在业务端口</td><td>配置端点泄露全部配置含密码；heapdump 可提取内存中的 token</td><td>单独绑内网端口，加认证，只放开 health 与 metrics</td></tr>
+<tr><td>CORS</td><td><code>Allow-Origin</code> 回显请求 Origin，同时 <code>Allow-Credentials: true</code></td><td>任意站点可携带用户 Cookie 调你的接口，等价于全站 CSRF 加数据泄露</td><td>显式白名单精确匹配（含协议与端口），绝不做前缀或后缀匹配</td></tr>
+<tr><td>错误响应</td><td>把异常堆栈序列化后返回给前端</td><td>暴露框架版本、类路径、内网 IP、SQL 结构，为后续攻击铺路</td><td>统一错误码返回，堆栈只进日志并带 trace_id 供排查</td></tr>
+<tr><td>目录列举</td><td>nginx <code>autoindex on</code>，静态目录直挂源码根</td><td><code>.git</code> 目录、备份文件、<code>.env</code> 可被直接下载</td><td>关闭 autoindex，构建产物与源码分离，拒绝访问隐藏文件</td></tr>
+<tr><td>对象存储桶</td><td>为了「让前端能读图」直接设成 public-read</td><td>桶内所有对象可枚举下载，含用户上传的证件照与导出报表</td><td>私有桶加预签名 URL（有效期分钟级），开启桶级访问日志</td></tr>
+<tr><td>默认账号</td><td>中间件控制台留 <code>admin/admin</code>，Redis 无密码裸奔</td><td>无密码 Redis 可写入定时任务文件实现命令执行</td><td>初始化即改密，绑定内网地址，开启保护模式与 ACL</td></tr>
+</tbody></table>
+
+<pre><code class="language-go">// CORS 白名单：唯一正确的写法是精确匹配完整 Origin
+var allowedOrigins = map[string]struct{}{
+    "https://app.example.com":   {},
+    "https://admin.example.com": {},
+}
+
+func CORS() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        origin := c.GetHeader("Origin")
+        if _, ok := allowedOrigins[origin]; ok {
+            // 回显的是白名单里命中的那个值，而不是无条件回显请求头
+            c.Header("Access-Control-Allow-Origin", origin)
+            c.Header("Access-Control-Allow-Credentials", "true")
+            c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            c.Header("Access-Control-Max-Age", "600") // 预检缓存 10 分钟，减少 OPTIONS
+            // 带凭证时必须声明 Vary，否则 CDN 可能把 A 站的响应缓存给 B 站
+            c.Header("Vary", "Origin")
+        }
+        if c.Request.Method == http.MethodOptions {
+            c.AbortWithStatus(http.StatusNoContent)
+            return
+        }
+        c.Next()
+    }
+}
+
+// 两个看起来能跑、实际等于对全网开放的错误变体：
+//   c.Header("Access-Control-Allow-Origin", c.GetHeader("Origin"))
+//   strings.HasSuffix(origin, "example.com")   // evil-example.com 也能通过
+</code></pre>
+
+<h2>A06 组件已知漏洞：间接依赖才是主要风险面</h2>
+
+<p>一个中型 Node 服务的 <code>package.json</code> 里可能只写了 30 个依赖，装完却有 900 多个包；Java 与 Go 稍好，但也是数倍关系。<strong>直接依赖通常只占依赖树的一到两成，剩下八成你从没听过名字，却和业务代码跑在同一个进程里</strong>。Log4Shell 影响面之所以巨大，正是因为绝大多数受影响的项目并没有直接声明 log4j-core。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> 未公开: 漏洞存在但无人知晓
+    未公开 --> 已披露: CVE 编号与补丁发布
+    已披露 --> 进入视野: SCA 扫描命中 SBOM 清单
+    进入视野 --> 评估中: 判断漏洞是否真实可达
+    评估中 --> 不受影响: 漏洞函数未出现在调用链
+    评估中 --> 待修复: 存在可达调用链或处理不可信输入
+    待修复 --> 已升级: 直接依赖可直接升版本
+    待修复 --> 已覆盖: 间接依赖用 overrides 或 replace 强制提版
+    待修复 --> 已兜底: 上游未发版 先用规则拦截或关闭功能缓解
+    已升级 --> [*]
+    已覆盖 --> [*]
+    已兜底 --> 待修复: 上游发版后重新进入修复流程
+    不受影响 --> [*]
+</div>
+
+<table>
+<thead><tr><th>生态</th><th>扫描命令</th><th>能力边界</th><th>注意事项</th></tr></thead>
+<tbody>
+<tr><td>Node.js</td><td><code>npm audit --omit=dev</code></td><td>基于版本区间匹配，不做可达性分析</td><td><code>--force</code> 会做破坏性升级，CI 里不要用；误报偏多需人工复核</td></tr>
+<tr><td>Python</td><td><code>pip-audit -r requirements.txt</code></td><td>覆盖 PyPI 公告库，支持锁文件</td><td>必须扫锁定后的实际版本，扫未锁定的输入文件意义不大</td></tr>
+<tr><td>Go</td><td><code>govulncheck ./...</code></td><td><strong>做调用链可达性分析</strong>，能区分「依赖里有漏洞」和「你真的调到了」</td><td>噪声最低的一个；只对编译进二进制的代码有效，反射调用可能漏判</td></tr>
+<tr><td>Java</td><td><code>mvn dependency-check:check</code></td><td>依赖 NVD 数据，首次同步数据库较慢</td><td>shade 与 fat jar 会让组件识别失效，需配合制品层扫描</td></tr>
+<tr><td>容器镜像</td><td><code>trivy image --severity HIGH,CRITICAL</code></td><td>同时扫系统包与语言包</td><td>基础镜像贡献的漏洞往往比业务依赖多，换 distroless 能砍掉大半</td></tr>
+<tr><td>密钥泄露</td><td><code>gitleaks detect --redact</code></td><td>扫全部历史提交，不只是工作区</td><td>推送过的密钥必须视为已泄露并轮转，删提交不等于没泄露</td></tr>
+</tbody></table>
+
+<pre><code class="language-bash"># 依赖与制品安全扫描：可直接放进 CI 的 security 阶段
+set -euo pipefail
+
+# 1) 语言生态漏洞扫描：Go 走可达性分析，噪声最低
+go install golang.org/x/vuln/cmd/govulncheck@latest
+govulncheck ./...
+
+# 2) 生成 SBOM 并归档。下次 CVE 披露时靠它在几分钟内查出哪些服务受影响
+syft dir:. -o spdx-json &gt; sbom.spdx.json
+
+# 3) 拿 SBOM 直接查漏洞，避免重复解析依赖树；high 及以上直接失败
+grype sbom:./sbom.spdx.json --fail-on high
+
+# 4) 镜像扫描：--ignore-unfixed 过滤掉上游还没修的，避免噪声淹没结论
+trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "myapp:${GIT_SHA}"
+
+# 5) 密钥泄露：扫全量历史，--redact 避免把密钥本身打进 CI 日志
+gitleaks detect --source . --redact --exit-code 1
+
+# 6) 基础镜像锁到 digest，避免同一个 tag 明天指向不同内容（供应链防护）
+#    FROM gcr.io/distroless/static:nonroot@sha256:abcd1234...
+</code></pre>
+
+<div class="callout callout-tip">
+    <div class="callout-icon">✅</div>
+    <div class="callout-title">无法升级时的现实解法</div>
+    <p>经常遇到「漏洞在间接依赖里，上游中间那层迟迟不发版」。不用干等：Node 用 <code>package.json</code> 的 <code>overrides</code>、Yarn 用 <code>resolutions</code>、Go 用 <code>go.mod</code> 的 <code>replace</code>、Maven 用 <code>dependencyManagement</code>，都能强制把传递依赖提到安全版本，代价是可能破坏 API 兼容性，必须配合回归测试。真正卡死时，退一步评估<strong>可达性</strong>：如果漏洞函数在你的调用链里根本不可达，就记录豁免（写清评估结论和复查日期），而不是让扫描报告长期挂着几百条红色告警、最后所有人都不看了。</p>
+</div>
+
+<h2>A09 日志与监控不足：该记什么、绝不记什么</h2>
+
+<p>这一项排在最后，但它决定的是「事故发生后你要多久才知道」。行业统计里从入侵到被发现的中位时间是以<strong>周</strong>为单位的，而不少团队最终是被外部通报才知道出事。工程上要同时解决两个相反方向的问题：<strong>该记的没记</strong>（登录失败、权限拒绝、敏感操作没有审计），以及<strong>不该记的记了</strong>（密码、token、卡号进了日志系统）。</p>
+
+<table>
+<thead><tr><th>类别</th><th>必须记录</th><th>绝对不能记录</th><th>折中做法</th></tr></thead>
+<tbody>
+<tr><td>认证</td><td>登录成功与失败、来源 IP、User-Agent、失败原因分类</td><td>明文密码、验证码原文</td><td>只记「密码错误」这类枚举化原因，不记用户输入值</td></tr>
+<tr><td>会话</td><td>会话创建与吊销、异地与异设备登录</td><td>完整 token 或 JWT 原文</td><td>记 token 前 8 位加哈希指纹，足够串联排查</td></tr>
+<tr><td>授权</td><td>权限拒绝事件、被访问资源的类型与 ID</td><td>——</td><td>权限拒绝单独打点并配阈值告警，这是越权扫描最强的信号</td></tr>
+<tr><td>支付与个人信息</td><td>操作类型、操作人、时间、结果</td><td>完整卡号、CVV、身份证号</td><td>卡号只记后四位，证件号做掩码</td></tr>
+<tr><td>请求体</td><td>trace_id、接口路径、耗时、状态码</td><td>无条件全量打印 request body</td><td>按字段白名单打印，或对敏感键名自动掩码</td></tr>
+<tr><td>变更</td><td>配置与权限变更的前后值、操作人</td><td>变更内容里夹带的密钥新值</td><td>密钥类字段只记「已变更」与版本号</td></tr>
+</tbody></table>
+
+<p>另一个被严重低估的问题是<strong>日志注入</strong>。只要把用户输入原样拼进单行文本日志，攻击者就能用回车换行在日志文件里伪造出一行看起来完全合法的系统日志，污染审计记录，甚至误导告警规则和分析平台。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant A as 攻击者
+    participant APP as 应用
+    participant LOG as 日志文件
+    participant SIEM as 日志分析平台
+    A->>APP: 用户名填入正常值 后面接换行与一段伪造日志文本
+    APP->>LOG: 原样拼接写入一行
+    Note over LOG: 一次写入产生了两行<br/>第二行看起来像系统自己打的日志
+    LOG->>SIEM: 按行采集与解析
+    SIEM-->>A: 审计链被污染 真实攻击被噪声淹没
+    Note over APP: 修复方向 写入前过滤 CR 与 LF<br/>或改用 JSON 结构化日志由序列化器负责转义
+</div>
+
+<pre><code class="language-python">import logging, re, json
+
+SENSITIVE_KEYS = {"password", "passwd", "token", "authorization",
+                  "id_card", "card_no", "cvv", "secret", "private_key"}
+# 控制字符集合：CR、LF 以及其他不可见字符
+_CTRL = re.compile(r"[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+def scrub(value):
+    """递归脱敏并过滤控制字符，防止日志注入伪造出新的日志行"""
+    if isinstance(value, dict):
+        return {k: ("***" if k.lower() in SENSITIVE_KEYS else scrub(v))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [scrub(v) for v in value]
+    if isinstance(value, str):
+        # 关键一步：把 CR 与 LF 换成可见转义，攻击者就造不出「新的一行」
+        # 顺带截断到 512 字符，避免超长输入把日志盘打满
+        return _CTRL.sub(lambda m: "\\x%02x" % ord(m.group()), value)[:512]
+    return value
+
+def mask_phone(p: str) -&gt; str:
+    return p[:3] + "****" + p[-4:] if len(p) &gt;= 7 else "***"
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        payload = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "msg": scrub(record.getMessage()),
+            "trace_id": getattr(record, "trace_id", "-"),
+            "extra": scrub(getattr(record, "extra_fields", {})),
+        }
+        # JSON 序列化本身会转义换行，单条日志永远只占一行
+        return json.dumps(payload, ensure_ascii=False)
+</code></pre>
+
+<h2>其余四项的边界条件速查</h2>
+
+<p>A04、A07、A08、A10 在前面的全景表里已经列了检测与修复，这里只补充最容易被忽略的那一处。</p>
+
+<table>
+<thead><tr><th>类别</th><th>最容易漏的那个点</th><th>具体表现与修法</th></tr></thead>
+<tbody>
+<tr><td>A04 不安全设计</td><td>限流只做了「接口级 QPS」，没做「业务动作级次数」</td><td>短信接口整体限流 1000 QPS 看起来很安全，但单个手机号可以被刷 500 条，因为没按手机号维度计数。限流键必须包含业务主体</td></tr>
+<tr><td>A07 认证失效</td><td>改密码或强制下线后，已签发的 JWT 仍然有效</td><td>无状态 JWT 天生无法吊销。把口令版本号写进 token，校验时与库里的版本比对，不一致即拒绝；或把 access token 有效期压到 15 分钟以内</td></tr>
+<tr><td>A08 完整性失效</td><td>CI 流水线信任了未校验的外部脚本与浮动镜像 tag</td><td>把远端脚本直接管道给 shell 执行、镜像用 latest，构建结果不可复现且可被上游替换。应锁 digest、校验签名、固定工具链版本</td></tr>
+<tr><td>A10 SSRF</td><td>只校验了 URL 字符串，没校验 DNS 解析结果，也没禁止重定向</td><td>攻击者用解析到 127.0.0.1 的域名绕过字符串黑名单，或用 302 跳转到云元数据地址窃取临时凭证。必须在建连前校验解析后的 IP，并禁止跟随重定向</td></tr>
+</tbody></table>
+
+<h2>上线前安全自查清单</h2>
+
+<p>这张表建议直接抄进 PR 模板或发布检查单。判据一栏写成「能被验证的动作」而不是「注意某某」，否则不可执行，也就等于没有。</p>
+
+<table>
+<thead><tr><th>#</th><th>检查项</th><th>判据（怎么算通过）</th><th>类别</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>资源归属校验</td><td>抽三个查询接口和一个批量接口，用 A 的 token 请求 B 的资源 ID，全部返回 404</td><td>A01</td></tr>
+<tr><td>2</td><td>越权响应一致性</td><td>资源不存在与无权限返回同一状态码、同一错误体</td><td>A01</td></tr>
+<tr><td>3</td><td>敏感字段存储</td><td>翻表结构确认口令为 bcrypt 或 argon2，证件号与手机号为密文列</td><td>A02</td></tr>
+<tr><td>4</td><td>密钥来源</td><td><code>gitleaks detect</code> 零命中，密钥全部来自 KMS 或运行时注入</td><td>A02</td></tr>
+<tr><td>5</td><td>参数化查询</td><td>全仓搜索 SQL 字符串拼接，命中处逐个确认已改为参数绑定</td><td>A03</td></tr>
+<tr><td>6</td><td>业务维度限流</td><td>短信、验证码、支付、导出接口均有按用户或手机号维度的次数上限</td><td>A04</td></tr>
+<tr><td>7</td><td>调试与管理端点</td><td>从外网视角扫描：pprof、actuator、swagger、监控面板均不可达</td><td>A05</td></tr>
+<tr><td>8</td><td>错误响应</td><td>故意触发 500，响应体内无堆栈、无 SQL、无内网 IP</td><td>A05</td></tr>
+<tr><td>9</td><td>CORS 与凭证</td><td>用伪造 Origin 请求，响应不含 <code>Allow-Origin</code>；确认代码里无前缀匹配</td><td>A05</td></tr>
+<tr><td>10</td><td>存储桶权限</td><td>未登录直连对象地址返回 403，列举桶内容失败</td><td>A05</td></tr>
+<tr><td>11</td><td>依赖漏洞</td><td>CI 中 govulncheck 与 trivy 高危为零，或有带复查日期的豁免记录</td><td>A06</td></tr>
+<tr><td>12</td><td>会话失效</td><td>改密码后用旧 token 请求返回 401</td><td>A07</td></tr>
+<tr><td>13</td><td>制品可复现</td><td>基础镜像锁到 digest，构建过程不拉取未校验的外部脚本</td><td>A08</td></tr>
+<tr><td>14</td><td>日志脱敏</td><td>在日志平台搜 password 与 authorization 关键字，零命中明文</td><td>A09</td></tr>
+<tr><td>15</td><td>告警可用</td><td>权限拒绝与登录失败有打点，配了阈值告警，并且演练过一次确认真能响</td><td>A09</td></tr>
+<tr><td>16</td><td>出网控制</td><td>接受外部 URL 的功能有协议与域名白名单，且不跟随重定向</td><td>A10</td></tr>
+</tbody></table>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">怎么用这份清单</div>
+    <p>不要指望一次做完十六项。按投入产出排，优先级最高的是第 1、4、7、11 四项：资源归属校验拦住最高频的数据泄露，密钥扫描拦住最不可逆的泄露，关闭调试端点砍掉最大的免费入口，依赖扫描把持续性风险变成自动化。这四项落地之后，把它们做成 CI 门禁而不是人工检查——<strong>任何依赖人记得去做的安全措施，半年后一定会失效</strong>。剩下的按业务敏感度逐步补齐。传输层与证书的部署加固见 <a href="../crypto-https/">HTTPS 与 CSP</a> 一篇，TLS 握手与证书信任链的原理见站内 <a href="../../../backend/auth/">HTTPS/TLS 深度原理</a>。</p>
+</div>
+
+                    </div>
+                </article>
+                <nav class="article-nav">
+                    
+                    <a class="nav-next" href="../xss/"><span class="nav-label">下一篇 →</span><span class="nav-title">XSS 防御</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · Web 安全</h2><ul class="related-list"><li><a class="side-post" href="../xss/">XSS 防御</a></li><li><a class="side-post" href="../csrf-clickjacking/">CSRF 与点击劫持</a></li><li><a class="side-post" href="../sql-injection/">SQL 注入防护</a></li><li><a class="side-post" href="../auth-security/">认证授权安全</a></li><li><a class="side-post" href="../crypto-https/">HTTPS 与 CSP</a></li></ul></aside>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+    <button class="back-to-top" title="回到顶部">↑</button>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "devops";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

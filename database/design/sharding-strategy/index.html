@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>分库分表策略 - 数据库设计 - 资深码农</title>
+    <title>数据归属与多租户：分片的数据模型策略 - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="分库分表策略实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="description" content="分片在数据模型层面的策略：先用聚合根确定数据归属，同一聚合根的数据必须同片；电商系统按买家维度与按卖家维度划分各自产生哪些跨片查询；同一份数据两种查询维度的经典冲突与三种解法（异构索引表、双写两套分片、列表外置检索）对照；跨片关联的三种替代与广播表的适用条件；多租户三种隔离模型六维对照与混合模型；租户数据倾斜的识别 SQL、冷热分离与归档为何常能替代分片、分片后对账校验，以及在 DAO 层强制注入租户条件的代码。">
     <meta name="keywords" content="数据库设计,分库分表策略,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/design/sharding-strategy/">
-    <meta property="og:title" content="分库分表策略 - 数据库设计 - 资深码农">
-    <meta property="og:description" content="分库分表策略实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta property="og:title" content="数据归属与多租户：分片的数据模型策略 - 资深码农">
+    <meta property="og:description" content="分片在数据模型层面的策略：先用聚合根确定数据归属，同一聚合根的数据必须同片；电商系统按买家维度与按卖家维度划分各自产生哪些跨片查询；同一份数据两种查询维度的经典冲突与三种解法（异构索引表、双写两套分片、列表外置检索）对照；跨片关联的三种替代与广播表的适用条件；多租户三种隔离模型六维对照与混合模型；租户数据倾斜的识别 SQL、冷热分离与归档为何常能替代分片、分片后对账校验，以及在 DAO 层强制注入租户条件的代码。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/design/sharding-strategy/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="分库分表策略 - 数据库设计">
-    <meta name="twitter:description" content="分库分表策略实战指南：讲清楚数据库与缓存中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="twitter:title" content="数据归属与多租户：分片的数据模型策略">
+    <meta name="twitter:description" content="分片在数据模型层面的策略：先用聚合根确定数据归属，同一聚合根的数据必须同片；电商系统按买家维度与按卖家维度划分各自产生哪些跨片查询；同一份数据两种查询维度的经典冲突与三种解法（异构索引表、双写两套分片、列表外置检索）对照；跨片关联的三种替代与广播表的适用条件；多租户三种隔离模型六维对照与混合模型；租户数据倾斜的识别 SQL、冷热分离与归档为何常能替代分片、分片后对账校验，以及在 DAO 层强制注入租户条件的代码。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "分库分表策略：从你遇到的问题出发：能不分就不分？", "acceptedAnswer": {"@type": "Answer", "text": "分库分表很复杂，单表几百万行加索引完全够用。"}}, {"@type": "Question", "name": "分库分表策略：从你遇到的问题出发：全局ID要处理？", "acceptedAnswer": {"@type": "Answer", "text": "分表了主键不能自增了，要用雪花算法。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "分片键选定之后，哪些表要跟着一起分？", "acceptedAnswer": {"@type": "Answer", "text": "先找聚合根，同一个聚合根下的全部数据必须落在同一分片。订单是聚合根，订单明细、订单地址快照、订单状态流转日志、订单发票都要用订单所属的那个维度值作为自己的分片键，而不是用自己的主键去做散列。做法是在从表上冗余一份父表的分片键列，例如订单明细表除了 order_id 还要带上 buyer_id，路由按 buyer_id 计算。如果从表按自己的主键散列，那么查一张订单的明细就要把所有分片都问一遍，这是分片方案里最常见也最难补救的错误，因为补救意味着整表重新迁移。"}}, {"@type": "Question", "name": "订单既要按买家查又要按卖家查怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "有三种解法。第一是异构索引表，按买家分片存主数据，另建一张只含卖家维度加订单号的映射表并按卖家分片，卖家查询先查映射表拿到订单号再回主表取详情，成本最低但要保证映射表与主表最终一致。第二是双写两套分片，同一份订单在买家维度和卖家维度各存一份完整数据，查询都能单片命中，代价是存储翻倍且写入要保证两边都成功。第三是把列表查询整体外置到搜索引擎，数据库只承担按主键的点查，这也是数据量大之后最终都会走到的方案。要点是不要试图在一套分片里同时满足两个维度，那只会退化成全分片扫描。"}}, {"@type": "Question", "name": "多租户系统应该用共享表还是每个租户一个库？", "acceptedAnswer": {"@type": "Answer", "text": "实践中最常见也最合理的是混合模型：小客户共享表加租户 ID 隔离，成本最低；大客户和有合规要求的客户单独给库，隔离最强也便于单独备份、单独扩容、单独维护窗口。纯共享表的最大风险不是性能而是越权，任何一条漏带租户条件的查询都会跨租户泄露数据，所以必须在框架层强制注入而不是靠开发自觉，PostgreSQL 还可以用行级安全策略兜底。每租户一个 schema 属于中间态，隔离好一些，但每次结构变更都要在成百上千个 schema 里执行，迁移工具和连接池都要专门适配，只有在租户数量可控时才值得。"}}, {"@type": "Question", "name": "一个超级大租户把它所在的分片打满了怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "把这个租户单独拆出来。按租户 ID 散列的方案无法解决倾斜，因为散列只保证租户数量分布均匀，不保证数据量分布均匀，一个占总量三成的大租户无论落到哪一片都会把那一片打满。正确做法是在路由层加一张租户到分片的映射表，默认走散列，对识别出来的大租户写死指向独占分片。识别方法是定期统计每个租户的行数与增长速率，把占比超过阈值或增速远高于中位数的租户列为候选。这个方案的另一个好处是大客户可以单独享受不同的备份策略和维护窗口。"}}, {"@type": "Question", "name": "广播表什么时候能用，会有什么问题？", "acceptedAnswer": {"@type": "Answer", "text": "广播表就是在每个分片上都存一份完整副本，让关联查询永远不跨片。适用条件很严格：数据量小到单表几万行以内、变更极少、且不参与事务性写入，典型是地区表、字典表、汇率表、配置表。问题主要有两个。一是写放大，每次变更要写 N 个分片，分片数越多失败概率越高，所以必须有对账任务确认各分片副本一致。二是很容易被滥用，把一张会持续增长的业务表设成广播表，几个月后每个分片都背着几百万行重复数据，变更时的一致性问题也随之放大。判断标准是问一句：这张表一年内会不会被业务写入？会就不要广播。"}}, {"@type": "Question", "name": "数据量大是不是必须分库分表？", "acceptedAnswer": {"@type": "Answer", "text": "多数情况不是。很多「必须分库分表」的需求本质是历史数据太多而查询只关心近期，这类需求用归档就能解决，成本比分片低一个数量级：按时间做分区表，把超过保留期的分区整体搬到归档库或分析型数据库，主表始终只保留活跃数据。分片真正不可替代的场景是活跃数据本身就超出单机容量，或者写入吞吐已经打满单机磁盘。所以决策顺序应该是先归档、再做分区表、再加只读副本分流查询、再做垂直拆分，最后才是水平分片，因为分片是唯一会把跨片查询、分布式事务、扩容迁移这些复杂度永久引入系统的选项。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,65 +64,365 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">分库分表策略：从你遇到的问题出发</h1>
+                        <h1 class="article-title">数据归属与多租户：分片的数据模型策略</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ 分库分表</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及分库分表怎么帮你解决。</p>
+<p>分片有两层问题。一层是工程层面的：分片键怎么选、用什么分片算法、怎么生成全局 ID、中间件选谁、扩容迁移怎么不停机——这些站内《分库分表》篇已经完整讲过决策与落地流程。另一层是<strong>数据模型层面的</strong>：哪些数据属于同一个归属单元、主表和从表怎么一起分、两种查询维度冲突时怎么办、多租户怎么隔离。这一层决定了分片方案的上限，而且一旦定错，后期只能靠整表迁移来纠正。这篇只讲第二层。</p>
+
+<h2>先确认真的需要分片</h2>
+
+<p>「单表几亿行，必须分库分表」这个判断在多数情况下是错的。因为它把两件事混在一起：<strong>数据总量大</strong>和<strong>活跃数据量大</strong>。如果几亿行里只有最近三个月的几千万行被查询，那么需要的不是分片，是归档。归档的复杂度比分片低一个数量级，而且不会引入跨片查询和分布式事务。</p>
 
 <div class="mermaid">
 flowchart TB
-    A[单表数据太大] --> B{按什么分?}
-    B --> C[按时间分]
-    B --> D[按ID哈希分]
-    B --> E[按业务分库]
-</div>
-
-<h2>1. 单表数据几亿行</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你的订单表几亿行，查询越来越慢。</p>
-</div>
-
-<p><strong>怎么解决？</strong>分库分表，把数据拆到多个库多个表。</p>
-
-<h2>2. 怎么选分片键</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>知道要分，不知道按什么分。</p>
-</div>
-
-<p><strong>怎么解决？</strong>按查询最多的字段分，常用用户 ID 或时间。</p>
-
-<h2>3. 分了之后怎么查</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>分表了，跨表查询怎么办？</p>
-</div>
-
-<p><strong>怎么解决？</strong>尽量不要跨分片查询，业务设计时就要考虑。</p>
-
-<h2>分片策略</h2>
+    S["单表数据量或写入压力告警"] --> Q1{"查询是否只关心近期数据<br/>历史数据可否只读或下线"}
+    Q1 -- 是 --> A1["按时间做分区表<br/>过期分区整体归档到对象存储或分析库"]
+    Q1 -- 否 --> Q2{"瓶颈是读还是写"}
+    Q2 -- 读 --> A2["加只读副本分流<br/>重查询走分析型副本"]
+    Q2 -- 写 --> Q3{"是否存在明显的业务边界<br/>可以整块搬走"}
+    Q3 -- 是 --> A3["垂直拆分<br/>按业务域拆库 不引入跨片查询"]
+    Q3 -- 否 --> Q4{"活跃数据本身是否已超单机容量<br/>或写入已打满单机磁盘"}
+    Q4 -- 否 --> A4["先做上面三项<br/>分片不是当前最优解"]
+    Q4 -- 是 --> A5["水平分片<br/>先定数据归属 再选分片算法"]
+    A1 --> A4
+    </div>
 
 <table>
-<thead><tr><th>策略</th><th>适合场景</th></tr></thead>
+<thead><tr><th>方案</th><th>解决什么</th><th>引入的复杂度</th><th>什么时候它不够用</th></tr></thead>
 <tbody>
-<tr><td>按时间分</td><td>日志、订单类数据</td></tr>
-<tr><td>按ID哈希分</td><td>用户数据</td></tr>
-<tr><td>按业务分库</td><td>不同业务拆到不同库</td></tr>
+<tr><td>时间分区加归档</td><td>历史数据挤占活跃数据的缓存与索引空间</td><td>低。访问路径分近期与历史两条，归档任务要可续跑</td><td>活跃窗口内的数据本身就超出单机容量</td></tr>
+<tr><td>只读副本分流</td><td>读压力大、重查询影响主库</td><td>低。要处理复制延迟与读写分离的一致性</td><td>写入吞吐已经是瓶颈</td></tr>
+<tr><td>垂直拆分（按业务域拆库）</td><td>不同业务互相影响，单库连接数与容量到顶</td><td>中。跨库事务变成分布式事务，但不产生跨片查询</td><td>单个业务域自身的数据量仍然过大</td></tr>
+<tr><td>水平分片</td><td>单表容量与单机写入吞吐</td><td>高。跨片查询、分布式事务、扩容迁移、全局 ID 全部要处理</td><td>它是最后一道，不够用时只能加分片数</td></tr>
 </tbody></table>
 
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
+<h2>数据归属：先找聚合根</h2>
+
+<p>分片的第一个动作不是选分片键，而是<strong>划分数据归属</strong>：把所有表按「属于哪个业务实体」分组，同一组的数据必须落在同一分片。这个「业务实体」就是聚合根——它是外部访问这组数据的唯一入口，也是事务边界。</p>
+
+<p>识别聚合根只要问两个问题：<strong>外部是通过哪个 ID 来访问这组数据的</strong>？<strong>哪些数据必须和它在同一个事务里被修改</strong>？订单和订单明细必须一起改、一起查，明细从不被单独访问，所以订单是聚合根，明细属于它。用户和用户地址同理。</p>
+
+<table>
+<thead><tr><th>数据</th><th>聚合根</th><th>它的分片键应该是</th><th>如果按自己的主键散列会怎样</th></tr></thead>
+<tbody>
+<tr><td>order_item 订单明细</td><td>订单</td><td>订单所在维度的值（如 buyer_id），冗余一列存进明细表</td><td>查一张订单的明细要问遍所有分片，且无法与订单在同一本地事务里提交</td></tr>
+<tr><td>order_status_log 状态流转</td><td>订单</td><td>同上</td><td>订单详情页要并发查 N 个分片，延迟等于最慢分片</td></tr>
+<tr><td>order_addr_snapshot 地址快照</td><td>订单</td><td>同上</td><td>一对一关联变成跨片查询，白白多一跳</td></tr>
+<tr><td>user_address 收货地址</td><td>用户</td><td>user_id</td><td>用户中心页要扫全分片</td></tr>
+<tr><td>product 与 sku</td><td>商家</td><td>shop_id</td><td>商家商品管理页无法单片完成，且商品与 SKU 可能落在不同片</td></tr>
+<tr><td>region 地区表、字典表</td><td>无归属</td><td>不分片，广播到所有分片或放公共库</td><td>任何需要它的关联都变成跨片</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+<div class="callout-icon">❌</div>
+<div class="callout-title">最常见也最难补救的错误</div>
+<p>从表按自己的主键散列。<code>order_item</code> 按 <code>id</code> 取模、<code>order_status_log</code> 按 <code>id</code> 取模，看起来「分布很均匀」，实际上把一次订单详情查询变成了 N 次全分片广播，并且订单主表和明细无法在同一个本地事务里提交，必须引入分布式事务。<strong>从表的分片键必须冗余父表的分片键列</strong>，也就是明细表上除了 <code>order_id</code> 还要带一列 <code>buyer_id</code>，路由按 <code>buyer_id</code> 算。这一列的值在插入时确定、此后永不变化。纠正这个错误意味着整表重新迁移，所以它必须在第一天就定对。</p>
+</div>
+
+<h2>按买家还是按卖家：同一系统两种归属的后果</h2>
+
+<p>电商系统里订单同时属于买家和卖家，这让「数据归属」出现了根本性的二选一。下面这张图对比同一套数据在两种划分下，哪些查询能单片完成、哪些必然跨片。</p>
+
+<div class="mermaid">
+flowchart TB
+    subgraph A["划分方案一 按 buyer_id 分片"]
+        A1["user 与 user_address 同片"]
+        A2["order 与 order_item 与状态日志<br/>按买家落片"]
+        A3["单片命中 我的订单 订单详情 买家中心"]
+        A4["必然跨片 商家订单列表 商家营业统计<br/>按店铺筛选与导出"]
+    end
+    subgraph B["划分方案二 按 shop_id 分片"]
+        B1["shop 与 product 与 sku 同片"]
+        B2["order 与 order_item 与状态日志<br/>按卖家落片"]
+        B3["单片命中 商家后台 发货 商品管理 店铺统计"]
+        B4["必然跨片 我的订单 买家售后列表<br/>买家跨店聚合"]
+    end
+    subgraph C["与划分无关 两种方案都要单独处理"]
+        C1["地区表 字典表 汇率表<br/>广播到所有分片"]
+        C2["跨维度列表与复杂筛选<br/>外置到检索服务"]
+        C3["全站经营分析<br/>同步到分析型数据库"]
+    end
+    A1 --> A3
+    A2 --> A3
+    A2 --> A4
+    B1 --> B3
+    B2 --> B3
+    B2 --> B4
+    A4 --> C2
+    B4 --> C2
+    A1 --> C1
+    B1 --> C1
+    A2 --> C3
+    B2 --> C3
+    </div>
+
+<p>怎么选？看<strong>哪一侧的查询更高频、更在意延迟、更难降级</strong>。C 端买家侧通常量级高一两个数量级且对延迟敏感，所以主数据按买家维度分片是更常见的选择；商家后台可以接受稍高的延迟和稍弱的实时性，用下一节的方式补上。反过来，在以商家为核心的 SaaS 型系统里，按商家分片才是对的。没有普适答案，但有一条纪律：<strong>主数据只有一个归属维度，另一个维度必须靠额外机制解决，不要试图让一套分片同时满足两边</strong>。</p>
+
+<h2>两种查询维度的三种解法</h2>
+
+<div class="mermaid">
+sequenceDiagram
+    participant W as 写入方 下单
+    participant P as 买家维度分片 主数据
+    participant MQ as 变更消息
+    participant IX as 卖家维度异构索引分片
+    participant R as 商家后台查询
+    W->>P: 本地事务写 order 与 order_item
+    P-->>W: 提交成功
+    W->>MQ: 同事务写本地消息表 再投递
+    MQ->>IX: 写映射行 只含 shop_id 与 order_id 与时间与状态
+    R->>IX: 按 shop_id 分页 拿到本页订单号列表
+    IX-->>R: 返回 20 个 order_id
+    R->>P: 按 order_id 批量回主表取详情 走买家维度路由
+    P-->>R: 返回本页详情
+    Note over IX,R: 只有映射表按卖家分片 主数据不复制<br/>存储开销极小 但排序字段必须存在映射表上
+    Note over W,IX: 一致性靠本地消息表加对账<br/>映射表丢一行的表现是商家列表少一单
+    </div>
+
+<table>
+<thead><tr><th>解法</th><th>存储成本</th><th>一致性</th><th>实现复杂度</th><th>限制与适用</th></tr></thead>
+<tbody>
+<tr><td>异构索引表<br/>按另一维度存只含 ID 的映射</td><td>低，每单一行窄记录</td><td>最终一致，靠本地消息表加对账</td><td>中，查询变两步</td><td><strong>默认推荐</strong>。限制是所有排序和筛选字段都必须冗余进映射表，否则分页要回表后再排序，结果就错了</td></tr>
+<tr><td>双写两套分片<br/>同一份数据在两个维度各存一份完整副本</td><td>高，翻倍</td><td>较难，两套都要写成功且字段全量同步</td><td>高，任何加列都要改两边</td><td>两个维度都要求低延迟完整查询且预算充足时用；实践中很少选</td></tr>
+<tr><td>列表整体外置<br/>数据库只做主键点查</td><td>中，检索侧另算</td><td>最终一致，延迟通常秒级</td><td>中高，多一套组件与索引映射</td><td>筛选维度多、要做全文或多字段组合查询时唯一可行的方案；量级上来后基本都会走到这里</td></tr>
+</tbody></table>
+
+<pre><code class="language-sql">-- 异构索引表：按 shop_id 分片，只存卖家维度的分页与筛选所需字段
+CREATE TABLE order_index_by_shop (
+  shop_id     BIGINT      NOT NULL,
+  order_id    BIGINT      NOT NULL,
+  buyer_id    BIGINT      NOT NULL COMMENT '回主表路由用，必须带上否则无法定位主数据分片',
+  order_status TINYINT    NOT NULL COMMENT '冗余：商家后台要按状态筛选',
+  created_at  DATETIME(3) NOT NULL COMMENT '冗余：商家后台按下单时间倒序翻页',
+  pay_amount  DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT '冗余：列表页要显示与按金额排序',
+  PRIMARY KEY (shop_id, created_at, order_id),   -- 直接支撑按店铺按时间翻页
+  KEY idx_shop_status (shop_id, order_status, created_at)
+);
+
+-- 第一步：在卖家维度分片上分页，注意用游标分页而不是 OFFSET
+SELECT order_id, buyer_id FROM order_index_by_shop
+ WHERE shop_id = 88 AND order_status = 1
+   AND created_at &lt; ?          -- 上一页最后一行的 created_at，避免深分页
+ ORDER BY created_at DESC, order_id DESC
+ LIMIT 20;
+
+-- 第二步：按 buyer_id 路由回主数据分片批量取详情（按分片分组后并发查询）
+SELECT * FROM orders WHERE buyer_id IN (?, ?) AND id IN (?, ?, ?);
+
+-- 对账：主表与索引表按小时桶比对条数，差异不为零就报警并补写
+SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H') AS h, COUNT(*) FROM orders
+ WHERE created_at &gt;= ? AND created_at &lt; ? GROUP BY h;   -- 各主分片求和后与索引表按店铺汇总比对</code></pre>
+
+<div class="callout callout-warning">
+<div class="callout-icon">⚠️</div>
+<div class="callout-title">异构索引表最容易被漏掉的一点</div>
+<p><strong>排序和筛选字段必须完整冗余进映射表</strong>。只存 <code>shop_id</code> 和 <code>order_id</code> 的映射表，在「按金额倒序」或「按状态筛选」这类需求下会退化成：先取出全部 order_id，回主表查详情，再在应用内存里排序分页。数据量一大就直接超时，而且分页结果在数据变动时会漂移。所以映射表的字段集合应该由<strong>列表页的排序项和筛选项</strong>决定，而不是「先存两列以后再说」。这也意味着列表页新增一个筛选项时，映射表要走一次完整的加列加回填流程。</p>
+</div>
+
+<h2>跨片关联的三种替代</h2>
+
+<p>分片之后跨片 JOIN 基本不可用：中间件即使支持，代价也是把参与方全部拉到内存再关联，量级稍大就失控。真正可用的只有三种替代。</p>
+
+<table>
+<thead><tr><th>替代方式</th><th>怎么做</th><th>适用条件</th><th>代价与限制</th></tr></thead>
+<tbody>
+<tr><td>冗余关键字段</td><td>把关联表上「列表页要展示的少数列」复制到主表，查询不再需要关联</td><td>被冗余的列变更频率低，或语义上是快照</td><td>需要同步通道与对账；冗余列的维护义务见站内《范式与反范式》篇</td></tr>
+<tr><td>广播表</td><td>维表在每个分片上存一份完整副本，关联永远在本地完成</td><td><strong>行数小于几万、一年内不会被业务写入、不参与事务性更新</strong>，典型是地区表、字典表、汇率表</td><td>写放大 N 倍，变更要确认所有分片都成功；被滥用在会增长的业务表上后果很严重</td></tr>
+<tr><td>应用层两次查询再拼装</td><td>先查主表拿到关联 ID 集合，再批量查另一侧，在应用里组装</td><td>关联侧可以按主键批量查，且单页结果集有限（几十行量级）</td><td>多一次往返；必须批量查而不是循环单查，否则一页 20 行会产生 20 次查询</td></tr>
+</tbody></table>
+
+<h2>多租户的三种隔离模型</h2>
+
+<div class="mermaid">
+flowchart TB
+    subgraph M1["模型一 共享表加 tenant_id"]
+        S1["单库单套表<br/>每行带 tenant_id"]
+        S2["所有查询必须强制带租户条件<br/>越权风险最高"]
+        S3["可用行级安全策略兜底"]
+    end
+    subgraph M2["模型二 每租户一个 schema"]
+        H1["单库多 schema<br/>表结构各自独立"]
+        H2["连接时切换搜索路径"]
+        H3["每次变更要在 N 个 schema 执行"]
+    end
+    subgraph M3["模型三 每租户一个库"]
+        D1["独立实例或独立库<br/>资源与故障域完全隔离"]
+        D2["可单独备份 单独扩容 单独维护窗口"]
+        D3["成本最高 运维对象数量线性增长"]
+    end
+    subgraph MX["实践中的混合模型"]
+        X1["路由层维护 租户到位置 映射表"]
+        X2["长尾小客户落共享表"]
+        X3["大客户与合规客户落独立库"]
+    end
+    S1 --> S2
+    S2 --> S3
+    H1 --> H2
+    H2 --> H3
+    D1 --> D2
+    D2 --> D3
+    S1 --> X2
+    D1 --> X3
+    X1 --> X2
+    X1 --> X3
+    </div>
+
+<table>
+<thead><tr><th>维度</th><th>共享表加 tenant_id</th><th>每租户一个 schema</th><th>每租户一个库</th></tr></thead>
+<tbody>
+<tr><td>单位成本</td><td>最低，几千租户共用一套资源</td><td>中，表对象数量等于租户数乘表数</td><td>最高，实例或库数量等于租户数</td></tr>
+<tr><td>隔离强度</td><td>弱，只有逻辑隔离，一条漏条件的查询就越权</td><td>中，误查另一个 schema 的概率低但仍可能</td><td>强，连接层面就无法访问其他租户</td></tr>
+<tr><td>结构变更</td><td>一次 DDL 全部生效</td><td>要在 N 个 schema 循环执行，且要处理部分失败</td><td>要在 N 个库执行，通常需要专门的编排工具</td></tr>
+<tr><td>资源争抢</td><td>严重，一个大租户的慢查询影响全部租户</td><td>存在，共享同一实例的缓冲池与连接数</td><td>无，故障域按租户切开</td></tr>
+<tr><td>按租户备份与恢复</td><td>难，要按条件导出并保证外键完整</td><td>中等，可按 schema 导出</td><td>容易，库级备份恢复</td></tr>
+<tr><td>适合谁</td><td>长尾小客户、免费版、租户数成千上万</td><td>租户数在几十到几百且需要一定隔离</td><td>大客户、有合规或数据驻留要求的客户</td></tr>
+</tbody></table>
+
+<p>结论是<strong>混合模型</strong>：在路由层维护一张「租户到存储位置」的映射表，默认落共享表，大客户和合规客户指向独立库。这样既控制了长尾成本，又能在客户量级上来时平滑迁走单个租户，而迁移单个租户的数据比迁移一个分片容易得多。</p>
+
+<h2>共享表模型的越权防线</h2>
+
+<p>共享表模型真正的风险不是性能，是<strong>越权</strong>。一条漏带 <code>tenant_id</code> 的查询就是一次跨租户数据泄露，而这种漏写在代码评审里极难发现。靠开发自觉是不成立的，必须在框架层强制。</p>
+
+<pre><code class="language-go">package tenantscope
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// 需要租户隔离的表必须显式登记。进程启动时用 information_schema 对比一遍，
+// 发现有 tenant_id 列但没登记的表就直接启动失败 —— 让漏登记在部署时暴露，
+// 而不是等到线上某个接口把别人的数据返回给用户。
+var scoped = map[string]bool{
+	"orders": true, "order_item": true, "invoice": true, "audit_log": true,
+}
+
+var (
+	ErrNoTenant     = errors.New("tenantscope: 上下文中没有租户标识，拒绝执行")
+	ErrNotRegistered = errors.New("tenantscope: 表未登记租户隔离")
+)
+
+// BuildSelect 是唯一允许拼装隔离表查询的入口，业务代码拿不到裸 SQL 通道。
+func BuildSelect(tenantID int64, table string, cols []string,
+	cond string, args []any) (string, []any, error) {
+
+	// 关键点一：租户标识为零值时必须报错，绝不能退化成「查全部」。
+	// 很多越权事故的根因就是默认值 0 被当成「不过滤」。
+	if tenantID == 0 {
+		return "", nil, ErrNoTenant
+	}
+	if !scoped[table] {
+		return "", nil, fmt.Errorf("%w: %s", ErrNotRegistered, table)
+	}
+
+	var b strings.Builder
+	b.WriteString("SELECT ")
+	b.WriteString(strings.Join(cols, ", "))
+	b.WriteString(" FROM ")
+	b.WriteString(table)
+	// 关键点二：租户条件永远是第一个条件，且由框架注入。
+	b.WriteString(" WHERE tenant_id = ?")
+
+	out := make([]any, 0, len(args)+1)
+	out = append(out, tenantID)
+	out = append(out, args...)
+
+	if cond != "" {
+		// 关键点三：业务条件必须整体加括号。
+		// 否则业务写出 "a = 1 OR b = 2" 时会变成
+		//   tenant_id = ? AND a = 1 OR b = 2
+		// OR 的优先级低于 AND，租户条件被绕过，直接跨租户返回数据。
+		b.WriteString(" AND (")
+		b.WriteString(cond)
+		b.WriteString(")")
+	}
+	return b.String(), out, nil
+}</code></pre>
+
+<pre><code class="language-sql">-- PostgreSQL 行级安全策略：在数据库层再加一道，防住框架被绕过和临时脚本直连
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+-- 注意：不加 FORCE，表的所有者会绕过策略，而应用账号往往就是所有者
+ALTER TABLE orders FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY p_tenant_isolation ON orders
+  USING (tenant_id = current_setting('app.tenant_id', true)::bigint)
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::bigint);
+-- USING 管读与更新可见性，WITH CHECK 管写入，两个都要给，
+-- 只给 USING 时仍可以插入属于别人的 tenant_id。
+
+-- 每个请求在事务开始时设置，SET LOCAL 随事务结束自动失效，
+-- 这一点在连接池场景下至关重要：用 SET 而不是 SET LOCAL 会让设置残留在
+-- 被复用的连接上，下一个请求就会读到上一个租户的数据。
+BEGIN;
+SET LOCAL app.tenant_id = '1001';
+SELECT id, amount FROM orders WHERE created_at &gt;= now() - interval '7 days';
+COMMIT;</code></pre>
+
+<h2>租户倾斜与生命周期</h2>
+
+<p>按租户散列无法解决倾斜。散列只保证<strong>租户数量</strong>分布均匀，不保证<strong>数据量</strong>分布均匀。一个占总量三成的大租户，落到哪一片都会把那一片打满。解法是在路由层加映射表：默认走散列，识别出的大租户写死指向独占分片。</p>
+
+<pre><code class="language-sql">-- 识别倾斜租户：行数占比与近期增速一起看，只看总量会漏掉新晋大客户
+SELECT tenant_id,
+       COUNT(*)                                                   AS rows_total,
+       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2)         AS pct_of_all,
+       SUM(created_at &gt;= NOW() - INTERVAL 7 DAY)                  AS rows_last_7d,
+       MOD(CRC32(CAST(tenant_id AS CHAR)), 16)                    AS shard_no
+  FROM orders
+ GROUP BY tenant_id
+HAVING rows_total &gt; 1000000 OR rows_last_7d &gt; 200000
+ ORDER BY rows_total DESC
+ LIMIT 50;
+
+-- 分片维度看倾斜：理想情况各分片接近均分，最大与最小之比超过 2 就该处理
+SELECT MOD(CRC32(CAST(tenant_id AS CHAR)), 16) AS shard_no,
+       COUNT(DISTINCT tenant_id) AS tenants, COUNT(*) AS rows_total
+  FROM orders GROUP BY shard_no ORDER BY rows_total DESC;
+
+-- 路由映射表：默认散列，命中这张表的租户强制走指定位置
+CREATE TABLE tenant_location (
+  tenant_id BIGINT PRIMARY KEY,
+  ds_name   VARCHAR(64) NOT NULL COMMENT '数据源名，指向独占库或独占分片',
+  mode      TINYINT     NOT NULL DEFAULT 1 COMMENT '1独占库 2独占分片 3共享表',
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+);</code></pre>
+
+<table>
+<thead><tr><th>校验项</th><th>怎么做</th><th>差异不为零时的含义</th></tr></thead>
+<tbody>
+<tr><td>主表与异构索引表条数</td><td>按小时桶分别汇总各分片条数后比对</td><td>索引写入丢失，表现为商家列表少单</td></tr>
+<tr><td>广播表各副本一致性</td><td>各分片计算行数与整表校验和并比对</td><td>某个分片的广播写失败，该分片的关联结果错误</td></tr>
+<tr><td>冗余分片键列的正确性</td><td>抽样校验从表的分片键列与父表是否一致</td><td>存在写入时未正确赋值的行，这些行永久查不到</td></tr>
+<tr><td>租户数据不跨界</td><td>按租户抽样统计各位置行数，与路由映射表期望比对</td><td>迁移遗留或路由配置错误，可能已发生越权</td></tr>
+<tr><td>分片容量与增速</td><td>定期记录各分片行数与磁盘占用，计算增速</td><td>倾斜正在形成，提前拆分而不是等告警</td></tr>
+</tbody></table>
+
+<p>最后是生命周期。<strong>按时间分区加归档往往比分片更省事</strong>：主表只保留活跃窗口的数据，过期分区整体搬到归档库、对象存储或分析型数据库。这条路径不引入跨片查询和分布式事务，恢复和验证都容易得多。很多「必须分库分表」的需求其实归档就能解决，值得在动手分片前认真评估一次。分片算法的具体选择、基因法、扩容迁移的状态流转和中间件选型，见站内《分库分表》篇。</p>
+
+<div class="callout callout-danger">
+<div class="callout-icon">❌</div>
+<div class="callout-title">最容易踩的坑</div>
 <ul>
-<li><strong>能不分就不分</strong>分库分表很复杂，单表几百万行加索引完全够用。</li>
-<li><strong>全局ID要处理</strong>分表了主键不能自增了，要用雪花算法。</li>
+<li>从表按自己的主键散列，订单明细和状态日志与订单主表不在同一片，订单详情页变成 N 次全分片广播，且无法用本地事务，只能改整表迁移来纠正。</li>
+<li>从表忘了冗余父表的分片键列，写入时无法计算路由，临时用「先查再写」兜住，并发下写错分片，这些行之后永久查不到。</li>
+<li>指望一套分片同时服务买家和卖家两个维度，最后每个列表接口都变成全分片扫描加内存归并，延迟等于最慢的那个分片。</li>
+<li>异构索引表只存了两列 ID，商家后台要按金额排序时只能全量拉回应用内存排序，翻页结果还会随数据变动漂移。</li>
+<li>异构索引表的一致性只靠「写完主表接着写索引表」，进程崩在中间就永久少一行，没有对账任务时无人发现。</li>
+<li>把会持续增长的业务表设成广播表，几个月后每个分片都背着几百万行重复数据，任何变更都要 N 次写且容易部分失败。</li>
+<li>跨片关联改成应用层两次查询，但第二次是在循环里单条查，一页 20 行产生 20 次往返，延迟比原来的关联还高。</li>
+<li>共享表模型里租户标识取默认值 0 时被当作「不过滤」，一条内部接口把全部租户数据返回给了某个客户。</li>
+<li>业务条件没加括号，拼出 <code>tenant_id = ? AND a = 1 OR b = 2</code>，OR 优先级低于 AND，租户条件被整条绕过。</li>
+<li>PostgreSQL 开了行级安全但没加 FORCE，而应用账号正是表的所有者，策略对它完全不生效。</li>
+<li>用 SET 而不是 SET LOCAL 设置当前租户，连接归还池后设置残留，下一个请求读到上一个租户的数据。</li>
+<li>每租户一个 schema 的方案里，一次 DDL 在 800 个 schema 中执行到第 300 个失败，此后各 schema 结构不一致，且没有记录能说清哪些成功了。</li>
+<li>按租户散列就以为解决了倾斜，结果占总量三成的大客户把它所在分片打满，而扩容分片数对倾斜毫无帮助。</li>
+<li>先上分片再发现真实需求只是「历史数据太多」，归档就能解决，白白引入了跨片查询和分布式事务的长期复杂度。</li>
 </ul>
 </div>
 
