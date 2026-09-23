@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>结构化日志 - 日志与监控 - 资深码农</title>
+    <title>结构化日志落地：字段规范、各语言库与上下文透传 - 日志与监控 - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="结构化日志入门实战指南：讲清楚运维与云原生中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="description" content="结构化日志的落地细节：必备字段表与完整 JSON 样例、msg 作为稳定模板而变量全部入字段的理由、Go slog 与 Java MDC 与 Python contextvars 与 Node AsyncLocalStorage 四种上下文透传写法、线程池复用导致 MDC 串到别的请求的坑与修法、在 encoder 层统一脱敏的实现思路、多行异常堆栈在采集侧的麻烦、容器内统一写 stdout 的理由与例外，以及老系统渐进结构化的双写迁移路径。">
     <meta name="keywords" content="日志与监控,结构化日志,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/devops/logging/structured/">
-    <meta property="og:title" content="结构化日志 - 日志与监控 - 资深码农">
-    <meta property="og:description" content="结构化日志入门实战指南：讲清楚运维与云原生中的核心概念、常见用法和新手踩坑经验。">
+    <meta property="og:title" content="结构化日志落地：字段规范、各语言库与上下文透传 - 日志与监控 - 资深码农">
+    <meta property="og:description" content="结构化日志的落地细节：必备字段表与完整 JSON 样例、msg 作为稳定模板而变量全部入字段的理由、Go slog 与 Java MDC 与 Python contextvars 与 Node AsyncLocalStorage 四种上下文透传写法、线程池复用导致 MDC 串到别的请求的坑与修法、在 encoder 层统一脱敏的实现思路、多行异常堆栈在采集侧的麻烦、容器内统一写 stdout 的理由与例外，以及老系统渐进结构化的双写迁移路径。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/logging/structured/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="结构化日志 - 日志与监控">
-    <meta name="twitter:description" content="结构化日志入门实战指南：讲清楚运维与云原生中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="twitter:title" content="结构化日志落地：字段规范、各语言库与上下文透传 - 日志与监控">
+    <meta name="twitter:description" content="结构化日志的落地细节：必备字段表与完整 JSON 样例、msg 作为稳定模板而变量全部入字段的理由、Go slog 与 Java MDC 与 Python contextvars 与 Node AsyncLocalStorage 四种上下文透传写法、线程池复用导致 MDC 串到别的请求的坑与修法、在 encoder 层统一脱敏的实现思路、多行异常堆栈在采集侧的麻烦、容器内统一写 stdout 的理由与例外，以及老系统渐进结构化的双写迁移路径。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "结构化日志入门：从你遇到的问题出发：一定要带 Trace ID？", "acceptedAnswer": {"@type": "Answer", "text": "所有结构化日志都要带 Trace ID，能串起来。"}}, {"@type": "Question", "name": "结构化日志入门：从你遇到的问题出发：字段要统一？", "acceptedAnswer": {"@type": "Answer", "text": "不同服务日志字段要统一，不要各写各的。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "为什么日志消息要写成固定模板，变量放到字段里？", "acceptedAnswer": {"@type": "Answer", "text": "因为只有 msg 稳定，才能按 msg 做聚合与统计。写成 order 123 created 的话，每条日志的 msg 都不一样，基数等于订单数，既无法统计某类事件发生了多少次，也让 zap 的按 message 采样、按 message 建告警规则全部失效。正确写法是 msg 固定为 order created，把 order_id 放进字段。这一条是结构化日志里收益最高、也最常被忽略的规范。"}}, {"@type": "Question", "name": "Java 用 MDC 传日志上下文，为什么会串到别的请求？", "acceptedAnswer": {"@type": "Answer", "text": "MDC 底层是 ThreadLocal，而线程池的线程是复用的。请求 A 在线程上写入 trace_id 后如果没有清理，线程被请求 B 复用时 B 的日志就会带上 A 的 trace_id；反过来，主线程往线程池提交的异步任务拿不到 MDC，日志里 trace_id 直接为空。修法是提交任务时显式复制 MDC 快照，在任务 run 方法的 finally 里 clear，并在过滤器的 finally 里清理主线程的 MDC。"}}, {"@type": "Question", "name": "脱敏应该写在调用方还是日志库里？", "acceptedAnswer": {"@type": "Answer", "text": "必须放在 encoder 或 formatter 层，也就是日志序列化的统一出口。靠调用方自觉必然会漏：新人不知道规范、老代码没人改、第三方库打印的日志你根本控制不了。在 encoder 层按字段名白名单加值正则双重判定，命中就替换成掩码，这样无论谁用什么方式打日志都会被拦住。代价是每条日志多一次字段遍历，通常在几微秒量级，可以接受。"}}, {"@type": "Question", "name": "容器里的日志应该写文件还是写 stdout？", "acceptedAnswer": {"@type": "Answer", "text": "默认一律写 stdout，交给容器运行时落盘、交给采集器读取。写文件再挂卷会带来四个麻烦：轮转要自己配、Pod 重建后文件可能丢失、多容器共享卷有权限和竞争问题、采集器需要额外的路径发现逻辑。例外只有两类：审计日志需要独立的可靠通道与保留策略；单条超大的调试输出会挤占 stdout 管道，可以单独落文件并配轮转。"}}, {"@type": "Question", "name": "异常堆栈是多行的，结构化之后怎么处理？", "acceptedAnswer": {"@type": "Answer", "text": "把堆栈整体作为一个字符串字段输出，例如 error.stack。这样它在 JSON 序列化后仍然只占一行，采集器不需要配多行合并规则。纯文本日志下堆栈是多行的，采集侧必须用 multiline 正则把后续行拼回上一条，这个正则一旦和某种框架的输出格式不匹配，就会把一个堆栈拆成几十条无意义的日志，而且这种错配通常在故障时才暴露。"}}, {"@type": "Question", "name": "老系统怎么渐进式改成结构化日志？", "acceptedAnswer": {"@type": "Answer", "text": "分三步，不要一次切换。第一步双写：保留原有文本格式输出，同时增加一份 JSON 输出到新的目标，此时解析规则与看板都还基于旧格式，风险为零。第二步切采集：把采集器与看板、告警规则逐个迁到 JSON 索引上，对照两边的量和字段齐全率，确认没有字段缺失。第三步下线旧格式与旧的 grok 规则。整个过程中新增代码只允许走新的 logger 封装。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,66 +64,488 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">结构化日志入门：从你遇到的问题出发</h1>
+                        <h1 class="article-title">结构化日志落地：字段规范、各语言库与上下文透传</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ 结构化日志</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及结构化日志怎么帮你解决。</p>
+<p><strong>本篇只讲结构化日志在应用侧怎么落地</strong>：字段怎么定、各语言库怎么配、上下文怎么自动带上、脱敏在哪一层做。平台侧的索引 mapping、text 与 keyword 的取舍、grok 解析的性能成本论证、ILM 与容量规划都在站内 <a href="../../monitoring/elk/">日志平台架构取舍与容量规划</a> 里；日志该记什么、分级判据、性能开销见 <a href="../">应用侧日志工程</a>。</p>
+
+<h2>为什么必须结构化：把解析成本从平台侧搬回应用侧</h2>
+<p>「结构化日志便于搜索」只是结果，真正的理由是<strong>成本归属</strong>。非结构化日志把解析工作推给了管道：Logstash 或 Ingest Pipeline 要对每一条日志跑 grok 正则，而 grok 本质是多个正则的顺序尝试，一条复杂 pattern 单条处理成本在几十到上百微秒，乘上每天几十亿条就是一整批常驻的解析节点。更麻烦的是<strong>脆</strong>：某个开发改了一句日志文案，解析规则静默失配，字段变成 <code>_grokparsefailure</code>，依赖这些字段的看板和告警一起哑掉，而且往往几天后才被发现。</p>
+<p>结构化日志把这一步前移到应用进程内：序列化一次 JSON，平台侧只要 <code>json</code> 解码。应用侧多花的 CPU 是微秒级且分摊在成百上千个实例上，平台侧省掉的是集中式的解析集群和它的运维。</p>
 
 <div class="mermaid">
 flowchart TB
-    A[传统日志] --> B[非结构化]
-    B --> C[难搜索]
-    C --> D[结构化日志]
-    D --> E[JSON 格式]
-    E --> F[易搜索分析]
+    subgraph A["非结构化路径 解析成本在平台"]
+        A1["应用打印文本行<br/>格式随手写"]
+        A2["采集器原样搬运"]
+        A3["Logstash grok 逐条正则<br/>CPU 密集 需独立集群"]
+        A4["文案一改即静默失配<br/>字段变成解析失败标记"]
+        A5["看板与告警哑掉"]
+        A1 --> A2 --> A3 --> A4 --> A5
+    end
+    subgraph B["结构化路径 解析成本在应用"]
+        B1["应用序列化 JSON<br/>字段即契约"]
+        B2["采集器原样搬运"]
+        B3["平台只做 json 解码<br/>几乎无 CPU 开销"]
+        B4["字段缺失在 CI 抽样时暴露"]
+        B1 --> B2 --> B3 --> B4
+    end
 </div>
-
-<h2>1. 日志不好搜</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>日志都是一行行文本，想按用户 ID 搜要写正则，太麻烦。</p>
-</div>
-
-<p><strong>怎么解决？</strong>用结构化日志，JSON 格式，字段固定，方便搜索分析。</p>
-
-<h2>2. 结构化日志是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>结构化日志是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>日志用 JSON 格式，字段固定（time/level/user_id/msg），方便机器解析。</p>
-
-<h2>3. 怎么打</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>怎么打结构化日志？</p>
-</div>
-
-<p><strong>怎么解决？</strong>日志库选支持结构化的（zap/serilog），输出 JSON 格式。</p>
-
-<h2>对比</h2>
 
 <table>
-<thead><tr><th>对比</th><th>传统日志</th><th>结构化日志</th></tr></thead>
+<thead>
+<tr><th>维度</th><th>文本日志 加 grok 解析</th><th>应用侧 JSON 结构化</th></tr>
+</thead>
 <tbody>
-<tr><td>格式</td><td>纯文本</td><td>JSON</td></tr>
-<tr><td>搜索</td><td>正则匹配</td><td>字段查询</td></tr>
-<tr><td>分析</td><td>难</td><td>易</td></tr>
-</tbody></table>
+<tr><td>解析成本位置</td><td>集中在管道节点，需按总量扩容</td><td>分摊在每个应用实例，单条微秒级</td></tr>
+<tr><td>格式变更的影响</td><td>静默失配，字段丢失但不报错</td><td>字段名是代码里的常量，改动可被静态检查发现</td></tr>
+<tr><td>多行堆栈</td><td>需要 multiline 合并规则，正则错配会把一个堆栈拆成几十条</td><td>堆栈是一个字段，天然单行</td></tr>
+<tr><td>日志注入</td><td>用户输入带换行即可伪造日志行</td><td>换行被转义，行边界不可破坏</td></tr>
+<tr><td>字段类型</td><td>全是字符串，耗时要在查询时转换</td><td>数字是数字，可直接做区间与聚合</td></tr>
+<tr><td>人工直读</td><td>友好</td><td>较差，需要本地开发环境切成彩色文本格式</td></tr>
+<tr><td>单条体积</td><td>较小</td><td>字段名重复出现，通常大 20% 到 40%</td></tr>
+</tbody>
+</table>
 
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
+<div class="callout callout-info">
+<div class="callout-icon">💡</div>
+<div class="callout-title">本地开发不要用 JSON 输出</div>
+<p>JSON 日志对人不友好，逼着开发在本地也读 JSON 只会让人开始用 <code>System.out.println</code>。正确做法是按环境切 encoder：本地用彩色文本单行输出，测试与生产用 JSON。字段定义不变，只换序列化方式，这样规范不打折、体验也不受损。</p>
+</div>
+
+<h2>字段规范：一份可以直接抄的字段表</h2>
+<p>字段规范的价值在于<strong>跨服务可比</strong>。只要全公司的服务名字段都叫 <code>service</code>、trace 字段都叫 <code>trace_id</code>，一条查询就能跨所有索引用；一旦一半服务叫 <code>traceId</code>、一半叫 <code>trace_id</code>、还有一半叫 <code>tid</code>，就得为每个服务单独建看板。这件事必须在第一天定死，它的迁移成本随服务数量线性增长。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>类型</th><th>示例值</th><th>要点</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ts</code></td><td>date</td><td>2026-09-23T10:12:33.481+08:00</td><td>RFC3339 带毫秒与时区偏移；最忌只写本地时间不带时区，跨区排障时差全靠猜</td></tr>
+<tr><td><code>level</code></td><td>keyword</td><td>ERROR</td><td>统一大写；不要同时出现 WARN 和 WARNING 两种写法</td></tr>
+<tr><td><code>service</code></td><td>keyword</td><td>order-api</td><td>与注册中心、指标标签、trace 的 service.name 完全一致</td></tr>
+<tr><td><code>env</code></td><td>keyword</td><td>prod</td><td>prod / staging / dev 三值枚举，用于索引路由与权限隔离</td></tr>
+<tr><td><code>host</code> / <code>pod</code></td><td>keyword</td><td>order-api-7c9f-x2k8</td><td>Pod 名基数较高但必需，用于定位单实例问题</td></tr>
+<tr><td><code>trace_id</code></td><td>keyword</td><td>4bf92f3577b34da6a3ce929d0e0e4736</td><td>全公司统一字段名，32 位小写十六进制，与 trace 系统一致</td></tr>
+<tr><td><code>span_id</code></td><td>keyword</td><td>00f067aa0ba902b7</td><td>16 位；有了它才能定位到链路里的具体一跳</td></tr>
+<tr><td><code>logger</code></td><td>keyword</td><td>com.example.order.PayService</td><td>代替类名加行号，配合动态调级使用</td></tr>
+<tr><td><code>msg</code></td><td>keyword 加 text 双字段</td><td>order created</td><td>稳定模板；keyword 子字段用于聚合，text 用于全文搜</td></tr>
+<tr><td><code>error.type</code></td><td>keyword</td><td>DeadlockLoserDataAccessException</td><td>用于按异常类型聚合，比按 message 聚合稳定得多</td></tr>
+<tr><td><code>error.stack</code></td><td>text 且不建索引</td><td>多行堆栈整体作为一个字符串</td><td>务必设 <code>index: false</code>，否则堆栈全文索引是存储与 CPU 双重浪费</td></tr>
+<tr><td><code>duration_ms</code></td><td>long</td><td>132</td><td>数值类型，单位写进字段名，避免出现毫秒和秒混用</td></tr>
+</tbody>
+</table>
+
+<p>业务字段的命名约定：<strong>大小写风格全公司选一种并写进 lint</strong>（<code>snake_case</code> 在日志生态里更通用，ECS 与多数 Handler 默认输出也是这个风格）；<strong>同名必须同义</strong>，<code>user_id</code> 在任何服务里都只能是内部用户主键，不能在某个服务里塞成第三方 openid；<strong>高基数字段不要进索引</strong>，订单号、请求体摘要这类字段在 ES 里可以存但应设为不索引或只放 <code>keyword</code> 且 <code>doc_values: false</code>，具体取舍见 <a href="../../monitoring/elk/">ELK 篇</a>。</p>
+
+<pre><code class="language-json">{
+  "ts": "2026-09-23T10:12:33.481+08:00",
+  "level": "ERROR",
+  "service": "order-api",
+  "env": "prod",
+  "pod": "order-api-7c9f4d8b6d-x2k8p",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "span_id": "00f067aa0ba902b7",
+  "logger": "com.example.order.PayService",
+  "msg": "pay callback verify failed",
+  "order_id": "O20260923000187",
+  "user_id": 88120034,
+  "channel": "wxpay",
+  "duration_ms": 132,
+  "retry": 2,
+  "error": {
+    "type": "SignatureMismatchException",
+    "message": "sign mismatch, expect a1b2c3",
+    "stack": "com.example.order.PayService.verify(PayService.java:88)\n\tat com.example.order.PayController.callback(PayController.java:41)"
+  }
+}</code></pre>
+
+<h2>msg 必须是稳定模板，变量全部进字段</h2>
+<p>这是结构化日志里收益最高、也最常被忽略的一条。<code>msg="order created" order_id=123</code> 和 <code>msg="order 123 created"</code> 在人眼里差别不大，在机器眼里差别是天壤：后者的 msg 基数等于订单数量，任何按 msg 的聚合都退化成「每条一个桶」。</p>
+
+<table>
+<thead>
+<tr><th>能力</th><th>msg 拼了变量</th><th>msg 是稳定模板</th></tr>
+</thead>
+<tbody>
+<tr><td>统计某类事件次数</td><td>做不到，需要再写一层正则提取</td><td>按 msg 直接 terms 聚合</td></tr>
+<tr><td>日志转指标</td><td>规则必须写正则，管道 CPU 上升</td><td>按字段精确匹配即可计数</td></tr>
+<tr><td>zap / zerolog 的采样器</td><td>完全失效，key 每条都不同</td><td>正常按 key 限流</td></tr>
+<tr><td>告警规则稳定性</td><td>改文案即失效</td><td>文案是常量，改动可见</td></tr>
+<tr><td>ES 索引体积</td><td>msg 字段基数爆炸，倒排词典膨胀</td><td>msg 只有有限枚举值，压缩率高</td></tr>
+<tr><td>新异常发现</td><td>无法区分新 msg 和新变量</td><td>出现未见过的 msg 即新事件</td></tr>
+</tbody>
+</table>
+
+<h2>各语言主流库的正确用法</h2>
+<p>四个语言的共同点是：<strong>用 <code>With</code> 类 API 派生一个带请求上下文的子 logger</strong>，而不是在每个调用点手写 trace_id。这是结构化日志真正省力的地方，也是多数团队只做了一半的地方——JSON 输出配好了，但每条日志的上下文还靠手传，于是漏得到处都是。</p>
+
+<table>
+<thead>
+<tr><th>语言</th><th>推荐库</th><th>派生上下文的 API</th><th>上下文载体</th><th>主要坑</th></tr>
+</thead>
+<tbody>
+<tr><td>Go</td><td>标准库 <code>slog</code>（1.21+）或 zap</td><td><code>logger.With(...)</code>、<code>slog.Group</code></td><td><code>context.Context</code> 携带 logger</td><td>忘记把 ctx 往下传，子函数拿到的是全局 logger</td></tr>
+<tr><td>Java</td><td>Logback 加 logstash-encoder，或 Log4j2 JsonTemplateLayout</td><td>MDC 加 <code>StructuredArguments</code></td><td>MDC，底层是 ThreadLocal</td><td>线程池复用导致 MDC 串号或为空</td></tr>
+<tr><td>Python</td><td><code>structlog</code>，或 <code>logging</code> 加 JSON formatter</td><td><code>bind_contextvars</code></td><td><code>contextvars</code></td><td>用 threading.local 写异步代码，协程间互相污染</td></tr>
+<tr><td>Node</td><td><code>pino</code></td><td><code>logger.child(...)</code></td><td><code>AsyncLocalStorage</code></td><td>回调风格代码跨不过 ALS 边界，上下文丢失</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-go">// Go：slog + 自定义 Handler 做统一脱敏 + context 携带 logger
+package logctx
+
+import (
+    "context"
+    "log/slog"
+    "os"
+    "regexp"
+    "strings"
+)
+
+type ctxKey struct{}
+
+var phoneRe = regexp.MustCompile(`1[3-9]\d{9}`)
+
+// 字段名黑名单：命中即整体掩码，不看值长什么样
+var sensitiveKeys = map[string]bool{
+    "password": true, "passwd": true, "token": true,
+    "authorization": true, "id_card": true, "card_no": true,
+}
+
+// 只扫字符串类型，避免对数字和时间做无用的正则匹配
+func maskPhone(s string) string {
+    return phoneRe.ReplaceAllStringFunc(s, func(m string) string {
+        return m[:3] + "****" + m[7:]   // 前 3 后 4，长度固定不会越界
+    })
+}
+
+// 脱敏必须放在 Handler 层：调用方怎么写都绕不过去
+func redact(groups []string, a slog.Attr) slog.Attr {
+    if sensitiveKeys[strings.ToLower(a.Key)] {
+        return slog.String(a.Key, "[REDACTED]")
+    }
+    if a.Value.Kind() == slog.KindString {
+        if v := a.Value.String(); phoneRe.MatchString(v) {
+            return slog.String(a.Key, maskPhone(v))
+        }
+    }
+    return a
+}
+
+func NewLogger(service, env string) *slog.Logger {
+    h := slog.NewJSONHandler(os.Stdout, &amp;slog.HandlerOptions{
+        Level: slog.LevelInfo,
+        // AddSource 会在每条日志上取调用栈帧，热路径上有可观开销，按需开启
+        AddSource:   false,
+        ReplaceAttr: redact,
+    })
+    // 进程级固定字段用 With 一次绑定，之后每条日志自动带上
+    return slog.New(h).With(
+        slog.String("service", service),
+        slog.String("env", env),
+    )
+}
+
+// 请求入口：派生带 trace 上下文的子 logger 并放进 context
+func WithRequest(ctx context.Context, base *slog.Logger, traceID, spanID string, uid int64) context.Context {
+    l := base.With(
+        slog.String("trace_id", traceID),
+        slog.String("span_id", spanID),
+        slog.Int64("user_id", uid),
+    )
+    return context.WithValue(ctx, ctxKey{}, l)
+}
+
+// 业务代码只认 ctx，永远不需要手写 trace_id
+func L(ctx context.Context) *slog.Logger {
+    if l, ok := ctx.Value(ctxKey{}).(*slog.Logger); ok {
+        return l
+    }
+    return slog.Default()
+}
+
+// 调用点：msg 是稳定模板，变量全部进字段
+func createOrder(ctx context.Context, orderID string, amount int64) {
+    L(ctx).Info("order created",
+        slog.String("order_id", orderID),
+        slog.Int64("amount_cent", amount),
+    )
+}</code></pre>
+
+<h2>上下文透传：结构化日志最难的部分</h2>
+<p>让每条日志自动带上 <code>trace_id</code> 和 <code>user_id</code>，听起来是配置问题，实际是运行模型问题。Go 靠显式传 <code>context</code>，代价是函数签名污染但绝不会串；Java 靠 <code>MDC</code>，写起来最舒服但埋着最大的雷；Python 的 <code>contextvars</code> 和 Node 的 <code>AsyncLocalStorage</code> 是语言层为异步场景提供的「隐式 context」，行为正确但都有边界。</p>
+<p><strong>Java 的 MDC 必须单独讲</strong>。MDC 底层是 <code>ThreadLocal</code>，而线程池的线程是复用的，于是有两个方向的故障：主线程提交异步任务，任务在池线程里执行，<strong>拿不到 MDC，日志里 trace_id 为空</strong>；请求 A 结束时没清理 MDC，线程被请求 B 复用，<strong>B 的日志带上了 A 的 trace_id</strong>——这一类问题比空值危险得多，因为它会把两个请求的日志错误地串成一条链路，排障时得出完全错误的结论。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    participant A as 请求 A
+    participant F as Servlet Filter
+    participant T as 池线程 worker-1
+    participant B as 请求 B
+    A->>F: 进入 设置 MDC trace_id 为 aaa
+    F->>T: 提交异步任务
+    Note over T: 任务里 MDC 为空<br/>日志 trace_id 缺失
+    A->>F: 返回响应 但 finally 里忘记 clear
+    Note over T: worker-1 仍残留 trace_id aaa
+    B->>T: 被调度到 worker-1
+    Note over T: B 的日志打出 trace_id aaa<br/>两个请求被错误串成一条链路
+    T-->>B: 返回结果
+</div>
+
+<pre><code class="language-java">// Java：Logback + logstash-encoder + MDC，并修掉线程池两个坑
+// 1) 请求边界必须 try/finally 清理 MDC
+// 2) 提交到线程池的任务必须显式携带 MDC 快照
+@Component
+public class TraceMdcFilter extends OncePerRequestFilter {
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse resp,
+                                    FilterChain chain) throws ServletException, IOException {
+        Span span = Span.current();
+        MDC.put("trace_id", span.getSpanContext().getTraceId());
+        MDC.put("span_id", span.getSpanContext().getSpanId());
+        MDC.put("uri", req.getRequestURI());
+        try {
+            chain.doFilter(req, resp);
+        } finally {
+            // 不清理 = 下一个复用该线程的请求会带上这次的 trace_id
+            MDC.clear();
+        }
+    }
+}
+
+// 用装饰器统一解决「异步任务丢 MDC」，不要每处手写
+public final class MdcTaskDecorator implements TaskDecorator {
+
+    @Override
+    public Runnable decorate(Runnable runnable) {
+        // 在提交线程上抓快照（此时 MDC 还在）
+        Map&lt;String, String&gt; snapshot = MDC.getCopyOfContextMap();
+        return () -&gt; {
+            Map&lt;String, String&gt; backup = MDC.getCopyOfContextMap();
+            if (snapshot != null) {
+                MDC.setContextMap(snapshot);
+            }
+            try {
+                runnable.run();
+            } finally {
+                // 恢复池线程原有状态，避免污染下一个任务
+                if (backup != null) {
+                    MDC.setContextMap(backup);
+                } else {
+                    MDC.clear();
+                }
+            }
+        };
+    }
+}
+
+@Bean
+public ThreadPoolTaskExecutor bizExecutor(MdcTaskDecorator decorator) {
+    ThreadPoolTaskExecutor ex = new ThreadPoolTaskExecutor();
+    ex.setCorePoolSize(16);
+    ex.setQueueCapacity(2000);
+    ex.setTaskDecorator(decorator);   // 关键一行
+    ex.setThreadNamePrefix("biz-");
+    ex.initialize();
+    return ex;
+}
+
+// 调用点：msg 固定，变量用 StructuredArguments 进字段而不是拼进消息
+log.info("order created", StructuredArguments.keyValue("order_id", orderId),
+                          StructuredArguments.keyValue("amount_cent", amountCent));</code></pre>
+
+<pre><code class="language-python"># Python：structlog + contextvars，异步与线程都安全
+# 关键点：用 contextvars 而不是 threading.local，
+# 否则在 asyncio 下多个协程共享同一个线程，上下文会互相覆盖
+import logging
+import structlog
+from structlog.contextvars import bind_contextvars, clear_contextvars, merge_contextvars
+
+SENSITIVE = {"password", "token", "id_card", "card_no", "authorization"}
+
+def redact(logger, method_name, event_dict):
+    # 统一脱敏放在 processor 链里，调用方无法绕过
+    for k in list(event_dict):
+        if k.lower() in SENSITIVE:
+            event_dict[k] = "[REDACTED]"
+    return event_dict
+
+structlog.configure(
+    processors=[
+        merge_contextvars,                      # 把 contextvars 里的字段并进每条日志
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso", utc=False),
+        redact,
+        structlog.processors.format_exc_info,   # 堆栈变成 exception 字段，仍是单行
+        structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    cache_logger_on_first_use=True,
+)
+
+log = structlog.get_logger().bind(service="order-api", env="prod")
+
+async def handle(request):
+    clear_contextvars()                          # 复用 worker 前先清干净
+    bind_contextvars(trace_id=request.trace_id, user_id=request.uid)
+    log.info("order created", order_id="O2026...", amount_cent=1990)</code></pre>
+
+<pre><code class="language-javascript">// Node：pino + AsyncLocalStorage，跨 await 自动保持上下文
+// 坑：老式回调 API（尤其是把回调交给原生扩展或全局事件总线的）可能跨不过 ALS，
+// 表现为某些日志莫名丢 trace_id，排查方向是找那个丢失 async 上下文的边界
+import pino from 'pino';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+const als = new AsyncLocalStorage();
+
+const base = pino({
+  level: 'info',
+  base: { service: 'order-api', env: 'prod' },
+  timestamp: pino.stdTimeFunctions.isoTime,
+  // redact 在序列化层做脱敏，支持路径通配，调用方绕不过
+  redact: {
+    paths: ['password', 'token', 'req.headers.authorization', '*.card_no'],
+    censor: '[REDACTED]',
+  },
+  formatters: { level: (label) =&gt; ({ level: label.toUpperCase() }) },
+});
+
+// 每个请求派生 child logger，字段一次绑定
+export function withRequestContext(req, res, next) {
+  const child = base.child({
+    trace_id: req.headers['traceparent']?.split('-')[1],
+    user_id: req.user?.id,
+  });
+  als.run({ log: child }, () =&gt; next());
+}
+
+export const log = () =&gt; als.getStore()?.log ?? base;
+
+// 调用点
+log().info({ order_id: 'O2026...', amount_cent: 1990 }, 'order created');</code></pre>
+
+<div class="mermaid">
+flowchart TB
+    S{"运行模型是什么"}
+    S -- "Go 显式并发" --> G["context.Context 携带 logger<br/>签名污染换零串号风险"]
+    S -- "Java 线程池 同步阻塞" --> J{"任务会跨线程吗"}
+    J -- "不会" --> J1["MDC 加请求边界 finally clear"]
+    J -- "会" --> J2["MDC 加 TaskDecorator 复制快照<br/>任务结束恢复原状态"]
+    S -- "Python asyncio" --> P["contextvars<br/>禁止用 threading.local"]
+    S -- "Node 事件循环" --> N["AsyncLocalStorage<br/>注意回调式 API 的断链点"]
+</div>
+
+<h2>脱敏放在 encoder 层，不靠调用方自觉</h2>
+<p>把脱敏写成一个工具方法然后要求大家调用，是注定失败的方案：新人不知道、老代码没人改、第三方库打印的日志你根本控制不了。唯一可靠的位置是<strong>序列化的统一出口</strong>——Go 的 <code>ReplaceAttr</code>、pino 的 <code>redact</code>、structlog 的 processor、Logback 的自定义 <code>JsonProvider</code> 或 <code>MessageConverter</code>。判定用两层：<strong>字段名白名单/黑名单</strong>（<code>password</code>、<code>token</code>、<code>id_card</code> 命中即整体替换）加<strong>值正则</strong>（手机号、卡号、身份证格式命中即掩码）。两层都要，因为字段名靠不住（有人会叫 <code>pwd2</code>），正则也靠不住（纯数字订单号可能误判成手机号）。</p>
+
+<table>
+<thead>
+<tr><th>脱敏对象</th><th>判定方式</th><th>输出形态</th><th>注意</th></tr>
+</thead>
+<tbody>
+<tr><td>密码、token、密钥</td><td>字段名黑名单，大小写不敏感</td><td>整体替换为固定标记</td><td>保留字段本身，便于确认「确实传了」而不是漏传</td></tr>
+<tr><td>手机号</td><td>值正则</td><td>前 3 后 4 保留，中间掩码</td><td>正则要限定长度边界，避免切中长数字串中间</td></tr>
+<tr><td>银行卡号</td><td>值正则加 Luhn 校验</td><td>前 6 后 4</td><td>只用正则误报率高，加校验位判断可大幅降低</td></tr>
+<tr><td>身份证号</td><td>值正则</td><td>只留末 4 位</td><td>18 位含 X 结尾，正则别漏</td></tr>
+<tr><td>邮箱</td><td>值正则</td><td>首字符加掩码加域名</td><td>域名保留有助于排查渠道问题</td></tr>
+<tr><td>嵌套对象里的敏感字段</td><td>路径通配</td><td>同上</td><td>只扫一层会漏，pino 的 paths 支持通配就是为此</td></tr>
+<tr><td>整个请求体</td><td>不脱敏，直接不记录</td><td>只记大小与摘要</td><td>试图「脱敏后记录完整 body」基本都会漏</td></tr>
+</tbody>
+</table>
+
+<div class="callout callout-warning">
+<div class="callout-icon">⚠️</div>
+<div class="callout-title">不要在 formatter 里做重计算</div>
+<p>encoder / formatter 在每条日志的写出路径上执行，它的开销会乘以日志条数。在这里做复杂正则、反射遍历深层对象、甚至查一次缓存，都会变成全局性的吞吐损失。脱敏正则要预编译、要限定只扫字符串类型字段、要给深度设上限；需要昂贵计算的字段应该在调用点算好再传进来。</p>
+</div>
+
+<h2>多行堆栈与输出目标</h2>
+<p>纯文本日志里异常堆栈是几十行，采集器必须用 <code>multiline</code> 规则把后续行拼回上一条日志（Filebeat 的 <code>multiline.pattern</code>、Fluent Bit 的 <code>multiline.parser</code>）。这个规则的失效方式很讨厌：换一个框架、换一种语言、堆栈里出现 <code>Caused by</code> 之外的格式，正则就配不上，一个堆栈被拆成几十条孤立日志，而且通常在故障时才暴露。结构化之后这个问题直接消失——堆栈作为 <code>error.stack</code> 一个字符串字段，JSON 里换行被转义，永远单行。</p>
+
+<table>
+<thead>
+<tr><th>输出目标</th><th>适用</th><th>代价</th></tr>
+</thead>
+<tbody>
+<tr><td>stdout（容器默认选择）</td><td>所有业务日志</td><td>受运行时日志驱动吞吐限制；单条过大可能被截断</td></tr>
+<tr><td>容器内文件加挂卷</td><td>审计日志；超大调试输出</td><td>轮转、权限、清理都要自己管；Pod 重建可能丢</td></tr>
+<tr><td>直接从应用发往日志后端</td><td>几乎不推荐</td><td>后端不可用时反压业务；应用要承担重试与缓冲</td></tr>
+<tr><td>本地 socket 交给 sidecar</td><td>需要在节点外做统一加工时</td><td>多一跳，sidecar 崩了日志静默丢失</td></tr>
+</tbody>
+</table>
+
+<h2>老系统怎么渐进结构化</h2>
+<p>一次性切换格式几乎必然出事：解析规则、看板、告警规则、下游数仓任务都绑在旧格式上。可行路径是<strong>双写、切采集、下线</strong>三段，每段都可独立回滚。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> 纯文本格式
+    纯文本格式 --> 双写期: 新增 JSON appender 输出到独立目标
+    双写期 --> 双写期: 对照两侧条数与字段齐全率
+    双写期 --> 切采集期: 看板与告警逐个迁到 JSON 索引
+    切采集期 --> 双写期: 发现字段缺失即回滚看板
+    切采集期 --> 只有结构化: 关闭文本 appender 与 grok 规则
+    只有结构化 --> [*]
+    note right of 双写期
+        日志量在这一阶段翻倍
+        要提前给采集与存储留余量
+        新代码只允许走新的 logger 封装
+    end note
+</div>
+
+<table>
+<thead>
+<tr><th>阶段</th><th>动作</th><th>验收标准</th><th>回滚方式</th></tr>
+</thead>
+<tbody>
+<tr><td>双写</td><td>保留文本 appender，增加 JSON appender 写独立索引</td><td>两侧条数差异小于 1%，必备字段齐全率达到 100%</td><td>关掉 JSON appender，零影响</td></tr>
+<tr><td>切采集</td><td>看板、告警、下游任务逐个改查 JSON 索引</td><td>同一时间窗内两套查询结果一致</td><td>看板查询切回旧索引</td></tr>
+<tr><td>下线</td><td>移除文本 appender 与 grok 规则、缩减解析节点</td><td>一个保留周期内无人再查旧索引</td><td>旧索引先冻结再删，保留期内可恢复</td></tr>
+<tr><td>加固</td><td>lint 禁止直接依赖原始日志库；CI 抽样校验字段</td><td>抽样一千条无字段缺失、msg 唯一值数量在预期内</td><td>不涉及</td></tr>
+</tbody>
+</table>
+
+<h2>反模式</h2>
+
+<table>
+<thead>
+<tr><th>反模式</th><th>后果</th><th>正确做法</th></tr>
+</thead>
+<tbody>
+<tr><td>把整个对象 <code>toString</code> 塞进一个字段</td><td>字段值是一坨不可查询的文本，体积还大</td><td>只挑需要的字段平铺，或用结构化的嵌套对象</td></tr>
+<tr><td>每条日志字段名都不一样</td><td>无法跨服务查询，看板要一个服务建一套</td><td>必备字段写进 logger 封装，业务字段过 lint</td></tr>
+<tr><td>用 message 拼接变量</td><td>无法聚合，采样器与告警规则同时失效</td><td>msg 固定模板，变量进字段</td></tr>
+<tr><td>高基数字段当索引字段</td><td>倒排词典与 doc_values 膨胀，写入变慢</td><td>存但不索引，或只保留可枚举的派生字段</td></tr>
+<tr><td>在 formatter 里做重计算</td><td>开销乘以日志条数，全局吞吐下降</td><td>预编译正则、限定扫描范围，昂贵计算在调用点做</td></tr>
+<tr><td>时间戳不带时区</td><td>跨区排障时差全靠猜，日志排序错乱</td><td>RFC3339 带偏移量，或统一 UTC 并在展示层转</td></tr>
+<tr><td><code>error.stack</code> 建全文索引</td><td>存储翻倍、写入 CPU 飙升，而堆栈几乎不用全文搜</td><td>设为不索引，只索引 <code>error.type</code></td></tr>
+<tr><td>本地开发也强制 JSON</td><td>开发绕过 logger 改用打印语句</td><td>按环境切 encoder，字段定义不变</td></tr>
+</tbody>
+</table>
+
+<div class="callout callout-danger">
+<div class="callout-icon">❌</div>
+<div class="callout-title">最容易踩的坑</div>
 <ul>
-<li><strong>一定要带 Trace ID</strong>所有结构化日志都要带 Trace ID，能串起来。</li>
-<li><strong>字段要统一</strong>不同服务日志字段要统一，不要各写各的。</li>
+<li>MDC 在请求结束时没清理，线程池复用后下一个请求带上了上一个请求的 trace_id，两条无关链路被错误地串成一条。</li>
+<li>往线程池提交任务时没复制 MDC 快照，异步日志里 trace_id 全空，排障时以为是采集丢了。</li>
+<li>Python 里用 <code>threading.local</code> 存日志上下文，切到 asyncio 后多个协程共享线程，字段互相覆盖且完全没有报错。</li>
+<li>Node 的回调式 API 跨不过 <code>AsyncLocalStorage</code> 边界，表现为「某几类日志固定丢 trace_id」，很容易被误判成框架 bug。</li>
+<li>字段名大小写风格不统一，<code>traceId</code> 与 <code>trace_id</code> 并存，ES 里变成两个字段，看板过滤器永远漏一半数据。</li>
+<li>同名不同义：<code>user_id</code> 在某个服务里塞的是第三方 openid，跨服务 join 时数据全对不上。</li>
+<li>把变量拼进 msg，导致 msg 基数等于业务量，聚合、采样、告警规则三件事同时失效。</li>
+<li><code>error.stack</code> 按 text 全文索引，一次线上异常风暴把索引写入打满，而堆栈几乎没人用全文搜。</li>
+<li>时间戳只写本地时间不带时区，容器 TZ 又是 UTC，日志时间比业务时间「早八小时」，排障从一开始就对错了时间窗。</li>
+<li>脱敏写在调用方，第三方库和老代码打的日志完全没走这条路，敏感字段照样进索引。</li>
+<li>脱敏正则没预编译或没限定字段类型，encoder 变成 CPU 热点，日志量一大就拖慢整个服务。</li>
+<li>迁移时忘了双写期日志量会翻倍，采集与存储没留余量，切换当天就触发写入拒绝。</li>
+<li>Go 里忘记把 <code>context</code> 往下传，子函数拿到的是全局 logger，日志有了但没有 trace_id，比没有日志更迷惑。</li>
 </ul>
 </div>
 

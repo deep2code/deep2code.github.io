@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>链路追踪 - 日志与监控 - 资深码农</title>
+    <title>日志指标链路三者关联：traceID、exemplar 与下钻路径 - 日志与监控 - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="OpenTelemetry / Jaeger / 链路分析 / 性能瓶颈">
+    <meta name="description" content="把日志、指标、链路真正串起来的工程做法：traceID 的完整落地清单（入口生成、全链路透传、注入日志固定字段、写回响应头给客户端、带进工单）、exemplar 如何跨过从 P99 高到哪一条请求慢之间的鸿沟、从告警到看板到链路到日志到代码的可点击导航路径与 Grafana derived fields 配置、trace 字段名全公司统一、采样导致日志里有 traceID 但链路查不到的解法，以及 MQ 与定时任务用 span links 而非硬套父子关系。">
     <meta name="keywords" content="日志与监控,链路追踪,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/devops/logging/tracing/">
-    <meta property="og:title" content="链路追踪 - 日志与监控 - 资深码农">
-    <meta property="og:description" content="OpenTelemetry / Jaeger / 链路分析 / 性能瓶颈">
+    <meta property="og:title" content="日志指标链路三者关联：traceID、exemplar 与下钻路径 - 日志与监控 - 资深码农">
+    <meta property="og:description" content="把日志、指标、链路真正串起来的工程做法：traceID 的完整落地清单（入口生成、全链路透传、注入日志固定字段、写回响应头给客户端、带进工单）、exemplar 如何跨过从 P99 高到哪一条请求慢之间的鸿沟、从告警到看板到链路到日志到代码的可点击导航路径与 Grafana derived fields 配置、trace 字段名全公司统一、采样导致日志里有 traceID 但链路查不到的解法，以及 MQ 与定时任务用 span links 而非硬套父子关系。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/logging/tracing/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="链路追踪 - 日志与监控">
-    <meta name="twitter:description" content="OpenTelemetry / Jaeger / 链路分析 / 性能瓶颈">
+    <meta name="twitter:title" content="日志指标链路三者关联：traceID、exemplar 与下钻路径 - 日志与监控">
+    <meta name="twitter:description" content="把日志、指标、链路真正串起来的工程做法：traceID 的完整落地清单、exemplar 如何跨过从 P99 高到哪一条请求慢之间的鸿沟、从告警到看板到链路到日志到代码的可点击导航路径与 Grafana derived fields 配置、trace 字段名全公司统一、采样导致日志里有 traceID 但链路查不到的解法，以及异步与批处理用 span links 关联。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "链路追踪：自动埋点？", "acceptedAnswer": {"@type": "Answer", "text": "：主流框架自动埋，不用自己写"}}, {"@type": "Question", "name": "链路追踪：导出标准？", "acceptedAnswer": {"@type": "Answer", "text": "：OTLP 协议，兼容 Jaeger/Zipkin"}}, {"@type": "Question", "name": "链路追踪：语言无关？", "acceptedAnswer": {"@type": "Answer", "text": "：Java/Go/Python/Node 都支持"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "为什么要把 traceID 写进 HTTP 响应头返回给客户端？", "acceptedAnswer": {"@type": "Answer", "text": "因为这样用户报障时可以直接把 traceID 给你，你一次查询就能定位到那一次请求的完整链路和全部日志，不需要再靠时间点、账号、IP 去猜。前端也可以在错误提示页上展示它，客服工单模板里留一个字段。这一条的实现成本是中间件里加一行 header 设置，收益极高，但实际做了的团队很少。"}}, {"@type": "Question", "name": "exemplar 解决的是什么问题？", "acceptedAnswer": {"@type": "Answer", "text": "它填的是「P99 是 2 秒」和「到底是哪一条请求花了 2 秒」之间的鸿沟。直方图是聚合值，天然丢失了个体信息，过去只能靠时间窗去日志里翻慢请求。exemplar 让直方图的每个 bucket 附带少量具体样本的 traceID，Grafana 里就能从延迟面板上的一个点直接跳到那条 trace。启用要点是暴露端必须走 OpenMetrics 格式，Prometheus 要开启 exemplar 存储。"}}, {"@type": "Question", "name": "日志里有 traceID，但在链路系统里查不到，是什么原因？", "acceptedAnswer": {"@type": "Answer", "text": "最常见的原因是采样。日志通常全量记录，而 trace 按比例采样，比如 1%，于是 99% 的 traceID 在链路系统里根本不存在。这个现象非常容易被误判成链路系统丢数据。解法有两条：一是让错误与慢请求的 trace 必定保留，也就是尾部采样按 error 与 latency 规则强制保留；二是在日志里带上采样决策标记，查不到时一眼就知道是被采样丢了而不是系统故障。"}}, {"@type": "Question", "name": "为什么 trace 字段名必须全公司统一？", "acceptedAnswer": {"@type": "Answer", "text": "因为跨系统关联靠的就是字段名。不同语言的 SDK 和日志库默认字段名不一致，有的输出 trace_id，有的输出 traceId，有的叫 dd.trace_id 或 TraceId。字段名不统一时，Grafana 的 derived field 规则、Loki 的跳转链接、ES 的查询模板都要为每个服务写一份，而且新服务接入必然漏配。统一的做法是在内部 logger 封装里把字段名写死，不给业务方选择。"}}, {"@type": "Question", "name": "MQ 消费和定时任务的链路应该怎么关联？", "acceptedAnswer": {"@type": "Answer", "text": "不要硬套父子关系。生产者和消费者在时间上可能相隔很久，一个消费批次还可能对应成百上千条不同来源的消息，把它们塞成一棵树会得到一条跨越几小时的畸形 trace。正确做法是消费侧开一个新的 trace，用 span links 指向生产侧的 span context，表达「有因果但不是同一次调用」。批量消费时一个 span 可以带多个 link。"}}, {"@type": "Question", "name": "从告警到根因的导航路径应该怎么设计？", "acceptedAnswer": {"@type": "Answer", "text": "每一跳都要做成可点击的链接：告警通知里带看板链接与样本 traceID，看板面板通过 exemplar 或 data links 跳到链路，链路详情页通过 trace 到 logs 的配置跳到该 span 所属服务、按 traceID 过滤的日志，日志里的堆栈指向代码仓库的具体行。是否能一路点下去而不用手动拼查询，是可观测性成熟度最实在的衡量标准。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,50 +64,419 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">链路追踪</h1>
+                        <h1 class="article-title">日志指标链路三者关联：traceID、exemplar 与下钻路径</h1>
                     </header>
                     <div class="article-content">
+<p><strong>本篇只讲「关联」这一件事</strong>：怎么用 traceID 把日志、指标、链路真正串成一条可以一路点下去的排障路径。Span 数据模型与 SpanKind、W3C traceparent 传播协议与断链场景、头部采样与尾部采样、Collector pipeline，都在站内 <a href="../../monitoring/opentelemetry/">OpenTelemetry 怎么接</a> 里写透了，本篇不重复；日志字段规范与上下文透传的代码见 <a href="../structured/">结构化日志落地</a>，日志派生指标与告警见 <a href="../monitoring/">从日志派生指标与告警</a>。</p>
 
-<h2>什么是链路追踪</h2>
-<p>一个请求经过多个服务：网关 → 订单服务 → 库存服务 → 支付服务。出问题了不知道哪一步慢了。链路追踪就是把整个请求路径串起来，每一步耗时都能看到。</p>
+<h2>为什么关联比单独任何一支都重要</h2>
+<p>三大支柱各自回答一个问题：<strong>指标告诉你哪里坏了</strong>（订单服务 P99 从 200ms 涨到 2s），<strong>链路告诉你哪一跳慢</strong>（慢在库存服务的一次 DB 查询上），<strong>日志告诉你为什么</strong>（那次查询命中了一个没走索引的分支，因为灰度配置把某个开关打开了）。任何一支单独存在时，它的回答都在半路上断掉。</p>
+<p>三者割裂的具体表现是：拿到告警后，人在三个系统之间用<strong>时间戳和 IP 做手工 join</strong>。指标面板显示 10:12 有尖刺，于是去日志系统把时间窗设成 10:11 到 10:13，搜出六万条，靠肉眼找可疑的；找到一条可疑日志后拿它的 pod 名和时间点，去链路系统按服务加时间范围翻，翻出几十条 trace，再一条条看哪条对得上。这个过程通常要几十分钟，而且结论经常是错的——时间戳对齐误差、同一秒内多个请求、时钟漂移，都会让你 join 到错误的那一条上。</p>
 
 <div class="mermaid">
-graph LR
-    A[用户请求] --> B[网关 10ms]
-    B --> C[订单服务 50ms]
-    C --> D[库存服务 30ms]
-    D --> E[支付服务 200ms]
-    E --> F[响应 290ms]
+sequenceDiagram
+    participant O as on-call
+    participant M as 指标系统
+    participant L as 日志系统
+    participant T as 链路系统
+    O->>M: 看到 P99 在 10:12 出现尖刺
+    M-->>O: 只有聚合曲线 没有个体信息
+    O->>L: 把时间窗设成 10:11 到 10:13 全文搜
+    L-->>O: 返回 6 万条 靠肉眼筛
+    O->>T: 用 pod 名加时间范围翻 trace
+    T-->>O: 返回几十条 不知道哪条对应尖刺
+    O->>O: 用时间戳手工对齐 结论可能是错的
+    Note over O: 累计 30 至 60 分钟<br/>且结论可靠性低
 </div>
 
-<h2>核心概念</h2>
+<div class="mermaid">
+sequenceDiagram
+    participant O as on-call
+    participant A as 告警通知
+    participant D as 延迟看板
+    participant T as 链路系统
+    participant L as 日志系统
+    A->>O: 告警里直接带样本 trace_id 与看板链接
+    O->>D: 点开看板 直方图上的 exemplar 点
+    D->>T: 点 exemplar 跳到该条 trace
+    T-->>O: 火焰图显示慢在库存服务的 DB span
+    O->>L: 点该 span 的日志链接 按 trace_id 精确过滤
+    L-->>O: 返回该请求的 12 条日志 含慢查询与灰度开关值
+    Note over O: 累计 2 至 5 分钟<br/>每一步都是精确匹配不是猜
+</div>
+
 <table>
 <thead>
-<tr><th>概念</th><th>说明</th></tr>
+<tr><th>排障环节</th><th>三者割裂</th><th>用 traceID 关联</th></tr>
 </thead>
 <tbody>
-<tr><td>Trace</td><td>一次完整请求链路</td></tr>
-<tr><td>Span</td><td>一个操作（一次 RPC、一次 DB 查询）</td></tr>
-<tr><td>TraceId</td><td>链路唯一 ID，全链路透传</td></tr>
+<tr><td>从告警定位到具体请求</td><td>只能按时间窗筛，10 至 20 分钟</td><td>告警里带样本 trace_id，一次点击</td></tr>
+<tr><td>确定慢在哪一跳</td><td>翻多个服务的日志比对时间差</td><td>火焰图直接看出来，秒级</td></tr>
+<tr><td>找到该跳的相关日志</td><td>按 pod 加时间窗搜，噪声极大</td><td>按 trace_id 精确过滤，只有这次请求的日志</td></tr>
+<tr><td>结论可靠性</td><td>低，时间戳对齐会 join 错</td><td>高，ID 精确匹配</td></tr>
+<tr><td>用户报障的处理</td><td>要用户提供时间、账号、截图，还经常对不上</td><td>用户直接给 trace_id</td></tr>
+<tr><td>典型总耗时</td><td>30 至 60 分钟</td><td>2 至 5 分钟</td></tr>
 </tbody>
 </table>
 
-<h2>OpenTelemetry</h2>
-<p>2026 年链路追踪的标准。统一了指标、日志、追踪三个信号。</p>
+<h2>traceID 是唯一的粘合剂：完整落地清单</h2>
+<p>关联不需要什么复杂机制，只需要<strong>一个在所有系统里都出现、且名字一样的 ID</strong>。难的不是原理，是清单里的每一条都要真做到——漏掉任意一条，链条就在那里断掉。</p>
 
-<ul>
-<li><strong>自动埋点</strong>：主流框架自动埋，不用自己写</li>
-<li><strong>导出标准</strong>：OTLP 协议，兼容 Jaeger/Zipkin</li>
-<li><strong>语言无关</strong>：Java/Go/Python/Node 都支持</li>
-</ul>
+<table>
+<thead>
+<tr><th>动作</th><th>做法</th><th>漏掉的后果</th></tr>
+</thead>
+<tbody>
+<tr><td>入口生成或继承</td><td>网关与各服务入口都要处理：有 <code>traceparent</code> 就继承，没有就新建</td><td>只在网关生成时，内网直连调用与回调入口的链路凭空断开</td></tr>
+<tr><td>透传到所有下游</td><td>HTTP 头、gRPC metadata、MQ 消息头；用 SDK 的自动注入而不是手写</td><td>某一跳没透传，下游成为孤立 trace，且现场很难发现</td></tr>
+<tr><td>定时任务与脚本自行生成</td><td>任务入口显式开 root span</td><td>后台任务的日志完全无法与任何链路关联</td></tr>
+<tr><td>注入每条日志的固定字段</td><td>在 logger 封装层自动带 <code>trace_id</code> 与 <code>span_id</code></td><td>关联退化成时间窗搜索，本篇全部收益丧失</td></tr>
+<tr><td>写进 HTTP 响应头</td><td>中间件里 <code>Trace-Id</code> 响应头；前端错误页展示</td><td>用户报障时只能给时间和截图，定位成本高一个量级</td></tr>
+<tr><td>错误上报与工单带上</td><td>前端异常上报、客服工单模板、审批单都留字段</td><td>跨团队协作时每次都要重新定位</td></tr>
+<tr><td>指标的 exemplar 带上</td><td>直方图观测时附带 trace_id</td><td>从「P99 高」到「哪条慢」之间仍然是断层</td></tr>
+<tr><td>下游数据里留痕</td><td>关键业务表加一列 <code>trace_id</code>（只对写操作）</td><td>数据异常时无法回溯是哪一次请求写进去的</td></tr>
+</tbody>
+</table>
 
-<h2>怎么用</h2>
+<div class="callout callout-tip">
+<div class="callout-icon">✅</div>
+<div class="callout-title">把 traceID 返回给客户端，收益极高但极少人做</div>
+<p>加一行响应头，用户报障时就能直接给你 traceID，你一次精确查询就还原出完整现场，不用再问「大概几点」「什么账号」。前端把它展示在错误提示里（哪怕是折叠的小字），客服工单模板加一个字段，这件事的总实现量不到半天。担心信息泄露的话：traceID 本身不含业务语义，它只是一个随机的 128 位 ID，泄露它并不能反查任何数据——前提是你的日志查询接口本身有权限控制。</p>
+</div>
+
+<pre><code class="language-go">// Go：一个中间件同时做四件事
+// 1) 继承或生成 trace 上下文  2) 把 trace_id 注入请求域的 logger
+// 3) 把 trace_id 写回响应头  4) 观测耗时时附带 exemplar
+package middleware
+
+import (
+    "net/http"
+    "time"
+
+    "github.com/prometheus/client_golang/prometheus"
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/propagation"
+)
+
+var reqDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+    Name:    "http_server_duration_seconds",
+    Buckets: prometheus.DefBuckets,
+}, []string{"route", "status"})
+
+// propagator 用标准 W3C 格式，不要自己造 X-Request-Id 那一套
+var propagator = propagation.TraceContext{}
+
+func Observe(next http.Handler) http.Handler {
+    tracer := otel.Tracer("http-server")
+
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // 有 traceparent 头就继承，没有则由 tracer 新建 root span
+        ctx := propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+        ctx, span := tracer.Start(ctx, r.Method+" "+routeOf(r))
+        defer span.End()
+
+        sc := span.SpanContext()
+        traceID := sc.TraceID().String()
+
+        // 关键一步：响应头回带，用户报障时可直接提供
+        w.Header().Set("Trace-Id", traceID)
+
+        // 请求域 logger 绑定 trace 字段，业务代码无需手写
+        ctx = WithLogger(ctx, Base().With(
+            "trace_id", traceID,
+            "span_id", sc.SpanID().String(),
+        ))
+
+        start := time.Now()
+        rec := &amp;statusRecorder{ResponseWriter: w, code: 200}
+        next.ServeHTTP(rec, r.WithContext(ctx))
+
+        obs := reqDuration.WithLabelValues(routeOf(r), itoa(rec.code))
+        // exemplar 只在被采样的 span 上附带才有意义：
+        // 没被采样的 trace 在链路系统里查不到，点过去是空的
+        if sc.IsSampled() {
+            obs.(prometheus.ExemplarObserver).ObserveWithExemplar(
+                time.Since(start).Seconds(),
+                prometheus.Labels{"trace_id": traceID},
+            )
+        } else {
+            obs.Observe(time.Since(start).Seconds())
+        }
+    })
+}
+
+// 注意：exemplar 必须以 OpenMetrics 格式暴露，否则会被静默丢弃，
+// 表现是应用侧调用了 ObserveWithExemplar 但 Prometheus 里查不到任何 exemplar：
+// promhttp.HandlerFor(reg, promhttp.HandlerOpts{EnableOpenMetrics: true})</code></pre>
+
+<h2>exemplar：跨过「P99 高」到「哪一条慢」的鸿沟</h2>
+<p>直方图是聚合结构，它的设计目的就是丢掉个体。所以「P99 是 2 秒」这句话本身无法继续追问下去，过去只能靠时间窗回日志里翻慢请求，而慢请求在总量里可能只占万分之一。exemplar 的做法很直接：<strong>让每个 bucket 附带少量具体样本的 traceID</strong>，Grafana 在延迟面板上把它们画成小点，点一下就跳到那条 trace。它解决的是可观测性里最实际的一个断层。</p>
+
+<table>
+<thead>
+<tr><th>启用环节</th><th>要点</th><th>不做的后果</th></tr>
+</thead>
+<tbody>
+<tr><td>应用侧暴露</td><td>用 <code>ObserveWithExemplar</code>，并且 metrics 端点必须以 OpenMetrics 格式输出</td><td>exemplar 在文本格式里没有位置，会被静默丢弃</td></tr>
+<tr><td>Prometheus 抓取</td><td>启用 <code>exemplar-storage</code> 特性，抓取时协商 OpenMetrics</td><td>抓到了也不存，查询返回空</td></tr>
+<tr><td>只给被采样的 span 附带</td><td>判断 <code>IsSampled()</code></td><td>点过去链路系统查不到，用户以为系统坏了</td></tr>
+<tr><td>Grafana 面板</td><td>查询选项里开 exemplar，并配置指向链路数据源的跳转</td><td>点不动，等于没做</td></tr>
+<tr><td>存储量</td><td>exemplar 是环形缓冲，默认保留量有限，只覆盖最近一段时间</td><td>回看昨天的尖刺时找不到 exemplar，属正常现象</td></tr>
+<tr><td>label 精简</td><td>exemplar 的标签只放 <code>trace_id</code></td><td>塞多余标签会占满缓冲，能保留的样本数下降</td></tr>
+</tbody>
+</table>
+
+<h2>从告警到根因的导航路径设计</h2>
+<p>把「每一跳都可点击」当成硬指标，是可观测性成熟度最实在的衡量方式——它没法靠买产品解决，只能靠把配置一条条做对。路径是固定的五跳：<strong>告警 → 看板 → 链路 → 日志 → 代码</strong>。</p>
+
+<div class="mermaid">
+flowchart TB
+    subgraph S1["第一跳 告警"]
+        A1["通知里带看板链接<br/>样本 trace_id<br/>runbook 链接"]
+    end
+    subgraph S2["第二跳 看板"]
+        A2["延迟直方图面板<br/>exemplar 小点可点击"]
+        A3["错误率面板<br/>data links 带上标签值"]
+    end
+    subgraph S3["第三跳 链路"]
+        A4["trace 详情火焰图<br/>定位到具体 span"]
+    end
+    subgraph S4["第四跳 日志"]
+        A5["按 trace_id 精确过滤<br/>只看该 span 服务的日志"]
+    end
+    subgraph S5["第五跳 代码"]
+        A6["堆栈行号链接到仓库<br/>版本由 service.version 标签给出"]
+    end
+    A1 --> A2
+    A1 --> A3
+    A2 --> A4
+    A3 --> A5
+    A4 --> A5
+    A5 --> A6
+</div>
+
+<p>具体配置在 Grafana 里是两个能力：<strong>derived fields</strong>（Loki 数据源里用正则从日志行提取 <code>trace_id</code>，自动渲染成指向链路数据源的按钮）和 <strong>data links / tracesToLogs</strong>（从 trace 详情反向跳到按 traceID 过滤的日志查询）。两个方向都要配，因为排障既会从指标往下走，也会从一条可疑日志往上找链路。</p>
+
+<pre><code class="language-yaml"># Grafana 数据源 provisioning：把三者双向打通
+apiVersion: 1
+datasources:
+  - name: Loki
+    type: loki
+    uid: loki-prod
+    url: http://loki-gateway.observability:3100
+    jsonData:
+      # derivedFields：从日志里提取 trace_id 并渲染成跳转按钮
+      derivedFields:
+        # 结构化日志直接用 JSON 路径，不需要正则，稳定得多
+        - name: TraceID
+          matcherType: label
+          matcherRegex: trace_id
+          datasourceUid: tempo-prod
+          url: '${__value.raw}'
+          urlDisplayLabel: '查看链路'
+        # 兼容尚未结构化的老服务：从文本里正则提取
+        - name: TraceIDLegacy
+          matcherType: regex
+          matcherRegex: 'trace_id=([a-f0-9]{32})'
+          datasourceUid: tempo-prod
+          url: '${__value.raw}'
+
+  - name: Tempo
+    type: tempo
+    uid: tempo-prod
+    url: http://tempo-query.observability:3200
+    jsonData:
+      # 从 trace 详情跳到该 span 所属服务、按 traceID 过滤的日志
+      tracesToLogsV2:
+        datasourceUid: loki-prod
+        # 只带 service 与 pod 标签，避免生成一个永远查不到结果的过滤条件
+        tags:
+          - key: service.name
+            value: service
+        spanStartTimeShift: '-2m'    # 向前留缓冲，日志时间戳与 span 常有偏差
+        spanEndTimeShift: '2m'
+        filterByTraceID: true
+        filterBySpanID: false        # 按 span 过滤常常查不到，日志未必带 span_id
+      # 从 trace 跳到该服务的 RED 指标面板
+      tracesToMetrics:
+        datasourceUid: prom-prod
+        queries:
+          - name: '该服务 P99 延迟'
+            query: 'histogram_quantile(0.99, sum by (le) (rate(http_server_duration_seconds_bucket{service="$${__span.tags["service.name"]}"}[5m])))'
+
+  - name: Prometheus
+    type: prometheus
+    uid: prom-prod
+    url: http://prometheus.observability:9090
+    jsonData:
+      # exemplar 跳转：延迟面板上的小点直接点到 trace
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo-prod</code></pre>
+
+<h2>跨系统关联的实现细节：字段名与采样</h2>
+<p>两个细节能让上面所有配置全部失效。</p>
+<p><strong>第一是字段名。</strong>不同语言的 SDK 与日志库默认输出的 trace 字段名不一样，同一家公司里常见四五种写法并存。字段名不统一时，derived field 规则、跳转链接、查询模板都得按服务写一份，新服务接入必然漏配，而且漏配的表现是「按钮不出现」，很容易被当成 Grafana 的问题。唯一可靠的做法是在内部 logger 封装里<strong>把字段名写死</strong>，不给业务方选择权。</p>
+
+<table>
+<thead>
+<tr><th>来源</th><th>默认字段名</th><th>统一成</th></tr>
+</thead>
+<tbody>
+<tr><td>OTel 日志规范 / ECS</td><td><code>trace.id</code> 或 <code>trace_id</code></td><td><code>trace_id</code></td></tr>
+<tr><td>Java 加 OTel 的 MDC 注入</td><td><code>trace_id</code>、<code>span_id</code>、<code>trace_flags</code></td><td>保持，作为基准</td></tr>
+<tr><td>Spring Cloud Sleuth 旧版</td><td><code>X-B3-TraceId</code>、<code>traceId</code></td><td>迁移时在 encoder 里改名</td></tr>
+<tr><td>部分商业 APM agent</td><td><code>dd.trace_id</code> 之类带前缀的名字</td><td>在 Collector 或采集侧 rename</td></tr>
+<tr><td>自研网关</td><td><code>X-Request-Id</code></td><td>保留但另存字段，不要和 trace_id 混用</td></tr>
+<tr><td>Node 与 Python 社区库</td><td><code>traceId</code> 驼峰写法居多</td><td>在 formatter 里统一改成下划线</td></tr>
+</tbody>
+</table>
+
+<p><strong>第二是采样导致的「有 traceID 但查不到链路」。</strong>这是高频困惑：日志全量保留，trace 按 1% 采样，于是 99% 的 traceID 在链路系统里根本不存在。第一次遇到的人几乎都会认为链路系统在丢数据，然后花时间去查 Collector。它不是故障，是采样的必然结果。</p>
+
+<div class="mermaid">
+flowchart TB
+    Q1{"日志里有 trace_id<br/>链路系统查不到"}
+    Q1 --> Q2{"日志里有采样决策标记吗"}
+    Q2 -- "有 且标记为未采样" --> R1["这是预期行为<br/>不是故障 停止排查"]
+    Q2 -- "没有这个字段" --> R2["先补上采样标记字段<br/>否则每次都要重新排查"]
+    Q1 --> Q3{"这条是错误或慢请求吗"}
+    Q3 -- "是 却仍然查不到" --> R3["尾部采样规则没覆盖错误与高延迟<br/>这是配置缺陷 必须修"]
+    Q3 -- "不是 普通成功请求" --> R1
+    Q1 --> Q4{"trace 保留期到了吗"}
+    Q4 -- "链路留 3 天 日志留 30 天" --> R4["保留期错配<br/>三天前的日志点过去必然为空"]
+</div>
+
+<table>
+<thead>
+<tr><th>组合</th><th>现象</th><th>处理</th></tr>
+</thead>
+<tbody>
+<tr><td>头部采样 1%，日志全量</td><td>99% 的 traceID 点过去是空的</td><td>日志里加 <code>sampled</code> 标记；或对错误请求强制采样</td></tr>
+<tr><td>尾部采样未配置错误规则</td><td>恰恰是出故障的那条 trace 找不到</td><td>Collector 的尾部采样加 <code>status_code=ERROR</code> 与延迟阈值规则</td></tr>
+<tr><td>trace 保留 3 天，日志保留 30 天</td><td>回看一周前的日志时链路全空</td><td>保留期对齐，或至少对错误 trace 延长保留</td></tr>
+<tr><td>只在网关采样，下游各自决策</td><td>同一条链路一半的 span 存在一半不存在</td><td>采样决策必须随上下文传播，下游只遵从不重新决策</td></tr>
+<tr><td>exemplar 带了未采样的 trace_id</td><td>面板上的点全是死链</td><td>只对 <code>IsSampled()</code> 为真的请求写 exemplar</td></tr>
+</tbody>
+</table>
+
+<h2>异步与批处理：用 links，不要硬套父子关系</h2>
+<p>MQ 消费、定时任务、重试这三类场景，把它们塞成父子关系会得到畸形的 trace：生产者和消费者可能相隔几小时，一条 trace 的时间跨度变成几小时；一个批次消费 500 条消息，这 500 条来自 500 个不同的上游请求，硬套父子等于把 500 棵树粘成一团。OTel 为此提供了 <strong>span links</strong>：表达「有因果关系，但不是同一次调用」。</p>
+
+<table>
+<thead>
+<tr><th>场景</th><th>用父子关系</th><th>用 links</th><th>推荐</th></tr>
+</thead>
+<tbody>
+<tr><td>同步 RPC 调用</td><td>正确，这就是父子</td><td>不必要</td><td>父子</td></tr>
+<tr><td>MQ 单条消费</td><td>trace 时间跨度失真，且生产侧 span 可能已结束上报</td><td>新 trace 加一个 link 指向生产者</td><td>links</td></tr>
+<tr><td>MQ 批量消费</td><td>不可能，一个 span 只有一个 parent</td><td>一个 span 带 N 个 link</td><td>links</td></tr>
+<tr><td>定时任务扫表处理</td><td>无上游可挂</td><td>每条记录的来源 trace 作为 link</td><td>root span 加 links</td></tr>
+<tr><td>失败重试</td><td>重试挂在原 span 下会让原 trace 一直不结束</td><td>新 trace 加 link 指向上一次尝试</td><td>links</td></tr>
+<tr><td>扇出后聚合</td><td>父子可表达</td><td>不必要</td><td>父子</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-go">// Kafka 批量消费：开新 trace，用 links 指回每条消息的生产侧上下文
+// 这样既保住了因果可追溯，又不会产生跨越数小时的畸形 trace
+func consumeBatch(ctx context.Context, msgs []*kafka.Message) {
+    tracer := otel.Tracer("order-consumer")
+    prop := propagation.TraceContext{}
+
+    links := make([]trace.Link, 0, len(msgs))
+    for _, m := range msgs {
+        // 从消息头里取出生产侧写入的 traceparent
+        mctx := prop.Extract(context.Background(), kafkaHeaderCarrier(m.Headers))
+        if sc := trace.SpanContextFromContext(mctx); sc.IsValid() {
+            links = append(links, trace.Link{SpanContext: sc})
+        }
+    }
+
+    // 注意：是 WithLinks 而不是把某条消息当 parent
+    ctx, span := tracer.Start(ctx, "consume order events",
+        trace.WithSpanKind(trace.SpanKindConsumer),
+        trace.WithLinks(links...),
+        trace.WithAttributes(
+            attribute.Int("messaging.batch.message_count", len(msgs)),
+        ),
+    )
+    defer span.End()
+
+    log := L(ctx).With(
+        "trace_id", span.SpanContext().TraceID().String(),
+        "batch_size", len(msgs),
+    )
+
+    for _, m := range msgs {
+        // 每条消息一个子 span，它的日志能精确定位到这一条
+        mctx, ms := tracer.Start(ctx, "handle order event")
+        if err := handle(mctx, m); err != nil {
+            ms.RecordError(err)
+            // 让这条 trace 在尾部采样时必定被保留
+            ms.SetStatus(codes.Error, "handle failed")
+            L(mctx).Error("handle order event failed",
+                "offset", m.TopicPartition.Offset, "err", err)
+        }
+        ms.End()
+    }
+    log.Info("batch consumed")
+}</code></pre>
+
+<h2>关联的成本与取舍</h2>
+
+<table>
+<thead>
+<tr><th>做法</th><th>成本</th><th>收益</th><th>建议</th></tr>
+</thead>
+<tbody>
+<tr><td>日志加 trace_id 与 span_id 字段</td><td>每条日志多约 60 字节，日志总量涨 5% 到 10%</td><td>关联的全部收益都建立在这一条上</td><td>必做，没有取舍空间</td></tr>
+<tr><td>响应头回带 trace_id</td><td>几乎为零</td><td>用户报障定位成本降一个量级</td><td>必做</td></tr>
+<tr><td>exemplar</td><td>少量内存与存储，标签需精简</td><td>补上「哪一条慢」的断层</td><td>建议做，只给延迟与错误直方图配</td></tr>
+<tr><td>trace 全量采样</td><td>链路存储成本最高，常是日志的数倍</td><td>任何 traceID 都查得到</td><td>不建议；用尾部采样保错误与慢请求</td></tr>
+<tr><td>业务表加 trace_id 列</td><td>一列字符串，写入略增</td><td>数据异常可回溯到具体请求</td><td>只对关键写操作表做</td></tr>
+<tr><td>trace 与日志保留期对齐</td><td>链路存储成本上升</td><td>避免「点过去是空的」</td><td>折中：错误 trace 延长保留，正常 trace 短留</td></tr>
+</tbody>
+</table>
+
+<h2>反模式</h2>
+
+<table>
+<thead>
+<tr><th>反模式</th><th>后果</th><th>正确做法</th></tr>
+</thead>
+<tbody>
+<tr><td>各服务用不同的 trace 字段名</td><td>跳转规则要按服务写，新服务必然漏配</td><td>logger 封装里写死字段名，接入即合规</td></tr>
+<tr><td>只在网关埋点</td><td>内网直连、回调、消费者、定时任务全是黑洞</td><td>每个入口都处理继承或生成</td></tr>
+<tr><td>traceID 不返回给客户端</td><td>用户报障只能给时间和截图</td><td>响应头回带，前端展示，工单留字段</td></tr>
+<tr><td>日志和链路存在两个互不相通的系统</td><td>关联只能靠人复制粘贴 ID</td><td>配置双向跳转，两个方向都要通</td></tr>
+<tr><td>采样后不保留错误链路</td><td>出故障的那条 trace 恰好被丢弃</td><td>尾部采样按错误与延迟强制保留</td></tr>
+<tr><td>exemplar 带未采样的 trace_id</td><td>面板上的点全是死链，用户失去信任</td><td>判断采样标志后再写 exemplar</td></tr>
+<tr><td>把 MQ 消费硬套成父子关系</td><td>trace 跨越数小时，批量消费无法表达</td><td>新 trace 加 span links</td></tr>
+<tr><td>自造 <code>X-Request-Id</code> 代替 W3C 标准</td><td>与任何标准 SDK 都对不上，第三方组件无法接入</td><td>用 <code>traceparent</code>，历史 ID 另存字段</td></tr>
+<tr><td>链路留 3 天日志留 30 天</td><td>回看稍早的日志时链路全空，被当成系统故障</td><td>保留期对齐或对错误 trace 延长</td></tr>
+<tr><td>把 trace_id 放进指标标签</td><td>时序库基数爆炸，这是最贵的错误之一</td><td>用 exemplar 承载样本，标签只放低基数维度</td></tr>
+</tbody>
+</table>
+
+<div class="callout callout-danger">
+<div class="callout-icon">❌</div>
+<div class="callout-title">最容易踩的坑</div>
 <ul>
-<li>每个请求生成 TraceId，通过 HTTP Header 透传</li>
-<li>每一步操作生成 Span，记录开始结束时间</li>
-<li>上报到 Jaeger/Tempo 等后端存储</li>
-<li>看火焰图找性能瓶颈</li>
+<li>日志里有 trace_id 但链路系统查不到，绝大多数是采样导致的正常现象，却几乎每个团队都会先去怀疑 Collector 丢数据。</li>
+<li>尾部采样规则里没有 <code>status_code=ERROR</code> 和延迟阈值，结果被保留的全是正常请求，出事的那条恰好丢了。</li>
+<li>exemplar 没走 OpenMetrics 格式暴露，应用侧调了 <code>ObserveWithExemplar</code> 但数据被静默丢弃，查询永远为空。</li>
+<li>给未采样的请求也写 exemplar，面板上的点全是死链，用了两次之后就没人再点。</li>
+<li>把 <code>trace_id</code> 当成指标标签，时序库基数瞬间爆炸；trace_id 只能出现在 exemplar 和日志里。</li>
+<li>字段名不统一，<code>traceId</code> 与 <code>trace_id</code> 并存，Grafana 的 derived field 按钮在一半服务上不出现。</li>
+<li>只在网关生成 traceID，内网直连调用、第三方回调、MQ 消费、定时任务全部成为无法关联的黑洞。</li>
+<li>MQ 消息头没透传 traceparent，消费侧成为孤立 trace，而生产侧看起来一切正常，很难察觉。</li>
+<li>把 MQ 消费硬套成生产者的子 span，一条 trace 时间跨度几小时，火焰图完全不可读。</li>
+<li>Grafana 的 tracesToLogs 配了 <code>filterBySpanID</code>，而日志里其实没有 span_id 字段，跳过去永远是空结果。</li>
+<li>trace 保留 3 天、日志保留 30 天，回看上周日志时所有链路链接都是空的，被反复当成故障上报。</li>
+<li>traceID 不回带给客户端，用户报障后先花二十分钟按时间和账号定位请求，而这一步本来可以是零成本。</li>
+<li>日志时间戳与 span 时间存在偏差却没配 <code>spanStartTimeShift</code>，跳过去的日志查询窗口刚好错开，显示没有日志。</li>
 </ul>
+</div>
 
                     </div>
                 </article>

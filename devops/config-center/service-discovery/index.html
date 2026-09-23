@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>服务发现 - 配置中心与服务发现 - 资深码农</title>
+    <title>服务注册发现的机制与故障模式 - 配置中心与服务发现 - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="服务发现实战指南：从你遇到的问题出发，讲清楚运维与云原生中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="description" content="讲透服务注册发现的实现机制与故障形态：客户端发现、服务端发现、Sidecar 三种模式的对照，应用自注册与平台自动注册的区别，心跳续约、服务端探测、TCP 探测、业务健康接口四种健康检查的发现延迟与误判风险，摘除延迟四段耗时叠加为什么导致下游重启时调用方必然报错，优雅下线的正确顺序，Eureka 与 Nacos 的保护模式如何避免实例被摘空，元数据标签与同区域优先路由，以及完整的排障清单和反模式。">
     <meta name="keywords" content="配置中心与服务发现,服务发现,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/devops/config-center/service-discovery/">
-    <meta property="og:title" content="服务发现 - 配置中心与服务发现 - 资深码农">
-    <meta property="og:description" content="服务发现实战指南：从你遇到的问题出发，讲清楚运维与云原生中的核心概念、常见用法和新手踩坑经验。">
+    <meta property="og:title" content="服务注册发现的机制与故障模式 - 配置中心与服务发现 - 资深码农">
+    <meta property="og:description" content="讲透服务注册发现的实现机制与故障形态：客户端发现、服务端发现、Sidecar 三种模式的对照，应用自注册与平台自动注册的区别，心跳续约、服务端探测、TCP 探测、业务健康接口四种健康检查的发现延迟与误判风险，摘除延迟四段耗时叠加为什么导致下游重启时调用方必然报错，优雅下线的正确顺序，Eureka 与 Nacos 的保护模式如何避免实例被摘空，元数据标签与同区域优先路由，以及完整的排障清单和反模式。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/config-center/service-discovery/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="服务发现 - 配置中心与服务发现">
-    <meta name="twitter:description" content="服务发现实战指南：从你遇到的问题出发，讲清楚运维与云原生中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="twitter:title" content="服务注册发现的机制与故障模式 - 配置中心与服务发现">
+    <meta name="twitter:description" content="讲透服务注册发现的实现机制与故障形态：客户端发现、服务端发现、Sidecar 三种模式的对照，应用自注册与平台自动注册的区别，心跳续约、服务端探测、TCP 探测、业务健康接口四种健康检查的发现延迟与误判风险，摘除延迟四段耗时叠加为什么导致下游重启时调用方必然报错，优雅下线的正确顺序，Eureka 与 Nacos 的保护模式如何避免实例被摘空，元数据标签与同区域优先路由，以及完整的排障清单和反模式。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "服务发现：心跳？", "acceptedAnswer": {"@type": "Answer", "text": "：服务定期发心跳，挂了自动摘除"}}, {"@type": "Question", "name": "服务发现：主动健康检查？", "acceptedAnswer": {"@type": "Answer", "text": "：注册中心主动 ping 服务"}}, {"@type": "Question", "name": "服务发现：主动上报？", "acceptedAnswer": {"@type": "Answer", "text": "：服务状态变化时主动上报"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "为什么下游服务重启时，调用方总会报一批错？", "acceptedAnswer": {"@type": "Answer", "text": "因为摘除延迟是四段延迟叠加的：健康检查发现实例异常需要一到几个检查周期，注册中心更新状态需要一次写入与集群内传播，推送到调用方需要一次网络往返，调用方 SDK 刷新本地缓存还有自己的周期。四段加起来通常是几秒到几十秒，在这段时间里调用方仍会把请求发到已经停止的实例上。解决方向有两个：被调方做优雅下线，先注销并等待推送生效再停止接收新请求；调用方必须有连接失败的快速重试与熔断，把剩余的少量失败兜住。指望注册中心做到零延迟摘除是不现实的。"}}, {"@type": "Question", "name": "心跳续约和服务端主动探测哪种健康检查更好？", "acceptedAnswer": {"@type": "Answer", "text": "两者的盲区不同，理想情况是叠加使用。心跳续约是实例定期向注册中心报到，注册中心在租约超时后摘除，摘除延迟等于租约时长，通常五秒到三十秒；它的盲区是进程活着但服务已经不可用时，心跳线程仍在正常发送，实例不会被摘除。服务端主动探测能发现这种假活状态，因为它真的去调了业务健康接口，但探测本身对注册中心有并发压力，实例数上万时探测器自身就是瓶颈，而且探测走的网络路径可能与真实调用方不同，容易出现误判。"}}, {"@type": "Question", "name": "Eureka 的保护模式到底在保护什么？", "acceptedAnswer": {"@type": "Answer", "text": "保护的是不要把实例摘空。当注册中心在短时间内发现大批实例心跳失败时，真实原因更可能是注册中心自己的网络出了问题，而不是所有实例同时宕机。此时若照常摘除，结果是实例列表被清空，调用方拿到空列表，整个集群瞬间不可用，故障范围比原本大得多。所以 Eureka 在续约成功率低于阈值时停止摘除任何实例，Nacos 也有类似的保护开关。副作用是真正故障的实例也不会被摘除，流量会继续打过去，因此保护模式生效期间必须依赖调用方的重试与熔断兜底。"}}, {"@type": "Question", "name": "在 Kubernetes 里还需要单独部署注册中心吗？", "acceptedAnswer": {"@type": "Answer", "text": "多数情况下不需要。K8s 的 Service 加 Endpoints 本身就是一套平台级自动注册：Pod 就绪后由控制器把它的地址写入 EndpointSlice，Pod 终止时自动移除，应用不需要写任何注册代码。需要额外注册中心的情况有三类：跨集群或跨 K8s 与虚拟机混合部署的统一发现、需要实例级元数据做灰度与单元化路由、以及框架强绑定了某个注册中心的生态能力。要注意 K8s 的摘除同样有延迟，Endpoints 变更传播到每个节点的转发规则需要时间，所以优雅下线和 preStop 等待照样必须做。"}}, {"@type": "Question", "name": "优雅下线的正确顺序是什么？", "acceptedAnswer": {"@type": "Answer", "text": "先主动从注册中心注销，然后等待一段时间让摘除信息推送到所有调用方，这段等待通常设为五到十五秒，取决于调用方缓存刷新周期；接着停止接收新请求，但继续处理已经进来的请求；等存量请求处理完或达到超时上限后，关闭下游连接池与消息消费，最后退出进程。顺序错了就没有意义：先停止服务再注销，或者直接强杀进程，都会让调用方在摘除延迟窗口内继续发请求，必然产生一批连接被拒的错误。在容器环境里这段等待通常放在 preStop 钩子里实现。"}}, {"@type": "Question", "name": "为什么服务发现不应该用强一致的注册中心？", "acceptedAnswer": {"@type": "Answer", "text": "因为强一致组件在失去多数派时会拒绝读写，而服务发现最需要的恰好是在故障时仍然可用。实例列表本身允许短暂过期，调用方必须有重试和熔断来处理已死实例，这条链路本来就存在；但如果注册中心因为网络分区而整体不可用，后果是所有服务既不能注册也不能发现，一个交换机故障会被放大成全站故障。所以服务发现应选可用性优先的实现，或者在强一致组件上叠加客户端缓存与快照兜底，让控制面不可用时数据面仍能继续工作。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,79 +64,303 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">服务发现入门：从你遇到的问题出发</h1>
+                        <h1 class="article-title">服务注册发现的机制与故障模式</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ 服务发现</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及服务发现怎么帮你解决。</p>
+<p><strong>本篇写注册发现的实现机制与故障模式</strong>：三种发现模式、健康检查的盲区、摘除延迟的四段叠加、优雅下线、保护模式、就近路由与多机房。三块治理基础设施的共性与 AP 选型结论见 <a href="../">服务治理的三块基础设施</a>；配置中心的服务端机制见 <a href="../config-center/">配置中心的服务端机制与选型</a>；重试与熔断的参数细节见 <a href="../../../backend/microservice/circuit-breaker/">熔断与重试</a>；K8s 的 Service 与 Endpoints 语义见 <a href="../../kubernetes/core-resources/">Kubernetes 核心资源</a>。</p>
+
+<h2>注册发现解决的是「地址随时在变」</h2>
+
+<p>单体时代地址写在配置文件里就够了，因为一年也不改几次。微服务加容器之后，实例地址变化成了常态：扩缩容、故障自愈替换、滚动更新、节点驱逐、单元切换，每一次都在改变「某个服务当前有哪些可用地址」。注册发现要做的就是<strong>把这份随时在变的地址清单，及时、准确地送到每一个调用方手里</strong>。</p>
+
+<p>注意这句话里有三个互相冲突的要求：及时（延迟要低）、准确（不要给死实例）、送到每个调用方（扇出大）。后面所有的机制和故障，本质都是在这三者之间做取舍。</p>
 
 <div class="mermaid">
 flowchart TB
-    A[服务 A] --> B[注册中心]
-    B --> C[服务 B]
-    C --> D[找到对方]
+    subgraph M1["模式一：客户端发现"]
+        C1["调用方进程<br/>内置发现 SDK"]
+        C1 -- "拉取或订阅实例列表" --> R1["注册中心"]
+        C1 -- "SDK 内做负载均衡后直连" --> S1["被调实例"]
+    end
+    subgraph M2["模式二：服务端发现"]
+        C2["调用方<br/>只认一个固定地址"]
+        C2 -- "请求发给中间层" --> P2["网关或 LB"]
+        P2 -- "订阅实例列表" --> R2["注册中心"]
+        P2 -- "转发，多一跳" --> S2["被调实例"]
+    end
+    subgraph M3["模式三：Sidecar 模式"]
+        C3["调用方<br/>只访问本机 127.0.0.1"]
+        C3 -- "出向流量被劫持" --> SC["同 Pod 内的代理"]
+        SC -- "由控制面下发端点" --> R3["注册中心或 xDS 控制面"]
+        SC -- "代理直连目标" --> S3["被调实例"]
+    end
 </div>
-
-<h2>1. 服务地址会变</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>微服务部署后 IP 经常变，调用方怎么知道地址？</p>
-</div>
-
-<p><strong>怎么解决？</strong>用服务发现，服务启动自动注册，调用方从注册中心拿地址。</p>
-
-<h2>2. 服务发现是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>服务发现是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>服务启动注册到注册中心，调用方通过服务名找地址。</p>
-
-<h2>3. 常用注册中心</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>常用注册中心有哪些？</p>
-</div>
-
-<p><strong>怎么解决？</strong>Nacos、Consul、Etcd、ZooKeeper。</p>
-
-<h2>对比</h2>
 
 <table>
-<thead><tr><th>注册中心</th><th>特点</th><th>适合</th></tr></thead>
+<thead><tr><th>维度</th><th>客户端发现</th><th>服务端发现</th><th>Sidecar 模式</th></tr></thead>
 <tbody>
-<tr><td>Nacos</td><td>轻量、Java 友好</td><td>Spring 项目</td></tr>
-<tr><td>Consul</td><td>功能全、健康检查</td><td>云原生</td></tr>
-<tr><td>Etcd</td><td>轻量、K8s 内置</td><td>K8s 生态</td></tr>
+<tr><td>请求路径跳数</td><td>直连，最少一跳</td><td>多一跳，增加 0.5 到 2 毫秒与一次连接管理</td><td>本机回环多一跳，通常 0.1 到 0.5 毫秒</td></tr>
+<tr><td>多语言成本</td><td>最高，每种语言都要实现并升级 SDK</td><td>最低，调用方只需要会发 HTTP</td><td>低，代理与语言无关</td></tr>
+<tr><td>负载均衡能力</td><td>最强，能做实例级权重、最少连接、同区域优先</td><td>受中间层能力限制</td><td>强，代理能做全套策略且可统一升级</td></tr>
+<tr><td>升级治理策略的成本</td><td>高，改算法要所有服务升级 SDK 并重新发布</td><td>低，改中间层配置即可</td><td>低，控制面推送新策略，代理热生效</td></tr>
+<tr><td>可观测性</td><td>取决于各语言 SDK 埋点是否一致，往往不一致</td><td>中间层统一埋点，但看不到调用方侧视角</td><td>最好，代理天然产出统一的指标与链路</td></tr>
+<tr><td>额外资源开销</td><td>几乎为零</td><td>中间层集群的机器成本</td><td>每个实例多一个代理进程，内存与 CPU 都要预留</td></tr>
+<tr><td>运维与排障复杂度</td><td>低，但故障分散在各语言 SDK 里</td><td>低</td><td>最高，流量被劫持后排障链路变长，需要专门积累经验</td></tr>
+<tr><td>适合谁</td><td>单一语言栈、追求极致延迟</td><td>多语言、南北向入口</td><td>服务数多、多语言、且有平台团队能兜住网格</td></tr>
 </tbody></table>
 
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>要有健康检查</strong>服务挂了要自动从注册中心摘掉，不要调挂掉的服务。</li>
-<li><strong>本地缓存地址</strong>调用方本地缓存地址，注册中心挂了也能调。</li>
-</ul>
+<h2>注册的两种来源：自注册与平台注册</h2>
+
+<p><strong>应用自注册</strong>是应用启动后自己调注册中心的接口把自己加进去，再靠心跳维持。优点是不依赖平台、任何部署形态都能用；缺点是注册逻辑散落在每个应用里，注册的地址由应用自己决定，<strong>最常见的事故就是注册了一个不可达的地址</strong>：容器里注册了 Docker 的内部 IP、多网卡机器上选错了网卡、或者注册了容器端口而不是映射后的主机端口。</p>
+
+<p><strong>平台自动注册</strong>是编排系统替应用完成注册。K8s 的 Endpoints 与 EndpointSlice 就是典型：Pod 通过就绪探针后，控制器把它的地址写进去；Pod 进入终止状态时自动移除。应用里没有一行注册代码，也就不会出现注册错地址的问题。<strong>这也是为什么全量跑在 K8s 上时往往不需要额外的注册中心</strong>，除非你需要跨集群发现、实例级元数据路由，或者框架强绑定了某个注册中心的生态。K8s 侧的控制循环与探针语义见 <a href="../../kubernetes/core-resources/">Kubernetes 核心资源</a>。</p>
+
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">平台注册不代表没有摘除延迟</div>
+    <p>很多人以为用了 K8s Service 就不存在摘除延迟。实际上 Pod 终止时，EndpointSlice 的变更要经过 API Server、控制器、再到每个节点的 kube-proxy 或 CNI 更新转发规则，<strong>这个链路同样是几百毫秒到几秒</strong>；如果前面还有 Ingress 或自建网关，又多一段缓存。所以无论平台注册还是自注册，preStop 里的等待与优雅下线都必须做。</p>
 </div>
 
-                    </div>
-                </article>
-            </main>
-        </div>
-    </div>
-    <footer class="site-footer">
-        <div class="footer-inner">
-            <p>© 2026 资深码农. 保留所有权利。</p>
-        </div>
-    </footer>
-    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "devops";</script>
-    <script defer src="../../../vendor/highlight.min.js"></script>
-    <script defer src="../../../js/main.js?v=2"></script>
-</body>
-</html>
+<h2>健康检查的四种机制与各自盲区</h2>
+
+<p>注册中心判断「一个实例还活着吗」只有四种手段，每一种都有明确的盲区。<strong>选择健康检查方式，实际上是在选择你愿意接受哪一类误判</strong>。</p>
+
+<table>
+<thead><tr><th>机制</th><th>怎么工作</th><th>发现故障的延迟</th><th>盲区与误判风险</th><th>典型实现与默认值</th></tr></thead>
+<tbody>
+<tr><td>客户端心跳续约</td><td>实例定期上报，注册中心到期未收到即摘除</td><td>等于租约时长，通常 5 到 30 秒</td><td>进程被强杀后要等租约过期；<strong>进程活着但服务不可用时心跳仍正常</strong>，实例永不被摘；网络抖动会造成误摘</td><td>Nacos 临时实例默认 5 秒心跳、15 秒标记不健康、30 秒删除；Eureka 默认 30 秒心跳、90 秒过期</td></tr>
+<tr><td>服务端主动探测</td><td>注册中心周期性去调实例的健康接口</td><td>等于探测周期加超时，通常 5 到 15 秒</td><td>能发现假活，但<strong>探测器自身有并发压力</strong>，实例上万时探测成为瓶颈；探测走的网络路径与真实调用方不同，可能出现「探测通但业务不通」</td><td>Consul 的 HTTP check，默认 10 秒间隔</td></tr>
+<tr><td>TCP 端口探测</td><td>建连成功即认为健康</td><td>秒级</td><td><strong>只能证明端口在监听</strong>：线程池打满、下游全挂、GC 长暂停、返回全部 500，端口都还在听，一律判健康</td><td>各注册中心与 LB 的默认检查方式，也是最常见的错误选择</td></tr>
+<tr><td>业务健康接口</td><td>实例自己判断依赖是否可用后返回状态</td><td>取决于探测方的周期</td><td>最准，但要求应用实现；<strong>接口里串行检查所有下游依赖是典型错误</strong>，会造成一个非核心依赖抖动导致全部实例被判不健康的雪崩</td><td>K8s readinessProbe，默认 periodSeconds 10、failureThreshold 3</td></tr>
+</tbody></table>
+
+<pre><code class="language-go">// 健康接口的正确写法：区分「存活」与「就绪」，只检查强依赖，且结果要有缓存
+// 反面教材是在这里串行 ping 所有下游，一个非核心依赖抖动就让全部实例被摘除
+
+// 存活检查：只回答「进程还能处理请求吗」，不查任何外部依赖
+// 这个接口挂了意味着要重启进程，所以绝不能因为数据库抖动而失败
+func liveness(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+    _, _ = w.Write([]byte("ok"))
+}
+
+// 就绪检查：回答「现在该不该给我发流量」，检查强依赖，且必须带缓存与超时
+type Readiness struct {
+    db       *sql.DB
+    mu       sync.RWMutex
+    lastOK   bool
+    lastTime time.Time
+    draining atomic.Bool // 优雅下线开始后置为 true，让探测立刻失败
+}
+
+func (rd *Readiness) Handler(w http.ResponseWriter, r *http.Request) {
+    if rd.draining.Load() {
+        http.Error(w, "draining", http.StatusServiceUnavailable) // 下线中：主动拒绝新流量
+        return
+    }
+    if !rd.check() {
+        http.Error(w, "dependency down", http.StatusServiceUnavailable)
+        return
+    }
+    w.WriteHeader(http.StatusOK)
+}
+
+func (rd *Readiness) check() bool {
+    rd.mu.RLock()
+    // 结果缓存 2 秒：探测方可能是注册中心加网关加 K8s 三家同时来探，不能每次都真查一遍
+    if time.Since(rd.lastTime) &lt; 2*time.Second {
+        ok := rd.lastOK
+        rd.mu.RUnlock()
+        return ok
+    }
+    rd.mu.RUnlock()
+
+    // 超时必须远小于探测方的超时，否则探测方先超时，你的检查结果毫无意义
+    ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+    defer cancel()
+    err := rd.db.PingContext(ctx) // 只查强依赖：没它就真的处理不了请求
+
+    rd.mu.Lock()
+    rd.lastOK, rd.lastTime = err == nil, time.Now()
+    rd.mu.Unlock()
+    return err == nil
+}
+</code></pre>
+
+<h2>摘除延迟：服务发现最核心的指标</h2>
+
+<p>如果只允许用一个指标衡量注册发现做得好不好，那就是<strong>摘除延迟</strong>：从实例真正不可用，到最后一个调用方不再向它发请求，一共过了多久。这个时间不是单一环节，而是四段延迟的叠加，任何一段配置不当都会把总时长拉长到分钟级。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant I as 被调实例
+    participant R as 注册中心
+    participant SDK as 调用方 SDK 缓存
+    participant C as 调用方业务线程
+    I->>I: 进程被强杀或假死（T0）
+    Note over I,R: 第一段：健康检查发现<br/>心跳租约 15 秒或探测周期乘失败阈值
+    R->>R: 租约到期，标记实例不健康（T0 加 5 到 30 秒）
+    Note over R: 第二段：注册中心内部更新<br/>写存储并在集群节点间传播，约 100 毫秒到 2 秒
+    R-->>SDK: 第三段：推送变更（长轮询或 gRPC，10 到 500 毫秒）
+    Note over SDK: 第四段：客户端缓存刷新<br/>若只靠定时拉取，这里还要等一个周期
+    SDK->>SDK: 替换内存实例列表（T0 加 6 到 35 秒）
+    C->>I: 在整个窗口内，请求仍在发往已死实例
+    I--xC: 连接被拒或读超时
+    C->>C: 熔断器记失败并本地摘除该地址，重试其他实例
+    Note over C: 所以重试与熔断不是可选项<br/>它们负责兜住摘除窗口内的失败
+</div>
+
+<table>
+<thead><tr><th>延迟段</th><th>典型耗时</th><th>由什么决定</th><th>怎么缩短</th><th>缩短过头的副作用</th></tr></thead>
+<tbody>
+<tr><td>健康检查发现</td><td>5 到 30 秒，最主要的一段</td><td>心跳间隔与租约时长，或探测周期乘失败阈值</td><td>Nacos 临时实例可把心跳调到 3 秒、不健康阈值 9 秒；K8s 探针 periodSeconds 设 2 到 3、failureThreshold 设 2</td><td>网络抖动时误摘实例，甚至出现实例反复上下线的抖动</td></tr>
+<tr><td>注册中心内部更新</td><td>100 毫秒到 2 秒</td><td>存储写入与集群内数据传播方式</td><td>选择传播更快的实现，避免跨机房强同步</td><td>一致性变弱，不同节点返回的列表短暂不同</td></tr>
+<tr><td>推送到客户端</td><td>10 到 500 毫秒</td><td>推送机制：gRPC 流最快，长轮询次之，定时拉取最慢</td><td>启用推送而不是只靠拉取</td><td>服务端连接数与内存上升</td></tr>
+<tr><td>客户端缓存刷新</td><td>0 秒到一个拉取周期，常见 30 秒</td><td>SDK 的缓存 TTL 与是否接受推送</td><td>确认推送链路真的连上；把兜底拉取周期设为 10 到 30 秒</td><td>拉取过频时注册中心 QPS 抬升</td></tr>
+<tr><td>合计</td><td>常见 6 到 35 秒，配置不当可达分钟级</td><td>四段叠加，木桶效应</td><td>先优化最长的那段，通常是健康检查</td><td>—</td></tr>
+</tbody></table>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这就是「下游重启时我这边报了一批错」的全部原因</div>
+    <p>很多人第一反应是注册中心有 bug，其实<strong>这是机制的必然结果</strong>：摘除必须靠观测来推断，而观测有周期。摘除延迟不可能降到零，所以工程上只有两条路——被调方通过优雅下线把「实例消失」变成一个提前通知的、有序的过程；调用方通过连接失败快速重试与熔断兜住剩余失败。把希望寄托在「把心跳调到 1 秒」上只会换来抖动误摘。</p>
+</div>
+
+<h2>优雅下线：把摘除延迟从被动观测变成主动通知</h2>
+
+<p>优雅下线的核心思路是<strong>先让调用方知道我要走，再真的走</strong>。顺序错了整个机制就失效：先停服务再注销，或者直接强杀，都会让调用方在摘除窗口里继续发请求。</p>
+
+<div class="mermaid">
+flowchart TB
+    A["收到终止信号：SIGTERM 或 preStop"] --> B["主动调注册中心注销本实例"]
+    B --> C["就绪检查立刻返回失败<br/>让平台与网关也停止派发"]
+    C --> D["等待摘除生效<br/>时长约等于推送延迟加客户端缓存周期"]
+    D --> E{"等待时间是否<br/>大于调用方缓存刷新周期"}
+    E -- "小于" --> F["仍有调用方持有旧列表<br/>下线必然产生失败请求"]
+    E -- "大于，通常 5 到 15 秒" --> G["停止接收新请求<br/>关闭监听或拒绝新连接"]
+    G --> H["继续处理存量请求<br/>直到处理完或达到超时上限"]
+    H --> I{"是否还有<br/>未完成的请求"}
+    I -- "有且未超时" --> H
+    I -- "无，或已超时" --> J["停止消息消费与定时任务"]
+    J --> K["关闭下游连接池与数据库连接"]
+    K --> L["进程退出"]
+    F --> G
+</div>
+
+<pre><code class="language-go">// 优雅下线的完整实现，顺序就是上图：注销 -&gt; 就绪置失败 -&gt; 等推送 -&gt; 停新请求 -&gt; 排空 -&gt; 退出
+func main() {
+    srv := &amp;http.Server{Addr: ":8080", Handler: router}
+    go func() {
+        if err := srv.ListenAndServe(); err != nil &amp;&amp; err != http.ErrServerClosed {
+            log.Fatal(err)
+        }
+    }()
+
+    stop := make(chan os.Signal, 1)
+    signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+    &lt;-stop
+
+    // 第一步：主动注销，这一步把「被动等租约过期」变成「主动通知」，省下最长的那段延迟
+    if err := registry.Deregister(instanceID); err != nil {
+        log.Warn("deregister failed, will fall back to lease expiry", err)
+    }
+    // 第二步：就绪检查立刻失败，让 K8s 与网关同步停止派发新流量
+    readiness.draining.Store(true)
+
+    // 第三步：等待摘除信息扩散到所有调用方。这个 15 秒不是拍脑袋，
+    // 它必须大于「推送延迟 + 调用方 SDK 缓存刷新周期」，否则等于没等
+    time.Sleep(15 * time.Second)
+
+    // 第四步：停止接收新请求并排空存量。Shutdown 会先关监听再等连接处理完
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    if err := srv.Shutdown(ctx); err != nil {
+        log.Warn("graceful shutdown timeout, force closing", err) // 超时兜底，避免永不退出
+    }
+
+    // 第五步：先停消费再关连接池，顺序反了会出现「消息已取出但连接池已关」的丢消息
+    consumer.Stop()
+    db.Close()
+}
+</code></pre>
+
+<pre><code class="language-yaml"># 容器环境里等待摘除的标准做法：preStop 里睡够，terminationGracePeriodSeconds 要更长
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      # 必须大于 preStop 等待 + 请求排空时间，否则 kubelet 会在排空前发 SIGKILL
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: app
+        lifecycle:
+          preStop:
+            exec:
+              # SIGTERM 与 Endpoints 移除是并发发生的，没有这段等待就必然有请求打到正在退出的 Pod
+              command: ["/bin/sh", "-c", "sleep 15"]
+        readinessProbe:            # 只有就绪探针失败才会摘流量，存活探针失败是重启
+          httpGet: { path: /readyz, port: 8080 }
+          periodSeconds: 3         # 缩短这一段能显著降低摘除延迟
+          failureThreshold: 2
+          timeoutSeconds: 1        # 必须大于应用侧健康检查的内部超时
+        livenessProbe:
+          httpGet: { path: /livez, port: 8080 }
+          periodSeconds: 10
+          failureThreshold: 3      # 存活探针要比就绪探针宽松，否则抖动时会被反复重启
+</code></pre>
+
+<h2>保护模式：宁可留着死实例，也不能把列表摘空</h2>
+
+<p>假设注册中心在一分钟内发现 80% 的实例都没有续约，最合理的推断是什么？<strong>不是「80% 的实例同时挂了」，而是「注册中心自己的网络出问题了」</strong>。真实世界里成百上千个实例同时失联的概率极低，而注册中心与机房之间断网的概率高得多。</p>
+
+<p>如果注册中心此时照常摘除，结果是实例列表被清空，调用方拿到空列表，<strong>一个注册中心的网络问题被放大成全站不可用</strong>。这正是 Eureka 自我保护模式要解决的问题：当最近一段时间的续约成功率低于阈值时，停止摘除任何实例。这也是 AP 取向在工程上的具体落地——宁可给出包含死实例的列表，也不给出空列表。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> 健康: 注册成功并开始续约
+    健康 --> 疑似异常: 连续若干次未收到心跳
+    疑似异常 --> 健康: 心跳恢复
+    疑似异常 --> 已摘除: 租约过期且未触发保护阈值
+    已摘除 --> 健康: 实例恢复并重新注册
+    疑似异常 --> 保护模式挂起: 同时异常的实例比例超过阈值
+    保护模式挂起 --> 健康: 续约成功率回升，退出保护
+    保护模式挂起 --> 已摘除: 退出保护后逐个重新判定
+    已摘除 --> [*]
+    note right of 保护模式挂起
+        此状态下不摘除任何实例<br/>列表里会包含真正已死的实例<br/>必须靠调用方重试与熔断兜底
+    end note
+</div>
+
+<table>
+<thead><tr><th>实现</th><th>保护机制</th><th>触发条件</th><th>生效后的行为</th><th>副作用与注意点</th></tr></thead>
+<tbody>
+<tr><td>Eureka</td><td>自我保护模式</td><td>最近一分钟实际续约数低于期望值的 85%，阈值可配</td><td>停止摘除任何实例，界面出现红色告警横幅</td><td>小集群极易误触发：实例数少时统计噪声大，测试环境经常长期停留在保护模式，死实例一直不摘</td></tr>
+<tr><td>Nacos</td><td>实例保护阈值，按服务粒度配置</td><td>健康实例数占比低于设定阈值，例如 0.6</td><td>把不健康实例也返回给调用方，避免列表被摘空</td><td>默认值是 0，即不开启，需要为核心服务显式配置；开启后调用方必须能容忍不健康实例</td></tr>
+<tr><td>Consul</td><td>无等价机制，依赖检查失败即标记 critical</td><td>—</td><td>失败实例被标记，查询时默认过滤</td><td>大面积检查失败时确实可能返回空列表，需要在客户端侧做「空列表保留旧值」保护</td></tr>
+<tr><td>K8s Service</td><td>无保护阈值</td><td>—</td><td>就绪的 Pod 全部失败时 EndpointSlice 为空，流量直接失败</td><td>这也是为什么就绪探针绝不能检查非核心依赖，否则一次外部依赖抖动会让整个 Service 没有端点</td></tr>
+<tr><td>客户端 SDK 侧</td><td>空列表保护</td><td>拉取或推送得到的实例列表为空</td><td>保留上一次的非空列表，并打告警指标</td><td><strong>这是最后一道防线，也是最应该确认的一条</strong>：无论服务端用什么实现，客户端都不该接受空列表</td></tr>
+</tbody></table>
+
+<h2>元数据、就近路由与多机房</h2>
+
+<p>注册信息里除了地址，还应带上一组元数据标签，它们是流量治理的基础：版本号用于金丝雀、分组标签用于灰度、<strong>区域与可用区标签用于同区域优先路由</strong>。</p>
+
+<p>同区域优先的收益非常具体：跨可用区调用的网络往返通常比同可用区高 0.5 到 2 毫秒，一条链路上有十几次内部调用时，累积延迟差异可达十几毫秒；更直接的是<strong>跨可用区流量在公有云上是要计费的</strong>，把内部调用限制在同可用区里，这部分账单可以显著下降。实现方式是负载均衡时先过滤出同区域实例，只有同区域没有健康实例时才回退到跨区域——<strong>回退逻辑必须有，否则同区域全挂时流量无处可去</strong>。</p>
+
+<table>
+<thead><tr><th>元数据用途</th><th>标签示例</th><th>消费方</th><th>常见做法</th><th>易错点</th></tr></thead>
+<tbody>
+<tr><td>金丝雀与灰度</td><td>version 为 v2、tag 为 canary</td><td>调用方 SDK 或 sidecar 的路由规则</td><td>按请求头或用户标识匹配到特定标签的实例</td><td>灰度实例权重没调低，新版本一上线就承接了平均流量</td></tr>
+<tr><td>同区域优先</td><td>zone 为 cn-east-1a</td><td>负载均衡策略</td><td>优先同 zone，无健康实例时回退</td><td>没有回退逻辑，单 zone 故障时请求全部失败</td></tr>
+<tr><td>单元化路由</td><td>unit 为 unit-01</td><td>网关与内部调用</td><td>同一用户的请求闭环在一个单元内</td><td>跨单元调用没有兜底，数据不在本单元时直接报错</td></tr>
+<tr><td>权重与容量</td><td>weight 为 100</td><td>负载均衡</td><td>新扩容实例先给低权重预热，避免冷启动被打爆</td><td>预热逻辑缺失时，JIT 未热的实例延迟高，表现为「某个实例的 P99 特别差」</td></tr>
+<tr><td>下线标记</td><td>enabled 为 false</td><td>调用方 SDK</td><td>运维手动标记实例下线，比注销更可控，可随时恢复</td><td>标记后忘记恢复，扩容后某些实例长期不接流量</td></tr>
+</tbody></table>
+
+<p>多机房部署要先回答一个问题：<strong>注册信息要不要跨机房同步</strong>。全同步的好处是任何机房都能发现全部实例，可以做跨机房容灾；代价是同步链路本身成为故障点，且一旦跨机房调用变成常态，延迟与流量成本都会上升。更稳的做法是<strong>每个机房一套注册中心，各自只管本机房实例，机房之间通过网关或专门的跨机房入口互通</strong>，这样机房级故障天然被隔离，代价是跨机房调用要显式声明，不能像本机房一样透明。</p>
