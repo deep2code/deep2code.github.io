@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>数据库性能优化 - 性能优化实战 - 资深码农</title>
+    <title>应用侧的数据库访问优化 - 性能优化实战 - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="数据库优化实战实战指南：讲清楚后端开发中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="description" content="很多「数据库慢」其实是应用用错了数据库：连接池配成几百反而降吞吐、池耗尽让应用侧看起来慢两秒而数据库侧只用了三毫秒、ORM 懒加载在循环里触发 N+1、批量插入没开重写参数变成一千次往返、事务里调 RPC 把网络耗时变成行锁持有时间、读写分离后立刻读从库读到旧数据。本篇讲清连接池参数矩阵、连接泄漏与有效性检测、ORM 六类陷阱、事务边界、批量与限速、写后读一致性三种解法。">
     <meta name="keywords" content="性能优化实战,数据库性能优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/backend/performance/db-optimization/">
-    <meta property="og:title" content="数据库性能优化 - 性能优化实战 - 资深码农">
-    <meta property="og:description" content="数据库优化实战实战指南：讲清楚后端开发中的核心概念、常见用法和新手踩坑经验。">
+    <meta property="og:title" content="应用侧的数据库访问优化 - 性能优化实战 - 资深码农">
+    <meta property="og:description" content="很多「数据库慢」其实是应用用错了数据库：连接池配成几百反而降吞吐、池耗尽让应用侧看起来慢两秒而数据库侧只用了三毫秒、ORM 懒加载在循环里触发 N+1、批量插入没开重写参数变成一千次往返、事务里调 RPC 把网络耗时变成行锁持有时间、读写分离后立刻读从库读到旧数据。本篇讲清连接池参数矩阵、连接泄漏与有效性检测、ORM 六类陷阱、事务边界、批量与限速、写后读一致性三种解法。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/backend/performance/db-optimization/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="数据库性能优化 - 性能优化实战">
-    <meta name="twitter:description" content="数据库优化实战实战指南：讲清楚后端开发中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="twitter:title" content="应用侧的数据库访问优化 - 性能优化实战">
+    <meta name="twitter:description" content="很多「数据库慢」其实是应用用错了数据库：连接池配成几百反而降吞吐、池耗尽让应用侧看起来慢两秒而数据库侧只用了三毫秒、ORM 懒加载在循环里触发 N+1、批量插入没开重写参数变成一千次往返、事务里调 RPC 把网络耗时变成行锁持有时间、读写分离后立刻读从库读到旧数据。本篇讲清连接池参数矩阵、连接泄漏与有效性检测、ORM 六类陷阱、事务边界、批量与限速、写后读一致性三种解法。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "数据库优化实战：从你遇到的问题出发：先看执行计划？", "acceptedAnswer": {"@type": "Answer", "text": "优化 SQL 前先 explain 看执行计划。"}}, {"@type": "Question", "name": "数据库优化实战：从你遇到的问题出发：索引不是越多越好？", "acceptedAnswer": {"@type": "Answer", "text": "索引太多影响写入，要合适。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "数据库连接池设多大合适，为什么不是越大越好？", "acceptedAnswer": {"@type": "Answer", "text": "经验公式是核数乘二再加上有效磁盘数，一台 8 核加 SSD 的数据库对应的池大小通常在 15 到 20 左右，很多人配成 200 是错的。原因在数据库侧：连接不是免费的并发度，每个活跃连接在数据库里对应一个线程，超过 CPU 能真正并行处理的数量后，多出来的连接只会带来线程上下文切换、缓冲池与锁结构的争抢，结果是吞吐下降而延迟上升。实测常见的现象是把池从 200 降到 20，吞吐反而上升而 P99 下降。另外要注意池大小是按实例算的，20 个实例每个配 50 就是 1000 个连接，很容易撞到数据库的最大连接数上限。"}}, {"@type": "Question", "name": "应用侧说数据库很慢，但数据库侧统计只有几毫秒，问题在哪？", "acceptedAnswer": {"@type": "Answer", "text": "几乎一定是连接池耗尽，业务线程的时间花在等连接而不是等 SQL。典型场景是池里所有连接都被长事务、慢接口或泄漏的连接占住，新来的请求阻塞在获取连接这一步，等了将近两秒才拿到连接，而真正的 SQL 执行只花了三毫秒。这时慢查询日志里什么都没有，数据库监控一切正常，开发却认定是数据库的问题。判据很简单：用应用侧的总耗时减去数据库侧的执行时间，差值就是连接等待时间。要确认的话看连接池暴露的等待时间与活跃连接数指标，如果活跃连接长期等于最大池大小、等待队列不为零，结论就明确了。"}}, {"@type": "Question", "name": "为什么一千条插入在应用里跑得像一千次单条插入？", "acceptedAnswer": {"@type": "Answer", "text": "因为 JDBC 的批量接口默认并不会把多条语句合并发送。MySQL 驱动必须在连接字符串上开启批量语句重写参数，驱动才会把多条插入改写成一条多值插入语句，一次网络往返完成；不开的话即使调用了批量接口，底层仍是逐条发送，一千条就是一千次往返，同机房按每次零点五毫秒算光往返就是半秒。ORM 层同样有坑：很多框架的保存全部方法只是在循环里调单条保存，还会顺带触发主键回填查询。正确做法是开启重写参数、控制单批 500 到 1000 条、超过就切批，并且在压测时用抓包或驱动日志确认真的合并了。"}}, {"@type": "Question", "name": "为什么事务里不能调 RPC 或发消息？", "acceptedAnswer": {"@type": "Answer", "text": "因为事务里的每一毫秒都是锁持有时间。一旦执行了更新语句，对应的行锁会持有到提交，如果紧接着调一个平均八百毫秒、偶发三秒的外部接口，那么这行数据就被锁住了同样长的时间，其他要更新同一行的线程全部排队，连接池随之被占满，最终表现是整个服务不可用，而外部接口只是慢了一点。此外分布式事务语义也不成立：外部调用成功而本地事务回滚，数据就不一致了。正确做法是事务里只包数据库操作，外部调用移到事务提交之后，需要可靠性时用本地消息表或事务消息，把跨系统一致性交给补偿机制。"}}, {"@type": "Question", "name": "读写分离后立刻查询读不到刚写的数据怎么解决？", "acceptedAnswer": {"@type": "Answer", "text": "有三种常见解法。第一种是关键读强制走主库，实现上在写操作后给当前请求上下文打标记，路由层看到标记就走主库，简单可靠但会把流量压回主库。第二种是等待复制位点，写完后拿到主库的位点，读之前确认从库已经追到该位点再读，一致性最强但实现复杂且会增加读延迟。第三种是会话粘滞，同一个用户或会话在一段时间窗口内的读全部走主库，折中方案，注意窗口要大于主从延迟的实际分布。此外必须记住只读从库不是免费的：它有自己的连接数上限，复制本身也会消耗资源，延迟在大批量写入时会显著上升。"}}, {"@type": "Question", "name": "ORM 常见的性能陷阱有哪些？", "acceptedAnswer": {"@type": "Answer", "text": "六类。一是懒加载在循环里触发 N+1，代码上只是访问一个关联属性，实际发了上百条 SQL，修法是用联表抓取或显式预加载。二是默认查询全部列，把大文本和扩展字段一起取回，列表接口尤其浪费。三是会话级与全局级缓存带来的脏读与内存膨胀，长生命周期会话还会把查过的对象一直留在内存里。四是自动生成的 SQL 走不上索引，比如在条件列上套函数、隐式类型转换、或者生成了无法利用最左前缀的条件顺序。五是批量操作被拆成逐条执行。六是事务注解的范围意外扩大，把远程调用和循环都包进了事务。这些问题在代码评审时看不出来，必须打开框架的 SQL 日志实际观察。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,94 +64,670 @@
             <main id="body-content">
                 <article class="article">
     <header class="article-header">
-        <h1 class="article-title">数据库优化：从慢查询到分库分表</h1>
+        <h1 class="article-title">应用侧的数据库访问优化</h1>
         <div class="article-meta">
             <span class="meta-item">🏷️ 数据库优化</span>
         </div>
     </header>
-    <p>数据库查询越来越慢，接口超时，CPU 跑满。数据库优化不是上来就分库分表，先把能优化的都优化了再说。</p>
+    <p>这篇只讲<strong>「数据库本身没问题，是应用用错了」</strong>这一类问题：连接池、ORM 陷阱、批量与 N+1、事务边界、读写分离的应用侧实现。SQL 写法、索引设计、慢查询治理、分库分表全部属于数据库侧，见站内<a href="../../../database/optimization/">数据库优化</a>四篇；B+ 树、缓冲池、MVCC、加锁范围、执行计划判读见站内<a href="../../../database/mysql/">MySQL 深度原理</a>；缓存层的设计见站内<a href="../../../database/cache/">缓存设计</a>；接口整体的耗时拆解见<a href="../api-optimization/">接口性能优化</a>。</p>
+
+    <h2>先划清边界：数据库很快，是应用用错了</h2>
+    <p>线上「数据库慢」的报警里，我见过的至少有一半，数据库侧是清白的：慢查询日志空空如也，实例 CPU 百分之二十，执行时间毫秒级，但应用侧的接口 P99 是两秒。<strong>这类问题的共同特征是：耗时花在应用到数据库之间的那几层，而不是数据库内部。</strong></p>
     <div class="mermaid">
-flowchart LR
-    A[查询慢] --> B[索引优化]
-    B --> C[SQL优化]
-    C --> D[表结构优化]
-    D --> E[读写分离]
-    E --> F[分库分表]
-    </div>
-
-    <h2>查询越来越慢，接口超时</h2>
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">你遇到的问题</div>
-        <p>一个列表接口原来 100ms，现在要 1 秒，用户都投诉了。</p>
-    </div>
-    <p><strong>怎么解决？</strong>先查慢查询日志，看看是哪条 SQL 慢，然后 explain 分析，加索引优化。</p>
-    <pre><code class="language-bash"># 开慢查询日志
-slow_query_log = 1
-long_query_time = 1
-
-# 看慢查询
-mysqldumpslow -s t slow.log</code></pre>
-
-    <h2>加了索引还是慢</h2>
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">你遇到的问题</div>
-        <p>索引加了一堆，结果写入慢，查询也没快多少。</p>
-    </div>
-    <p><strong>怎么解决？</strong>先分析是不是索引失效，是不是加了没用的索引，把没用的索引删掉。</p>
-    <pre><code class="language-bash"># 查没用的索引
-SELECT * FROM sys.schema_unused_indexes;
-
-# 删掉没用的索引
-DROP INDEX idx_name ON table_name;</code></pre>
-    <h2>优化步骤</h2>
+flowchart TB
+    subgraph A["应用代码层 本篇重点"]
+        A1["事务边界 循环里查询"]
+        A2["读写分离路由 写后读"]
+    end
+    subgraph B["ORM 层 本篇重点"]
+        B1["懒加载 自动生成 SQL"]
+        B2["一级二级缓存 逐条保存"]
+    end
+    subgraph C["连接池层 本篇重点"]
+        C1["池大小 获取超时 泄漏"]
+        C2["最大存活时长 有效性检测"]
+    end
+    subgraph D["驱动层 本篇重点"]
+        D1["批量语句重写 服务端预编译"]
+        D2["fetchSize 流式读取"]
+    end
+    subgraph E["网络与中间件"]
+        E1["代理空闲超时 连接被单方面关闭"]
+    end
+    subgraph F["数据库内部 见站内数据库优化篇"]
+        F1["执行计划 索引 锁 缓冲池"]
+    end
+    A --> B --> C --> D --> E --> F
+</div>
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant B as 业务线程
+    participant P as 连接池 最大 10
+    participant D as MySQL
+    Note over P: 池中 10 个连接全部被长事务或慢接口占用
+    B->>P: 申请连接
+    Note over B,P: 业务线程阻塞在这一步 等待 1997ms
+    P->>D: 前面的请求归还连接后才轮到它
+    D-->>P: SQL 执行完成 仅 3ms
+    P-->>B: 归还结果
+    Note over B,D: 现象 接口耗时 2000ms 开发结论是 数据库慢
+    Note over B,D: 事实 数据库侧执行 3ms 慢查询日志里什么都没有
+    Note over B,D: 判据 应用侧耗时 减去 数据库侧执行时间 等于 连接等待时间<br/>差值巨大就去看连接池 不要去看 SQL
+</div>
     <table>
         <thead>
             <tr>
-                <th>步骤</th>
-                <th>做什么</th>
-                <th>效果</th>
+                <th>症状</th>
+                <th>数据库侧表现</th>
+                <th>真实原因</th>
+                <th>去哪一节</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>1. 慢查询分析</td>
-                <td>找慢SQL，explain分析</td>
-                <td>找到问题点</td>
+                <td>接口慢，数据库执行毫秒级</td>
+                <td>慢查询日志为空，CPU 很低</td>
+                <td>连接池耗尽或连接泄漏</td>
+                <td>连接池那两节</td>
             </tr>
             <tr>
-                <td>2. 索引优化</td>
-                <td>加合适的索引，删没用的</td>
-                <td>查询快 10-100 倍</td>
+                <td>数据库 QPS 是接口 QPS 的几十倍</td>
+                <td>每条 SQL 都很快，但数量巨大</td>
+                <td>ORM 懒加载或循环里查询造成的 N+1</td>
+                <td>ORM 陷阱那节</td>
             </tr>
             <tr>
-                <td>3. SQL优化</td>
-                <td>优化写法，避免全表扫描</td>
-                <td>再快几倍</td>
+                <td>偶发行锁等待超时、死锁</td>
+                <td>锁等待时间与外部接口耗时高度相关</td>
+                <td>事务里做了 RPC 或发消息</td>
+                <td>事务边界那节</td>
             </tr>
             <tr>
-                <td>4. 读写分离</td>
-                <td>读走从库，写走主库</td>
-                <td>读性能翻倍</td>
+                <td>批量导入慢得离谱</td>
+                <td>每条插入都很快，总时长等于条数乘往返</td>
+                <td>批量被拆成逐条执行</td>
+                <td>批量操作那节</td>
             </tr>
             <tr>
-                <td>5. 分库分表</td>
-                <td>数据量太大了才拆</td>
-                <td>解决单点瓶颈</td>
+                <td>偶发「连接已关闭」「连接重置」</td>
+                <td>数据库侧无异常</td>
+                <td>连接最大存活时长大于中间层或数据库的空闲超时</td>
+                <td>连接有效性那节</td>
+            </tr>
+            <tr>
+                <td>写完立刻查不到</td>
+                <td>主库有数据，从库还没有</td>
+                <td>读写分离后立即读从库</td>
+                <td>读写分离那节</td>
+            </tr>
+            <tr>
+                <td>SQL 本身慢、扫描行数巨大</td>
+                <td>慢查询日志有记录，执行计划走全表</td>
+                <td>索引或 SQL 写法问题，不属于本篇</td>
+                <td>站内数据库优化篇</td>
             </tr>
         </tbody>
     </table>
 
-    <h2>新手最容易踩的坑</h2>
+    <h2>连接池：最容易配错的组件</h2>
+    <p>连接池配置的第一个反直觉结论：<strong>池不是越大越好，很多系统把池从 200 降到 20 之后吞吐反而上升、P99 下降。</strong>原因在数据库侧——连接不是免费的并发度，每个活跃连接在数据库里对应一个工作线程，当活跃连接数超过数据库能真正并行处理的数量后，多出来的连接只带来三样东西：线程上下文切换、缓冲池与锁结构的争抢、以及更长的排队。这正是主干篇里排队论那条曲线的另一种体现，详见<a href="../">后端性能优化的度量与方法论</a>。</p>
+    <p>经验公式来自 HikariCP 的池大小建议：<code>连接数 = 核数 × 2 + 有效磁盘数</code>。一台 8 核加 SSD 的数据库，对应池大小 15 到 20 就够了。注意两点：<strong>这个数是整个应用集群加起来的活跃连接数</strong>，20 个实例每个配 50 就是 1000 个连接，很容易撞上数据库的最大连接数；另外如果业务里有大量长事务，瓶颈不是池大小而是事务时长，加池只是把问题推迟。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>参数（HikariCP 名称）</th>
+                <th>默认值</th>
+                <th>推荐设置思路</th>
+                <th>配错的后果</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>maximumPoolSize</td>
+                <td>10</td>
+                <td>按核数乘二加磁盘数估算，再用压测验证；集群总量不超过数据库最大连接数的 70%</td>
+                <td>配成几百：数据库线程争抢，吞吐下降、P99 上升；配得太小：请求排队等连接</td>
+            </tr>
+            <tr>
+                <td>minimumIdle</td>
+                <td>等于 maximumPoolSize</td>
+                <td>生产建议保持与最大值相同，避免流量突增时现场建连</td>
+                <td>设得很小：突发流量时大量请求要等建连与握手，表现为「冷启动抖动」</td>
+            </tr>
+            <tr>
+                <td>connectionTimeout（获取超时）</td>
+                <td>30 秒</td>
+                <td>改成 1 到 3 秒，让池耗尽时快速失败而不是拖死线程</td>
+                <td>保持 30 秒：池耗尽时所有业务线程挂满 30 秒，整个服务不可用</td>
+            </tr>
+            <tr>
+                <td>maxLifetime（最大存活时长）</td>
+                <td>30 分钟</td>
+                <td>必须小于数据库 wait_timeout 与所有中间层的空闲超时，留几十秒余量</td>
+                <td>大于对端超时：拿到已被对端关闭的连接，偶发连接重置错误</td>
+            </tr>
+            <tr>
+                <td>idleTimeout</td>
+                <td>10 分钟</td>
+                <td>只在 minimumIdle 小于最大值时生效，需大于 maxLifetime 的一半</td>
+                <td>配置互相矛盾时连接反复创建销毁，建连开销白付</td>
+            </tr>
+            <tr>
+                <td>validationTimeout / 连接测试</td>
+                <td>5 秒</td>
+                <td>优先依赖驱动的 JDBC4 isValid，不要用 connectionTestQuery 每次借出都发一条 SQL</td>
+                <td>每次借出都测试：每个请求多一次往返；完全不测试：坏连接直接抛给业务</td>
+            </tr>
+            <tr>
+                <td>leakDetectionThreshold（泄漏检测）</td>
+                <td>0（关闭）</td>
+                <td>设成 2 到 5 秒，超时未归还就打印持有线程栈</td>
+                <td>不开：泄漏只能靠猜，拿不到「谁没还连接」的证据</td>
+            </tr>
+            <tr>
+                <td>keepaliveTime</td>
+                <td>0（关闭）</td>
+                <td>有中间层的场景设成小于对端空闲超时的一半，主动保活空闲连接</td>
+                <td>不开且有代理：空闲连接被静默回收，业务偶发拿到坏连接</td>
+            </tr>
+        </tbody>
+    </table>
+    <pre><code class="language-properties"># HikariCP 生产配置示例，每一行都写清了为什么
+# 数据库是 8 核 SSD，应用 6 个实例，数据库 max_connections = 500
+spring.datasource.hikari.maximum-pool-size=20
+# 6 个实例 × 20 = 120 个连接，约占 max_connections 的 24%，留足运维与其它应用的余量
+spring.datasource.hikari.minimum-idle=20
+# 生产保持与最大值相同：不要在流量高峰现场建连（建连 + 认证通常 2 到 5ms）
+
+# 池耗尽时快速失败，不要让业务线程挂 30 秒
+spring.datasource.hikari.connection-timeout=2000
+
+# 关键约束：maxLifetime 必须小于 MySQL wait_timeout 和所有中间层的空闲超时
+#   MySQL 默认 wait_timeout = 28800s；云负载均衡常见空闲超时 300s；ProxySQL 也有自己的超时
+#   取最小的那个再减去 60s 作为安全余量。这里假设链路上最小是 600s
+spring.datasource.hikari.max-lifetime=540000
+spring.datasource.hikari.idle-timeout=300000
+# 主动保活，避免代理静默回收空闲连接后应用拿到坏连接
+spring.datasource.hikari.keepalive-time=120000
+
+# 泄漏检测：超过 3 秒没归还就打印持有连接的线程栈，这是定位泄漏唯一有效的手段
+spring.datasource.hikari.leak-detection-threshold=3000
+
+# 不要配 connection-test-query，现代驱动支持 isValid，配了等于每次借出多一次往返
+# spring.datasource.hikari.connection-test-query=SELECT 1
+
+# 驱动参数（拼在 JDBC URL 上）：
+#   rewriteBatchedStatements=true  批量语句重写，不开的话批量插入等于逐条插入
+#   cachePrepStmts 与 useServerPrepStmts 见后文「预编译语句」一节
+#   connectTimeout / socketTimeout 必须显式设置，默认是无限等待
+spring.datasource.url=jdbc:mysql://db:3306/app?rewriteBatchedStatements=true&amp;cachePrepStmts=true&amp;prepStmtCacheSize=250&amp;prepStmtCacheSqlLimit=2048&amp;connectTimeout=3000&amp;socketTimeout=10000&amp;useSSL=false&amp;serverTimezone=Asia/Shanghai</code></pre>
+
+    <h2>连接泄漏与坏连接：两类最难查的故障</h2>
+    <p>连接泄漏的表现极具误导性：<strong>应用侧看是「数据库越来越慢，最后全部超时」，数据库侧看是「一切正常，只是有几个连接一直闲着不干活」</strong>。泄漏的来源基本就三种：拿到连接后没有在 finally 里归还、把 ResultSet 或流式查询的游标一直开着、以及手动开启事务后在异常路径上既没提交也没回滚。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>观察点</th>
+                <th>泄漏的特征</th>
+                <th>池太小的特征</th>
+                <th>长事务的特征</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>活跃连接数曲线</td>
+                <td>单向上升，不随流量回落</td>
+                <td>随流量起伏，高峰打满</td>
+                <td>阶梯式上升，与某类操作时间吻合</td>
+            </tr>
+            <tr>
+                <td>数据库侧连接状态</td>
+                <td>大量连接处于 Sleep 且时长持续增长</td>
+                <td>连接都在执行中</td>
+                <td>存在长时间处于事务中的连接</td>
+            </tr>
+            <tr>
+                <td>重启后表现</td>
+                <td>恢复正常，运行一段时间后复现</td>
+                <td>立刻复现</td>
+                <td>与批量任务的执行时间相关</td>
+            </tr>
+            <tr>
+                <td>定位手段</td>
+                <td>打开泄漏检测阈值，看打印出的持有线程栈</td>
+                <td>看获取连接的等待时间直方图</td>
+                <td>查数据库里事务存续时间最长的会话</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>坏连接是另一类偶发故障，根因几乎总是同一个：<strong>应用池里的连接存活时间超过了链路上某一环的空闲超时</strong>。链路上可能有云负载均衡（常见空闲超时 300 秒）、数据库代理、以及数据库自身的 <code>wait_timeout</code>（MySQL 默认 28800 秒）。对端单方面关闭连接后并不会通知应用，池里那条连接看起来仍然可用，直到业务借走它并发出第一条语句才报错。三条规则：<strong>maxLifetime 取链路上最小空闲超时再减去几十秒余量</strong>；开启保活让空闲连接周期性发心跳；依赖驱动的连接有效性检查而不是每次借出都发一条测试 SQL（后者等于给每个请求加一次往返）。</p>
+
+    <h2>ORM 的六类性能陷阱</h2>
+    <p>ORM 的问题不在于慢，而在于<strong>它让昂贵的操作在代码上看起来免费</strong>。访问一个属性可能是一次网络往返，保存一个列表可能是一千次插入，加一个注解可能把事务范围扩大十倍。下面六类占了我见过的绝大多数 ORM 性能问题。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>陷阱</th>
+                <th>代码上的样子</th>
+                <th>实际发生了什么</th>
+                <th>修法</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>懒加载 N+1</td>
+                <td>循环里访问 <code>order.getUser().getName()</code></td>
+                <td>每次属性访问触发一条 SQL，100 条订单发 101 条 SQL</td>
+                <td>用联表抓取（JOIN FETCH）、实体图或显式预加载；一次把关联数据查回来在内存里组装</td>
+            </tr>
+            <tr>
+                <td>默认查询全部列</td>
+                <td><code>findAll()</code>、<code>SELECT *</code> 风格的自动 SQL</td>
+                <td>把富文本、扩展 JSON、大字段一起取回，网络与内存双重浪费，还破坏覆盖索引</td>
+                <td>列表查询用投影（只映射需要的列），大字段拆到单独的表或懒加载列</td>
+            </tr>
+            <tr>
+                <td>会话缓存与二级缓存</td>
+                <td>长生命周期的会话、开启全局二级缓存</td>
+                <td>查过的对象一直留在会话里导致内存膨胀；多实例下二级缓存与数据库不一致，出现脏读</td>
+                <td>会话尽量短；二级缓存只用于极少变更的数据，并明确失效策略</td>
+            </tr>
+            <tr>
+                <td>自动 SQL 走不上索引</td>
+                <td>动态条件拼接、日期范围、类型不一致的参数</td>
+                <td>条件列被套函数或发生隐式类型转换，索引失效走全表；生成的条件顺序无法命中最左前缀</td>
+                <td>打开 SQL 日志核对实际语句并看执行计划，判读方法见站内 MySQL 篇</td>
+            </tr>
+            <tr>
+                <td>批量被拆成逐条</td>
+                <td><code>saveAll(list)</code> 看起来是批量</td>
+                <td>框架在循环里逐条保存，还可能每条都回查主键；驱动没开重写参数时一条一次往返</td>
+                <td>开启批量语句重写、设置批大小、必要时直接写原生批量语句</td>
+            </tr>
+            <tr>
+                <td>事务范围被注解扩大</td>
+                <td>在类上加事务注解，或在包含远程调用的方法上加</td>
+                <td>整个方法都在事务里，包括循环、RPC、发消息，锁持有时间暴涨</td>
+                <td>事务注解只加在「只做数据库写」的最小方法上，注意同类内部调用注解不生效</td>
+            </tr>
+        </tbody>
+    </table>
+    <div class="callout callout-tip">
+        <div class="callout-icon">✅</div>
+        <div class="callout-title">上线前必做的一件事</div>
+        <p>在测试环境打开 ORM 的 SQL 打印，跑一遍核心接口，数一下实际发出的 SQL 条数。一个正常的详情接口应该在个位数，出现几十上百条就是 N+1。更进一步的做法是在集成测试里断言「单个接口的 SQL 条数不超过 N」，这是唯一能防住 N+1 悄悄回归的手段。</p>
+    </div>
+
+    <h2>事务边界：应用侧最大的性能与稳定性问题</h2>
+    <p>一条原则就够了：<strong>事务里只包数据库操作。</strong>原因是从执行第一条更新语句开始，行锁就被持有直到提交，事务里任何一毫秒的等待都是锁持有时间。一个平均 800ms、偶发 3 秒的第三方接口放进事务，等于让这行数据被锁住同样长的时间。</p>
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant T as 业务线程 事务中
+    participant D as MySQL
+    participant R as 第三方支付接口
+    T->>D: BEGIN
+    T->>D: UPDATE account SET balance 减 100 WHERE id 等于 9
+    Note over T,D: 这一刻起 id 等于 9 这行的行锁被持有
+    T->>R: 调用支付 平均 800ms 偶发 3s
+    Note over T,R: 锁一直持有 其它要改这行的线程全部排队<br/>排队线程各占一个连接 池很快被耗光
+    R-->>T: 返回结果
+    T->>D: UPDATE orders SET status 等于 已支付
+    T->>D: COMMIT 此时才释放锁
+    Note over T,D: 结论 外部接口的抖动被放大成数据库锁等待与死锁<br/>而数据库侧看起来只是 锁等待变多了
+</div>
+    <pre><code class="language-java">// 改造前：事务包住了远程调用，锁持有时间等于外部接口耗时
+@Transactional
+public void payBad(long orderId) {
+    Order o = orderMapper.selectForUpdate(orderId); // 行锁开始持有
+    accountMapper.deduct(o.getUserId(), o.getAmount());
+    PayResult r = payClient.pay(o);                 // 800ms 到 3s，锁全程持有
+    orderMapper.updateStatus(orderId, r.status());
+    mqProducer.send(new OrderPaidEvent(orderId));   // 发消息也在事务里，还可能失败后回滚不掉
+}
+
+// 改造后：事务内只做数据库操作，外部调用移到事务之外
+public void payGood(long orderId) {
+    // 第一段事务：本地状态置为「支付中」，并写一条待发送的本地消息
+    // 事务很短，只有两条更新，锁持有时间是毫秒级
+    PayContext ctx = txTemplate.execute(status -&gt; {
+        Order o = orderMapper.selectForUpdate(orderId);
+        if (o.status() != OrderStatus.CREATED) {
+            return null; // 幂等：重复请求直接返回
+        }
+        orderMapper.updateStatus(orderId, OrderStatus.PAYING);
+        outboxMapper.insert(new Outbox("ORDER_PAYING", orderId)); // 本地消息表
+        return PayContext.of(o);
+    });
+    if (ctx == null) {
+        return;
+    }
+
+    // 事务之外调用第三方，慢多久都不会持有任何数据库锁
+    PayResult r = payClient.pay(ctx.order());
+
+    // 第二段事务：回写结果。必须幂等，因为这一步可能因进程重启而重试
+    txTemplate.executeWithoutResult(status -&gt; {
+        accountMapper.deduct(ctx.userId(), ctx.amount());
+        orderMapper.updateStatusIfPaying(orderId, r.toOrderStatus());
+        outboxMapper.markReady("ORDER_PAID", orderId); // 消息由独立线程扫表投递
+    });
+}</code></pre>
+    <table>
+        <thead>
+            <tr>
+                <th>事务里的操作</th>
+                <th>为什么危险</th>
+                <th>改造方式</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>调用 RPC 或第三方 HTTP</td>
+                <td>网络耗时直接变成锁持有时间，对端抖动引发大面积锁等待与死锁</td>
+                <td>拆成「事务内改状态 加 事务外调用 加 事务内回写」，用本地消息表或事务消息保证最终一致</td>
+            </tr>
+            <tr>
+                <td>发消息队列</td>
+                <td>消息发成功但事务回滚，下游收到不存在的事件；发消息本身也会阻塞事务</td>
+                <td>写本地消息表，提交后由独立任务投递；或使用消息中间件的事务消息</td>
+            </tr>
+            <tr>
+                <td>循环里逐条写入几千行</td>
+                <td>事务越长，undo 链越长、锁越多，回滚成本也越高，主从延迟随之上升</td>
+                <td>分批提交，每批 500 到 1000 行，批与批之间留出间隔</td>
+            </tr>
+            <tr>
+                <td>事务里读缓存或调搜索引擎</td>
+                <td>同样是把外部延迟计入锁持有时间</td>
+                <td>把读操作提到事务之前，事务内只用已经拿到的数据</td>
+            </tr>
+            <tr>
+                <td>在类级别加事务注解</td>
+                <td>所有方法包括纯查询都开事务，连接被长时间占用</td>
+                <td>注解下沉到最小的写方法；只读路径显式标注只读或不开事务</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>顺带纠正一个常见误解：<strong>「把事务隔离级别调低就能解决锁等待」是错的</strong>。锁等待的根因是锁持有时间太长，隔离级别只影响加锁范围与可见性规则，调低隔离级别可能减少某些间隙锁，但对「事务里等了 800ms 的外部调用」毫无帮助。加锁范围与隔离级别的具体语义见站内<a href="../../../database/mysql/">MySQL 深度原理</a>。</p>
+
+    <h2>批量操作：1000 条插入不该是 1000 次往返</h2>
+    <p>最典型的认知错误：<strong>以为调用了批量接口就是批量了</strong>。JDBC 的 addBatch 与 executeBatch 只是把语句攒在客户端，MySQL 驱动在未开启 <code>rewriteBatchedStatements=true</code> 时仍然逐条发送，1000 条插入就是 1000 次网络往返，同机房按每次 0.5ms 算，光往返就是 500ms。开启之后驱动会把它们改写成一条多值插入语句，一次往返完成，差距通常在 10 倍以上。</p>
+    <pre><code class="language-java">// 批量写入的正确姿势。前提：JDBC URL 上带 rewriteBatchedStatements=true，否则以下代码等于逐条插入。
+private static final int BATCH_SIZE = 500; // 500 到 1000 是常见甜点区，再大收益递减且单包过大
+
+public void batchInsert(List&lt;Order&gt; orders) throws SQLException {
+    String sql = "INSERT INTO orders (id, user_id, amount, status) VALUES (?, ?, ?, ?)";
+    try (Connection conn = dataSource.getConnection();
+         PreparedStatement ps = conn.prepareStatement(sql)) {
+
+        // 关闭自动提交：否则每条都是一个独立事务，等于多付 N 次提交开销
+        conn.setAutoCommit(false);
+
+        int n = 0;
+        for (Order o : orders) {
+            ps.setLong(1, o.id());
+            ps.setLong(2, o.userId());
+            ps.setLong(3, o.amount());
+            ps.setInt(4, o.status());
+            ps.addBatch();
+
+            if (++n % BATCH_SIZE == 0) {
+                ps.executeBatch();
+                conn.commit();   // 分批提交：避免单个超长事务把 undo 链和锁堆到不可控
+                ps.clearBatch();
+            }
+        }
+        ps.executeBatch();
+        conn.commit();
+    }
+}
+
+// 验证有没有真的合并：打开驱动的 profileSQL 或直接抓包看发出的语句条数。
+// 只看耗时会被缓存和预热误导，必须看实际语句数。</code></pre>
+    <table>
+        <thead>
+            <tr>
+                <th>场景</th>
+                <th>推荐做法</th>
+                <th>关键参数</th>
+                <th>做错的后果</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>批量插入</td>
+                <td>开启批量重写，单批 500 到 1000 条，分批提交</td>
+                <td>rewriteBatchedStatements、autoCommit=false</td>
+                <td>不开重写：条数次往返；批太大：单个包过大、事务过长、失败重试代价高</td>
+            </tr>
+            <tr>
+                <td>插入或更新（upsert）</td>
+                <td>用 ON DUPLICATE KEY UPDATE 或数据库原生 upsert，一次往返完成</td>
+                <td>需要唯一键；注意它会影响自增值的消耗</td>
+                <td>先查再决定插还是改：两次往返，并且在并发下仍然会撞唯一键冲突</td>
+            </tr>
+            <tr>
+                <td>大批量更新或删除</td>
+                <td>按主键范围分批，每批 500 到 1000 行，批间 sleep 限速</td>
+                <td>批大小、间隔时长、主从延迟阈值</td>
+                <td>一条语句更新百万行：长事务、锁范围巨大、主从延迟飙到几十秒</td>
+            </tr>
+            <tr>
+                <td>批量读取超大结果集</td>
+                <td>流式读取，按需设置 fetchSize，边读边处理</td>
+                <td>MySQL 需要配合特定的 fetchSize 才会真正流式</td>
+                <td>一次性拉回百万行：应用直接内存溢出</td>
+            </tr>
+            <tr>
+                <td>批量任务与在线流量共用实例</td>
+                <td>限速并避开高峰，或在专用从库上跑</td>
+                <td>每批间隔、监控主从延迟自适应降速</td>
+                <td>批量任务把缓冲池冲刷一遍，在线接口全部变慢</td>
+            </tr>
+        </tbody>
+    </table>
+    <pre><code class="language-sql">-- 大批量更新的正确形态：按主键推进 + 限批 + 观察主从延迟后再继续
+-- 错误写法：一条语句更新百万行，长事务 + 巨大锁范围 + 主从延迟飙升
+UPDATE orders SET status = 4 WHERE status = 1 AND created_at &lt; '2026-01-01';
+
+-- 正确写法：循环执行，每次只处理一批，应用侧在批与批之间 sleep 50 到 200ms，
+-- 并在继续前检查主从延迟，超过阈值就自动降速（延迟指标见站内 MySQL 与数据库优化篇）
+UPDATE orders SET status = 4
+WHERE status = 1 AND created_at &lt; '2026-01-01' AND id &gt; ?   -- ? 为上一批处理到的最大 id
+ORDER BY id
+LIMIT 500;
+
+-- 应用侧的游标分页：把偏移量换成条件过滤，耗时与页码无关
+-- 错误写法：偏移量越大越慢，数据库要先扫过并丢弃前一百万行
+SELECT id, user_id, amount FROM orders WHERE status = 1 ORDER BY id LIMIT 1000000, 20;
+
+-- 正确写法：用上一页最后一行的排序键作为游标
+SELECT id, user_id, amount FROM orders
+WHERE status = 1 AND id &gt; ?
+ORDER BY id
+LIMIT 20;
+-- 注意：游标分页要求排序键唯一且有序，如果按创建时间排序，必须带上主键做次级排序键，
+-- 否则同一时间戳的多行会在翻页时重复或丢失。深分页的原理见站内 MySQL 篇。</code></pre>
+
+    <h2>读写分离的应用侧实现</h2>
+    <p>读写分离在应用侧真正难的不是路由，而是<strong>写后读</strong>。主从复制是异步的，写完立刻读从库大概率读不到，表现为「下单成功但订单列表里没有」这类偶发 bug，而且它只在延迟升高时复现，本地和测试环境永远测不出来。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>解法</th>
+                <th>怎么实现</th>
+                <th>一致性强度</th>
+                <th>代价</th>
+                <th>适用场景</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>关键读强制走主库</td>
+                <td>在请求上下文里打标记，路由层看到标记就走主库；或在方法上显式声明走主库</td>
+                <td>强</td>
+                <td>把流量压回主库，用多了读写分离就失效了</td>
+                <td>写后立即读、支付与库存等强一致路径</td>
+            </tr>
+            <tr>
+                <td>等待复制位点</td>
+                <td>写事务后取得主库位点，读之前确认从库已追上该位点再读</td>
+                <td>强</td>
+                <td>实现复杂，需要中间件支持；读延迟增加</td>
+                <td>有数据库代理或中间件支持位点等待的系统</td>
+            </tr>
+            <tr>
+                <td>会话粘滞</td>
+                <td>同一用户或会话在一个时间窗口内的读全部走主库，窗口按主从延迟的高分位设置</td>
+                <td>中</td>
+                <td>窗口设小了仍会读到旧数据，设大了主库压力上升</td>
+                <td>大多数以用户为中心的业务，落地成本最低</td>
+            </tr>
+            <tr>
+                <td>前端乐观回显</td>
+                <td>写成功后前端直接用提交的数据渲染，不再回查</td>
+                <td>弱（只是视觉一致）</td>
+                <td>数据不完整时会与真实状态不符</td>
+                <td>评论、点赞这类非关键展示</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>还有三件事必须说清楚。第一，<strong>只读从库不是免费的</strong>：它有自己的最大连接数上限，复制线程本身要消耗资源，并且在大批量写入时延迟会显著上升——这时把读切到从库等于把不一致放大。第二，<strong>事务内的读必须走主库</strong>，哪怕是纯查询，否则同一事务内读到两个不同的数据版本。第三，路由要能<strong>按延迟自动摘除</strong>：从库延迟超过阈值就临时不分配读流量，否则一个卡住的从库会让部分用户持续看到旧数据。</p>
+
+    <h2>预编译语句与执行计划缓存</h2>
+    <p>预编译有两层含义，经常被混为一谈。客户端预编译（MySQL 驱动默认行为）只是在客户端做参数拼接与转义，好处是防注入、无额外往返；服务端预编译（<code>useServerPrepStmts=true</code>）会把语句真正发给数据库解析一次并缓存执行计划，之后只传参数。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>配置</th>
+                <th>收益</th>
+                <th>代价与风险</th>
+                <th>建议</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>useServerPrepStmts=false（默认）</td>
+                <td>一次往返完成，简单</td>
+                <td>数据库每次都要解析语句</td>
+                <td>语句种类多、每种执行次数少的场景保持默认</td>
+            </tr>
+            <tr>
+                <td>useServerPrepStmts=true 配合语句缓存</td>
+                <td>省掉重复解析，高频固定语句收益明显</td>
+                <td>首次多一次往返；数据库侧为每个连接缓存预编译对象，占内存；语句种类过多会撑爆缓存</td>
+                <td>固定 SQL、高 QPS 时开启，并设置缓存条数与语句长度上限</td>
+            </tr>
+            <tr>
+                <td>动态拼接的 SQL</td>
+                <td>无</td>
+                <td>每个组合都是一条新语句，预编译缓存命中率极低反而浪费内存</td>
+                <td>先收敛 SQL 形态（比如把 IN 的参数个数归一到几个档位）再考虑开启</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>顺带提醒一个和性能无关但更严重的点：<strong>预编译的防注入效果来自参数与语句分离，字符串拼接出来的 SQL 即使走了预编译接口也一样能被注入</strong>，注入边界的完整讨论见站内安全篇。</p>
+
+    <h2>排查清单与反模式</h2>
+    <div class="mermaid">
+flowchart TB
+    A["接口慢 怀疑数据库"] --> B{数据库侧执行时间是否也慢}
+    B -->|数据库侧毫秒级 应用侧秒级| C{连接池活跃数是否长期打满}
+    C -->|打满 且等待队列不为零| D{活跃连接数会随流量回落吗}
+    D -->|不回落 单向上升| E["连接泄漏<br/>开启泄漏检测 看持有线程栈"]
+    D -->|随流量起伏| F{是否存在长事务}
+    F -->|有长事务| G["缩短事务边界<br/>把 RPC 与发消息移出事务"]
+    F -->|没有长事务| H["池确实太小<br/>按核数乘二加磁盘数重估并压测验证"]
+    C -->|未打满| I["查 SQL 条数<br/>是否 ORM 懒加载造成 N+1"]
+    B -->|数据库侧也慢| J{慢查询日志里有记录吗}
+    J -->|有 扫描行数巨大| K["索引与 SQL 问题<br/>见站内数据库优化篇"]
+    J -->|没有 但锁等待高| L{锁等待时长是否与外部接口耗时相关}
+    L -->|相关| G
+    L -->|不相关| M["热点行竞争<br/>见站内 MySQL 篇的加锁分析"]
+</div>
+    <table>
+        <thead>
+            <tr>
+                <th>反模式</th>
+                <th>后果</th>
+                <th>正确做法</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>连接池调到几百</td>
+                <td>数据库线程争抢，吞吐下降、延迟上升，还可能撞上最大连接数</td>
+                <td>按核数乘二加磁盘数估算，压测验证，按集群总量核对上限</td>
+            </tr>
+            <tr>
+                <td>获取连接超时保持 30 秒默认值</td>
+                <td>池耗尽时业务线程集体挂住，整个服务不可用</td>
+                <td>改成 1 到 3 秒，快速失败并打点</td>
+            </tr>
+            <tr>
+                <td>连接最大存活时长大于数据库或代理的空闲超时</td>
+                <td>偶发「连接已关闭」「连接重置」，且无法稳定复现</td>
+                <td>取链路上最小空闲超时再减几十秒余量，并开启保活</td>
+            </tr>
+            <tr>
+                <td>事务里调 RPC、发消息、读缓存</td>
+                <td>外部延迟变成锁持有时间，引发锁等待与死锁</td>
+                <td>事务只包数据库操作，外部调用移到事务前后，用本地消息表兜底</td>
+            </tr>
+            <tr>
+                <td>循环里逐条插入或逐条查询</td>
+                <td>N 次网络往返，CPU 全程空转</td>
+                <td>批量语句加重写参数；查询改批量或预加载</td>
+            </tr>
+            <tr>
+                <td>ORM 懒加载不管</td>
+                <td>一个详情接口悄悄发出上百条 SQL</td>
+                <td>联表抓取或显式预加载，并在测试里断言 SQL 条数</td>
+            </tr>
+            <tr>
+                <td>读写分离后立刻读从库</td>
+                <td>偶发「刚写的数据查不到」，只在延迟升高时复现</td>
+                <td>关键读走主库、等待位点或会话粘滞，三选一并写进规范</td>
+            </tr>
+            <tr>
+                <td>一条语句更新百万行</td>
+                <td>长事务、锁范围巨大、主从延迟飙升，回滚代价极高</td>
+                <td>按主键分批推进，批间限速并监控主从延迟</td>
+            </tr>
+            <tr>
+                <td>用 LIMIT 加大偏移量做深分页</td>
+                <td>页码越大越慢，最后超时</td>
+                <td>游标分页，排序键必须唯一有序</td>
+            </tr>
+            <tr>
+                <td>每次借出连接都执行一条测试 SQL</td>
+                <td>每个请求多一次往返，高 QPS 下是纯浪费</td>
+                <td>用驱动的连接有效性检查，配合保活与最大存活时长</td>
+            </tr>
+        </tbody>
+    </table>
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
-        <div class="callout-title">避坑指南</div>
+        <div class="callout-title">最容易踩的坑</div>
         <ul>
-            <li>优化顺序别搞反了，先索引，再SQL，再表结构，最后才分库分表</li>
-            <li>索引不是越多越好，每个索引都会拖慢写入</li>
-            <li>分库分表是最后手段，拆了后面跨库查询、分布式事务都是坑</li>
-            <li>优化前一定要先测，优化后对比效果，别瞎改</li>
+            <li>把连接池从 20 调到 200 试图提升吞吐：数据库侧线程争抢加剧，结果吞吐下降、P99 上升。</li>
+            <li>按单实例配池却忘了乘实例数：20 个实例各 50 个连接就是 1000 个，直接撞上最大连接数，扩容时全站报连接失败。</li>
+            <li>获取连接超时用默认 30 秒：池一耗尽，所有业务线程一起挂 30 秒，连健康检查都失败。</li>
+            <li>maxLifetime 大于云负载均衡的空闲超时：空闲连接被静默回收，业务偶发拿到坏连接，日志里只有一行连接重置。</li>
+            <li>不开泄漏检测：连接泄漏只能靠重启缓解，永远找不到是哪段代码没归还。</li>
+            <li>批量插入没开 rewriteBatchedStatements：1000 条插入等于 1000 次往返，代码看起来是批量的。</li>
+            <li>ORM 的 saveAll 当成批量用：框架内部是循环单条保存，还可能每条回查一次主键。</li>
+            <li>在循环里访问懒加载属性：代码上只是取个名字，实际发了上百条 SQL。</li>
+            <li>类上加事务注解：连查询方法都开事务，连接被长时间占用，还把 RPC 包了进去。</li>
+            <li>同类内部方法调用指望事务注解生效：基于代理的实现不会拦截自调用，事务根本没开。</li>
+            <li>事务里发消息：事务回滚了消息已经发出去，下游处理了一个不存在的订单。</li>
+            <li>一条 SQL 刷全表状态：主从延迟飙到几十秒，所有读从库的接口开始返回旧数据。</li>
+            <li>写完立刻读从库：功能测试永远通过，线上偶发「下单成功但列表没有」。</li>
+            <li>事务内的查询走了从库：同一事务里读到两个数据版本，对账时才发现。</li>
+            <li>从库延迟高时不摘除：部分用户持续看到过期数据，且没有任何报错。</li>
+            <li>把「数据库慢」直接甩给 DBA：先用应用侧耗时减去数据库侧执行时间，差值大就说明问题在自己这边。</li>
         </ul>
     </div>
 </article>

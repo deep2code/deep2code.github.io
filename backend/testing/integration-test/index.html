@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>集成测试 - 代码质量与测试 - 资深码农</title>
+    <title>集成测试怎么写：Testcontainers、隔离策略与异步断言 - 代码质量与测试 - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="集成测试实战指南：讲清楚后端开发中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="description" content="集成测试验证的是与外部的契约而不是自己的逻辑：列出只有集成测试能发现的五类问题，说明为什么绝不能用 Mock 或 H2 替代真实数据库，给出 Java 与 Go 两版可直接抄的 Testcontainers 代码（容器复用、生产同一套迁移脚本、清理策略），对比事务回滚与清表与独立 schema 三种隔离方式，讲清外部 HTTP 依赖用本地 stub 的理由、异步与最终一致必须用轮询加超时而不是 sleep、消息中间件的幂等与死信怎么测、容器耗时怎么压。">
     <meta name="keywords" content="代码质量与测试,集成测试,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/backend/testing/integration-test/">
-    <meta property="og:title" content="集成测试 - 代码质量与测试 - 资深码农">
-    <meta property="og:description" content="集成测试实战指南：讲清楚后端开发中的核心概念、常见用法和新手踩坑经验。">
+    <meta property="og:title" content="集成测试怎么写：Testcontainers、隔离策略与异步断言 - 代码质量与测试 - 资深码农">
+    <meta property="og:description" content="集成测试验证的是与外部的契约而不是自己的逻辑：列出只有集成测试能发现的五类问题，说明为什么绝不能用 Mock 或 H2 替代真实数据库，给出 Java 与 Go 两版可直接抄的 Testcontainers 代码（容器复用、生产同一套迁移脚本、清理策略），对比事务回滚与清表与独立 schema 三种隔离方式，讲清外部 HTTP 依赖用本地 stub 的理由、异步与最终一致必须用轮询加超时而不是 sleep、消息中间件的幂等与死信怎么测、容器耗时怎么压。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/backend/testing/integration-test/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="集成测试 - 代码质量与测试">
-    <meta name="twitter:description" content="集成测试实战指南：讲清楚后端开发中的核心概念、常见用法和新手踩坑经验。">
+    <meta name="twitter:title" content="集成测试怎么写：Testcontainers、隔离策略与异步断言 - 代码质量与测试">
+    <meta name="twitter:description" content="集成测试验证的是与外部的契约而不是自己的逻辑：列出只有集成测试能发现的五类问题，说明为什么绝不能用 Mock 或 H2 替代真实数据库，给出 Java 与 Go 两版可直接抄的 Testcontainers 代码（容器复用、生产同一套迁移脚本、清理策略），对比事务回滚与清表与独立 schema 三种隔离方式，讲清外部 HTTP 依赖用本地 stub 的理由、异步与最终一致必须用轮询加超时而不是 sleep、消息中间件的幂等与死信怎么测、容器耗时怎么压。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "集成测试：从你遇到的问题出发：先写接口测试？", "acceptedAnswer": {"@type": "Answer", "text": "接口测试性价比最高，先把核心接口测了。"}}, {"@type": "Question", "name": "集成测试：从你遇到的问题出发：测试要独立？", "acceptedAnswer": {"@type": "Answer", "text": "每个测试用例独立，不要互相依赖。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "集成测试可以用 H2 这类内存数据库代替 MySQL 或 PostgreSQL 吗？", "acceptedAnswer": {"@type": "Answer", "text": "不建议。H2 的兼容模式只覆盖常用语法，一旦用到窗口函数、JSON 类型、数组类型、ON CONFLICT 或 INSERT IGNORE、FOR UPDATE SKIP LOCKED、自增序列语义、隐式类型转换、日期函数，行为就和真库不一致。结果是最坏的一种失败模式：测试全绿而生产报错，你还会因为有测试而更加自信。现在起一个真实容器只要几秒，用生产同版本的镜像加生产同一套迁移脚本，是成本更低也更可靠的做法。"}}, {"@type": "Question", "name": "Testcontainers 每个用例都起容器太慢，怎么压时间？", "acceptedAnswer": {"@type": "Answer", "text": "关键是容器的生命周期要放在类或整个进程级别，而不是方法级别。Java 用静态容器字段让整个 JVM 只起一次，Go 在 TestMain 里起一次给整个包共用；本地再打开复用开关，跨多次运行都不重启。数据目录挂成内存文件系统能让写入快好几倍；镜像提前预拉取避免首次下载。真正需要独立容器的只有极少数验证初始化过程的用例。经过这些处理，几十个用例的总时长通常能从几分钟压到十几秒。"}}, {"@type": "Question", "name": "集成测试之间的数据怎么隔离？", "acceptedAnswer": {"@type": "Answer", "text": "三种策略按速度递减：一是每个用例包在一个事务里、结束回滚，最快，但被测代码自己管理事务时就不能用，也测不到提交后触发的逻辑；二是每个用例结束后清表，用一条级联清空语句搞定，速度仍然很快，且能测真实事务与提交，是默认推荐；三是每个用例用独立 schema 或独立容器，最彻底也最慢，只留给验证迁移脚本、多租户隔离这类用例。无论哪种，都不要依赖用例执行顺序来准备数据。"}}, {"@type": "Question", "name": "异步处理和最终一致的结果怎么断言？", "acceptedAnswer": {"@type": "Answer", "text": "绝对不要用固定睡眠。正确做法是轮询加超时：设置一个较宽的上限（容器环境建议 10 到 30 秒）和较短的轮询间隔（100 毫秒左右），在轮询体里做完整断言，第一次满足就立刻返回。Java 有 Awaitility，Go 用循环加超时通道或者测试库里的最终一致断言。这样快的时候不浪费时间，慢的时候也不误报。另外别忘了显式把首次延迟清零，有些库默认带一段起始延迟。"}}, {"@type": "Question", "name": "第三方 HTTP 依赖在集成测试里怎么处理？", "acceptedAnswer": {"@type": "Answer", "text": "优先用本地 stub 服务而不是 Mock 客户端对象。区别很关键：本地 stub 让请求走完真实的 HTTP 栈，你能测到序列化、请求头、连接池、读超时、重试与降级；Mock 客户端会把这些全部跳过，而线上故障恰恰经常出在超时和重试上。stub 还能模拟慢响应、返回畸形报文、返回 5xx 这些真实故障。至于怎么保证 stub 里的报文和对方真实接口不脱节，用消费者驱动契约测试来卡，细节详见站内 API 版本管理一篇。"}}, {"@type": "Question", "name": "端到端测试应该写多少条？", "acceptedAnswer": {"@type": "Answer", "text": "很少，通常一位数，只覆盖最关键的几条主流程，比如注册登录、下单支付、退款。原因是它最慢、最脆、最难定位：失败时你面对的是整条链路，光确认是哪个环节出问题就要很久，而且它依赖的环境越多，随机失败概率越高。更划算的做法是把大部分验证下沉到服务级集成测试，端到端只用来回答一个问题：这些服务拼在一起还能不能跑通。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,66 +64,409 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">集成测试：从你遇到的问题出发</h1>
+                        <h1 class="article-title">集成测试怎么写：Testcontainers、隔离策略与异步断言</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ 集成测试</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及集成测试怎么帮你解决。</p>
+<p>一句话区分：<strong>单元测试验证「我的逻辑对」，集成测试验证「我和外部的契约对」</strong>。SQL 真的能跑、序列化真的能来回、事务真的会回滚、消息真的会被消费——这些都不是逻辑问题，是契约问题，而契约只能和真实的对端对出来。</p>
 
-<div class="mermaid">
-flowchart LR
-    A[单元测试] --> B[集成测试]
-    B --> C[接口测试]
-    C --> D[全链路测试]
-</div>
+<p>这篇讲测试本身怎么写。这些测试在流水线的哪个阶段跑、怎么并行、失败怎么归因，详见站内 CI/CD 专题。</p>
 
-<h2>1. 单元测试都过了，放一起就坏了</h2>
+<h2>只有集成测试能发现的五类问题</h2>
 
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>每个模块单测都过了，连起来跑就出错。</p>
-</div>
-
-<p><strong>怎么解决？</strong>写集成测试，测模块之间的接口。</p>
-
-<h2>2. 接口测试怎么做</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>你想测你的 API 接口对不对。</p>
-</div>
-
-<p><strong>怎么解决？</strong>用 Postman 或者写自动化测试脚本，发请求看返回对不对。</p>
-
-<h2>3. 单元测试和集成测试区别</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>都是测试，有什么不一样？</p>
-</div>
-
-<p><strong>怎么解决？</strong>单测测单个函数，集成测试测多个模块连起来。</p>
-
-<h2>测试分类</h2>
+<p>如果你怀疑集成测试的必要性，看这张表：下面每一类问题，单元测试在数学上就不可能发现，因为被替身掉的那一侧正是出错的一侧。</p>
 
 <table>
-<thead><tr><th>类型</th><th>测什么</th></tr></thead>
+<thead><tr><th>问题类别</th><th>典型表现</th><th>为什么单测抓不到</th><th>线上后果</th></tr></thead>
 <tbody>
-<tr><td>单元测试</td><td>单个函数/类</td></tr>
-<tr><td>集成测试</td><td>模块之间</td></tr>
-<tr><td>接口测试</td><td>API 接口</td></tr>
-<tr><td>E2E 测试</td><td>整个流程</td></tr>
+<tr><td>SQL 语法与方言差异</td><td>MySQL 的 INSERT IGNORE 在 PG 上要写 ON CONFLICT；PG 的 SKIP LOCKED 在旧版 MySQL 不支持</td><td>Mock 掉数据库后，SQL 字符串从没被解析过</td><td>启动即报语法错，或者某个分支第一次走到才炸</td></tr>
+<tr><td>ORM 生成的 SQL 与索引不匹配</td><td>字段类型是 varchar 而参数绑成数字，隐式转换让索引失效；懒加载导致 N 加 1 查询</td><td>Mock 返回的是对象，不经过 SQL 生成与执行计划</td><td>接口慢到超时；执行计划怎么判读详见站内 MySQL 专题</td></tr>
+<tr><td>事务传播与回滚行为</td><td>内层方法自己开了新事务，外层回滚时内层已提交；同一线程内嵌套调用没走代理导致注解失效</td><td>替身不参与事务，回滚语义完全没被执行</td><td>部分数据落库形成中间态，对账对不平</td></tr>
+<tr><td>序列化字段遗漏与类型漂移</td><td>新加的字段没有 getter 所以没被序列化；长整型 ID 到前端丢精度；枚举改名后反序列化失败</td><td>单测里对象直连对象，从没编码解码过一次</td><td>下游拿到 null；历史消息全部消费失败</td></tr>
+<tr><td>中间件版本行为差异</td><td>Redis 命令在集群模式下不支持跨槽操作；Kafka 客户端与服务端版本组合导致协议降级</td><td>替身实现的是你以为的行为，不是真实行为</td><td>测试环境好、生产集群模式直接报错</td></tr>
 </tbody></table>
 
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
+<div class="mermaid">
+flowchart TB
+    subgraph SUT["测试进程内：被测应用完整装配"]
+        A1["HTTP 层与序列化"]
+        A2["Service 与事务边界"]
+        A3["Repository 与真实 SQL"]
+    end
+    subgraph REAL["Docker 容器：与生产同版本的真实依赖"]
+        D1["PostgreSQL 16.4"]
+        D2["Redis 7.4"]
+        D3["Kafka 7.7"]
+    end
+    subgraph STUB["本地 stub：不受你控制的第三方"]
+        W1["支付网关 stub"]
+        W2["风控评分 stub"]
+    end
+    A1 --> A2
+    A2 --> A3
+    A3 --> D1
+    A2 --> D2
+    A2 --> D3
+    A2 --> W1
+    A2 --> W2
+</div>
+
+<h2>绝不要用 Mock 或 H2 替代真实数据库</h2>
+
+<p>这条值得单独强调，因为它是集成测试里最常见也最致命的走偏。<strong>Mock 的行为是你假设的，而 bug 恰恰出在假设错误的地方</strong>——用 Mock 做集成测试，等于用自己的假设验证自己的假设，它能产生的唯一结果是虚假的信心。</p>
+
+<p>H2 或 SQLite 这类内存数据库看起来是个折中，实际上是<strong>最坏的一种失败模式：测试通过而生产报错</strong>，并且因为你有测试，还会更自信。它们的兼容模式只覆盖常用语法，下面这些差异每一条我都见过真实翻车。</p>
+
+<table>
+<thead><tr><th>能力</th><th>H2 兼容模式</th><th>真实 MySQL 8 / PostgreSQL 16</th><th>翻车方式</th></tr></thead>
+<tbody>
+<tr><td>冲突写入</td><td>部分支持，语义与真库不同</td><td>MySQL 的 INSERT ... ON DUPLICATE KEY，PG 的 ON CONFLICT DO UPDATE</td><td>测试里覆盖成功，生产变成主键冲突异常</td></tr>
+<tr><td>行锁与跳过锁</td><td>基本不支持 SKIP LOCKED</td><td>PG 与 MySQL 8 都支持，是任务队列抢单的关键</td><td>抢单逻辑在测试里串行通过，生产并发重复消费</td></tr>
+<tr><td>JSON 与数组类型</td><td>类型映射不一致，函数名不同</td><td>原生类型与丰富的函数集</td><td>查询语句直接语法错误</td></tr>
+<tr><td>隐式类型转换</td><td>更宽松</td><td>更严格，且影响索引是否命中</td><td>测试通过但生产全表扫描</td></tr>
+<tr><td>唯一索引与外键</td><td>建表脚本常被简化，约束丢失</td><td>严格生效</td><td>重复数据在测试里写得进去，生产写不进去</td></tr>
+<tr><td>大小写与排序规则</td><td>默认行为不同</td><td>受 collation 影响</td><td>登录名去重逻辑在生产失效</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">别用 ddl-auto=create 给集成测试建表</div>
+    <p>让 ORM 自动建表是另一个高频错误：这样建出来的 schema 和生产由迁移脚本建出来的不是同一个东西——索引、约束、默认值、字段长度、字符集全都可能不一样，于是测试验证的是一个并不存在的数据库。<strong>集成测试必须跑生产同一套迁移脚本</strong>（Flyway、Liquibase、golang-migrate 都行），并把 ORM 的 schema 校验设成只校验不改动。顺带还免费获得一个好处：迁移脚本本身也被每次测试验证了一遍。</p>
+</div>
+
+<h2>Testcontainers 落地：容器复用与生产同款 schema</h2>
+
+<p>现在的标准做法是用 Testcontainers 拉起与生产同版本的真实依赖。关键不在于会不会用，而在于<strong>把容器的生命周期放对</strong>：放在方法级别，几十个用例就是几十次启动；放在进程级别，全套只付一次启动成本。</p>
+
+<pre><code class="language-java">// 依赖：testImplementation "org.testcontainers:postgresql:1.20.4"
+// 本地复用需要在 ~/.testcontainers.properties 里写 testcontainers.reuse.enable=true
+@Testcontainers
+@SpringBootTest
+abstract class AbstractDbIT {
+
+    // static 字段：整个 JVM 只启动一次，是压缩耗时最关键的一行
+    @Container
+    static final PostgreSQLContainer&lt;?&gt; PG =
+        new PostgreSQLContainer&lt;&gt;("postgres:16.4-alpine") // 版本钉死，与生产一致
+            .withDatabaseName("app")
+            .withUsername("app")
+            .withPassword("app")
+            .withReuse(true) // 本地跨多次运行复用，省掉每次 3 到 8 秒的启动
+            // 数据目录放内存：集成测试不需要持久化，写入速度能快好几倍
+            .withTmpFs(Map.of("/var/lib/postgresql/data", "rw"));
+
+    @DynamicPropertySource
+    static void datasource(DynamicPropertyRegistry r) {
+        r.add("spring.datasource.url", PG::getJdbcUrl);
+        r.add("spring.datasource.username", PG::getUsername);
+        r.add("spring.datasource.password", PG::getPassword);
+        // schema 用生产同一套迁移脚本，顺带把迁移脚本本身也测了
+        r.add("spring.flyway.enabled", () -&gt; true);
+        // 只校验不改动：ORM 与迁移脚本不一致时立刻失败，而不是悄悄改表
+        r.add("spring.jpa.hibernate.ddl-auto", () -&gt; "validate");
+    }
+
+    @Autowired protected JdbcTemplate jdbc;
+
+    // 隔离策略：每个用例后清表。比重建容器快两个数量级，又保留真实事务语义
+    // RESTART IDENTITY 让自增序列归零，避免用例断言 id 时相互影响
+    @AfterEach
+    void truncateAll() {
+        jdbc.execute("TRUNCATE TABLE payment_flow, order_item, orders, outbox "
+                   + "RESTART IDENTITY CASCADE");
+    }
+}
+</code></pre>
+
+<pre><code class="language-go">// go get github.com/testcontainers/testcontainers-go/modules/postgres
+var testDB *sql.DB
+
+// TestMain：整个 package 共用一个容器，而不是每个用例起一次
+func TestMain(m *testing.M) {
+    ctx := context.Background()
+
+    pg, err := postgres.Run(ctx, "postgres:16.4-alpine",
+        postgres.WithDatabase("app"),
+        postgres.WithUsername("app"),
+        postgres.WithPassword("app"),
+        // 必须等两次 ready：Postgres 初始化阶段会先 ready 一次再重启，
+        // 只等一次会拿到一个马上就被关掉的连接，表现为随机失败
+        testcontainers.WithWaitStrategy(
+            wait.ForLog("database system is ready to accept connections").
+                WithOccurrence(2).
+                WithStartupTimeout(60*time.Second)),
+    )
+    if err != nil {
+        log.Fatalf("启动 postgres 容器失败: %v", err)
+    }
+
+    dsn, err := pg.ConnectionString(ctx, "sslmode=disable")
+    if err != nil {
+        log.Fatalf("取连接串失败: %v", err)
+    }
+    if testDB, err = sql.Open("pgx", dsn); err != nil {
+        log.Fatalf("打开连接失败: %v", err)
+    }
+    if err := runMigrations(testDB); err != nil { // 生产同一套迁移脚本
+        log.Fatalf("迁移失败: %v", err)
+    }
+
+    code := m.Run()
+    _ = testcontainers.TerminateContainer(pg) // 复用模式下这行会被忽略
+    os.Exit(code)
+}
+
+// 隔离策略之一：用例包在事务里、结束回滚。最快，但测不了被测代码自己的事务边界
+func withRollback(t *testing.T, fn func(tx *sql.Tx)) {
+    t.Helper()
+    tx, err := testDB.Begin()
+    require.NoError(t, err)
+    t.Cleanup(func() { _ = tx.Rollback() })
+    fn(tx)
+}
+
+func TestOrderRepo_业务号唯一约束真的生效(t *testing.T) {
+    withRollback(t, func(tx *sql.Tx) {
+        repo := NewOrderRepo(tx)
+        ctx := context.Background()
+
+        require.NoError(t, repo.Insert(ctx, Order{BizNo: "B-1"}))
+        err := repo.Insert(ctx, Order{BizNo: "B-1"}) // 同一业务号再插一次
+
+        // 这条断言只有真库能验证：内存数据库的简化 schema 里经常没有这个唯一索引，
+        // 于是「重复下单」这个 bug 会一路活到生产
+        var pgErr *pgconn.PgError
+        require.True(t, errors.As(err, &amp;pgErr))
+        require.Equal(t, "23505", pgErr.Code) // 23505 = unique_violation
+    })
+}
+</code></pre>
+
+<h2>测试数据与隔离策略</h2>
+
+<p>「测试之间互相污染」的排查顺序固定：先单独跑失败用例，如果单独跑是绿的，基本就是隔离问题；再看有没有静态缓存、连接池里的会话变量、Redis 里没清的键、自增序列没归零。</p>
+
+<table>
+<thead><tr><th>策略</th><th>速度</th><th>能测到什么</th><th>测不到什么</th><th>适用</th></tr></thead>
+<tbody>
+<tr><td>用例包事务并回滚</td><td>最快，毫秒级</td><td>SQL 正确性、约束、索引</td><td>被测代码自己的事务边界、提交后触发的逻辑、触发器与延迟约束</td><td>纯仓储层用例</td></tr>
+<tr><td>用例后清表</td><td>快，一条语句几毫秒</td><td>真实提交与回滚、事务传播、outbox 写入</td><td>并行执行时需要额外隔离手段</td><td>默认推荐，覆盖绝大多数用例</td></tr>
+<tr><td>每个用例独立 schema</td><td>中，建 schema 加迁移约百毫秒级</td><td>多租户隔离、迁移脚本本身</td><td>跨 schema 的全局对象仍可能冲突</td><td>需要并行且写入量大的套件</td></tr>
+<tr><td>每个用例独立容器</td><td>最慢，每次数秒</td><td>初始化过程、首次启动行为</td><td>没有额外收益</td><td>只留给验证启动与初始化的极少数用例</td></tr>
+</tbody></table>
+
+<p>数据准备<strong>要用代码而不是 SQL 脚本</strong>。原因很实际：字段改名时代码会编译不过，SQL 脚本不会；构造器能表达「只有这个字段与本用例相关」，一大段 INSERT 做不到；而且脚本一旦被多个用例共用，就退化成了共享可变夹具。同样地，<strong>不要依赖生产数据快照</strong>——它有隐私风险、体积大、内容会随时间漂移，而且用例会悄悄依赖某条真实数据的具体取值，那条数据一改测试就红。</p>
+
+<h2>外部 HTTP 依赖：用本地 stub，不要 Mock 客户端</h2>
+
+<p>这里的选择影响很大。Mock 掉 HTTP 客户端对象，意味着序列化、请求头、连接池、读超时、重试、降级<strong>全部被跳过</strong>——而线上故障恰恰经常出在这些地方。本地 stub 服务（WireMock、httptest、mockserver）让请求走完真实 HTTP 栈，能把这些一并测掉，还能模拟慢响应和畸形报文。</p>
+
+<table>
+<thead><tr><th>方案</th><th>能测到</th><th>测不到</th><th>维护成本</th></tr></thead>
+<tbody>
+<tr><td>Mock 客户端接口</td><td>业务分支的走向</td><td>序列化、超时、重试、连接池、状态码处理</td><td>低，但价值也低</td></tr>
+<tr><td>本地 stub 服务</td><td>真实 HTTP 栈、超时与重试、畸形报文、5xx 降级</td><td>对方接口悄悄改了</td><td>中，报文需要人工维护</td></tr>
+<tr><td>录制回放</td><td>报文与真实响应一致（录制那一刻）</td><td>录制之后对方的变更；录制里可能带上敏感数据</td><td>中，要定期重录并脱敏</td></tr>
+<tr><td>消费者驱动契约</td><td>对方一旦做出不兼容变更立刻失败</td><td>对方内部实现问题</td><td>高，需要双方协作，细节详见站内 API 版本管理一篇</td></tr>
+<tr><td>直连第三方沙箱</td><td>最真实</td><td>—</td><td>高，限流、不稳定、数据会脏，不适合进门禁</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+flowchart TB
+    A["一个外部依赖"] --> B{"是你自己部署的吗"}
+    B -->|"数据库、缓存、消息队列"| C["起真实容器<br/>镜像版本与生产一致"]
+    B -->|"第三方服务"| D{"有可用沙箱吗"}
+    D -->|"有，但限流或不稳定"| E["本地 stub 服务<br/>走真实 HTTP 栈"]
+    D -->|"没有"| E
+    E --> F{"对方接口会变吗"}
+    F -->|"会"| G["补消费者驱动契约测试<br/>详见站内 API 版本管理一篇"]
+    F -->|"已冻结"| H["stub 加定期录制回放校准"]
+</div>
+
+<pre><code class="language-java">@Test
+void 风控超时应重试一次并降级到默认分() {
+    // stub 走真实 HTTP，能测到读超时、重试次数、降级分支，Mock 客户端这些全测不到
+    wireMock.stubFor(get(urlPathEqualTo("/v1/credit"))
+        .withQueryParam("userId", equalTo("7"))
+        .willReturn(aResponse()
+            .withStatus(200)
+            .withHeader("Content-Type", "application/json")
+            .withBody("{\"score\":720}")
+            .withFixedDelay(3000))); // 故意慢于客户端 1 秒读超时
+
+    Decision d = riskService.evaluate(7L);
+
+    assertThat(d.degraded()).isTrue();
+    assertThat(d.score()).isEqualTo(DEFAULT_SCORE);
+    // 重试策略也是规格的一部分：总共发了 2 次请求（首次加一次重试）
+    wireMock.verify(2, getRequestedFor(urlPathEqualTo("/v1/credit")));
+}
+
+@Test
+void 下游返回畸形报文不能抛原始解析异常() {
+    wireMock.stubFor(get(urlPathEqualTo("/v1/credit"))
+        .willReturn(aResponse().withStatus(200).withBody("not a json at all")));
+
+    // 这类用例最容易被忽略，而线上「下游发版后返回了 HTML 错误页」相当常见
+    assertThatThrownBy(() -&gt; riskService.evaluate(7L))
+        .isInstanceOf(UpstreamBadResponseException.class)
+        .hasMessageContaining("credit");
+}
+</code></pre>
+
+<h2>异步与最终一致：绝不能用 sleep</h2>
+
+<p>固定睡眠在集成测试里比在单测里更致命，因为容器环境的抖动更大。<strong>正确写法是轮询加超时</strong>：上限设宽（容器环境建议 10 到 30 秒），间隔设短（100 毫秒左右），断言写在轮询体里，第一次满足就立刻返回——快的时候不浪费，慢的时候不误报。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    participant T as 测试代码
+    participant K as Kafka 容器
+    participant C as 应用内消费者
+    participant DB as Postgres 容器
+    T->>K: 投递 order.paid，同一 key 故意投两次
+    K->>C: 拉取第一条
+    C->>DB: 开事务，更新订单状态并写支付流水
+    DB-->>C: 提交成功
+    K->>C: 拉取第二条，重复消息
+    C->>DB: 查唯一键发现已处理，直接跳过
+    loop 轮询等待，上限 20 秒，间隔 100 毫秒
+        T->>DB: 查订单状态与流水条数
+        DB-->>T: 未达期望值则继续等待
+    end
+    T->>T: 断言状态为 paid 且流水恰好一条
+    Note over T,DB: 断言的是最终状态与幂等结果<br/>而不是「消费方法被调用了两次」
+</div>
+
+<pre><code class="language-java">@Container
+static final KafkaContainer KAFKA = new KafkaContainer(
+        DockerImageName.parse("confluentinc/cp-kafka:7.7.1")); // 版本与生产对齐
+
+@Test
+void 支付消息重复投递应幂等且只产生一条流水() {
+    String key = "order-1";
+    String payload = "{\"orderId\":1,\"amountFen\":10000}";
+
+    producer.send(new ProducerRecord&lt;&gt;("order.paid", key, payload));
+    producer.send(new ProducerRecord&lt;&gt;("order.paid", key, payload)); // 故意重投
+
+    Awaitility.await()
+        .atMost(Duration.ofSeconds(20))       // 上限留足：容器环境比本地慢得多
+        .pollInterval(Duration.ofMillis(100)) // 间隔别设 1 毫秒，会把 CPU 打满
+        .pollDelay(Duration.ZERO)             // 默认有首次延迟，显式清零
+        .untilAsserted(() -&gt; {
+            assertThat(jdbc.queryForObject(
+                    "select status from orders where id = 1", String.class))
+                .isEqualTo("paid");
+            // 幂等的真正断言：重投一次不能多出流水
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from payment_flow where order_id = 1", Integer.class))
+                .isEqualTo(1);
+        });
+}
+
+@Test
+void 业务异常重试三次后应进入死信主题() {
+    producer.send(new ProducerRecord&lt;&gt;("order.paid", "bad", "{\"orderId\":-1}"));
+
+    Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -&gt; {
+        ConsumerRecords&lt;String, String&gt; dlq = dlqConsumer.poll(Duration.ofMillis(200));
+        assertThat(dlq.count()).isEqualTo(1);
+        ConsumerRecord&lt;String, String&gt; r = dlq.iterator().next();
+        // 死信里必须保留原始内容与失败原因，否则人工修数时无从下手
+        assertThat(r.value()).contains("\"orderId\":-1");
+        assertThat(new String(r.headers().lastHeader("x-error-reason").value()))
+            .contains("InvalidOrderId");
+    });
+}
+</code></pre>
+
+<h2>消息中间件的集成测试要测什么</h2>
+
+<p>起真实 Kafka 或 RabbitMQ 之后，值得测的是这四件事，前两件几乎所有团队都会漏：</p>
+
 <ul>
-<li><strong>先写接口测试</strong>接口测试性价比最高，先把核心接口测了。</li>
-<li><strong>测试要独立</strong>每个测试用例独立，不要互相依赖。</li>
+<li><strong>幂等</strong>：同一条消息投两次，最终状态一致且副作用只发生一次。重复投递在生产中是常态而不是异常。</li>
+<li><strong>重试与死信</strong>：失败后是否按预期退避重试，达到上限后是否进了死信主题，死信里是否保留了原始内容与失败原因。</li>
+<li><strong>序列化兼容</strong>：用旧版本的消息体喂给新代码（字段新增、字段删除、枚举改名），验证不会整个分区卡住。</li>
+<li><strong>位点提交时机</strong>：业务失败时不能提交位点，业务成功但提交失败时要能容忍重复。</li>
 </ul>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> pending
+    pending --> processing: 消费者拉取
+    processing --> done: 业务成功并提交位点
+    processing --> retrying: 抛出可重试异常
+    retrying --> processing: 退避后重新投递
+    retrying --> dlq: 达到最大重试次数
+    dlq --> processing: 人工修数后重放
+    done --> [*]
+    note right of dlq
+        死信路径必须有独立用例
+        断言消息确实进了死信主题
+        断言原始内容与失败原因都被保留
+        断言重放后能正常处理
+    end note
+</div>
+
+<p>分区与顺序性、ISR 与位点语义这些机制不在这里展开，详见站内 Kafka 专题。</p>
+
+<h2>执行时间控制与端到端该写多少</h2>
+
+<p>集成测试的成败往往取决于一个很俗的指标：<strong>跑得完不完</strong>。一套跑一小时的集成测试等于没有集成测试，因为没人会在合并前等它。</p>
+
+<table>
+<thead><tr><th>耗时来源</th><th>典型量级</th><th>压缩手段</th><th>压缩后</th></tr></thead>
+<tbody>
+<tr><td>镜像首次拉取</td><td>10 到 60 秒</td><td>CI 上缓存镜像层或用私有镜像仓库预热</td><td>接近 0</td></tr>
+<tr><td>容器启动</td><td>Postgres 与 Redis 约 1 到 3 秒，Kafka 约 5 到 15 秒</td><td>容器提到进程级静态字段，本地开复用</td><td>全套只付一次</td></tr>
+<tr><td>Spring 上下文启动</td><td>每种不同配置 3 到 10 秒</td><td>统一配置让上下文可缓存，避免每个类都写不同的属性覆盖</td><td>全套一到两次</td></tr>
+<tr><td>数据清理</td><td>清表几毫秒，重建 schema 数百毫秒</td><td>默认用清表，独立 schema 只给需要并行的用例</td><td>可忽略</td></tr>
+<tr><td>磁盘写入</td><td>与宿主机 IO 相关</td><td>数据目录挂内存文件系统，关掉同步刷盘</td><td>快数倍</td></tr>
+<tr><td>用例串行</td><td>与用例数线性增长</td><td>按类并行，配合独立 schema 或独立表前缀</td><td>接近核数倍加速</td></tr>
+</tbody></table>
+
+<p>做完这些，几十个集成用例通常能压到十几秒到一分钟。剩下实在慢的（全量端到端、跨服务链路）放到合并后阶段跑，具体怎么分阶段编排详见站内 CI/CD 专题。</p>
+
+<p><strong>端到端测试写几条就够</strong>：通常一位数，只覆盖注册登录、下单支付、退款这类最关键的主流程。它最慢、最脆、最难定位——失败时你面对的是整条链路，光确认是哪个环节出问题就要很久。把验证尽量下沉到服务级集成测试，端到端只回答一个问题：这些服务拼在一起还能不能跑通。</p>
+
+<h2>反模式清单</h2>
+
+<table>
+<thead><tr><th>反模式</th><th>症状</th><th>后果</th><th>修法</th></tr></thead>
+<tbody>
+<tr><td>用 H2 代替真实数据库</td><td>测试飞快且全绿</td><td>方言差异导致生产报错，且你因为有测试而更自信</td><td>Testcontainers 起生产同版本镜像</td></tr>
+<tr><td>用 Mock 替代数据库做集成测试</td><td>测试里没有任何真实 SQL 被执行</td><td>用自己的假设验证自己的假设，零收益</td><td>仓储层必须对真库跑</td></tr>
+<tr><td>让 ORM 自动建表</td><td>schema 与生产不一致，约束和索引缺失</td><td>验证了一个并不存在的数据库</td><td>跑生产同一套迁移脚本，ORM 设为只校验</td></tr>
+<tr><td>用 sleep 等异步</td><td>偶发失败，重跑就过</td><td>门禁失去可信度，真问题被淹没</td><td>轮询加超时，断言写在轮询体里</td></tr>
+<tr><td>用例之间共享数据</td><td>必须按固定顺序跑，无法并行</td><td>套件时间压不下来，改一个用例连带几个红</td><td>用例后清表，数据由代码现造</td></tr>
+<tr><td>每个用例起新容器</td><td>套件从十几秒变一小时</td><td>没人在合并前跑，退化成摆设</td><td>容器提到进程级，开启复用</td></tr>
+<tr><td>集成测试里断言实现细节</td><td>断言「调用了哪个 DAO 方法」</td><td>失去集成测试的意义，又继承了它的慢</td><td>断言数据库里的最终状态与接口返回</td></tr>
+<tr><td>把集成测试写成端到端</td><td>一个用例拉起八个服务</td><td>失败无法归因，随机失败率飙升</td><td>边界收到单服务加其真实依赖</td></tr>
+<tr><td>依赖生产数据快照</td><td>用例依赖某条真实数据的具体取值</td><td>隐私风险加数据漂移，快照一换全红</td><td>用代码构造最小数据集</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+    <li><strong>容器等待策略只等一次 ready。</strong>Postgres 初始化阶段会先 ready 再重启，只等一次会拿到马上被关掉的连接，表现为无规律的连接失败。</li>
+    <li><strong>容器字段不是 static。</strong>JUnit 会为每个测试方法重启容器，套件时间瞬间乘以用例数。</li>
+    <li><strong>开了容器复用却忘了清数据。</strong>上一次运行留下的行还在，用例断言条数时莫名其妙多一条。</li>
+    <li><strong>清表时不 RESTART IDENTITY。</strong>自增 id 持续增长，任何断言具体 id 的用例都会随运行次数变化而失败。</li>
+    <li><strong>每个测试类写不同的属性覆盖。</strong>Spring 上下文缓存全部失效，每个类都要重新启动一次应用。</li>
+    <li><strong>用事务回滚做隔离却要测提交后的逻辑。</strong>outbox 投递、触发器、提交后事件永远不会被触发，用例假绿。</li>
+    <li><strong>Mock 掉 HTTP 客户端而不是起 stub。</strong>超时、重试、连接池、畸形报文全都没被验证，而这些是线上故障的主要来源。</li>
+    <li><strong>stub 的报文是手写的且从不校准。</strong>对方接口改了字段，你的测试依然全绿，直到生产解析失败。</li>
+    <li><strong>轮询断言忘记清掉首次延迟。</strong>每个异步用例白等一段固定时间，几十个用例累加起来很可观。</li>
+    <li><strong>只测消息被消费，不测重复投递。</strong>重复投递在生产是常态，幂等 bug 一定会以重复扣款的形式暴露。</li>
+    <li><strong>死信路径没有用例。</strong>真出问题时才发现死信里没保留原始内容，人工修数无从下手。</li>
+    <li><strong>连接池大小设成 1 还开并行。</strong>用例互相抢连接，超时失败的现场看起来像是死锁，排查方向完全被误导。</li>
+    </ul>
 </div>
 
                     </div>
