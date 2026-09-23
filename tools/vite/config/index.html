@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>配置与插件 - Vite - 资深码农</title>
+    <title>配置与插件机制：钩子、中间件与 SSR - Vite - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="vite.config.ts / 路径别名 / 环境变量 / 常用插件">
+    <meta name="description" content="Vite 的插件机制建立在 Rollup 插件接口之上，再扩展了一组开发服务器专属钩子。本文给出钩子分类对照：resolveId 与 load 与 transform 这类通用钩子，config 与 configResolved 与 configureServer 与 transformIndexHtml 与 handleHotUpdate 这类 Vite 专属钩子，以及 enforce 与 apply 如何决定执行时机与范围；配一个能直接抄的自定义插件、用 configureServer 挂中间件起 mock 服务、SSR 的 ssrLoadModule 与依赖外部化机制，并说明 define 是文本替换所以值必须是字符串化的 JSON。">
     <meta name="keywords" content="Vite,配置与插件,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/tools/vite/config/">
-    <meta property="og:title" content="配置与插件 - Vite - 资深码农">
-    <meta property="og:description" content="vite.config.ts / 路径别名 / 环境变量 / 常用插件">
+    <meta property="og:title" content="配置与插件机制：钩子、中间件与 SSR - Vite - 资深码农">
+    <meta property="og:description" content="Vite 的插件机制建立在 Rollup 插件接口之上，再扩展了一组开发服务器专属钩子。本文给出钩子分类对照：resolveId 与 load 与 transform 这类通用钩子，config 与 configResolved 与 configureServer 与 transformIndexHtml 与 handleHotUpdate 这类 Vite 专属钩子，以及 enforce 与 apply 如何决定执行时机与范围；配一个能直接抄的自定义插件、用 configureServer 挂中间件起 mock 服务、SSR 的 ssrLoadModule 与依赖外部化机制，并说明 define 是文本替换所以值必须是字符串化的 JSON。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/tools/vite/config/">
     <meta property="og:site_name" content="资深码农">
@@ -25,11 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="配置与插件 - Vite">
-    <meta name="twitter:description" content="vite.config.ts / 路径别名 / 环境变量 / 常用插件">
+    <meta name="twitter:title" content="配置与插件机制：钩子、中间件与 SSR - Vite">
+    <meta name="twitter:description" content="Vite 的插件机制建立在 Rollup 插件接口之上，再扩展了一组开发服务器专属钩子。本文给出钩子分类对照：resolveId 与 load 与 transform 这类通用钩子，config 与 configResolved 与 configureServer 与 transformIndexHtml 与 handleHotUpdate 这类 Vite 专属钩子，以及 enforce 与 apply 如何决定执行时机与范围；配一个能直接抄的自定义插件、用 configureServer 挂中间件起 mock 服务、SSR 的 ssrLoadModule 与依赖外部化机制，并说明 define 是文本替换所以值必须是字符串化的 JSON。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Vite 插件和 Rollup 插件是什么关系？", "acceptedAnswer": {"@type": "Answer", "text": "Vite 插件就是 Rollup 插件加上一组额外钩子。resolveId、load、transform、buildStart、generateBundle 这些都是原生 Rollup 钩子，写法完全一样，所以大量 Rollup 插件可以直接在 Vite 里用。Vite 额外扩展的是开发服务器相关的能力：config 与 configResolved 用来读改配置，configureServer 用来往开发服务器挂中间件，transformIndexHtml 用来改 HTML，handleHotUpdate 用来自定义热更新行为。需要注意的是生产构建走 Rollup，所以只用了 Vite 专属钩子的插件在 build 时可能什么都不做。"}}, {"@type": "Question", "name": "enforce 和 apply 分别控制什么？", "acceptedAnswer": {"@type": "Answer", "text": "enforce 控制顺序，apply 控制范围。enforce 设为 pre 的插件在 Vite 内置核心插件之前执行，不设的在核心插件之间按数组顺序执行，设为 post 的在最后执行，包括在内置的构建插件之后。apply 设为 serve 表示只在开发服务器生效，设为 build 表示只在生产构建生效，不设则两者都生效。不设 enforce 是很常见的问题：如果你的插件需要在框架插件处理 JSX 之前拿到原始代码，就必须设 pre，否则拿到的是已经被转换过的结果，正则匹配全部失效，而这种失效往往只在某些文件上出现，极难定位。"}}, {"@type": "Question", "name": "define 为什么值必须是字符串化的 JSON？", "acceptedAnswer": {"@type": "Answer", "text": "因为 define 做的是源码级文本替换，不是变量赋值。配置里给的值会被原封不动地贴进代码，所以想替换成字符串常量就必须把引号一起带上，也就是用 JSON 序列化一次。直接写一个普通字符串会变成代码里的标识符，构建时报未定义变量，或者更糟地引用到了同名变量。另外两个配套注意点：被替换的标识符必须足够独特，通常用双下划线包围，否则可能命中变量名或字符串内容；替换发生在语法分析之后，注释和字符串字面量里的同名内容一般不会被替换，但不要依赖这一点。"}}, {"@type": "Question", "name": "怎么在开发期起一个 mock 接口服务？", "acceptedAnswer": {"@type": "Answer", "text": "用 configureServer 钩子往开发服务器挂中间件。这个钩子会拿到 server 对象，它的 middlewares 是一个 connect 实例，直接 use 一个函数就能拦截请求，自己判断路径并写响应。要点有三个：中间件默认挂在 Vite 内置中间件之后，如果需要更早介入可以返回一个函数，它会在内置中间件安装完成后执行；路径判断要精确，否则会把页面请求也吞掉，导致开发时首页打不开；响应必须自己设 content-type 并调用 end 结束，否则请求会挂住直到超时。这套方式比起单独跑一个 mock 服务的好处是不用额外配代理，也不占端口。"}}, {"@type": "Question", "name": "Vite 的 SSR 是怎么工作的，难点在哪？", "acceptedAnswer": {"@type": "Answer", "text": "开发期的核心是 ssrLoadModule，它把服务端入口按 Node 能执行的形式加载进来，并且带热更新，所以改一行服务端渲染代码不需要重启进程。流程是自己起一个 Node 服务，收到请求后读 index.html 交给 transformIndexHtml 处理，再用 ssrLoadModule 拿到渲染函数，把结果塞进 HTML 返回。难点主要有三个：依赖外部化策略，默认 node_modules 里的包在服务端直接由 Node 加载，但那些只提供 ESM 或需要被 Vite 转换的包必须写进 ssr.noExternal；开发与生产的加载方式不同，生产要先构建出服务端产物；以及浏览器专有对象在服务端不存在，任何直接访问 window 的代码都要判断环境。"}}, {"@type": "Question", "name": "哪些插件写法会拖慢热更新？", "acceptedAnswer": {"@type": "Answer", "text": "最典型的是在 transform 钩子里做重计算却不做文件过滤。transform 对每个被请求的模块都会执行，热更新时也会执行，如果你在里面跑正则回溯、读文件、算哈希甚至发网络请求，每次保存都会多出这份开销，项目大了就表现为热更新从几十毫秒退化到几秒。正确写法是先用 id 做快速过滤，只处理确实需要处理的后缀和目录，能缓存的结果按内容哈希缓存，并且把与单个模块无关的工作挪到 buildStart 这类只执行一次的钩子里。判断方法是给自己的 transform 加上耗时日志，对比开启前后的热更新时间。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -62,62 +64,363 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">配置与插件</h1>
+                        <h1 class="article-title">配置与插件机制：钩子、中间件与 SSR</h1>
                     </header>
                     <div class="article-content">
 
-<h2>vite.config.ts</h2>
-<pre><code class="language-typescript">import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import path from 'path'
+<p>Vite 的配置文件通常很短，但它背后的插件系统信息量不小。理解一件事就够了：<strong>Vite 插件就是 Rollup 插件，加上一组只在开发服务器上生效的额外钩子</strong>。这个设计让它能直接复用整个 Rollup 插件生态，也解释了为什么某些插件在 <code>dev</code> 下有效在 <code>build</code> 下失效。开发期不打包的模型见 <a href="../">架构篇</a>，产物优化见 <a href="../optimization/">生产构建优化</a>。</p>
 
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
-  server: {
-    port: 3000,
-    open: true,
-  },
-  build: {
-    outDir: 'dist',
-    sourcemap: false,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-        },
-      },
-    },
-  },
-})</code></pre>
+<h2>钩子分类：通用的与 Vite 专属的</h2>
 
-<h2>环境变量</h2>
-<pre><code class="language-bash"># .env.development
-VITE_API_URL=http://localhost:8000/api
+<div class="mermaid">
+flowchart TB
+    subgraph R["Rollup 通用钩子 dev 与 build 都跑"]
+        R1["buildStart<br/>构建开始 只执行一次"]
+        R2["resolveId<br/>把导入说明符解析成模块 id"]
+        R3["load<br/>给定 id 返回模块内容"]
+        R4["transform<br/>改写模块代码 每个模块都跑"]
+        R5["generateBundle 与 writeBundle<br/>只在 build 阶段有意义"]
+    end
+    subgraph V["Vite 专属钩子"]
+        V1["config<br/>返回片段与用户配置深合并"]
+        V2["configResolved<br/>拿到最终配置 只读 存起来备用"]
+        V3["configureServer<br/>往开发服务器挂中间件"]
+        V4["configurePreviewServer<br/>预览服务器同理"]
+        V5["transformIndexHtml<br/>改 HTML 注入标签"]
+        V6["handleHotUpdate<br/>自定义热更新范围"]
+    end
+    V1 --> V2 --> V3
+    V2 --> R1
+    R2 --> R3 --> R4
+    R4 --> R5
+    V5 --> B["浏览器拿到的 HTML"]
+    V6 --> H["WebSocket 推送"]
+</div>
 
-# .env.production
-VITE_API_URL=https://api.example.com</code></pre>
-
-<pre><code class="language-typescript">// 代码里直接用
-const apiUrl = import.meta.env.VITE_API_URL</code></pre>
-
-<h2>常用插件</h2>
 <table>
-<thead>
-<tr><th>插件</th><th>用途</th></tr>
-</thead>
+<thead><tr><th>钩子</th><th>触发时机</th><th>典型用途</th><th>常见误用</th></tr></thead>
 <tbody>
-<tr><td>@vitejs/plugin-react</td><td>React 支持</td></tr>
-<tr><td>@vitejs/plugin-vue</td><td>Vue 支持</td></tr>
-<tr><td>vite-plugin-pwa</td><td>PWA 支持</td></tr>
-<tr><td>vite-plugin-compression</td><td>gzip/brotli 压缩</td></tr>
-<tr><td>unplugin-auto-import</td><td>自动导入 API</td></tr>
-</tbody>
-</table>
+<tr><td><code>config</code></td><td>解析配置前</td><td>按 mode 注入默认配置</td><td>直接改传入对象而不 return 片段，导致合并策略失效</td></tr>
+<tr><td><code>configResolved</code></td><td>配置最终确定后</td><td>把 <code>command</code>、<code>base</code>、<code>mode</code> 存起来供后续钩子用</td><td>试图在这里改配置，此时已是只读</td></tr>
+<tr><td><code>resolveId</code></td><td>遇到每个 import 说明符</td><td>实现虚拟模块、自定义解析规则</td><td>返回值不加空字节前缀，虚拟模块被其他插件当真实文件读</td></tr>
+<tr><td><code>load</code></td><td>需要某个 id 的内容时</td><td>为虚拟模块提供代码</td><td>对所有 id 都返回内容，把真实文件覆盖掉</td></tr>
+<tr><td><code>transform</code></td><td>每个模块被请求或打包时</td><td>代码改写、注入埋点</td><td>不按 id 过滤就做重计算，直接拖慢热更新</td></tr>
+<tr><td><code>configureServer</code></td><td>开发服务器创建时</td><td>挂 mock 中间件、加自定义路由</td><td>路径匹配过宽，把页面请求也吞了</td></tr>
+<tr><td><code>transformIndexHtml</code></td><td>返回 HTML 前</td><td>注入版本号、埋点脚本、预加载标签</td><td>用字符串拼接破坏 HTML 结构，改用返回标签描述对象更稳</td></tr>
+<tr><td><code>handleHotUpdate</code></td><td>文件变更时</td><td>扩大或缩小热更新影响范围</td><td>返回空数组想阻止更新，结果连整页刷新也没了，改动完全不生效</td></tr>
+</tbody></table>
+
+<h2>enforce 与 apply：顺序和范围</h2>
+
+<div class="mermaid">
+flowchart TB
+    A["用户 plugins 数组"] --> P1["enforce 为 pre 的插件<br/>别名解析 代码预处理"]
+    P1 --> P2["Vite 内置核心插件<br/>裸模块名重写 CSS 处理 资源处理"]
+    P2 --> P3["未设 enforce 的插件<br/>按数组顺序"]
+    P3 --> P4["Vite 内置构建插件<br/>压缩 产物生成"]
+    P4 --> P5["enforce 为 post 的插件<br/>产物分析 最终改写"]
+    A --> F{"apply 取值"}
+    F -->|serve| S["只在 vite dev 生效"]
+    F -->|build| B["只在 vite build 生效"]
+    F -->|不设| SB["两者都生效<br/>注意 build 下没有 configureServer"]
+</div>
+
+<table>
+<thead><tr><th>组合</th><th>执行位置</th><th>适合做什么</th><th>踩坑点</th></tr></thead>
+<tbody>
+<tr><td><code>enforce: 'pre'</code></td><td>内置插件之前</td><td>需要拿到未被处理的原始源码，如自定义语法、宏展开</td><td>不设 pre 时拿到的是框架插件转换后的代码，正则失配</td></tr>
+<tr><td>不设 <code>enforce</code></td><td>内置核心插件之后</td><td>大多数常规转换</td><td>与其他同级插件的相对顺序取决于数组位置，容易被重排打乱</td></tr>
+<tr><td><code>enforce: 'post'</code></td><td>全部之后</td><td>产物统计、最终文本替换</td><td>此时代码已压缩，可读性差，做替换要非常小心</td></tr>
+<tr><td><code>apply: 'serve'</code></td><td>仅开发</td><td>mock 服务、开发期日志、调试面板</td><td>忘了生产也需要同等能力，上线后功能缺失</td></tr>
+<tr><td><code>apply: 'build'</code></td><td>仅构建</td><td>体积分析、产物校验、CDN 上传</td><td>开发期完全不生效，问题只在 CI 暴露</td></tr>
+<tr><td><code>apply</code> 传函数</td><td>按配置动态判断</td><td>只在 SSR 构建或某个 mode 下启用</td><td>判断条件写错时静默不生效，没有任何报错</td></tr>
+</tbody></table>
+
+<h2>一次模块请求经过插件链</h2>
+
+<div class="mermaid">
+sequenceDiagram
+    participant B as 浏览器
+    participant S as Dev Server 中间件栈
+    participant PR as pre 插件
+    participant CO as 内置核心插件
+    participant PL as 普通插件
+    participant M as 模块图缓存
+    B->>S: GET src App.tsx
+    S->>M: 查是否已有转换结果
+    M-->>S: 未命中 继续处理
+    S->>PR: resolveId 依次询问 谁认领这个 id
+    PR-->>S: 返回 null 表示不处理 交给下一个
+    S->>CO: 核心插件解析成绝对路径
+    CO->>PL: load 读取文件内容
+    PL-->>CO: 返回源码
+    CO->>PR: transform 按 pre 先执行
+    PR-->>CO: 可以拿到原始 JSX 与 TS 语法
+    CO->>CO: esbuild 擦除类型 react 插件处理 JSX
+    CO->>PL: 普通插件 transform 在这之后
+    PL-->>S: 最终代码 加 source map
+    S->>M: 写入模块图与转换缓存
+    S-->>B: 响应 ESM 代码
+    Note over S,M: 热更新时只重跑变更模块的这条链<br/>所以 transform 里的耗时会被每次保存放大
+</div>
+
+<h2>写一个自己的插件</h2>
+
+<p>下面这个插件做两件真实有用的事：<strong>构建时把版本号与构建时间注入 HTML</strong>（前端可以据此提示用户刷新，这是解决新版本发布后旧页面报错的常用手段），以及<strong>开发期打印慢模块日志</strong>。它同时用到了 <code>config</code>、<code>configResolved</code>、<code>transformIndexHtml</code>、<code>configureServer</code>、<code>transform</code> 五个钩子。</p>
+
+<pre><code class="language-typescript">// plugins/build-stamp.ts
+import type { Plugin, ResolvedConfig } from 'vite'
+import { execSync } from 'node:child_process'
+
+export function buildStamp(options: { slowMs?: number } = {}): Plugin {
+  const slowMs = options.slowMs ?? 50
+  let config: ResolvedConfig
+  const commit = (() =&gt; {
+    try {
+      return execSync('git rev-parse --short HEAD').toString().trim()
+    } catch {
+      return 'unknown'   // CI 里可能是浅克隆，不要让构建因为拿不到 commit 而失败
+    }
+  })()
+
+  return {
+    name: 'app:build-stamp',
+    // 不设 enforce 就够了：这里不需要拿原始源码
+    config() {
+      // 返回片段让 Vite 做深合并，不要直接改入参对象
+      return {
+        define: {
+          // define 是文本替换，值必须是字符串化的 JSON，否则会被当成标识符
+          __BUILD_COMMIT__: JSON.stringify(commit),
+          __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+        },
+      }
+    },
+    configResolved(resolved) {
+      config = resolved   // 后面要用 command 判断 dev 还是 build
+    },
+    transformIndexHtml() {
+      // 返回标签描述数组比字符串拼接安全，不会破坏 HTML 结构
+      return [
+        {
+          tag: 'meta',
+          attrs: { name: 'x-build-commit', content: commit },
+          injectTo: 'head',
+        },
+      ]
+    },
+    transform(code, id) {
+      // 关键：先用 id 过滤，否则每个模块都要付这份开销
+      if (config.command !== 'serve') return null
+      if (!/\.[jt]sx?$/.test(id) || id.includes('node_modules')) return null
+
+      const start = performance.now()
+      // 这里只做很轻的工作示意；真正的重计算绝不能放在这里
+      const result = code.includes('__BUILD_COMMIT__') ? code : null
+      const cost = performance.now() - start
+      if (cost &gt; slowMs) {
+        this.warn(`transform 耗时 ${cost.toFixed(1)}ms: ${id}`)
+      }
+      return result
+    },
+    configureServer(server) {
+      server.httpServer?.once('listening', () =&gt; {
+        // 开发期把构建标记打出来，方便对照线上问题
+        server.config.logger.info(`  ➜  build commit: ${commit}`)
+      })
+    },
+  }
+}</code></pre>
+
+<h2>configureServer：开发期起一个 mock 服务</h2>
+
+<p><code>configureServer</code> 拿到的 <code>server.middlewares</code> 是一个 connect 实例，可以直接 <code>use</code> 中间件。这比单独跑一个 mock 进程省事：不用配代理、不占端口、随 dev server 一起起停。</p>
+
+<pre><code class="language-typescript">// plugins/mock.ts —— 只在开发期生效
+import type { Plugin } from 'vite'
+
+export function mockApi(): Plugin {
+  return {
+    name: 'app:mock-api',
+    apply: 'serve',        // 必须限定，否则生产构建时这段逻辑毫无意义
+    configureServer(server) {
+      // 返回一个函数的话，它会在 Vite 内置中间件安装之后才执行
+      // 直接 use 则挂在内置中间件之前，要格外小心别吞掉页面请求
+      server.middlewares.use(async (req, res, next) =&gt; {
+        const url = req.url ?? ''
+        // 路径判断必须精确：写成 startsWith 斜杠 会把首页也拦掉
+        if (!url.startsWith('/mock/')) return next()
+
+        if (url === '/mock/user' &amp;&amp; req.method === 'GET') {
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          // 必须调用 end 结束响应，否则请求会挂到超时
+          res.end(JSON.stringify({ id: '1', name: '张三', role: 'admin' }))
+          return
+        }
+
+        if (url === '/mock/upload' &amp;&amp; req.method === 'POST') {
+          // 读请求体要自己收流，中间件层没有 body 解析
+          const chunks: Buffer[] = []
+          for await (const c of req) chunks.push(c as Buffer)
+          const body = JSON.parse(Buffer.concat(chunks).toString() || '{}')
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.end(JSON.stringify({ ok: true, received: Object.keys(body) }))
+          return
+        }
+
+        res.statusCode = 404
+        res.end(JSON.stringify({ message: 'mock not found' }))
+      })
+    },
+  }
+}</code></pre>
+
+<h2>SSR：ssrLoadModule 与依赖外部化</h2>
+
+<p>Vite 的 SSR 不是一个开箱即用的框架，而是一组原语。开发期的核心是 <code>ssrLoadModule</code>：它把服务端入口以 Node 能执行的形式加载进来，并且带热更新，所以改渲染逻辑不需要重启进程。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    participant C as 浏览器
+    participant N as 自建 Node 服务
+    participant V as Vite 中间件模式实例
+    participant E as 服务端入口模块
+    C->>N: GET 某个页面路径
+    N->>N: 读取根目录 index.html 模板
+    N->>V: transformIndexHtml 处理模板
+    V-->>N: 注入客户端脚本与 HMR 连接
+    N->>V: ssrLoadModule 加载服务端入口
+    V->>V: 按需转译 外部化 node_modules 依赖
+    V-->>E: 返回带热更新的模块实例
+    N->>E: 调用 render 传入路径与上下文
+    E-->>N: 返回 HTML 片段与预加载信息
+    N->>N: 把片段塞进模板占位处
+    N-->>C: 返回完整 HTML
+    Note over N,V: 报错栈默认指向转译后代码<br/>必须调用 ssrFixStacktrace 才能定位源码
+</div>
+
+<table>
+<thead><tr><th>依赖类型</th><th>默认处理</th><th>为什么</th><th>需要干预时</th></tr></thead>
+<tbody>
+<tr><td>普通 CommonJS 依赖</td><td>外部化，由 Node 直接 require</td><td>Node 本来就能跑，省一次转换</td><td>一般不用管</td></tr>
+<tr><td>只提供 ESM 的依赖</td><td>可能外部化失败</td><td>Node 的加载方式与 Vite 转换结果冲突</td><td>写进 <code>ssr.noExternal</code></td></tr>
+<tr><td>需要 Vite 转换的包（含 JSX、Vue SFC）</td><td>外部化会报语法错误</td><td>Node 不认识这些语法</td><td>写进 <code>ssr.noExternal</code></td></tr>
+<tr><td>monorepo 里的本地包</td><td>默认不外部化</td><td>需要跟随源码热更新</td><td>一般不用管，若报错可显式列出</td></tr>
+<tr><td>引用了 CSS 的组件库</td><td>外部化后 Node 无法解析 CSS 导入</td><td>Node 不认识 CSS 模块</td><td><code>ssr.noExternal</code> 加样式收集</td></tr>
+<tr><td>只能在浏览器跑的包</td><td>直接报错，如访问 window</td><td>服务端没有这些全局对象</td><td>改成动态导入并判断环境</td></tr>
+</tbody></table>
+
+<pre><code class="language-javascript">// server.mjs —— 开发期 SSR 的最小可跑骨架
+import fs from 'node:fs/promises'
+import express from 'express'
+import { createServer as createViteServer } from 'vite'
+
+const app = express()
+
+// 中间件模式：不让 Vite 接管 HTML 服务，由我们自己渲染
+const vite = await createViteServer({
+  server: { middlewareMode: true },
+  appType: 'custom',
+})
+app.use(vite.middlewares)
+
+app.use('*', async (req, res) =&gt; {
+  try {
+    let template = await fs.readFile('index.html', 'utf-8')
+    // 让 Vite 注入客户端脚本与 HMR 连接，否则页面没有热更新
+    template = await vite.transformIndexHtml(req.originalUrl, template)
+
+    // 关键 API：加载服务端入口，带热更新，改代码无需重启
+    const { render } = await vite.ssrLoadModule('/src/entry-server.tsx')
+    const appHtml = await render(req.originalUrl)
+
+    res.status(200)
+      .set({ 'Content-Type': 'text/html' })
+      .end(template.replace('&lt;!--ssr-outlet--&gt;', appHtml))
+  } catch (e) {
+    // 不加这一行，报错栈全部指向转译后的代码，完全没法定位
+    vite.ssrFixStacktrace(e)
+    res.status(500).end(e.message)
+  }
+})
+
+app.listen(5173)</code></pre>
+
+<h2>常用配置项速查与各自的坑</h2>
+
+<table>
+<thead><tr><th>配置项</th><th>作用</th><th>默认值</th><th>坑</th></tr></thead>
+<tbody>
+<tr><td><code>base</code></td><td>产物里资源的公共前缀</td><td>斜杠</td><td>部署到子路径时不改就全部 404；运行时拼路径要用 <code>import.meta.env.BASE_URL</code></td></tr>
+<tr><td><code>resolve.alias</code></td><td>路径别名</td><td>无</td><td>必须与 tsconfig 的 paths 同步，否则编辑器与构建行为不一致</td></tr>
+<tr><td><code>define</code></td><td>源码级文本替换</td><td>无</td><td>值必须是字符串化的 JSON；标识符要足够独特，通常用双下划线包围</td></tr>
+<tr><td><code>envDir</code> 与 <code>envPrefix</code></td><td>env 文件目录与注入前缀</td><td>根目录，<code>VITE_</code></td><td>放宽前缀等于放宽泄露面，不要为了省事改成空前缀</td></tr>
+<tr><td><code>server.proxy</code></td><td>开发期反向代理</td><td>无</td><td>只在开发生效，生产要靠网关；WebSocket 需单独开 <code>ws</code></td></tr>
+<tr><td><code>server.warmup</code></td><td>启动后预先转译指定文件</td><td>无</td><td>大项目首屏慢的有效缓解，但列表写太长会拖慢启动</td></tr>
+<tr><td><code>optimizeDeps.include</code> 与 <code>exclude</code></td><td>干预依赖预构建</td><td>自动扫描</td><td>动态导入里的依赖扫不到，会在运行时触发重新预构建并刷新页面</td></tr>
+<tr><td><code>build.target</code></td><td>产物语法目标</td><td>较新的基线</td><td>设太低会引入大量降级代码；设太高老设备白屏</td></tr>
+<tr><td><code>ssr.noExternal</code></td><td>强制让依赖参与 SSR 转换</td><td>空</td><td>不配会遇到服务端不认识 JSX 或 CSS 的报错</td></tr>
+</tbody></table>
+
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">define 是文本替换，不是变量注入</div>
+    <p>写 <code>define: { __VERSION__: pkg.version }</code> 会把版本号当成标识符贴进代码，构建报「未定义」或误引用同名变量。必须写 <code>JSON.stringify(pkg.version)</code>。同理，替换目标要用足够独特的名字（惯例是双下划线包围），否则可能命中业务代码里的同名变量。</p>
+</div>
+
+<h2>配置文件本身的执行环境</h2>
+
+<p>有一类问题出在配置文件自己身上，而不是配置内容。<code>vite.config.ts</code> 不是被直接执行的，Vite 会先用 esbuild 把它编译成一个临时文件再由 Node 加载，这带来几个很具体的影响。</p>
+
+<table>
+<thead><tr><th>现象</th><th>原因</th><th>处理</th></tr></thead>
+<tbody>
+<tr><td><code>__dirname</code> 报未定义</td><td>项目声明为 ESM 时不存在这个变量</td><td>从 <code>import.meta.url</code> 推导，或退而用 <code>process.cwd()</code></td></tr>
+<tr><td>在配置里引用业务代码后报错</td><td>配置在 Node 里跑，业务代码里的浏览器 API 不存在</td><td>把需要共享的东西抽成不含运行时依赖的纯数据模块</td></tr>
+<tr><td>读不到无前缀的环境变量</td><td>配置阶段 <code>.env</code> 还没被加载，<code>process.env</code> 里只有系统变量</td><td>用 <code>loadEnv</code> 显式加载，第三个参数传空字符串</td></tr>
+<tr><td>改完配置行为没变</td><td>配置变更会重启服务器，但依赖它派生的预构建缓存可能仍是旧的</td><td>必要时加 <code>--force</code></td></tr>
+<tr><td>需要异步拿配置</td><td>比如构建前要从远端取版本号或路由表</td><td><code>defineConfig</code> 支持传入返回 Promise 的函数</td></tr>
+<tr><td>同一份配置要区分 dev 与 build</td><td>两条路径需要的插件不同</td><td>用函数形式读 <code>command</code>，配合插件的 <code>apply</code></td></tr>
+</tbody></table>
+
+<p>配置的合并规则也值得说清：插件 <code>config</code> 钩子返回的片段会与用户配置做深合并，对象逐层合并、数组直接拼接、同名标量以用户配置为准。这解释了两个常见困惑——为什么你在插件里设的 <code>define</code> 不会覆盖用户的同名键，以及为什么两个插件各自往 <code>optimizeDeps.include</code> 里加东西不会互相覆盖。反过来说，<strong>插件无法通过 <code>config</code> 钩子强制覆盖用户配置</strong>，真有这个需求只能在 <code>configResolved</code> 里读到最终值后，在自己的钩子里做相应处理。</p>
+
+<p>还有一个容易被忽略的点：<strong>配置文件里的耗时操作会直接计入每次启动时间</strong>。在里面同步执行 git 命令、读大文件、甚至发网络请求，会让 dev server 每次启动以及每次配置热重启都多花几百毫秒到几秒。把这类工作加上缓存，或者挪进插件的 <code>buildStart</code> 里只在真正需要时执行。</p>
+
+<h2>反模式对照</h2>
+
+<table>
+<thead><tr><th>反模式</th><th>后果</th><th>正确做法</th></tr></thead>
+<tbody>
+<tr><td>插件不设 <code>enforce</code></td><td>拿到的是已被框架插件转换过的代码，正则失配且时机不稳定</td><td>需要原始源码就设 <code>pre</code>，做产物处理就设 <code>post</code></td></tr>
+<tr><td><code>transform</code> 里做重计算</td><td>每次保存都付一遍，热更新从几十毫秒退化到几秒</td><td>先按 id 过滤，缓存结果，一次性工作挪到 <code>buildStart</code></td></tr>
+<tr><td>alias 与 tsconfig paths 不同步</td><td>编辑器能跳转但构建失败，或反之</td><td>两处一起改，或用插件从 tsconfig 派生</td></tr>
+<tr><td><code>define</code> 值不做 JSON 序列化</td><td>构建报未定义标识符，或静默引用到同名变量</td><td>一律 <code>JSON.stringify</code></td></tr>
+<tr><td>mock 中间件路径匹配过宽</td><td>把页面请求也吞掉，开发时首页打不开</td><td>用明确前缀判断，不匹配就 <code>next()</code></td></tr>
+<tr><td>中间件里忘记 <code>res.end()</code></td><td>请求挂住直到超时，看起来像后端没响应</td><td>每条分支都确保结束响应</td></tr>
+<tr><td>SSR 里直接访问 <code>window</code></td><td>服务端渲染直接抛错，整页 500</td><td>判断运行环境，或把逻辑放进只在客户端执行的生命周期</td></tr>
+<tr><td>SSR 报错不调 <code>ssrFixStacktrace</code></td><td>栈指向转译后代码，定位不到源文件</td><td>catch 里必须调用一次</td></tr>
+<tr><td><code>apply</code> 用错</td><td>插件在需要的阶段静默不生效，没有任何报错</td><td>明确它是 serve 专属、build 专属还是两者都要</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+<li><strong>插件顺序没用 <code>enforce</code> 固定</strong>：同级插件的相对顺序取决于数组位置，有人重排一下你的转换就失效了。</li>
+<li><strong>在 <code>transform</code> 里读文件或算哈希</strong>：这是热更新变慢的头号原因，因为每次保存都会重跑这条链。</li>
+<li><strong><code>transform</code> 不做 id 过滤</strong>：连 node_modules 里成百上千个模块都会走一遍你的逻辑。</li>
+<li><strong><code>define</code> 忘了 <code>JSON.stringify</code></strong>：值被当成标识符，报错信息指向一个你从没写过的变量名。</li>
+<li><strong><code>define</code> 的标识符太普通</strong>：像 <code>VERSION</code> 这种名字可能命中业务代码里的同名变量，造成无法解释的行为。</li>
+<li><strong>mock 中间件用过宽的前缀</strong>：连首页请求都被拦下，表现是开发服务器起来了但页面全白。</li>
+<li><strong>中间件分支漏了 <code>res.end()</code></strong>：请求一直挂着，前端看到的是超时而不是错误。</li>
+<li><strong><code>configResolved</code> 里试图改配置</strong>：此时配置已只读，改了不报错也不生效。</li>
+<li><strong>虚拟模块 id 不加空字节前缀</strong>：其他插件会把它当真实文件去读磁盘，报找不到文件。</li>
+<li><strong><code>handleHotUpdate</code> 返回空数组</strong>：热更新和整页刷新一起被阻止，表现是改代码完全没反应。</li>
+<li><strong>SSR 忘配 <code>ssr.noExternal</code></strong>：服务端遇到 JSX 或 CSS 导入直接语法报错，错误信息指向 node_modules 深处。</li>
+<li><strong>只在 dev 下验证插件</strong>：<code>configureServer</code> 这类钩子在 build 时根本不执行，生产行为可能完全不同。</li>
+    </ul>
+</div>
 
                     </div>
                 </article>
@@ -129,6 +432,7 @@ const apiUrl = import.meta.env.VITE_API_URL</code></pre>
             <p>© 2026 资深码农. 保留所有权利。</p>
         </div>
     </footer>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "tools";</script>
     <script defer src="../../../vendor/highlight.min.js"></script>
     <script defer src="../../../js/main.js?v=2"></script>
 </body>

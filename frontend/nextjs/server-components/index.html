@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>Server Components 深度 - Next.js - 资深码农</title>
+    <title>Server Components 的边界与数据流 - Next.js - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Server vs Client Component / 什么时候用客户端 / 数据流 / 缓存策略">
+    <meta name="description" content="RSC 让组件直接在服务端读库，省掉一层内部 API，代价是引入了一条新的边界。这篇讲清 use client 是边界声明而不是文件标记、它会把整个导入子树拉到客户端；跨边界只能传可序列化数据，ORM 实体带方法与循环引用必须在边界处转成纯 DTO；Server Action 本质是自动生成的公开 RPC 端点，鉴权与校验必须写在 action 内部；以及串行 await 造成的瀑布怎么用并行取数与下传 Promise 解决，环境变量在什么情况下会泄漏进客户端 bundle。">
     <meta name="keywords" content="Next.js,Server Components 深度,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/frontend/nextjs/server-components/">
-    <meta property="og:title" content="Server Components 深度 - Next.js - 资深码农">
-    <meta property="og:description" content="Server vs Client Component / 什么时候用客户端 / 数据流 / 缓存策略">
+    <meta property="og:title" content="Server Components 的边界与数据流 - Next.js - 资深码农">
+    <meta property="og:description" content="RSC 让组件直接在服务端读库，省掉一层内部 API，代价是引入了一条新的边界。这篇讲清 use client 是边界声明而不是文件标记、它会把整个导入子树拉到客户端；跨边界只能传可序列化数据，ORM 实体带方法与循环引用必须在边界处转成纯 DTO；Server Action 本质是自动生成的公开 RPC 端点，鉴权与校验必须写在 action 内部；以及串行 await 造成的瀑布怎么用并行取数与下传 Promise 解决，环境变量在什么情况下会泄漏进客户端 bundle。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/frontend/nextjs/server-components/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Server Components 深度 - Next.js">
-    <meta name="twitter:description" content="Server vs Client Component / 什么时候用客户端 / 数据流 / 缓存策略">
+    <meta name="twitter:title" content="Server Components 的边界与数据流 - Next.js">
+    <meta name="twitter:description" content="RSC 让组件直接在服务端读库，省掉一层内部 API，代价是引入了一条新的边界。这篇讲清 use client 是边界声明而不是文件标记、它会把整个导入子树拉到客户端；跨边界只能传可序列化数据，ORM 实体带方法与循环引用必须在边界处转成纯 DTO；Server Action 本质是自动生成的公开 RPC 端点，鉴权与校验必须写在 action 内部；以及串行 await 造成的瀑布怎么用并行取数与下传 Promise 解决，环境变量在什么情况下会泄漏进客户端 bundle。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Next.js Server Components：从你遇到的问题出发：默认用 Server？", "acceptedAnswer": {"@type": "Answer", "text": "默认写 Server Components，需要交互再加 \"use client\"。"}}, {"@type": "Question", "name": "Next.js Server Components：从你遇到的问题出发：数据放服务端取？", "acceptedAnswer": {"@type": "Answer", "text": "数据获取放 Server Component 里做，不要发到客户端。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "use client 只影响当前这个文件吗？", "acceptedAnswer": {"@type": "Answer", "text": "不是，这是最常见的误解。它是一条边界声明：从这个文件开始，它自己以及它 import 进来的所有模块都会被划进客户端子树，一起打进浏览器 bundle。所以在一个体积很大的组件里加这一行，往往会连带把它依赖的工具库、常量表、甚至间接引用的服务端模块全拉到客户端。正确姿势是把这行加在尽可能靠叶子的小组件上，而不是顺手加在页面顶部。"}}, {"@type": "Question", "name": "为什么把 ORM 查出来的对象传给客户端组件会报错？", "acceptedAnswer": {"@type": "Answer", "text": "跨边界传递的 props 要经过序列化，只支持基础类型、纯对象、数组、Date、Map、Set、Promise 这类可序列化值。ORM 返回的实体往往挂着实例方法、懒加载代理、以及父子互相引用形成的环，这些都过不去，会直接抛出不可序列化的错误。工程上的正确做法跟后端接口一样：在边界处显式转成纯 DTO，只挑客户端真正需要的字段。这顺带还避免了把内部字段和敏感列一起送到浏览器。"}}, {"@type": "Question", "name": "Server Action 需要自己做鉴权吗？", "acceptedAnswer": {"@type": "Answer", "text": "必须做，这是最重要的一条。Server Action 在构建时会被编译成一个带 ID 的公开端点，任何人都可以直接构造请求调用它，不需要先访问那个表单页面。所以不能依赖「只有登录后的页面才会渲染这个按钮」这种假设。每个 action 内部都要重新取会话、校验身份、校验这条资源是否属于当前用户、再校验输入参数，顺序和写一个对外 API 完全一样。"}}, {"@type": "Question", "name": "Server Action 和 Route Handler 该用哪个？", "acceptedAnswer": {"@type": "Answer", "text": "表单提交、按钮触发的写操作用 Server Action，它省掉手写接口与客户端请求代码，还能直接触发页面重新验证。需要被外部系统调用、需要自定义 HTTP 状态码与响应头、需要给移动端或第三方复用、需要支持文件流式上传或 Webhook 回调的，用 Route Handler。判断标准很简单：只服务于自家页面交互的写操作用 Action，任何意义上的公开接口用 Handler。"}}, {"@type": "Question", "name": "服务端组件里串行 await 为什么会变慢，怎么修？", "acceptedAnswer": {"@type": "Answer", "text": "因为父组件只有 await 完成后才会渲染子组件，子组件里再 await 就形成了瀑布：三段各 200 毫秒的查询会累加成 600 毫秒。修法有三种：同一层的无依赖请求用 Promise.all 并行；把父组件拿到的 Promise 直接当 props 传下去，由子组件配合 Suspense 各自等待；真正有依赖关系的查询考虑合并成一次下游调用。判断依据是看这几个请求之间有没有真实的数据依赖。"}}, {"@type": "Question", "name": "环境变量在 Server Component 里安全吗？", "acceptedAnswer": {"@type": "Answer", "text": "在纯服务端组件里读私密变量是安全的，它不会进客户端 bundle。危险的是间接泄漏：一个读了密钥的模块如果被任何客户端组件 import 了，这段代码就会被打进浏览器产物。以 NEXT_PUBLIC_ 开头的变量是显式声明「我可以公开」，它在构建时被直接内联成字面量，因此改它必须重新构建，而且千万不要给它赋敏感值。可以在服务端模块顶部引入 server-only 包，一旦被客户端导入就在构建期报错。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,65 +64,346 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Next.js Server Components：从你遇到的问题出发</h1>
+                        <h1 class="article-title">Server Components 的边界与数据流</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ Server Components</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Server Components怎么帮你解决。</p>
+<p>Server Components 解决的问题，用后端的话说就是<strong>省掉一层为自家页面服务的内部 API</strong>。以前写一个列表页要三步：写查询、包一个 HTTP 接口、在前端 fetch 这个接口并处理加载与错误。现在组件本身就跑在服务端，直接 <code>await</code> 数据库就行，那个只有自家页面调用、还要维护序列化与类型的接口层可以不存在。</p>
+
+<p>代价是引入了<strong>一条新的边界</strong>：一部分组件在服务端执行，一部分在浏览器执行，两边靠序列化通信。这条边界跟远程调用的边界性质完全一样——有序列化约束、有安全边界、有延迟成本。搞不清边界在哪，就会出现「本地跑得好，上线密钥泄漏」「把 ORM 实体传下去直接报错」「整页标了 <code>'use client'</code> 于是 RSC 白用」这几类问题。</p>
+
+<h2><code>'use client'</code> 是边界声明，不是文件标记</h2>
+
+<p>最常见的误解：以为这行指令只影响当前文件。实际上它声明的是<strong>边界的起点</strong>——从这个文件开始，它自己加上它 <code>import</code> 进来的整个模块子树，全部被划到客户端。</p>
 
 <div class="mermaid">
 flowchart TB
-    A[Server Component] --> B[服务端渲染]
-    B --> C[少发 JS]
-    C --> D[页面更快]
+    subgraph SRV["服务端子树，不进浏览器 bundle"]
+        P["app/orders/page.tsx 默认 Server Component"]
+        Q["lib/db.ts 连接池与 SQL"]
+        T["lib/dto.ts 实体转纯对象"]
+        P --> Q
+        P --> T
+    end
+    subgraph BND["边界：被 Server Component 引用的 use client 文件"]
+        C["components/filter-bar.tsx 首行 use client"]
+    end
+    subgraph CLI["客户端子树，全部打进 bundle"]
+        C1["hooks/use-query-state.ts"]
+        C2["utils/format.ts"]
+        C3["某个 300 KB 的图表库"]
+        C --> C1
+        C --> C2
+        C1 --> C3
+    end
+    P --> C
+    T -.序列化后的 props.-> C
 </div>
-
-<h2>1. 客户端 JS 太多</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Next.js 客户端 JS 太多，页面加载慢。</p>
-</div>
-
-<p><strong>怎么解决？</strong>用 Server Components，组件在服务端渲染，不发到浏览器，减少 JS 体积。</p>
-
-<h2>2. Server Components 是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Server Components 是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>Next.js 13+ 新特性，组件在服务端运行，不增加客户端 JS 体积。</p>
-
-<h2>3. 和 Client Components 区别</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>Server 和 Client Components 区别？</p>
-</div>
-
-<p><strong>怎么解决？</strong>Server 组件在服务端跑，不能用 useState/useEffect；Client 组件在浏览器跑。</p>
-
-<h2>对比</h2>
 
 <table>
-<thead><tr><th>对比</th><th>Server Component</th><th>Client Component</th></tr></thead>
+<thead><tr><th>能力</th><th>Server Component</th><th>Client Component</th><th>踩坑点</th></tr></thead>
 <tbody>
-<tr><td>运行位置</td><td>服务端</td><td>浏览器</td></tr>
-<tr><td>JS 体积</td><td>不增加</td><td>增加</td></tr>
-<tr><td>能用 Hooks</td><td>不能</td><td>能</td></tr>
+<tr><td><code>async</code> 组件与直接 <code>await</code></td><td>可以</td><td>不可以</td><td>客户端组件写 <code>async</code> 会在运行期出现难懂的报错</td></tr>
+<tr><td><code>useState</code> / <code>useEffect</code> / 事件回调</td><td>不可以</td><td>可以</td><td>需要交互就必须过边界</td></tr>
+<tr><td>访问数据库、私密环境变量</td><td>可以</td><td>不可以</td><td>服务端模块被客户端导入即泄漏</td></tr>
+<tr><td>访问 <code>window</code> / <code>localStorage</code></td><td>不可以</td><td>可以，且要放在副作用里</td><td>直接在客户端组件顶层读会在服务端预渲染阶段报错</td></tr>
+<tr><td>进入客户端 JS 体积</td><td>不进</td><td>进，含全部传递依赖</td><td>边界越靠外，bundle 越大</td></tr>
+<tr><td>接收的 props</td><td>任意值</td><td><strong>只能是可序列化值</strong></td><td>函数、类实例、ORM 实体都不行</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+flowchart TB
+    A["这个组件要不要标 use client"] --> B{"是否用到状态、事件或浏览器 API"}
+    B -- 否 --> C["保持服务端，直接在里面取数"]
+    B -- 是 --> D{"交互部分能否单独抽成小组件"}
+    D -- 能 --> E["只在那个小组件上标 use client，其余留服务端"]
+    D -- 不能 --> F{"它依赖的模块里有没有服务端专用代码"}
+    F -- 有 --> G["先把服务端逻辑拆到独立模块，再标边界"]
+    F -- 没有 --> H["标上，并检查构建输出的首屏 JS 体积变化"]
+</div>
+
+<h2>跨边界只能传可序列化的数据</h2>
+
+<p>这一点对后端工程师最有实际意义，因为它跟「实体不要直接当接口响应体」是同一条工程原则，只是这次编译器会替你把违规行为变成报错。</p>
+
+<table>
+<thead><tr><th>值类型</th><th>能否跨边界传</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>字符串、数字、布尔、<code>null</code></td><td>能</td><td>基础类型</td></tr>
+<tr><td>纯对象、数组</td><td>能</td><td>要求属性本身也可序列化</td></tr>
+<tr><td><code>Date</code>、<code>Map</code>、<code>Set</code>、<code>BigInt</code></td><td>能</td><td>RSC 协议支持，但要注意时区与精度在客户端的处理</td></tr>
+<tr><td><code>Promise</code></td><td>能</td><td>这是「下传 Promise 配 Suspense」的基础</td></tr>
+<tr><td>由 <code>'use server'</code> 定义的函数引用</td><td>能</td><td>传过去的是端点引用，不是函数体</td></tr>
+<tr><td>普通函数、箭头函数、回调</td><td><strong>不能</strong></td><td>服务端函数体无法送到浏览器执行</td></tr>
+<tr><td>类实例、ORM 实体</td><td><strong>不能</strong></td><td>带方法、原型链，常含懒加载代理</td></tr>
+<tr><td>含循环引用的对象</td><td><strong>不能</strong></td><td>父子互相引用是 ORM 的常态</td></tr>
+<tr><td><code>Symbol</code>、<code>WeakMap</code>、流、连接对象</td><td><strong>不能</strong></td><td>没有序列化表示</td></tr>
+</tbody></table>
+
+<pre><code class="language-typescript">// lib/dto.ts —— 边界处必须有这么一层，理由和后端不要直接返回实体一模一样
+import 'server-only'   // 这个包的作用：一旦被客户端组件导入，构建期直接报错
+
+import type { Order } from '@prisma/client'
+
+// 客户端真正需要的字段，显式列出。多一个字段就是多一份泄漏面与 payload
+export type OrderDTO = {
+  id: string
+  no: string
+  amountText: string     // 金额在服务端就格式化好，避免客户端再引一个货币库
+  createdAt: string      // 统一成 ISO 字符串，跨边界最省心
+  canCancel: boolean     // 把「能不能取消」这个判断也在服务端算完
+}
+
+export function toOrderDTO(row: Order &amp; { items?: unknown[] }): OrderDTO {
+  return {
+    id: row.id,
+    no: row.orderNo,
+    // 注意 Prisma 的 Decimal 是类实例，直接传会报不可序列化
+    amountText: row.amount.toFixed(2),
+    createdAt: row.createdAt.toISOString(),
+    canCancel: row.status === 'PENDING',
+    // 故意不带：internalRemark、riskScore、userId、items 里的反向引用
+  }
+}</code></pre>
+
+<h2>组合模式：把交互下推到叶子</h2>
+
+<p>方向是单向的：<strong>Server Component 可以渲染 Client Component，反过来不行</strong>。但客户端组件可以通过 <code>children</code> 接收服务端渲染好的内容——这个口子是保持大部分树留在服务端的关键手法。</p>
+
+<pre><code class="language-typescript">// components/collapsible.tsx —— 只有「展开收起」这一点交互过边界
+'use client'
+import { useState, type ReactNode } from 'react'
+
+export default function Collapsible({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    &lt;section&gt;
+      &lt;button onClick={() =&gt; setOpen((v) =&gt; !v)}&gt;{title}&lt;/button&gt;
+      {/* children 是服务端已经渲染好的结果，客户端只负责决定显不显示。
+          这里没有把数据查询拉到客户端，也没有把子组件拖进 bundle */}
+      {open &amp;&amp; children}
+    &lt;/section&gt;
+  )
+}
+
+// app/orders/page.tsx —— 服务端组件，把客户端组件当容器用
+import Collapsible from '@/components/collapsible'
+import { listOrders } from '@/lib/db'
+import { toOrderDTO } from '@/lib/dto'
+
+export default async function Page() {
+  const rows = await listOrders()   // 直接查库，不经过任何 HTTP
+  return (
+    &lt;Collapsible title="历史订单"&gt;
+      {/* 这段在服务端渲染，bundle 里没有它的代码 */}
+      &lt;ul&gt;
+        {rows.map(toOrderDTO).map((o) =&gt; (
+          &lt;li key={o.id}&gt;{o.no} · {o.amountText} · {o.createdAt}&lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+    &lt;/Collapsible&gt;
+  )
+}</code></pre>
+
+<table>
+<thead><tr><th>组合方向</th><th>是否可行</th><th>原因</th><th>替代手法</th></tr></thead>
+<tbody>
+<tr><td>Server 里渲染 Client</td><td>可以</td><td>服务端输出里留一个客户端组件的占位引用</td><td>—</td></tr>
+<tr><td>Client 里 <code>import</code> Server 组件</td><td>不行</td><td>导入即把它拉进客户端子树，服务端能力全失</td><td>改成通过 <code>children</code> 或 props 传入</td></tr>
+<tr><td>Client 通过 <code>children</code> 接收服务端内容</td><td>可以</td><td>传过去的是已渲染结果，不是组件代码</td><td>—</td></tr>
+<tr><td>Client 调用服务端函数</td><td>可以</td><td>只能通过 Server Action 这个受控通道</td><td>或走 Route Handler</td></tr>
+<tr><td>Server 给 Client 传回调函数</td><td>不行</td><td>函数不可序列化</td><td>传 Server Action 引用</td></tr>
+</tbody></table>
+
+<p>写代码时的实用顺序是：默认一切都留在服务端，只有当某个元素需要响应用户输入时，才把那个元素单独抽成一个文件并在它上面标边界。按这个顺序写出来的树，客户端 bundle 通常只有反过来做的三分之一到一半。</p>
+
+<h2>Server Actions 本质是自动生成的 RPC 端点</h2>
+
+<p>这句话必须先立住：<strong>加了 <code>'use server'</code> 的函数，在构建时会被编译成一个带唯一 ID 的 HTTP 端点</strong>。客户端调用它，实际上是向当前路径 POST 一个带 action ID 与序列化参数的请求。它跟你手写的接口没有本质区别，唯一区别是路由和序列化代码由框架生成。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    participant U as 用户
+    participant F as 客户端表单组件
+    participant N as Next 服务端
+    participant A as Action 函数
+    participant D as 数据库
+    U->>F: 点击提交
+    F->>N: POST 当前路径，携带 action ID 与序列化参数
+    N->>A: 按 ID 找到对应函数并调用
+    A->>A: 第一步取会话并校验身份
+    A->>A: 第二步校验参数 schema
+    A->>D: 写入，同时校验这条记录属于当前用户
+    D-->>A: 结果
+    A->>N: 调用 revalidatePath 标记该路径失效
+    N-->>F: 返回序列化结果，并附带重新渲染后的 RSC payload
+    F-->>U: 表单状态更新，页面数据同步刷新
+    Note over F,N: 攻击者可以跳过表单页面，直接构造这个 POST 请求
+</div>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">这是本篇最重要的一条</div>
+    <p>Server Action 必须当成<strong>公开 API</strong> 对待。它可被直接调用，所以「只有登录后的页面才渲染这个按钮」提供不了任何保护。鉴权、越权检查、输入校验、速率限制，全部要写在 action 函数内部。授权模型与常见越权场景见站内 <a href="../../../backend/auth/">认证与授权</a>。</p>
+</div>
+
+<pre><code class="language-typescript">// app/orders/actions.ts
+'use server'
+
+import { z } from 'zod'
+import { revalidatePath } from 'next/cache'
+import { getSession } from '@/lib/session'
+import { db } from '@/lib/db'
+
+const CancelInput = z.object({
+  orderId: z.string().uuid(),
+  reason: z.string().max(200).optional(),
+})
+
+export async function cancelOrder(raw: unknown) {
+  // 1. 鉴权：不能假设「只有页面会调它」，这是一个公开端点
+  const session = await getSession()
+  if (!session) return { ok: false, code: 'unauthorized' as const }
+
+  // 2. 输入校验：参数完全由客户端控制
+  const parsed = CancelInput.safeParse(raw)
+  if (!parsed.success) return { ok: false, code: 'invalid_input' as const }
+
+  // 3. 越权检查：把归属条件写进 where，而不是先查出来再比对
+  //    这样即便有并发更新也不会出现「查到时是自己的、写入时已易主」
+  const affected = await db.order.updateMany({
+    where: { id: parsed.data.orderId, userId: session.userId, status: 'PENDING' },
+    data: { status: 'CANCELLED', cancelReason: parsed.data.reason ?? null },
+  })
+  if (affected.count === 0) return { ok: false, code: 'not_cancellable' as const }
+
+  // 4. 失效对应路径的缓存，否则页面还是旧数据
+  revalidatePath('/orders')
+
+  // 5. 返回可序列化的结果对象，而不是抛异常：
+  //    生产环境下抛出的错误消息会被脱敏，客户端拿不到有用信息
+  return { ok: true as const }
+}</code></pre>
+
+<table>
+<thead><tr><th>维度</th><th>Server Action</th><th>Route Handler</th></tr></thead>
+<tbody>
+<tr><td>调用方</td><td>只为自家页面交互设计</td><td>任何 HTTP 客户端，含移动端与第三方</td></tr>
+<tr><td>HTTP 语义</td><td>固定 POST，状态码不可控</td><td>方法、状态码、响应头全可控</td></tr>
+<tr><td>与页面缓存的联动</td><td>可直接调 <code>revalidatePath</code> 并回传新 payload</td><td>需要客户端自己刷新</td></tr>
+<tr><td>渐进增强</td><td>表单在 JS 未加载时也能提交</td><td>需要自己写表单目标</td></tr>
+<tr><td>文件上传与流式</td><td>受 body 大小限制，默认 1 MB 量级</td><td>可处理流式与大文件</td></tr>
+<tr><td>鉴权责任</td><td><strong>在函数内部，无人代劳</strong></td><td>在 handler 内部，同样无人代劳</td></tr>
+<tr><td>适合</td><td>表单提交、状态切换、点赞收藏</td><td>Webhook、开放接口、导出下载</td></tr>
+</tbody></table>
+
+<h2>数据流方向与瀑布问题</h2>
+
+<p>数据流是单向的：服务端取数 → 序列化进 RSC payload → 客户端 hydration 复活交互。这个模型很干净，但它天然鼓励「在需要数据的组件里就地 await」，于是瀑布几乎必然出现——<strong>父组件不 await 完，子组件根本不会开始渲染</strong>。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    participant N as Next 渲染进程
+    participant D as 数据层
+    Note over N,D: 反模式：逐层就地 await，延迟累加
+    N->>D: 查用户 200ms
+    D-->>N: 返回
+    N->>D: 查订单列表 200ms
+    D-->>N: 返回
+    N->>D: 查推荐位 200ms
+    D-->>N: 返回
+    Note over N: 总耗时约 600ms
+    Note over N,D: 改法：无依赖的请求同层并行发起
+    N->>D: 同时发起三个查询
+    D-->>N: 三个结果陆续返回
+    Note over N: 总耗时约等于最慢那个 200ms
+</div>
+
+<table>
+<thead><tr><th>瀑布形态</th><th>典型写法</th><th>修法</th><th>注意</th></tr></thead>
+<tbody>
+<tr><td>同层串行</td><td>连续三个 <code>await</code></td><td><code>Promise.all</code> 并行</td><td>确认它们之间真的没有数据依赖</td></tr>
+<tr><td>父子串行</td><td>父 <code>await</code> 完才渲染子，子再 <code>await</code></td><td>父层发起请求但不 <code>await</code>，把 Promise 当 props 传给子，子用 <code>use()</code> 取值并包 Suspense</td><td>Promise 必须在服务端创建</td></tr>
+<tr><td>列表里逐项查询</td><td><code>map</code> 里每项一个查询</td><td>批量查询一次取回，或用 DataLoader 式聚合</td><td>这就是后端的 N 加一问题，见站内 GraphQL 专题</td></tr>
+<tr><td>客户端二次取数</td><td>hydration 后再发一轮请求</td><td>能在服务端拿到的就在服务端拿</td><td>个性化内容有时确实只能这样</td></tr>
+</tbody></table>
+
+<pre><code class="language-typescript">// app/dashboard/page.tsx —— 两种手法都在这里
+import { Suspense } from 'react'
+import Reviews from './reviews'
+
+export default async function Page({ params }: { params: Promise&lt;{ id: string }&gt; }) {
+  const { id } = await params
+
+  // 手法一：同层无依赖的请求并行发起，总耗时等于最慢那个
+  const [user, orders] = await Promise.all([getUser(id), listOrders(id)])
+
+  // 手法二：慢查询不在这里 await，把 Promise 下传给子组件
+  //         页面其余部分立刻可以流式输出，不被它拖住
+  const reviewsPromise = listReviews(id)
+
+  return (
+    &lt;main&gt;
+      &lt;h1&gt;{user.name}&lt;/h1&gt;
+      &lt;OrderList items={orders} /&gt;
+      &lt;Suspense fallback={&lt;p&gt;评价加载中&lt;/p&gt;}&gt;
+        {/* Reviews 内部用 use(promise) 取值；Promise 必须在服务端创建 */}
+        &lt;Reviews promise={reviewsPromise} /&gt;
+      &lt;/Suspense&gt;
+    &lt;/main&gt;
+  )
+}</code></pre>
+
+<p>还有一个容易被忽略的成本：<strong>服务端组件的产出是要通过网络传输的 RSC payload</strong>。你在服务端查回来一个上千行的列表，即便页面只展示前二十条，整份序列化结果也会进响应体。分页、字段裁剪、聚合这些后端习惯在这里完全适用，只是它们影响的是响应体积与客户端解析耗时，而不是数据库耗时。判断方法很直接：在网络面板里看这条路由的 payload 大小，动辄几百 KB 就说明你把整张表传下来了。</p>
+
+<h2>环境变量与密钥：泄漏总是间接发生的</h2>
+
+<table>
+<thead><tr><th>场景</th><th>是否进客户端 bundle</th><th>何时确定值</th><th>风险</th></tr></thead>
+<tbody>
+<tr><td>Server Component 读 <code>process.env.DB_URL</code></td><td>不进</td><td>运行时</td><td>安全</td></tr>
+<tr><td>该模块被任意客户端组件 <code>import</code></td><td><strong>进</strong></td><td>构建时被内联</td><td>密钥直接出现在浏览器可读的产物里</td></tr>
+<tr><td><code>NEXT_PUBLIC_</code> 前缀变量</td><td>进，设计如此</td><td><strong>构建时内联成字面量</strong></td><td>改值必须重新构建，一份镜像不能多环境复用</td></tr>
+<tr><td>Route Handler 与 Server Action 内读私密变量</td><td>不进</td><td>运行时</td><td>安全</td></tr>
+<tr><td>middleware 读私密变量</td><td>不进，但在边缘节点</td><td>运行时</td><td>注意密钥分发范围变大了</td></tr>
+</tbody></table>
+
+<p>防线有两道：服务端专用模块顶部写 <code>import 'server-only'</code>，被客户端导入时构建期就失败；纯客户端模块顶部写 <code>import 'client-only'</code>，被服务端引用时同样报错。这比靠人工评审可靠得多。构建产物里搜一遍密钥字面量应该纳入发布前检查，具体的构建与体积治理手段见站内 <a href="../../frameworks/engineering/">前端工程化</a>。</p>
+
+<h2>反模式对照表</h2>
+
+<table>
+<thead><tr><th>反模式</th><th>症状</th><th>根因</th><th>正确做法</th></tr></thead>
+<tbody>
+<tr><td>整个页面顶部标 <code>'use client'</code></td><td>首屏 JS 体积暴涨，RSC 的好处全没了</td><td>边界声明会拉走整个导入子树</td><td>边界下推到真正需要交互的叶子组件</td></tr>
+<tr><td>把 ORM 实体直接传给客户端组件</td><td>报不可序列化错误，或意外把内部字段送上浏览器</td><td>实体带方法、代理与循环引用</td><td>边界处统一转 DTO，只挑必要字段</td></tr>
+<tr><td>Server Action 不做鉴权与校验</td><td>越权写入，日志里看不出异常</td><td>误以为它只能从页面调用</td><td>每个 action 内部先鉴权、再校验、归属条件写进 where</td></tr>
+<tr><td>逐层就地 <code>await</code></td><td>TTFB 随层数线性增长</td><td>父组件阻塞子组件渲染</td><td>并行取数，或下传 Promise 配 Suspense</td></tr>
+<tr><td>在客户端组件里 <code>import</code> 服务端模块</td><td>构建报错，或更糟：密钥进 bundle</td><td>导入关系决定归属，与目录无关</td><td>用 <code>server-only</code> 把违规变成构建期错误</td></tr>
+<tr><td>给客户端组件传回调函数</td><td>报 props 不可序列化</td><td>函数无法跨边界</td><td>传 Server Action 引用，或把逻辑放客户端</td></tr>
+<tr><td>Server Action 里抛异常当错误处理</td><td>客户端只拿到一句被脱敏的通用消息</td><td>生产环境会隐藏服务端错误细节</td><td>返回结构化的结果对象，含错误码</td></tr>
 </tbody></table>
 
 <div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>默认用 Server</strong>默认写 Server Components，需要交互再加 "use client"。</li>
-<li><strong>数据放服务端取</strong>数据获取放 Server Component 里做，不要发到客户端。</li>
-</ul>
+    <div class="callout-icon">✅</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+<li>以为 <code>'use client'</code> 只影响当前文件，于是在一个被处处引用的基础组件上加了它，客户端 bundle 一次涨几百 KB。</li>
+<li>把 Prisma 的 <code>Decimal</code>、Mongoose 文档、Sequelize 实例当 props 传下去，运行期才报不可序列化。</li>
+<li>DTO 转换时用了 <code>...row</code> 展开，顺手把 <code>passwordHash</code>、<code>riskScore</code> 这类字段送到了浏览器。</li>
+<li>Server Action 里只校验了参数没校验归属，改一下请求里的 ID 就能操作别人的数据。</li>
+<li>先 <code>findUnique</code> 查出来比对 <code>userId</code>，再 <code>update</code>。并发下存在窗口，应该把归属条件直接写进更新语句的 where。</li>
+<li>Server Action 写完忘了 <code>revalidatePath</code>，用户提交成功但页面显示的还是旧数据。</li>
+<li>在客户端组件里 <code>async function Component()</code>，得到一堆看不懂的 hydration 报错。</li>
+<li>客户端组件顶层直接读 <code>window</code> 或 <code>localStorage</code>，服务端预渲染阶段就崩了，必须放进副作用里。</li>
+<li>用 Server Action 做文件上传，超过默认 body 上限后才发现应该用 Route Handler。</li>
+<li>给 <code>NEXT_PUBLIC_</code> 变量赋了一个「反正只有前端用」的第三方密钥，它在产物里是明文字面量。</li>
+<li>没装 <code>server-only</code> 这道防线，全靠代码评审拦截服务端模块被客户端导入。</li>
+<li>把 Promise 在客户端组件里创建再传给 <code>use()</code>，每次渲染都新建一个，导致无限挂起。</li>
+    </ul>
 </div>
 
                     </div>

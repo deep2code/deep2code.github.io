@@ -88,12 +88,20 @@
         return btn;
     }
 
+
+    // 部分历史页面没有 #body-content 容器，退化为全文档查询，
+    // 否则这些页面的 mermaid 与图表永远不会被渲染。
+    function qsIn(sel) {
+        var scoped = document.querySelectorAll('#body-content ' + sel);
+        return scoped.length ? scoped : document.querySelectorAll(sel);
+    }
+
     // Mermaid blocks: copy the raw source and fold the diagram. The page
     // module script renders them before main.js runs (and re-renders on
     // theme switch), wiping div content, so the tools are attached here AND
     // re-attached on the 'mermaid:rendered' event (idempotent).
     function initMermaidTools() {
-        var blocks = document.querySelectorAll('#body-content div.mermaid');
+        var blocks = qsIn('div.mermaid');
         blocks.forEach(function (div) {
             if (div.querySelector('.code-copy-btn')) return;
 
@@ -888,7 +896,7 @@
             theme: isDark ? 'dark' : 'default',
             securityLevel: 'strict'
         });
-        var blocks = document.querySelectorAll('#body-content div.mermaid');
+        var blocks = qsIn('div.mermaid');
         var jobs = Array.prototype.map.call(blocks, function (div, i) {
             // 读取源代码：优先 data-src，否则从内容中提取（排除按钮等非代码元素）
             var src = div.getAttribute('data-src');
@@ -938,8 +946,8 @@
 
     function initLazyCharts() {
         var base = window.SITE_BASE || '';
-        var mermaidBlocks = document.querySelectorAll('#body-content div.mermaid');
-        var echartBlocks = document.querySelectorAll('#body-content .echart-container, #body-content .echart');
+        var mermaidBlocks = qsIn('div.mermaid');
+        var echartBlocks = qsIn('.echart-container, .echart');
 
         // Mermaid lazy load
         if (mermaidBlocks.length > 0 && !mermaidLoaded) {

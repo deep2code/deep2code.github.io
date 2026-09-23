@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>Node.js 事件循环 - 资深码农</title>
+    <title>Node.js 事件循环的六个阶段与实际影响 - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="libuv 事件循环模型、事件队列、process.nextTick vs setImmediate、Worker Threads、异步IO底层原理，以及阻塞事件循环的常见坑。">
+        <meta name="description" content="逐阶段拆解 libuv 事件循环：timers、pending callbacks、idle 与 prepare、poll、check、close callbacks 各自处理什么回调；nextTick 队列与 Promise 微任务在每个阶段之间都会被清空，因此递归 nextTick 能永久饿死循环；setTimeout 零延迟与 setImmediate 的顺序为何在主模块不稳定而在 IO 回调中确定；poll 阶段阻塞时长由最近定时器决定；libuv 线程池承担 fs、dns.lookup、crypto 与 zlib 但不承担网络 IO，附 UV_THREADPOOL_SIZE 验证脚本、定时器漂移规则与反模式清单。">
     <meta name="keywords" content="Node.js,事件循环,event loop,libuv,process.nextTick,setImmediate,Worker Threads,异步IO,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,8 +26,8 @@
     <meta name="Google-Extended" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/backend/nodejs/event-loop/">
     <!-- Open Graph -->
-    <meta property="og:title" content="Node.js 事件循环 - 资深码农">
-    <meta property="og:description" content="libuv 事件循环模型、事件队列、process.nextTick vs setImmediate、Worker Threads、异步IO底层原理，以及阻塞事件循环的常见坑。">
+    <meta property="og:title" content="Node.js 事件循环的六个阶段与实际影响 - 资深码农">
+    <meta property="og:description" content="逐阶段拆解 libuv 事件循环：timers、pending callbacks、idle 与 prepare、poll、check、close callbacks 各自处理什么回调；nextTick 队列与 Promise 微任务在每个阶段之间都会被清空，因此递归 nextTick 能永久饿死循环；setTimeout 零延迟与 setImmediate 的顺序为何在主模块不稳定而在 IO 回调中确定；poll 阶段阻塞时长由最近定时器决定；libuv 线程池承担 fs、dns.lookup、crypto 与 zlib 但不承担网络 IO，附 UV_THREADPOOL_SIZE 验证脚本、定时器漂移规则与反模式清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/backend/nodejs/event-loop/">
     <meta property="og:site_name" content="资深码农">
@@ -37,17 +37,16 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Node.js 事件循环 - 资深码农">
-    <meta name="twitter:description" content="libuv 事件循环模型、事件队列、process.nextTick vs setImmediate、Worker Threads">
+    <meta name="twitter:title" content="Node.js 事件循环的六个阶段与实际影响 - 资深码农">
+    <meta name="twitter:description" content="逐阶段拆解 libuv 事件循环：timers、pending callbacks、idle 与 prepare、poll、check、close callbacks 各自处理什么回调；nextTick 队列与 Promise 微任务在每个阶段之间都会被清空，因此递归 nextTick 能永久饿死循环；setTimeout 零延迟与 setImmediate 的顺序为何在主模块不稳定而在 IO 回调中确定；poll 阶段阻塞时长由最近定时器决定；libuv 线程池承担 fs、dns.lookup、crypto 与 zlib 但不承担网络 IO，附 UV_THREADPOOL_SIZE 验证脚本、定时器漂移规则与反模式清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="Node.js">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Node.js 事件循环","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"libuv 事件循环模型、事件队列、process.nextTick vs setImmediate、Worker Threads、异步IO底层原理，以及阻塞事件循环的常见坑。","url":"https://www.yijunjun.asia/backend/nodejs/event-loop/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/backend/nodejs/event-loop/"},"articleSection":"后端与编程语言"}</script>
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "后端与编程语言", "item": "https://www.yijunjun.asia/backend/"}, {"position": 3, "name": "Node.js 总览", "item": "https://www.yijunjun.asia/backend/nodejs/"}, {"position": 4, "name": "Node.js 事件循环", "item": "https://www.yijunjun.asia/backend/nodejs/event-loop/"}]}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "Node.js 事件循环的六个阶段与实际影响", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "逐阶段拆解 libuv 事件循环：timers、pending callbacks、idle 与 prepare、poll、check、close callbacks 各自处理什么回调；nextTick 队列与 Promise 微任务在每个阶段之间都会被清空，因此递归 nextTick 能永久饿死循环；setTimeout 零延迟与 setImmediate 的顺序为何在主模块不稳定而在 IO 回调中确定；poll 阶段阻塞时长由最近定时器决定；libuv 线程池承担 fs、dns.lookup、crypto 与 zlib 但不承担网络 IO，附 UV_THREADPOOL_SIZE 验证脚本、定时器漂移规则与反模式清单。", "url": "https://www.yijunjun.asia/backend/nodejs/event-loop/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/backend/nodejs/event-loop/"}, "articleSection": "后端与编程语言"}</script>    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "后端与编程语言", "item": "https://www.yijunjun.asia/backend/"}, {"position": 3, "name": "Node.js 总览", "item": "https://www.yijunjun.asia/backend/nodejs/"}, {"position": 4, "name": "Node.js 事件循环", "item": "https://www.yijunjun.asia/backend/nodejs/event-loop/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "setTimeout(fn, 0) 和 setImmediate 哪个先执行？", "acceptedAnswer": {"@type": "Answer", "text": "在主模块里不一定，取决于机器负载。在 I/O 回调里 setImmediate 一定先。别在代码里依赖这个顺序，用 queueMicrotask() 或 process.nextTick 明确表达意图。"}}, {"@type": "Question", "name": "事件循环阻塞了，加机器有用吗？", "acceptedAnswer": {"@type": "Answer", "text": "没用。单进程的事件循环堵在一个核上，加机器只是多开几个进程。你要做的是找到阻塞点，把它改成异步，或者丢给 Worker Thread。"}}, {"@type": "Question", "name": "Node.js 24 的 event loop 有变化吗？", "acceptedAnswer": {"@type": "Answer", "text": "核心模型没变，但 V8 13.x 优化了 microtask 执行效率，WebSocket 事件处理从 poll 阶段独立出来了。整体逻辑一样，别被新特性吓到。"}}, {"@type": "Question", "name": "Worker Thread 和 cluster 有什么区别？", "acceptedAnswer": {"@type": "Answer", "text": "Worker 是单进程内的真线程，共享内存可以用 SharedArrayBuffer，适合 CPU 密集子任务。cluster 是多进程，每个进程独立 V8 实例，适合利用多核跑完整服务。"}}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Node.js 事件循环的六个阶段顺序是什么", "acceptedAnswer": {"@type": "Answer", "text": "一轮迭代的顺序是 timers、pending callbacks、idle 与 prepare、poll、check、close callbacks。timers 执行已到期的 setTimeout 与 setInterval 回调；pending callbacks 处理上一轮推迟的系统级回调，主要是 TCP 错误；idle 与 prepare 由 libuv 内部使用；poll 收割已完成的 IO 事件，也是整个循环唯一会阻塞等待的阶段；check 执行 setImmediate 回调；close callbacks 处理句柄关闭事件。每个阶段会把自己队列里的回调执行完才进入下一个阶段。"}}, {"@type": "Question", "name": "process.nextTick 为什么会饿死事件循环", "acceptedAnswer": {"@type": "Answer", "text": "因为 nextTick 队列不是每轮循环清空一次，而是在每个阶段切换之前、以及每个回调执行结束之后都要被完整清空，清空过程中新入队的项会追加到同一条队列末尾。递归调用 nextTick 意味着这条队列永远清不空，事件循环根本走不到 poll 阶段，所有网络和文件回调都得不到执行。表现是单核 CPU 打满、进程还在、健康检查不响应。需要切片时应改用 setImmediate，它每轮只执行本轮已入队的一批，给 IO 留出机会。"}}, {"@type": "Question", "name": "setTimeout 零延迟和 setImmediate 到底谁先执行", "acceptedAnswer": {"@type": "Answer", "text": "在 IO 回调内部注册时 setImmediate 一定先执行，因为 IO 回调运行在 poll 阶段，本轮的下一站就是 check 阶段，而 timers 要等到下一轮。在主模块顶层注册时顺序不稳定，原因是 setTimeout 的零延迟被钳成一毫秒，第一次进入 timers 阶段时是否已经过了这一毫秒取决于进程启动耗时和机器负载。工程上不要依赖这个顺序，想让路给 IO 用 setImmediate，想在同步代码结束后立刻执行用微任务。"}}, {"@type": "Question", "name": "libuv 线程池到底负责哪些操作", "acceptedAnswer": {"@type": "Answer", "text": "线程池承担那些操作系统没有提供可用异步接口的阻塞操作，主要是 fs 模块几乎所有异步方法、调用 getaddrinfo 的 dns.lookup、crypto 的 pbkdf2 与 scrypt 等派生函数的异步版本、zlib 的压缩与解压。它不承担网络 IO，TCP 与 UDP 由内核的 epoll 或 kqueue 直接通知，不占线程。默认线程数是 4，上限 1024，通过启动时的 UV_THREADPOOL_SIZE 环境变量调整。理解这条分工才能解释大量文件读写时延迟暴涨而 CPU 并不忙的现象。"}}, {"@type": "Question", "name": "为什么接口延迟很高但 CPU 使用率不高", "acceptedAnswer": {"@type": "Answer", "text": "最常见的三个原因是线程池排队、下游变慢、GC 停顿。线程池排队的特征是 fs、crypto、zlib 或 dns.lookup 的并发量远超线程池规模，线程都在等磁盘或做密钥派生，CPU 上体现不出来；下游变慢的特征是数据库或外部 HTTP 的 p99 同步升高；GC 问题的特征是老生代持续增长不回落。判定顺序是先看事件循环延迟直方图，延迟高说明主线程有长阻塞，延迟正常就往线程池和下游查。"}}, {"@type": "Question", "name": "poll 阶段为什么会阻塞，这会影响性能吗", "acceptedAnswer": {"@type": "Answer", "text": "poll 阶段的阻塞是设计上必要的行为，它让进程在无事可做时不消耗 CPU。libuv 进入 poll 前会计算一个超时值传给内核的等待调用：poll 队列非空或有 setImmediate 待执行时超时为零，立即返回；只有定时器时超时等于最近定时器的剩余时间；只有活跃 socket 时无限期等待直到事件就绪。所以空闲的 web 服务 CPU 接近零是正常的，而挂一个一毫秒的 setInterval 会让进程每毫秒醒一次，系统调用次数明显上升。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -83,206 +82,284 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Node.js 事件循环</h1>
+                        <h1 class="article-title">Node.js 事件循环的六个阶段与实际影响</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ Node.js 总览</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<h2>事件循环到底是什么</h2>
-<p>我见过太多 Node.js 开发者，写了两年 Express，说不清楚事件循环怎么转。这不怪他们——文档写得像论文，面试题又全是 console.log 顺序题。</p>
-<p>一句话说清：<strong>事件循环是一个 while(true) 循环，不断检查有没有事件要处理，有就跑回调，没有就去阻塞等</strong>。它由 libuv 实现，跑在主线程上。你写的所有 JS 代码都在这个循环里执行。</p>
-<div class="mermaid">
-flowchart TD
-    START[进入事件循环] --> TIMERS[timers 阶段<br/>执行 setTimeout/setInterval 回调]
-    TIMERS --> PENDING[pending callbacks<br/>上一轮延迟的系统回调]
-    PENDING --> IDLE[idle/prepare<br/>libuv 内部用]
-    IDLE --> POLL[poll 阶段<br/>取新的 IO 事件，阻塞在这里]
-    POLL --> CHECK[check 阶段<br/>执行 setImmediate 回调]
-    CHECK --> CLOSE[close callbacks<br/>socket.on close 等]
-    CLOSE --> START
-    style TIMERS fill:#f59e0b,stroke:#fff,color:#fff
-    style POLL fill:#00add8,stroke:#fff,color:#fff
-    style CHECK fill:#10b981,stroke:#fff,color:#fff
-</div>
-
-<h2>六个阶段，一个都不能少</h2>
-<p>很多人以为事件循环就是"先执行同步代码，再执行异步回调"。太粗糙了。每个阶段有自己的队列，一个阶段跑完所有回调才进下一个阶段。关键规则：<strong>每个阶段的队列清空了（或达到上限）才切换阶段</strong>。</p>
+<h2>先纠正几个流传很广的说法</h2>
+<p>事件循环是 Node.js 面试里问得最多、讲得最糊的一块。绝大多数教程停留在「单线程 + 非阻塞 IO」这一句话上，而线上真正会咬人的细节恰恰藏在阶段边界和队列优先级里。先把几个错误认知摆出来，后面逐条展开。</p>
 <table>
-<thead><tr><th>阶段</th><th>处理什么</th><th>常用 API</th></tr></thead>
+<thead><tr><th>流传很广的说法</th><th>实际情况</th><th>会导致什么后果</th></tr></thead>
 <tbody>
-<tr><td>timers</td><td>到期的定时器回调</td><td>setTimeout, setInterval</td></tr>
-<tr><td>pending callbacks</td><td>上一轮延迟的系统级回调</td><td>TCP 错误等</td></tr>
-<tr><td>idle/prepare</td><td>libuv 内部用</td><td>—</td></tr>
-<tr><td>poll</td><td>新 IO 事件，会阻塞等</td><td>fs.readFile, 网络回调</td></tr>
-<tr><td>check</td><td>setImmediate 回调</td><td>setImmediate</td></tr>
-<tr><td>close callbacks</td><td>close 事件</td><td>socket.on('close')</td></tr>
+<tr><td>微任务队列每轮循环清空一次</td><td>每两个阶段之间、以及每个回调执行完都会清空</td><td>误以为递归 nextTick 只会拖慢一轮，实际能永久饿死 IO</td></tr>
+<tr><td><code>setImmediate</code> 就是「立即执行」</td><td>它在 check 阶段执行，比微任务晚，比下一轮 timers 早</td><td>拿它当同步用，顺序推演全错</td></tr>
+<tr><td>Node 的异步 IO 全是内核原生异步</td><td>只有网络 IO 走 epoll/kqueue，文件与部分 crypto、zlib 走线程池</td><td>大量文件读写时延迟暴涨却查不出原因</td></tr>
+<tr><td>没有事件要处理时进程在空转</td><td>poll 阶段会真正阻塞在 <code>epoll_wait</code> 上，超时由最近的定时器决定</td><td>误判空闲进程的 CPU 曲线</td></tr>
+<tr><td><code>setTimeout(fn, 0)</code> 等于 0 延迟</td><td>最小值被钳到 1ms，且实际执行点取决于当轮阻塞情况</td><td>拿定时器做精确节拍，高负载下漂移到几百毫秒</td></tr>
 </tbody>
 </table>
-<p>重点说 poll 阶段。这是事件循环的"主战场"——如果 poll 队列空了，事件循环会<strong>阻塞在这里等新的 IO 事件</strong>。但如果有 setImmediate 注册了，它不会傻等，直接跳到 check 阶段。这就是为什么 setImmediate 比 setTimeout(fn, 0) 快——它跳过了 poll 的等待。</p>
 
-<h2>microtask 和 macrotask：两套队列</h2>
-<p>光知道六个阶段还不够。每个阶段之间，Node.js 会先把 <strong>microtask 队列</strong>全部清空，才进入下一个阶段。这就是为什么 <code>process.nextTick</code> 和 Promise.then 总是比 setTimeout 先跑。</p>
+<h2>一轮循环的六个阶段</h2>
+<p>libuv 的一轮迭代按固定顺序穿过六个阶段。每个阶段有自己的回调队列，<strong>进入某个阶段后会把该阶段队列里的回调执行完（或达到系统相关的上限）才进入下一阶段</strong>。当没有任何活跃的 handle 和 request 时，循环退出，进程自然结束。</p>
 <div class="mermaid">
-flowchart LR
-    SYNC[同步代码执行] --> MICRO1[清空 nextTick 队列]
-    MICRO1 --> PROMISE1[清空 Promise 队列]
-    PROMISE1 --> MACRO1[执行一个 macrotask<br/>（一个阶段的回调）]
-    MACRO1 --> MICRO2[再次清空 nextTick 队列]
-    MICRO2 --> PROMISE2[再次清空 Promise 队列]
-    PROMISE2 --> MACRO2[下一个 macrotask]
-    style MICRO1 fill:#dc382d,stroke:#fff,color:#fff
-    style MICRO2 fill:#dc382d,stroke:#fff,color:#fff
+stateDiagram-v2
+    state "timers 到期的定时器回调" as Timers
+    state "pending callbacks 上一轮延迟的系统级回调" as Pending
+    state "idle / prepare libuv 内部使用" as Idle
+    state "poll 收割 IO 事件 并在此阻塞等待" as Poll
+    state "check setImmediate 回调" as Check
+    state "close callbacks 句柄关闭事件回调" as Close
+    [*] --> Timers
+    Timers --> Pending
+    Pending --> Idle
+    Idle --> Poll
+    Poll --> Check
+    Check --> Close
+    Close --> Timers: 仍有活跃句柄或请求
+    Close --> [*]: 无活跃句柄 事件循环退出
+    note right of Poll
+        队列为空且有 setImmediate 待执行时 不阻塞直接进入 check
+        队列为空且只有定时器时 最多阻塞到最近定时器到期
+        队列为空且什么都没有时 无限期阻塞直到有 IO 就绪
+    end note
 </div>
-<p>看个实际的例子，你就明白执行顺序了：</p>
-<pre><code class="language-javascript">console.log('1: 同步代码')
-
-setTimeout(() => console.log('2: setTimeout'), 0)
-
-setImmediate(() => console.log('3: setImmediate'))
-
-Promise.resolve().then(() => console.log('4: Promise.then'))
-
-process.nextTick(() => console.log('5: nextTick'))
-
-console.log('6: 同步代码结束')
-
-// 输出顺序：1 → 6 → 5 → 4 → 2 → 3
-// 注意 2 和 3 的顺序不确定！
-// 在 I/O 回调里 setImmediate 一定比 setTimeout(fn,0) 快
-// 但在主模块里，取决于机器性能，可能反</code></pre>
-
-<h2>process.nextTick vs setImmediate</h2>
-<p>这是面试必考、线上必踩的坑。两个函数名字很像，行为完全不同。</p>
 <table>
-<thead><tr><th>对比</th><th>process.nextTick</th><th>setImmediate</th></tr></thead>
+<thead><tr><th>阶段</th><th>执行哪些回调</th><th>队列来源</th><th>能否阻塞</th><th>典型误解</th></tr></thead>
 <tbody>
-<tr><td>队列位置</td><td>当前阶段结束后立刻执行</td><td>check 阶段执行</td></tr>
-<tr><td>优先级</td><td>比 Promise 还高</td><td>比 I/O 回调晚</td></tr>
-<tr><td>会不会饿死 IO</td><td>会！递归调用直接卡死</td><td>不会</td></tr>
-<tr><td>典型用途</td><td>确保回调在同步代码后执行</td><td>把重活拆到下一轮循环</td></tr>
+<tr><td>timers</td><td>已到期的 <code>setTimeout</code> / <code>setInterval</code></td><td>libuv 最小堆按到期时间排序</td><td>否</td><td>以为到点就执行，实际是「到点后最近一次进入 timers 时执行」</td></tr>
+<tr><td>pending callbacks</td><td>被推迟到下一轮的系统级回调，主要是 TCP 错误码（如 <code>ECONNREFUSED</code>）</td><td>上一轮 poll 未处理完的操作</td><td>否</td><td>以为这个阶段没用，连接错误回调延后一轮就来自这里</td></tr>
+<tr><td>idle / prepare</td><td>libuv 内部使用，JS 层无对应 API</td><td>libuv 内部</td><td>否</td><td>以为可以挂业务回调</td></tr>
+<tr><td>poll</td><td>已完成的 IO 回调：socket 可读写、文件读完、域名解析返回</td><td>内核就绪列表 + 线程池完成通知</td><td><strong>是，整个循环唯一会阻塞的地方</strong></td><td>以为「阻塞」是坏事，它恰恰是不空转 CPU 的原因</td></tr>
+<tr><td>check</td><td><code>setImmediate</code> 回调</td><td>独立的 immediate 队列</td><td>否</td><td>以为比微任务还早</td></tr>
+<tr><td>close callbacks</td><td><code>socket.on('close')</code>、<code>server.close()</code> 等句柄销毁回调</td><td>句柄关闭队列</td><td>否</td><td>以为 close 是同步的，在这里做清理才是正确时机</td></tr>
 </tbody>
 </table>
-<div class="callout callout-danger">
-<div class="callout-title">nextTick 递归能把事件循环卡死</div>
-我见过有人在 nextTick 回调里再调 nextTick，以为是"异步"。结果事件循环永远在清空 nextTick 队列，poll 阶段根本进不去，所有 IO 回调全部饿死。整个服务假死，CPU 100%。<strong>除非你确实需要最高优先级，否则用 queueMicrotask() 或 Promise.resolve().then()</strong>。
-</div>
-<pre><code class="language-javascript">// 危险：这会卡住事件循环
-function recursiveNextTick() {
-  process.nextTick(recursiveNextTick) // 永不结束
-}
-recursiveNextTick()
 
-// 安全：setImmediate 每轮循环才执行一次
-function safeDefer() {
-  setImmediate(safeDefer) // 每轮 event loop 跑一次，不会阻塞 IO
-}
-safeDefer()</code></pre>
+<h2>微任务的插入时机才是关键</h2>
+<p>六个阶段只是骨架。真正决定输出顺序的是两条微任务队列的清空时机：<code>process.nextTick</code> 队列优先于 Promise 微任务队列，而<strong>这两条队列在每个阶段切换之间、以及每个宏任务回调执行完之后都会被完整清空</strong>——不是每轮循环一次。这个细节决定了递归 <code>nextTick</code> 的杀伤力。</p>
+<table>
+<thead><tr><th>能力</th><th>process.nextTick</th><th>Promise 微任务 / queueMicrotask</th><th>setImmediate</th><th>setTimeout(fn, 0)</th></tr></thead>
+<tbody>
+<tr><td>清空时机</td><td>当前回调结束后立刻，先于 Promise</td><td>nextTick 队列清空后紧接着</td><td>check 阶段</td><td>下一次进入 timers 阶段</td></tr>
+<tr><td>递归自身的后果</td><td><strong>永久饿死后续阶段，poll 再也进不去</strong></td><td>同样饿死循环，微任务同属一轮清空</td><td>安全，每轮执行一批，IO 有机会插入</td><td>安全但每轮最少多 1ms</td></tr>
+<tr><td>嵌套深度限制</td><td>无限制，无警告</td><td>无限制</td><td>无限制但让路</td><td>无限制但让路</td></tr>
+<tr><td>适用场景</td><td>在同步代码返回后立刻触发错误事件，库作者用</td><td>业务代码里绝大多数「下一个微任务」需求</td><td>把大任务切片，给 IO 让路</td><td>需要真实时间延迟</td></tr>
+<tr><td>业务代码该不该用</td><td>基本不需要</td><td>推荐</td><td>切片时推荐</td><td>只在需要延时时用</td></tr>
+</tbody>
+</table>
+<pre><code class="language-javascript">// 完整的顺序推演：把这段直接存成 order.js 跑一遍
+const fs = require('node:fs')
 
-<h2>异步 IO 的底层：libuv 线程池</h2>
-<p>很多人以为 Node.js 的异步 IO 是内核原生的。一半对一半不对。网络 IO（TCP/UDP）确实走内核的 epoll/kqueue，真异步。但文件 IO、DNS 查询、加密计算这些，走的是 <strong>libuv 线程池</strong>——默认 4 个线程，你可以通过环境变量调大。</p>
-<div class="mermaid">
-flowchart TD
-    APP[你的 Node.js 代码] --> CHECK_IO{什么操作?}
-    CHECK_IO -->|网络请求| NET[内核 epoll/kqueue<br/>真异步，不占线程]
-    CHECK_IO -->|文件读写| POOL[libuv 线程池<br/>默认 4 线程]
-    CHECK_IO -->|DNS 解析| POOL
-    CHECK_IO -->|crypto.pbkdf2| POOL
-    CHECK_IO -->|zlib 压缩| POOL
-    NET --> LOOP[事件循环回调]
-    POOL --> LOOP
-    style POOL fill:#f59e0b,stroke:#fff,color:#fff
-    style NET fill:#10b981,stroke:#fff,color:#fff
-</div>
-<p>这就解释了一个经典现象：<strong>同时读 1000 个文件，Node.js 只能同时处理 4 个</strong>。不是 Node.js 慢，是你把活全压在 4 个线程上了。调大线程池：</p>
-<pre><code class="language-bash"># 在代码最开头设置，必须在任何 IO 调用之前
-export UV_THREADPOOL_SIZE=16
+console.log('A 同步开始')
 
-// 或者代码里
-process.env.UV_THREADPOOL_SIZE = '16'</code></pre>
-<div class="callout callout-tip">
-<div class="callout-title">线程池不是越大越好</div>
-我调过 64，结果吞吐量不升反降。为什么？线程切换开销。磁盘 IO 密集型任务，线程数等于磁盘并发上限就够了。CPU 密集型的加密运算，线程数等于 CPU 核数最好。别盲目调大，压测说话。
-</div>
+setTimeout(() =&gt; console.log('E timers 阶段'), 0)
+setImmediate(() =&gt; console.log('F check 阶段'))
 
-<h2>Worker Threads：真·多线程</h2>
-<p>Node.js 10 引入 Worker Threads，12 之后稳定。它不是线程池，是<strong>真正的 V8 实例</strong>——每个 Worker 有自己的事件循环、自己的堆内存。适合跑 CPU 密集任务，不适合跑 IO（IO 有跨线程通信开销）。</p>
-<pre><code class="language-javascript">// worker.js —— 跑 CPU 密集任务
-const { parentPort } = require('worker_threads')
-
-parentPort.on('message, (data) => {
-  let result = 0
-  for (let i = 0; i &lt; data.iterations; i++) {
-    result += Math.sqrt(i)
-  }
-  parentPort.postMessage(result)
-})</code></pre>
-<pre><code class="language-javascript">// main.js —— 主线程
-const { Worker } = require('worker_threads')
-
-const worker = new Worker('./worker.js')
-
-worker.postMessage({ iterations: 10_000_000 })
-worker.on('message', (result) => {
-  console.log('结果:', result)
-})</code></pre>
-<p>Worker 之间通过 <code>postMessage</code> 通信，数据是<strong>结构化克隆</strong>——不是共享内存，是拷贝。所以传大对象性能很差。要共享内存用 <code>SharedArrayBuffer</code>，但那是另一套心智模型了。</p>
-
-<h2>阻塞事件循环的常见凶手</h2>
-<p>我线上出过三次"事件循环被阻塞"的事故，凶手全是下面这些：</p>
-<ol>
-<li><strong>同步 JSON.parse 大字符串</strong>：一个 50MB 的 JSON.parse，阻塞主线程 800ms。所有请求排队。</li>
-<li><strong>循环里做同步加密</strong>：<code>crypto.pbkdf2Sync</code> 在请求处理里调，每来一个请求就阻塞一下。</li>
-<li><strong>正则回溯爆炸</strong>：用户输入触发 Catastrophic Backtracking，CPU 100% 转不出来。</li>
-<li><strong>同步读大文件</strong>：<code>fs.readFileSync</code> 在启动时用没问题，在请求路径里用就是灾难。</li>
-<li><strong>监控上报忘了异步</strong>：循环里同步写日志，日志写到磁盘慢了，整个服务卡。</li>
-</ol>
-<div class="callout callout-danger">
-<div class="callout-title">怎么发现事件循环被阻塞</div>
-用 <code>perf_hooks</code> 监控事件循环延迟。正常应该 &lt;1ms。我在生产环境挂了个监控，超过 50ms 就报警，超过 200ms 直接 dump 堆快照。线上问题 90% 是同步代码阻塞，不是你想象的复杂原因。
-</div>
-<pre><code class="language-javascript">const { monitorEventLoopDelay } = require('perf_hooks')
-const h = monitorEventLoopDelay({ resolution: 20 })
-h.enable()
-
-setInterval(() => {
-  // p50 和 p99 延迟
-  console.log('p50:', h.percentile(50) / 1e6, 'ms')
-  console.log('p99:', h.percentile(99) / 1e6, 'ms')
-  if (h.percentile(99) / 1e6 > 200) {
-    console.warn('事件循环阻塞超过 200ms!')
-  }
-}, 5000)</code></pre>
-
-<h2>回调地狱：2026 年还有吗</h2>
-<p>基本没了。async/await 是 ES2017 的东西，现在谁还写嵌套回调？但有个变种还在——<strong>未捕获的 Promise rejection</strong>。你写了个 async 函数，里面 throw 了，没 catch，Node.js 24 直接崩进程。</p>
-<pre><code class="language-javascript">// 这样写，报错了你都不知道
-app.get('/user/:id', async (req, res) => {
-  const user = await db.find(req.params.id)
-  // 如果 db.find 抛错，Promise rejection 未捕获，进程退出
-  res.json(user)
+Promise.resolve().then(() =&gt; {
+  console.log('D Promise 微任务')
+  // 微任务里再塞 nextTick：它会插到「当前微任务队列清空之后」
+  process.nextTick(() =&gt; console.log('D2 微任务里注册的 nextTick'))
 })
 
-// 正确做法：全局兜底
-process.on('unhandledRejection', (err) => {
-  console.error('未捕获 Promise 错误:', err)
-  // 别直接 exit，先记录再决定
+process.nextTick(() =&gt; console.log('C nextTick 优先于 Promise'))
+
+console.log('B 同步结束')
+
+// 输出：A B C D D2 E F
+// 关键点 1：C 在 D 之前 —— nextTick 队列整体优先于 Promise 微任务队列
+// 关键点 2：D2 在 E 之前 —— 进入 timers 阶段前又清空了一次两条微任务队列
+// 关键点 3：E 与 F 的先后在主模块里不稳定（见下一节），在 IO 回调里才稳定
+
+fs.readFile(__filename, () =&gt; {
+  // 这里是 poll 阶段的回调，本轮的下一站就是 check 阶段
+  setTimeout(() =&gt; console.log('H timers 要等到下一轮'), 0)
+  setImmediate(() =&gt; console.log('G check 就在本轮的下一站'))
+  // 稳定输出：先 G 再 H
 })</code></pre>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">递归 nextTick 能让整个进程假死</div>
+    <p>因为 nextTick 队列在进入下一阶段前必须清空，而清空过程中新增的项会追加到同一队列，循环永远走不到 poll 阶段。表现是 CPU 单核 100%、进程还活着、健康检查端口不响应、日志停止输出。同样的代码换成 <code>setImmediate</code> 递归则完全安全——每轮只执行本轮已入队的那一批，IO 回调能插进来。</p>
+</div>
+<pre><code class="language-javascript">// 场景：对 200 万条记录做 CPU 计算，又不想让健康检查超时
+// 错误写法：nextTick 递归，poll 阶段永远进不去，服务假死
+function badChunk(items, i = 0) {
+  if (i &gt;= items.length) return
+  compute(items[i])
+  process.nextTick(() =&gt; badChunk(items, i + 1))
+}
 
-<h2>FAQ</h2>
-<p><strong>Q：setTimeout(fn, 0) 和 setImmediate 哪个先执行？</strong><br/>在主模块里不一定，取决于机器负载。在 I/O 回调里 setImmediate 一定先。别在代码里依赖这个顺序，用 <code>queueMicrotask()</code> 或 <code>process.nextTick</code> 明确表达意图。</p>
-<p><strong>Q：事件循环阻塞了，加机器有用吗？</strong><br/>没用。单进程的事件循环堵在一个核上，加机器只是多开几个进程。你要做的是找到阻塞点，把它改成异步，或者丢给 Worker Thread。</p>
-<p><strong>Q：Node.js 24 的 event loop 有变化吗？</strong><br/>核心模型没变，但 V8 13.x 优化了 microtask 执行效率，WebSocket 事件处理从 poll 阶段独立出来了。整体逻辑一样，别被新特性吓到。</p>
-<p><strong>Q：Worker Thread 和 cluster 有什么区别？</strong><br/>Worker 是单进程内的真线程，共享内存可以用 SharedArrayBuffer，适合 CPU 密集子任务。cluster 是多进程，每个进程独立 V8 实例，适合利用多核跑完整服务。</p>
+// 正确写法：setImmediate 切片，每片之间让事件循环跑完一整轮
+// batch 取多大：让单片耗时控制在 5ms 以内，避免单次阻塞抬高 p99
+function goodChunk(items, i = 0, batch = 500) {
+  const end = Math.min(i + batch, items.length)
+  for (let k = i; k &lt; end; k++) compute(items[k])
+  if (end &lt; items.length) {
+    setImmediate(() =&gt; goodChunk(items, end, batch))
+  }
+}
 
-<h2>我的结论</h2>
-<p>事件循环是 Node.js 设计哲学的浓缩——<strong>单线程、非阻塞、事件驱动</strong>。理解了六个阶段和 microtask 队列的关系，你就能解释 90% 的"为什么我的代码跑出来顺序不对"。</p>
-<p>生产环境我最在意的就两件事：别阻塞事件循环（用 monitorEventLoopDelay 监控），别让 nextTick 递归饿死 IO。剩下的，都是写业务逻辑的事。下一篇我们讲 NestJS——在这个事件循环之上，怎么把一个中大型项目的架构组织好。</p>
+// 注意：切片只解决「不要一次阻塞太久」，不解决「总算力不够」。
+// 真正 CPU 密集的负载该移出主线程，单线程的适用边界见 Node.js 总览篇。</code></pre>
 
+<h2>为什么主模块里 setTimeout 与 setImmediate 顺序不稳定</h2>
+<p>这是最经典的输出顺序题。答案不是「随机」，而是取决于<strong>进程从启动到第一次进入 timers 阶段花了多久</strong>。<code>setTimeout(fn, 0)</code> 被 Node 钳成 1ms，第一次进入 timers 阶段时：如果已经过了 1ms，定时器到期，先打印 timers 的回调；如果还没到 1ms，timers 阶段空过，接着走到 check 阶段先打印 immediate。机器负载、启动时加载的模块数量都会改变这个结果。</p>
+<p>而在任何 IO 回调内部注册时，顺序是确定的：IO 回调运行在 poll 阶段，本轮的下一站就是 check，所以 <code>setImmediate</code> 一定先于 <code>setTimeout</code> 执行。结论很实用：<strong>不要让业务逻辑或单元测试依赖这两者的相对顺序</strong>，需要「给 IO 让路」就用 <code>setImmediate</code>，需要「同步代码结束后立刻」就用微任务。</p>
 
+<h2>poll 阶段阻塞多久，由最近的定时器决定</h2>
+<p>libuv 在进入 poll 前会算一个超时值，这个值就是 <code>epoll_wait</code> 的 timeout 参数。理解它，就能解释「为什么空闲的 Node 进程 CPU 是 0% 而不是 100%」，也能解释「为什么加了一个 1ms 的 setInterval 之后进程的系统调用次数翻了几十倍」。</p>
+<table>
+<thead><tr><th>当前状态</th><th>poll 阻塞时长</th><th>观测表现</th></tr></thead>
+<tbody>
+<tr><td>poll 队列非空</td><td>0，立即处理</td><td>高负载时 CPU 跑满，延迟由回调本身耗时决定</td></tr>
+<tr><td>有 <code>setImmediate</code> 待执行</td><td>0，直接进 check</td><td>immediate 递归时循环空转，CPU 偏高但 IO 不饿死</td></tr>
+<tr><td>只有定时器</td><td>到最近定时器的剩余毫秒</td><td><code>setInterval(fn, 1)</code> 让进程每毫秒醒一次，<code>strace</code> 里 <code>epoll_wait</code> 刷屏</td></tr>
+<tr><td>只有活跃的 socket 或监听句柄</td><td>无限期，直到有事件就绪</td><td>空闲 web 服务 CPU 接近 0%，这是正常状态</td></tr>
+<tr><td>无任何活跃句柄</td><td>不阻塞，循环退出</td><td>脚本跑完自然退出；进程不退出说明有句柄没关</td></tr>
+</tbody>
+</table>
 
+<h2>libuv 线程池承担什么，不承担什么</h2>
+<p>这是排查「延迟很高但 CPU 不忙」时最容易漏掉的一层。网络 IO 由内核的 epoll / kqueue / IOCP 直接通知，不占线程；而文件系统操作、<code>dns.lookup</code>、部分 crypto 和 zlib 操作在操作系统层面<strong>没有可用的异步接口</strong>，libuv 只能把它们丢进线程池里用阻塞方式跑完再回调。线程池默认只有 4 个线程。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph LOOP["JS 主线程 事件循环"]
+        A["业务回调代码"]
+        B["poll 阶段收割完成通知"]
+    end
+    subgraph KERNEL["内核多路复用 epoll / kqueue / IOCP"]
+        N1["TCP 与 UDP 网络 IO"]
+        N2["pipe 与 tty"]
+        N3["dns.resolve 走 c-ares 自己发 UDP 包"]
+    end
+    subgraph POOL["libuv 线程池 默认 4 线程 上限 1024"]
+        P1["fs 模块几乎所有异步方法"]
+        P2["dns.lookup 调用 getaddrinfo"]
+        P3["crypto.pbkdf2 / scrypt 等 KDF 的异步版"]
+        P4["zlib 压缩与解压"]
+        P5["fs.watch 在部分平台的实现"]
+    end
+    A -->|"网络请求"| KERNEL
+    A -->|"文件 加密 压缩 域名解析"| POOL
+    KERNEL --> B
+    POOL --> B
+    B --> A
+</div>
+<p>推论非常明确：<strong>并发 1000 个 <code>fs.readFile</code>，真正同时在跑的只有 4 个</strong>，其余全在线程池队列里排队。这时候 CPU 可能只有 20%（线程都在等磁盘），但 p99 延迟已经几百毫秒。同理，用 <code>crypto.pbkdf2</code> 做密码校验时，4 个线程被 CPU 密集的 KDF 占满，同一进程里的 <code>fs</code> 和 <code>dns.lookup</code> 全部跟着排队——这是最隐蔽的相互影响。</p>
+<table>
+<thead><tr><th>症状</th><th>是否线程池饱和</th><th>判定方法</th><th>处理方向</th></tr></thead>
+<tbody>
+<tr><td>CPU 单核 100%，事件循环延迟直方图 p99 极高</td><td>不是</td><td>火焰图里能看到一个平顶的 JS 函数</td><td>找同步计算，切片或移出主线程</td></tr>
+<tr><td>CPU 不高，事件循环延迟正常，但接口 p99 高</td><td><strong>很可能是</strong></td><td>统计 fs / crypto / zlib 调用并发量；把并发压到 4 以下看延迟是否线性下降</td><td>调大 <code>UV_THREADPOOL_SIZE</code>、加并发闸门、改流式读取</td></tr>
+<tr><td>CPU 不高，事件循环延迟正常，下游 RT 同步升高</td><td>不是</td><td>对比下游调用的客户端耗时与服务端耗时</td><td>问题在下游或网络</td></tr>
+<tr><td>只有域名解析偶发变慢</td><td>可能是</td><td><code>dns.lookup</code> 占线程池，<code>dns.resolve</code> 不占</td><td>改用 resolve，或在连接层做 DNS 缓存</td></tr>
+<tr><td>压缩接口一慢，全站文件读取一起慢</td><td>是</td><td>zlib 与 fs 共用同一个池</td><td>把压缩挪到网关层或独立进程</td></tr>
+</tbody>
+</table>
+<pre><code class="language-bash"># 验证线程池是瓶颈：8 个并发 pbkdf2，对比线程池 4 与 8 的完成时间分布
+cat &gt; /tmp/pool.js &lt;&lt;'EOF'
+const crypto = require('node:crypto')
+const t0 = Date.now()
+let done = 0
+for (let i = 0; i &lt; 8; i++) {
+  crypto.pbkdf2('pwd', 'salt', 200000, 64, 'sha512', () =&gt; {
+    console.log('第 ' + (++done) + ' 个完成 ' + (Date.now() - t0) + 'ms')
+  })
+}
+EOF
 
+# 默认 4 线程：前 4 个几乎同时完成，后 4 个的时间戳整体翻倍，呈明显的两批
+UV_THREADPOOL_SIZE=4 node /tmp/pool.js
+
+# 8 线程：8 个时间戳挤在一起（前提是 CPU 核数够，否则变成互相抢 CPU）
+UV_THREADPOOL_SIZE=8 node /tmp/pool.js
+
+# 必须在进程启动时设置环境变量才可靠。在代码里写 process.env.UV_THREADPOOL_SIZE
+# 只在「任何线程池操作发生之前」有效，而很多依赖在 require 阶段就会读文件，
+# 池已按 4 初始化，改了也不生效 —— 实践上只在启动命令或编排文件里设。</code></pre>
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">UV_THREADPOOL_SIZE 不是越大越好</div>
+    <p>上限是 1024。磁盘 IO 密集场景，线程数超过磁盘队列深度后收益归零；CPU 密集的 KDF 与 zlib，线程数超过可用核数后只增加上下文切换和内存（每个线程有独立栈）。容器里更要小心：CPU limit 只有 1 核时把池调到 16，只会让所有请求一起变慢。先压测再定值，常见落点是 8 到 16。容器 CPU 配额与 Node 的关系详见 <a href="../">Node.js 总览</a>。</p>
+</div>
+
+<h2>定时器的精度与漂移</h2>
+<p>把 <code>setTimeout</code> 当精确定时器用，是另一个高频翻车点。定时器只保证「不早于」设定值触发，不保证「不晚于」。</p>
+<table>
+<thead><tr><th>行为</th><th>实际表现</th><th>工程含义</th></tr></thead>
+<tbody>
+<tr><td><code>setTimeout(fn, 0)</code></td><td>被钳为 1ms</td><td>不存在 0 延迟定时器，想「尽快且让路」用 <code>setImmediate</code></td></tr>
+<tr><td>延迟上界</td><td>没有上界，等于「1ms + 当轮剩余阶段的全部耗时」</td><td>一次 300ms 的同步计算会让所有定时器整体推迟 300ms</td></tr>
+<tr><td><code>setInterval</code> 的节拍</td><td>回调超时不会堆积补偿，而是丢拍</td><td>需要固定节拍的任务要自己对齐墙上时钟</td></tr>
+<tr><td>延迟超过 2147483647ms</td><td>溢出为 1ms 并输出警告</td><td>算出来的「30 天后执行」会立刻执行，长延迟必须分段</td></tr>
+<tr><td><code>unref()</code> 后的定时器</td><td>不再算活跃句柄</td><td>后台轮询定时器要 unref，否则进程无法自然退出</td></tr>
+</tbody>
+</table>
+
+<h2>怎么知道事件循环被拖住了</h2>
+<p>一句结论：<strong>事件循环延迟是 Node 服务最重要的单一健康指标，比 CPU 使用率更早、更准确地反映问题</strong>，因为线程池排队和下游阻塞不会体现在 CPU 上，而任何形式的主线程阻塞都会立刻体现在延迟直方图上。采集方式用 <code>perf_hooks.monitorEventLoopDelay</code>，告警阈值量级、直方图 p99 的判读、以及火焰图和堆快照的配合方法，详见 <a href="../performance/">Node.js 性能诊断</a>；单线程模型的适用边界、容器里的 CPU 配额与进程模型，详见 <a href="../">Node.js 总览</a>。</p>
+<div class="mermaid">
+flowchart TD
+    S["接口 p99 明显变高"] --> Q1{"CPU 是否单核接近 100%"}
+    Q1 -->|"是"| A1["主线程同步计算<br/>用 CPU profile 找平顶函数"]
+    Q1 -->|"否"| Q2{"事件循环延迟 p99 是否达到几十毫秒"}
+    Q2 -->|"是"| A2["存在单次长阻塞<br/>用 trace-sync-io 找同步 IO"]
+    Q2 -->|"否"| Q3{"fs / crypto / zlib / dns.lookup 并发是否很高"}
+    Q3 -->|"是"| A3["线程池排队<br/>调 UV_THREADPOOL_SIZE 或降并发"]
+    Q3 -->|"否"| Q4{"下游数据库或 HTTP 的 p99 是否同步升高"}
+    Q4 -->|"是"| A4["问题在下游<br/>看连接池等待时间与超时配置"]
+    Q4 -->|"否"| A5["看 GC 与堆<br/>老生代持续增长会拉长停顿"]
+</div>
+<table>
+<thead><tr><th>反模式</th><th>为什么坏</th><th>怎么改</th></tr></thead>
+<tbody>
+<tr><td>递归 <code>process.nextTick</code></td><td>阶段切换前必须清空该队列，poll 永久进不去</td><td>改 <code>setImmediate</code> 递归</td></tr>
+<tr><td>请求路径里 <code>JSON.parse</code> 几十 MB 字符串</td><td>单次阻塞几百毫秒，所有并发请求一起等</td><td>流式解析，并限制请求体大小</td></tr>
+<tr><td>请求路径里用 <code>*Sync</code> 系列</td><td>连让路的机会都没有</td><td>启动期可以用，请求期一律异步</td></tr>
+<tr><td>一次性并发上千个 <code>fs</code> 操作</td><td>线程池只有 4 个位置，其余排队且拖累 dns 与 zlib</td><td>并发闸门控制在线程池规模的 2 到 3 倍</td></tr>
+<tr><td>用户输入直接进复杂正则</td><td>回溯爆炸，单核打满且无法中断</td><td>限制输入长度，改写正则避免嵌套量词</td></tr>
+<tr><td>用 <code>setTimeout</code> 做精确节拍</td><td>最小 1ms 且被阻塞时漂移无上界</td><td>对齐墙上时钟自校正，或交给外部调度</td></tr>
+<tr><td>在 close 事件之前就释放资源</td><td>close callbacks 阶段才是句柄真正销毁的时机</td><td>清理逻辑挂在 close 事件里</td></tr>
+</tbody>
+</table>
+
+<h2>一次完整的 fs 调用是怎么回到 JS 的</h2>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant JS as JS 主线程
+    participant UV as libuv 事件循环
+    participant TP as 线程池 worker
+    participant OS as 内核
+    JS-&gt;&gt;UV: fs.readFile 提交一个 work 请求
+    UV-&gt;&gt;TP: 派发到线程池队列
+    Note over TP: 4 个线程都在忙时<br/>新请求在队列里排队 这段等待不占 CPU
+    TP-&gt;&gt;OS: 阻塞式 read 系统调用
+    OS--&gt;&gt;TP: 数据返回
+    TP--&gt;&gt;UV: 通过 async handle 唤醒 poll
+    UV-&gt;&gt;JS: poll 阶段执行 readFile 回调
+    Note over JS: 回调返回后立刻清空 nextTick 队列<br/>再清空 Promise 微任务队列 然后才进 check
+</div>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <p>1. 以为微任务每轮清空一次，写出递归 <code>nextTick</code>，进程假死且从堆栈里看不出异常。</p>
+    <p>2. 在主模块里用 <code>setTimeout</code> 与 <code>setImmediate</code> 的相对顺序写单测，CI 机器负载一变就随机失败。</p>
+    <p>3. 用 <code>setTimeout(fn, 0)</code> 做任务切片，每片白等 1ms，十万次切片凭空多出 100 秒。</p>
+    <p>4. 在请求路径里调 <code>crypto.pbkdf2</code> 却不限并发，线程池被 KDF 占满，同进程的文件读写和域名解析一起变慢。</p>
+    <p>5. 在代码里给 <code>process.env.UV_THREADPOOL_SIZE</code> 赋值，但依赖早在 require 阶段就触发了 fs 操作，池已按 4 初始化，改动无效。</p>
+    <p>6. 容器 CPU limit 是 1 核却把线程池调到 32，上下文切换开销吃掉全部收益。</p>
+    <p>7. 用 <code>dns.lookup</code>（占线程池）而不是 <code>dns.resolve</code>（不占），高并发下域名解析成为隐形瓶颈。</p>
+    <p>8. 忘记给后台轮询定时器 <code>unref()</code>，优雅关闭时进程迟迟不退出，最后被强杀。</p>
+    <p>9. 算出一个超过 24.8 天的延迟传给 <code>setTimeout</code>，溢出后立刻执行，业务逻辑提前触发。</p>
+    <p>10. 用 <code>setInterval</code> 做定时对账，回调偶发耗时超过间隔，实际执行频率静默降低且没有告警。</p>
+    <p>11. 只监控 CPU 和 QPS，不监控事件循环延迟，线程池排队和单次长阻塞完全看不见。</p>
+    <p>12. 把 zlib 压缩和高并发文件读放在同一个进程里，两者抢同一个线程池，互相拖慢却查不到关联。</p>
+</div>
                     </div>
                 </article>
                 <nav class="article-nav">

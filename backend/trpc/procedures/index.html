@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>Procedures 与路由 - tRPC - 资深码农</title>
+    <title>Procedure 设计：输入校验、中间件与鉴权 - tRPC - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Query / Mutation / Subscription / 路由组织 / 中间件">
+    <meta name="description" content="Procedure 是 tRPC 里唯一承载业务与安全边界的单元。本文讲清 input 的 zod schema 为什么是唯一的运行时防线、output schema 的收益与维护成本、middleware 如何改写 ctx 类型让 user 从可空收窄为非空、publicProcedure 与 protectedProcedure 与 adminProcedure 的标准分层、query 与 mutation 与 subscription 的语义差异，以及鉴权必须分成中间件做角色、resolver 查资源归属这两层的原因。">
     <meta name="keywords" content="tRPC,Procedures 与路由,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/backend/trpc/procedures/">
-    <meta property="og:title" content="Procedures 与路由 - tRPC - 资深码农">
-    <meta property="og:description" content="Query / Mutation / Subscription / 路由组织 / 中间件">
+    <meta property="og:title" content="Procedure 设计：输入校验、中间件与鉴权 - tRPC - 资深码农">
+    <meta property="og:description" content="Procedure 是 tRPC 里唯一承载业务与安全边界的单元。本文讲清 input 的 zod schema 为什么是唯一的运行时防线、output schema 的收益与维护成本、middleware 如何改写 ctx 类型让 user 从可空收窄为非空、publicProcedure 与 protectedProcedure 与 adminProcedure 的标准分层、query 与 mutation 与 subscription 的语义差异，以及鉴权必须分成中间件做角色、resolver 查资源归属这两层的原因。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/backend/trpc/procedures/">
     <meta property="og:site_name" content="资深码农">
@@ -25,11 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Procedures 与路由 - tRPC">
-    <meta name="twitter:description" content="Query / Mutation / Subscription / 路由组织 / 中间件">
+    <meta name="twitter:title" content="Procedure 设计：输入校验、中间件与鉴权 - tRPC">
+    <meta name="twitter:description" content="Procedure 是 tRPC 里唯一承载业务与安全边界的单元。本文讲清 input 的 zod schema 为什么是唯一的运行时防线、output schema 的收益与维护成本、middleware 如何改写 ctx 类型让 user 从可空收窄为非空、publicProcedure 与 protectedProcedure 与 adminProcedure 的标准分层、query 与 mutation 与 subscription 的语义差异，以及鉴权必须分成中间件做角色、resolver 查资源归属这两层的原因。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "每个 procedure 都必须声明 input schema 吗？", "acceptedAnswer": {"@type": "Answer", "text": "凡是接受参数的都必须声明。TypeScript 的类型在编译后被完全擦除，服务端运行时收到的只是一段 JSON，没有 schema 就等于没有任何校验，调用方可以用 curl 发任意结构。input 里的 zod schema 是 tRPC 唯一的运行时防线，它同时承担三件事：挡掉畸形结构、把字符串数字等宽松输入规范化成确定类型、给分页与文本长度设上界防止打穿数据库。建议在团队里把这条做成 lint 规则或 code review 检查项，因为漏一个就是一个敞开的入口。"}}, {"@type": "Question", "name": "output schema 值得声明吗？", "acceptedAnswer": {"@type": "Answer", "text": "对返回敏感实体的接口值得，对内部聚合接口通常不值得。收益是防止字段意外泄露：ORM 查出来的用户对象常带 passwordHash、手机号、软删标记，直接 return 会整个下发，而 output schema 会把没声明的字段剥掉，相当于一道白名单。成本是每次加字段都要改两处，而且返回值类型不再由 resolver 自动推导，写起来变啰嗦。折中方案是给涉及用户、支付、权限的 router 强制加 output，其余用一个统一的序列化函数把敏感字段剔除。"}}, {"@type": "Question", "name": "tRPC 的中间件为什么能改变 ctx 的类型？", "acceptedAnswer": {"@type": "Answer", "text": "因为 next 函数接受一个新的 ctx 并把它的类型向下传递。鉴权中间件在确认 session 存在后调用 next 并传入 user 字段，tRPC 会把这个新类型合并进后续链路的 ctx 类型。效果是在 protectedProcedure 上写 resolver 时，ctx.user 的类型已经是非空的 User，不再需要写判空分支，也不会有人误用可选链把空值悄悄放过。这是 tRPC 设计里最巧妙的一点：把运行期的守卫和编译期的类型收窄绑在了一起，一处校验换来全链路的类型确定性。"}}, {"@type": "Question", "name": "为什么资源归属校验不能放在中间件里？", "acceptedAnswer": {"@type": "Answer", "text": "因为中间件在 input 校验之前执行，此时输入还没被 schema 验证过，结构不可信；更关键的是资源归属判断需要知道具体是哪条记录，而这条记录往往要查库才能拿到 ownerId，把查询塞进中间件会让每个接口都多一次往返，并且中间件无法表达不同 procedure 各异的归属规则。正确分层是：中间件负责垂直权限，也就是你是不是登录用户、是不是管理员；resolver 负责水平权限，也就是这条订单是不是你的。越权的完整分类与防护见站内认证授权相关文章。"}}, {"@type": "Question", "name": "query 和 mutation 的区别只是语义吗？", "acceptedAnswer": {"@type": "Answer", "text": "不只是语义，行为差异是真实的。query 可以被配置成 GET 从而被浏览器和 CDN 缓存，在 React 集成里会被自动缓存、窗口聚焦时后台重新获取、失败时按策略重试，并且可以被预取。mutation 不会被缓存，同一个 mutation 的多次调用在客户端默认串行排队，也不会被自动重试。这意味着把写操作写成 query 会导致副作用被缓存命中跳过、被预取提前触发、被重试重复执行三种问题同时出现。只要有副作用，就必须是 mutation。"}}, {"@type": "Question", "name": "tRPC 的监控该怎么打点？", "acceptedAnswer": {"@type": "Answer", "text": "必须按 procedure path 维度打点，而不是按 HTTP URL。原因有两个：开启 batch 后多个 procedure 共用一个 HTTP 请求，URL 维度的耗时和错误率会把它们混在一起；而且整批响应通常是 200，网关按状态码统计的错误率会严重漏报。做法是写一个日志中间件，在 next 前后记时间戳，把 path、type、耗时、结果、错误 code 和 requestId 一起上报，再在看板上按 path 出 P95 和错误率。这样才能定位到是哪个 procedure 在拖慢整批请求。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -62,83 +64,345 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Procedures 与路由</h1>
+                        <h1 class="article-title">Procedure 设计：输入校验、中间件与鉴权</h1>
                     </header>
                     <div class="article-content">
 
-<h2>三种 Procedure</h2>
+<p>router 只是命名空间，真正承载业务逻辑和安全边界的是 procedure。tRPC 把 procedure 设计成一条可组合的构建链：<code>.use()</code> 挂中间件、<code>.input()</code> 声明输入 schema、<code>.output()</code> 声明输出 schema、<code>.query()</code> 或 <code>.mutation()</code> 收尾。这条链上每一环都有明确的安全含义，写错一环就是一个漏洞。</p>
+
+<h2>input schema 是唯一的运行时防线</h2>
+
+<p>这一点必须反复强调：<strong>TS 的类型在编译后完全擦除，服务端运行时没有任何类型信息</strong>。你的 procedure 收到的就是 <code>JSON.parse</code> 出来的裸对象。没有 <code>input()</code> 的 procedure 不是「输入类型是 undefined」，而是「任何人可以发任何东西进来」。</p>
+
 <table>
-<thead>
-<tr><th>类型</th><th>用途</th><th>HTTP 方法</th></tr>
-</thead>
+<thead><tr><th>schema 写法</th><th>挡住什么</th><th>不写的后果</th></tr></thead>
 <tbody>
-<tr><td>Query</td><td>获取数据</td><td>GET</td></tr>
-<tr><td>Mutation</td><td>修改数据</td><td>POST/PUT/DELETE</td></tr>
-<tr><td>Subscription</td><td>实时推送</td><td>WebSockets</td></tr>
-</tbody>
-</table>
+<tr><td><code>z.string().uuid()</code></td><td>非法 id 格式</td><td>拼进查询条件后类型错误，或触发全表扫描</td></tr>
+<tr><td><code>z.number().int().min(1).max(100)</code></td><td>越界分页</td><td><code>limit</code> 传十万导致单请求拉全表，内存打满</td></tr>
+<tr><td><code>z.string().max(10000)</code></td><td>超长文本</td><td>富文本字段被塞进 10MB 内容，写库超时连带拖垮连接池</td></tr>
+<tr><td><code>z.enum(['asc','desc'])</code></td><td>排序字段注入</td><td>排序参数被直接拼进 SQL 片段，成为注入点</td></tr>
+<tr><td><code>z.coerce.number()</code></td><td>字符串数字混用</td><td>前端传来的字符串参与算术运算得到拼接结果</td></tr>
+<tr><td><code>z.object({}).strict()</code></td><td>多余字段</td><td>多余字段被展开进 ORM 的 data，造成字段覆写提权</td></tr>
+<tr><td><code>z.string().datetime()</code></td><td>非法时间</td><td>Invalid Date 进入查询范围，返回空结果但不报错</td></tr>
+</tbody></table>
 
-<pre><code class="language-typescript">export const appRouter = t.router({
-  // 查询
-  getUsers: t.procedure.query(() => {
-    return db.user.findMany()
+<pre><code class="language-typescript">import { z } from 'zod'
+import { publicProcedure, router } from '../trpc'
+
+// 分页查询的标准输入：上界与默认值都必须显式写出来
+const listInput = z.object({
+  // 游标分页优于 offset 分页，理由见站内 API 设计篇
+  cursor: z.string().uuid().nullish(),
+  limit: z.number().int().min(1).max(100).default(20),
+  keyword: z.string().trim().max(50).optional(),
+  // 排序字段一定用 enum 白名单，绝不能接受任意字符串
+  orderBy: z.enum(['createdAt', 'updatedAt', 'title']).default('createdAt'),
+  order: z.enum(['asc', 'desc']).default('desc'),
+})
+
+// 写操作的标准输入：strict 阻止多余字段被展开进 ORM
+const createInput = z
+  .object({
+    title: z.string().trim().min(1).max(120),
+    body: z.string().max(50_000),
+    tagIds: z.array(z.string().uuid()).max(10).default([]),
+    // 绝不要接受 authorId 之类的归属字段，它必须来自 ctx
+  })
+  .strict()
+
+export const postRouter = router({
+  list: publicProcedure.input(listInput).query(({ input, ctx }) =&gt; {
+    // input 到这里已经是校验并填过默认值的确定类型
+    return ctx.db.post.findMany({
+      take: input.limit + 1,
+      cursor: input.cursor ? { id: input.cursor } : undefined,
+      orderBy: { [input.orderBy]: input.order },
+    })
   }),
-  
-  // 带输入的查询
-  getUserById: t.procedure
-    .input(z.string())
-    .query(({ input }) => {
-      return db.user.findUnique({ where: { id: input } })
+})</code></pre>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最危险的一行代码</div>
+    <p>把 <code>authorId</code>、<code>ownerId</code>、<code>role</code>、<code>isAdmin</code> 这类归属或权限字段放进 input schema，然后 <code>...input</code> 展开写库。调用方只要在请求体里加一个 <code>role: "admin"</code>，就完成了提权。<strong>所有归属与权限字段必须从 <code>ctx</code> 取，永远不能从 input 取</strong>，并且写操作的 input 建议一律加 <code>.strict()</code>。</p>
+</div>
+
+<h2>output schema：什么时候值得付这个维护成本</h2>
+
+<p><code>output()</code> 的作用是把返回值再过一遍 schema，没声明的字段会被剥掉。它解决的是一个非常现实的泄露路径：ORM 查出来的实体对象往往带着 <code>passwordHash</code>、<code>phone</code>、<code>deletedAt</code>、<code>internalNote</code>，而 <code>return user</code> 会把它们整个下发。</p>
+
+<table>
+<thead><tr><th>维度</th><th>声明 output</th><th>不声明 output</th></tr></thead>
+<tbody>
+<tr><td>字段泄露风险</td><td>白名单，新增敏感字段不会自动下发</td><td>ORM 加一个字段就自动暴露</td></tr>
+<tr><td>返回类型来源</td><td>由 schema 决定，明确但需手写</td><td>由 resolver 自动推导，省事</td></tr>
+<tr><td>加字段成本</td><td>改 schema 加改 resolver 两处</td><td>只改 resolver</td></tr>
+<tr><td>运行时开销</td><td>每次响应多一次遍历校验</td><td>无</td></tr>
+<tr><td>对前端的价值</td><td>契约更明确，重构时不易漏改</td><td>依赖 resolver 实现细节</td></tr>
+<tr><td>建议</td><td>用户、支付、权限相关 router 强制加</td><td>内部聚合、报表类接口可以省</td></tr>
+</tbody></table>
+
+<h2>middleware：把运行期守卫变成编译期类型收窄</h2>
+
+<p>这是 tRPC 设计里最值得称赞的一点。<code>t.middleware</code> 拿到 <code>ctx</code> 和 <code>next</code>，<strong><code>next({ ctx: {...} })</code> 传入的新 ctx 会把类型向下游传递</strong>。于是鉴权中间件在运行期确认 session 存在之后，下游 resolver 里 <code>ctx.user</code> 的类型就从 <code>User | null</code> 收窄成了 <code>User</code>——不是靠断言，是编译器真的知道。</p>
+
+<table>
+<thead><tr><th>位置</th><th><code>ctx.session</code> 类型</th><th><code>ctx.user</code> 类型</th><th>resolver 里需要判空吗</th></tr></thead>
+<tbody>
+<tr><td>createContext 之后</td><td><code>Session | null</code></td><td>不存在</td><td>必须判空</td></tr>
+<tr><td>isAuthed 中间件之后</td><td><code>Session</code></td><td><code>User</code></td><td>不需要，编译器已确定非空</td></tr>
+<tr><td>isAdmin 中间件之后</td><td><code>Session</code></td><td><code>User</code> 且 role 已校验</td><td>不需要</td></tr>
+<tr><td>误用 publicProcedure 写需登录逻辑</td><td><code>Session | null</code></td><td>不存在</td><td>编译器会报错，这正是我们要的</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+sequenceDiagram
+    participant A as 适配器
+    participant L as 日志中间件
+    participant U as 鉴权中间件
+    participant V as input 校验
+    participant R as resolver
+    A->>L: 调用 path 为 post.update
+    L->>L: 记录开始时间戳
+    L->>U: next 放行
+    U->>U: 检查 ctx.session 是否存在
+    U-->>L: 不存在则抛 UNAUTHORIZED
+    U->>V: next 传入 user 字段 类型随之收窄
+    Note over V: 中间件在 input 校验之前执行<br/>所以中间件里的输入结构不可信
+    V->>R: 校验通过 输入已是确定类型
+    R->>R: 查记录并比对 ownerId 做水平权限
+    R-->>L: 返回结果
+    L->>L: 计算耗时并按 path 打点上报
+</div>
+
+<h2>procedure 分层：tRPC 的标准模式</h2>
+
+<div class="mermaid">
+flowchart TB
+    subgraph B["基础构件"]
+        T["t.procedure"]
+    end
+    subgraph L1["第一层 公开"]
+        T --> PUB["publicProcedure<br/>只挂日志与限流中间件"]
+    end
+    subgraph L2["第二层 需登录"]
+        PUB --> PRO["protectedProcedure<br/>use isAuthed 后 ctx.user 非空"]
+    end
+    subgraph L3["第三层 需角色"]
+        PRO --> ADM["adminProcedure<br/>use requireRole admin"]
+        PRO --> ORG["orgProcedure<br/>use requireOrgMember"]
+    end
+    PUB --> P1["post.list 登录页 健康检查"]
+    PRO --> P2["post.create 个人中心 下单"]
+    ADM --> P3["user.ban 配置变更 数据导出"]
+    ORG --> P4["team.invite 团队设置"]
+</div>
+
+<pre><code class="language-typescript">// server/trpc.ts 的分层定义，这是 tRPC 社区的事实标准写法
+import { initTRPC, TRPCError } from '@trpc/server'
+import type { Context } from './context'
+
+const t = initTRPC.context&lt;Context&gt;().create()
+
+// 日志与埋点：所有层都应该挂，必须按 procedure path 打点
+const withMetrics = t.middleware(async ({ path, type, next }) =&gt; {
+  const start = Date.now()
+  const result = await next()
+  const durationMs = Date.now() - start
+
+  // 关键：维度是 path 而不是 HTTP URL
+  // 开启 batch 后多个 procedure 共用一个请求，URL 维度会把它们混在一起
+  metrics.timing('trpc.duration', durationMs, { path, type, ok: String(result.ok) })
+  if (!result.ok) {
+    metrics.increment('trpc.error', { path, code: result.error.code })
+    logger.warn({ path, type, durationMs, code: result.error.code })
+  } else if (durationMs &gt; 500) {
+    logger.warn({ path, type, durationMs, msg: 'slow procedure' })
+  }
+  return result
+})
+
+// 鉴权：这里只做垂直权限（你是谁），不碰资源归属
+const isAuthed = t.middleware(({ ctx, next }) =&gt; {
+  if (!ctx.session?.userId) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: '请先登录' })
+  }
+  return next({
+    // 传入的新 ctx 会被合并进下游类型：session 从可空变非空，并多出 user
+    ctx: { session: ctx.session, user: { id: ctx.session.userId, role: ctx.session.role } },
+  })
+})
+
+const requireRole = (role: 'admin' | 'operator') =&gt;
+  t.middleware(({ ctx, next }) =&gt; {
+    // 这里能直接读 ctx.user 是因为它挂在 isAuthed 之后，类型已收窄
+    if (ctx.user.role !== role) {
+      // 有身份但没权限用 FORBIDDEN，不要用 UNAUTHORIZED，否则前端会错误地跳登录
+      throw new TRPCError({ code: 'FORBIDDEN' })
+    }
+    return next()
+  })
+
+export const router = t.router
+export const publicProcedure = t.procedure.use(withMetrics)
+export const protectedProcedure = publicProcedure.use(isAuthed)
+export const adminProcedure = protectedProcedure.use(requireRole('admin'))</code></pre>
+
+<h2>query、mutation 与 subscription 的真实差异</h2>
+
+<p>很多人以为这三者只是命名约定，实际行为差异是硬性的，选错会直接产生线上问题。</p>
+
+<table>
+<thead><tr><th>维度</th><th>query</th><th>mutation</th><th>subscription</th></tr></thead>
+<tbody>
+<tr><td>HTTP 形态</td><td>POST，可覆写为 GET</td><td>只能 POST</td><td>WebSocket 或 SSE 长连接</td></tr>
+<tr><td>可被 HTTP 缓存</td><td>GET 形态下可以</td><td>不可以</td><td>不适用</td></tr>
+<tr><td>客户端自动缓存</td><td>有，按 queryKey 缓存</td><td>无</td><td>无，走事件流</td></tr>
+<tr><td>失败自动重试</td><td>默认会重试</td><td>默认不重试</td><td>断线自动重连</td></tr>
+<tr><td>并发行为</td><td>并发发出</td><td>同一 mutation 默认串行排队</td><td>单连接多路复用</td></tr>
+<tr><td>可被预取</td><td>可以（SSR 预取、悬停预取）</td><td>不可以</td><td>不可以</td></tr>
+<tr><td>context 计算时机</td><td>每次请求</td><td>每次请求</td><td>只在建连时算一次</td></tr>
+<tr><td>适用</td><td>所有读取</td><td>所有有副作用的操作</td><td>需要服务端主动推的场景</td></tr>
+</tbody></table>
+
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">把写操作写成 query 会同时触发三个问题</div>
+    <p>一是可能被 GET 缓存命中，副作用被跳过；二是可能被预取或悬停预加载提前触发，用户还没点就执行了；三是失败后被自动重试，副作用重复执行。只要有副作用就必须是 mutation，没有例外。至于幂等性与重试安全的完整讨论，见站内 <a href="../../api-design/best-practices/">API 设计最佳实践</a>。</p>
+</div>
+
+<p>subscription 还有一个容易踩的点：<strong>它的 context 只在连接建立时计算一次</strong>。长连接跑了两小时后，<code>ctx.session</code> 里的 token 早已过期，但订阅还在推送数据。生产上要么在推送逻辑里定期重新校验会话，要么给连接设置最大存活时间强制客户端重连。</p>
+
+<h2>鉴权的两层：垂直权限与水平权限</h2>
+
+<p>中间件能解决的只是「你是不是登录用户」「你是不是管理员」这类与具体资源无关的判断，也就是垂直权限。而「这条订单是不是你的」属于水平权限，<strong>它必须在 resolver 里查库比对，中间件做不到也不该做</strong>：中间件在 input 校验之前执行，输入结构不可信；而且归属规则每个 procedure 都不一样。</p>
+
+<div class="mermaid">
+flowchart TB
+    Q1{"这个判断依赖<br/>具体某条记录吗"} -->|不依赖| M["放中间件<br/>登录态 角色 租户 限流"]
+    Q1 -->|依赖| Q2{"归属字段能从<br/>ctx 直接推出吗"}
+    Q2 -->|能| R1["resolver 里把 ownerId<br/>写进 where 条件"]
+    Q2 -->|不能| R2["resolver 先查记录<br/>再比对归属 不符抛 NOT_FOUND"]
+    M --> S["中间件保证 ctx.user 非空"]
+    S --> R1
+    S --> R2
+</div>
+
+<div class="mermaid">
+sequenceDiagram
+    participant H as 攻击者
+    participant S as 服务端
+    H->>S: 正常操作 post.update 传自己的 id
+    S-->>H: 成功 顺便在网络面板看到请求结构
+    H->>S: 改成别人的 postId 重发
+    S->>S: 中间件只校验了登录态 通过
+    S->>S: resolver 直接按 id 更新 没比对 ownerId
+    S-->>H: 200 成功 越权改掉他人数据
+    Note over S: 修法一 把 ownerId 放进 where<br/>修法二 先查再比对 不符抛 NOT_FOUND
+    Note over H: 返回 FORBIDDEN 会泄露 id 是否存在<br/>敏感资源建议统一返回 NOT_FOUND
+</div>
+
+<pre><code class="language-typescript">export const postRouter = router({
+  // 正确：归属条件直接写进 where，一次查询同时完成鉴权与更新
+  update: protectedProcedure
+    .input(z.object({ id: z.string().uuid(), title: z.string().min(1).max(120) }).strict())
+    .mutation(async ({ ctx, input }) =&gt; {
+      const result = await ctx.db.post.updateMany({
+        // authorId 来自 ctx 而非 input —— 这是水平权限的关键
+        where: { id: input.id, authorId: ctx.user.id },
+        data: { title: input.title },
+      })
+      if (result.count === 0) {
+        // 统一返回 NOT_FOUND 而不是 FORBIDDEN：后者会暴露该 id 是否存在
+        throw new TRPCError({ code: 'NOT_FOUND' })
+      }
+      return { id: input.id }
     }),
-  
-  // 修改
-  createUser: t.procedure
-    .input(z.object({ name: z.string(), email: z.string().email() }))
-    .mutation(({ input }) => {
-      return db.user.create({ data: input })
+
+  // 需要先读再判的场景：状态机校验与归属校验分开，错误码语义要区分
+  publish: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }).strict())
+    .mutation(async ({ ctx, input }) =&gt; {
+      const post = await ctx.db.post.findUnique({ where: { id: input.id } })
+      if (!post || post.authorId !== ctx.user.id) {
+        throw new TRPCError({ code: 'NOT_FOUND' })
+      }
+      if (post.status !== 'draft') {
+        // 前置条件不满足用 PRECONDITION_FAILED，前端据此提示刷新状态
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '只有草稿可以发布' })
+      }
+      return ctx.db.post.update({ where: { id: post.id }, data: { status: 'published' } })
     }),
 })</code></pre>
 
-<h2>路由组织</h2>
-<pre><code class="language-typescript">// routers/users.ts
-const usersRouter = t.router({
-  list: t.procedure.query(() => ...),
-  getById: t.procedure.input(z.string()).query(() => ...),
-  create: t.procedure.input(CreateUserSchema).mutation(() => ...),
+<p>越权的完整分类（水平、垂直、上下文越权）、枚举 id 的防护、以及为什么敏感资源要统一返回 NOT_FOUND，见站内 <a href="../../../devops/security/auth-security/">认证授权与越权防护</a>。</p>
+
+<h2>事务与并发：把 mutation 包进事务</h2>
+
+<p>「中间件能改写 ctx」这个特性还有一个很实用的落地：<strong>写一个事务中间件，把 <code>ctx.db</code> 换成事务句柄</strong>。这样 resolver 里所有数据访问自动落在同一个事务里，既不用每个 procedure 手写事务包裹，也不会出现某个分支忘了用事务句柄这种漏网。类型上它同样是一次收窄：下游拿到的 <code>ctx.db</code> 就是事务类型，误用外层连接会直接编译报错。</p>
+
+<pre><code class="language-typescript">// 只给 mutation 用：query 包事务纯属浪费，还会白占连接
+const withTransaction = t.middleware(async ({ ctx, next, type }) =&gt; {
+  if (type !== 'mutation') return next()
+
+  return ctx.db.$transaction(async (tx) =&gt; {
+    // 把 db 替换成 tx，下游 resolver 拿到的类型就是事务句柄
+    const result = await next({ ctx: { ...ctx, db: tx } })
+    // 关键：next 不会因为业务错误抛异常，它把错误放在返回值里
+    // 不显式抛出的话事务照样提交，这是最隐蔽的一类数据不一致
+    if (!result.ok) throw result.error
+    return result
+  })
 })
 
-// routers/posts.ts
-const postsRouter = t.router({
-  list: t.procedure.query(() => ...),
-  create: t.procedure.input(CreatePostSchema).mutation(() => ...),
-})
+export const txProcedure = protectedProcedure.use(withTransaction)</code></pre>
 
-// 主路由
-export const appRouter = t.router({
-  users: usersRouter,
-  posts: postsRouter,
-})
+<p>上面注释里那行是真正的坑：<code>next()</code> 的返回值是一个带 <code>ok</code> 字段的结果对象，<strong>resolver 抛出的 TRPCError 不会穿透中间件往上冒</strong>，所以你必须自己判断并重新抛出，否则失败的 mutation 也会被提交事务。这个行为与 Express 那种「异常自动冒泡」的直觉相反，写日志和监控中间件时同样要注意——判断成败要看 <code>result.ok</code>，而不是用 try catch 包住 <code>next()</code>。</p>
 
-// 前端调用
-client.users.list.query()
-client.posts.create.mutation({ title: 'Hello' })</code></pre>
+<table>
+<thead><tr><th>事务边界</th><th>写法</th><th>优点</th><th>风险</th></tr></thead>
+<tbody>
+<tr><td>不开事务</td><td>直接多次写</td><td>最简单，连接占用时间最短</td><td>中途失败留下半成品数据</td></tr>
+<tr><td>resolver 内手写</td><td>在需要的 procedure 里包一层</td><td>边界清晰，只有需要的地方付代价</td><td>容易漏，嵌套调用时难判断是否已在事务中</td></tr>
+<tr><td>中间件统一包</td><td>做成 <code>txProcedure</code> 分层</td><td>不会漏，类型上强制使用事务句柄</td><td>容易把慢的外部调用也圈进事务</td></tr>
+<tr><td>跨服务写操作</td><td>数据库事务用不上</td><td>不适用</td><td>必须改成最终一致方案</td></tr>
+</tbody></table>
 
-<h2>中间件</h2>
-<pre><code class="language-typescript">const isAuthed = t.middleware(({ ctx, next }) => {
-  if (!ctx.user) throw new TRPCError({ code: 'UNAUTHORIZED' })
-  return next({ ctx: { user: ctx.user } })
-})
+<p>最后两条必须提醒。第一，<strong>事务里绝不能放外部 HTTP 调用</strong>：一个三秒超时的第三方接口会让事务持有连接三秒，并发一上来连接池立刻耗尽，症状是全站数据库操作一起变慢，而慢的根因看起来和这个接口毫无关系。第二，tRPC 的 batch 会让多个 mutation 在同一个 HTTP 请求里到达并各自开事务并发执行，<strong>如果两个 mutation 以相反顺序更新同样两行记录就会死锁</strong>；对策是固定更新顺序，或者把需要原子性的操作合并成一个 procedure。写操作的幂等与重试安全见站内 <a href="../../api-design/best-practices/">API 设计最佳实践</a>。</p>
 
-const protectedProcedure = t.procedure.use(isAuthed)
+<h2>反模式对照</h2>
 
-const postsRouter = t.router({
-  create: protectedProcedure
-    .input(CreatePostSchema)
-    .mutation(({ ctx, input }) => {
-      // ctx.user 一定存在
-      return db.post.create({ data: { ...input, authorId: ctx.user.id } })
-    }),
-})</code></pre>
+<table>
+<thead><tr><th>反模式</th><th>现象</th><th>为什么危险</th><th>正确做法</th></tr></thead>
+<tbody>
+<tr><td>不声明 input schema</td><td>开发期一切正常</td><td>运行期完全没有校验，curl 可发任意结构</td><td>凡接受参数一律声明，用 lint 卡住</td></tr>
+<tr><td>把 ownerId 放进 input</td><td>功能正常</td><td>调用方可以伪造归属，等于提权</td><td>归属字段只从 ctx 取，input 加 <code>.strict()</code></td></tr>
+<tr><td>在中间件里做资源级鉴权</td><td>看起来很整洁</td><td>中间件早于 input 校验，输入不可信；每接口多一次查库</td><td>中间件管角色，resolver 管归属</td></tr>
+<tr><td>把 mutation 写成 query</td><td>偶发重复扣款、重复发消息</td><td>被缓存、被预取、被自动重试</td><td>有副作用一律 mutation</td></tr>
+<tr><td>中间件里抛普通 Error</td><td>前端拿到 500 和中性文案</td><td>错误结构不统一，无法做分支处理</td><td>一律抛 TRPCError 并选对 code</td></tr>
+<tr><td>无权限时返回 UNAUTHORIZED</td><td>用户被反复踢到登录页</td><td>401 与 403 语义混淆，前端逻辑必然写错</td><td>没身份 401，有身份没权限 403</td></tr>
+<tr><td>按 URL 而不是 path 打点</td><td>看板上耗时和错误率对不上</td><td>batch 下多个 procedure 共用一个 URL</td><td>在中间件里按 path 与 type 打点</td></tr>
+<tr><td>resolver 直接 return ORM 对象</td><td>前端能在响应里看到密码哈希</td><td>ORM 加字段就自动泄露</td><td>敏感实体强制 output schema 或统一序列化</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+<li><strong>漏掉某个 procedure 的 input schema</strong>：一个都不能漏，漏的那个就是入口；review 时优先扫没有 <code>.input()</code> 的调用链。</li>
+<li><strong>input 里接受 authorId、role、isAdmin</strong>：配合 <code>...input</code> 展开写库就是一键提权。</li>
+<li><strong>写操作的 input 没加 <code>.strict()</code></strong>：多余字段被展开进 ORM 的 data，覆写掉不该动的列。</li>
+<li><strong>分页 limit 没有上界</strong>：单个请求把整表拉进内存，连带打满数据库连接池。</li>
+<li><strong>排序字段用 <code>z.string()</code></strong>：等于把排序表达式的控制权交给调用方，部分 ORM 下可构成注入。</li>
+<li><strong>以为中间件在 input 校验之后跑</strong>：顺序相反，中间件里读输入必须做防御性判断。</li>
+<li><strong>把资源归属校验放在中间件</strong>：要么做不到，要么让每个接口都多付一次查库。</li>
+<li><strong>updateMany 不检查 count</strong>：where 带上 ownerId 后越权请求会静默返回成功（影响 0 行），必须判 <code>count === 0</code> 并抛 NOT_FOUND。</li>
+<li><strong>无权限时抛 FORBIDDEN 暴露资源存在性</strong>：攻击者可以据此枚举 id，敏感资源统一用 NOT_FOUND。</li>
+<li><strong>把 mutation 当 query 用</strong>：缓存、预取、重试三条路径都会让副作用错乱。</li>
+<li><strong>subscription 里假设 session 一直有效</strong>：context 只在建连时算一次，两小时后还在给已登出的用户推数据。</li>
+<li><strong>日志中间件挂在鉴权后面</strong>：所有 UNAUTHORIZED 请求都不会被记录，恰好丢掉了最该看的那部分流量。</li>
+    </ul>
+</div>
 
                     </div>
                 </article>
@@ -150,6 +414,7 @@ const postsRouter = t.router({
             <p>© 2026 资深码农. 保留所有权利。</p>
         </div>
     </footer>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "backend";</script>
     <script defer src="../../../vendor/highlight.min.js"></script>
     <script defer src="../../../js/main.js?v=2"></script>
 </body>

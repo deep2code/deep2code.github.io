@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../../images/logo.jpeg">
-    <title>生产部署与最佳实践 - FastAPI - 资深码农</title>
+    <title>Python 服务上生产：进程模型、优雅关闭与可观测性 - FastAPI - 资深码农</title>
     <link rel="stylesheet" href="../../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Uvicorn/Gunicorn 部署 / 配置管理 / 日志监控 / Docker 部署">
+    <meta name="description" content="Python 服务上生产要定的几件事：worker 数按内存与下游连接数反推而不是照抄核数公式、K8s 上为什么更推荐单 worker 多副本、SIGTERM 之后停止接新连接到连接池释放的完整优雅关闭链路、Python 进程内存不归还操作系统所以只涨不降常常不是泄漏、tracemalloc 与引用链排查、prometheus 多进程模式的目录配置、存活与就绪探针的区别，以及多副本下进程内定时任务为什么会重复执行。">
     <meta name="keywords" content="FastAPI,生产部署与最佳实践,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/backend/python/fastapi/production/">
-    <meta property="og:title" content="生产部署与最佳实践 - FastAPI - 资深码农">
-    <meta property="og:description" content="Uvicorn/Gunicorn 部署 / 配置管理 / 日志监控 / Docker 部署">
+    <meta property="og:title" content="Python 服务上生产：进程模型、优雅关闭与可观测性 - FastAPI - 资深码农">
+    <meta property="og:description" content="Python 服务上生产要定的几件事：worker 数按内存与下游连接数反推而不是照抄核数公式、K8s 上为什么更推荐单 worker 多副本、SIGTERM 之后停止接新连接到连接池释放的完整优雅关闭链路、Python 进程内存不归还操作系统所以只涨不降常常不是泄漏、tracemalloc 与引用链排查、prometheus 多进程模式的目录配置、存活与就绪探针的区别，以及多副本下进程内定时任务为什么会重复执行。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/backend/python/fastapi/production/">
     <meta property="og:site_name" content="资深码农">
@@ -25,11 +25,12 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="生产部署与最佳实践 - FastAPI">
-    <meta name="twitter:description" content="Uvicorn/Gunicorn 部署 / 配置管理 / 日志监控 / Docker 部署">
+    <meta name="twitter:title" content="Python 服务上生产：进程模型、优雅关闭与可观测性 - FastAPI">
+    <meta name="twitter:description" content="Python 服务上生产要定的几件事：worker 数按内存与下游连接数反推而不是照抄核数公式、K8s 上为什么更推荐单 worker 多副本、SIGTERM 之后停止接新连接到连接池释放的完整优雅关闭链路、Python 进程内存不归还操作系统所以只涨不降常常不是泄漏、tracemalloc 与引用链排查、prometheus 多进程模式的目录配置、存活与就绪探针的区别，以及多副本下进程内定时任务为什么会重复执行。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../../atom.xml">
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "uvicorn 的 worker 数到底该设多少？", "acceptedAnswer": {"@type": "Answer", "text": "先分清负载类型再算。CPU 密集型按核数设，超过核数只会增加争抢。IO 密集型可以超配到核数的二到四倍，但真正的上限往往不是 CPU 而是内存：每个 worker 是独立进程，独占一份解释器与已导入模块，常驻几十到上百兆，worker 数乘以单进程内存不能超过容器限额。另一个隐形上限是下游连接数，四个 worker 各持二十条数据库连接就是八十条，很容易顶到数据库的最大连接数。结论是按内存和连接数反推，再用压测校准，不要照抄二倍核数加一这类公式。"}}, {"@type": "Question", "name": "K8s 上应该用多 worker 还是多副本？", "acceptedAnswer": {"@type": "Answer", "text": "推荐每个 Pod 单 worker，用副本数扩展。理由有三：指标和日志按 Pod 天然可归因，不需要在进程间聚合，prometheus 也不用开多进程模式；滚动更新粒度更细，一次只影响一个进程的在途请求；资源限制与探针的语义更准确，某个进程卡住时只摘掉它自己。代价是每个副本各自持一份内存和连接池，总连接数要重新算。虚拟机或单机部署反过来，单容器多 worker 的资源利用率更高。"}}, {"@type": "Question", "name": "Python 服务内存只涨不降，是内存泄漏吗？", "acceptedAnswer": {"@type": "Answer", "text": "多数情况下不是。Python 的小对象分配器按页和区管理内存，一个区只有在完全空闲时才可能归还给操作系统，实际运行中总有零散对象留在各个区里，于是进程的 RSS 停在历史峰值附近不再下降。这是分配器的正常行为而不是泄漏。判断标准是趋势而不是绝对值：如果流量平稳后内存曲线走平，那就是正常的水位；如果持续单调上涨且没有平台期，才需要按泄漏排查。"}}, {"@type": "Question", "name": "真正的内存泄漏怎么排查？", "acceptedAnswer": {"@type": "Answer", "text": "先用 tracemalloc 在两个时间点各取一次快照做差异比较，按分配位置排序就能看到是哪一行在持续增长，注意它本身有明显开销，只在排查期临时开启。确认可疑对象类型之后，用 objgraph 找到引用链，看是谁一直持有它。最常见的三类原因是：模块级的字典或列表当缓存却没有淘汰策略、没有上限的 lru_cache 缓存了带大对象的参数、以及注册了回调或监听却从不注销。"}}, {"@type": "Question", "name": "为什么多 worker 下 prometheus 指标会错乱？", "acceptedAnswer": {"@type": "Answer", "text": "因为默认的客户端把指标存在进程内存里，而请求会被随机分到某一个 worker，每次抓取只能拿到其中一个进程的数据，计数器看起来会跳来跳去甚至倒退。解决办法是开多进程模式：设置一个共享目录的环境变量，让各进程把指标写成文件，暴露端点时用多进程收集器聚合。还要注意进程退出时标记它已死，否则退出进程的文件会一直被算进来，另外这个目录必须在启动时清空。"}}, {"@type": "Question", "name": "优雅关闭要配哪些参数才真的生效？", "acceptedAnswer": {"@type": "Answer", "text": "四处要对齐。应用侧要在 lifespan 的关闭阶段释放连接池与客户端。服务器侧要给足优雅关闭超时，uvicorn 与 gunicorn 各有对应参数，它决定等在途请求多久。编排侧的终止宽限期必须大于服务器的优雅超时，否则进程还在收尾就被强杀。最后要加一个 preStop 等待，因为收到 SIGTERM 与流量真正停止转发之间存在时间差，不等就会有请求被打到正在关闭的实例上。四个值的关系是终止宽限期大于优雅超时加上 preStop 等待时间。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -62,66 +63,346 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">生产部署与最佳实践</h1>
+                        <h1 class="article-title">Python 服务上生产：进程模型、优雅关闭与可观测性</h1>
                     </header>
                     <div class="article-content">
+<p>Python 服务上生产要回答的问题和写代码时完全不同：起几个进程、怎么关得干净、内存涨了算不算故障、指标怎么才不串、定时任务在多副本下会不会跑重。这几件事定错了，代码写得再好也会在发布和故障时付出代价。这篇按上线顺序逐个给结论和可抄的配置。为什么必须多进程才能吃满多核，见<a href="../../">《Python 做后端的适用边界与运行时约束》</a>。</p>
 
-<h2>生产部署方案</h2>
-<pre><code class="language-bash"># 1. 用 Gunicorn 管理 Uvicorn worker
-pip install gunicorn uvicorn[standard]
+<h2>进程模型：worker 数是被内存决定的</h2>
+<p><code>uvicorn --workers N</code> 会由主进程派生 N 个子进程共享监听套接字；gunicorn 加 <code>uvicorn.workers.UvicornWorker</code> 是同一件事，区别在 gunicorn 的进程管理更成熟（有 <code>--max-requests</code> 轮换、worker 静默超时强杀等治理能力）。</p>
+<p><strong>「worker 数 = 2 × 核数 + 1」这个公式不要照抄</strong>，它来自同步 WSGI 时代。Python 的每个 worker 是独立进程，独占一份解释器与已导入模块，常驻几十到上百 MB，所以真正卡住你的通常是内存和下游连接数，不是 CPU。</p>
 
-gunicorn app:app \
-  -w 4 \
-  -k uvicorn.workers.UvicornWorker \
-  -b 0.0.0.0:8000 \
-  --timeout 120 \
-  --access-logfile -</code></pre>
+<div class="mermaid">
+flowchart TB
+    Q{"部署在哪"} -->|"虚拟机 / 单机"| VM["单容器多 worker<br/>资源利用率最高"]
+    Q -->|"K8s / 容器编排"| K8S["每 Pod 单 worker<br/>靠副本数扩展"]
+    VM --> C1{"负载类型"}
+    C1 -->|"CPU 密集"| N1["worker 数 = 核数"]
+    C1 -->|"IO 密集"| N2["可超配到 2 到 4 倍核数"]
+    N1 --> M{"内存够吗<br/>worker 数 × 单进程 RSS"}
+    N2 --> M
+    M -->|"超过容器限额"| M1["按内存反推，减少 worker"]
+    M -->|"够"| D{"下游连接够吗<br/>worker 数 × 池大小"}
+    D -->|"顶到数据库上限"| D1["缩小每 worker 池，或减 worker"]
+    D -->|"够"| OK["压测校准，看 P99 与 CPU 拐点"]
+    K8S --> OBS["指标日志按 Pod 归因<br/>prometheus 不必开多进程模式"]
+</div>
 
 <table>
-<thead>
-<tr><th>配置</th><th>推荐值</th><th>说明</th></tr>
-</thead>
+<thead><tr><th>形态</th><th>扩展方式</th><th>优点</th><th>代价</th><th>适用</th></tr></thead>
 <tbody>
-<tr><td>worker 数</td><td>2*CPU+1</td><td>不要超过 CPU 核心数太多</td></tr>
-<tr><td>worker 类</td><td>UvicornWorker</td><td>异步 worker</td></tr>
-<tr><td>超时</td><td>120s</td><td>长接口要调大</td></tr>
+<tr><td><code>uvicorn --workers N</code></td><td>进程数</td><td>一条命令，无额外组件</td><td>进程治理能力弱</td><td>小服务、单机</td></tr>
+<tr><td>gunicorn + UvicornWorker</td><td>进程数</td><td>有 <code>max-requests</code>、静默超时强杀、平滑重启</td><td>多一层配置</td><td>虚拟机长期运行的服务</td></tr>
+<tr><td><strong>每 Pod 单 worker + 多副本</strong></td><td>副本数</td><td>指标日志天然按 Pod 归因；滚动更新粒度细；探针语义准确</td><td>每副本一份内存与连接池，总连接数要重算</td><td>K8s 上的推荐形态</td></tr>
+<tr><td>单进程</td><td>不能扩展</td><td>—</td><td>吃不满多核</td><td>仅本地开发</td></tr>
 </tbody>
 </table>
 
-<h2>Docker 部署</h2>
+<pre><code class="language-bash"># ---------- 形态一：虚拟机上用 gunicorn 管进程 ----------
+gunicorn myapp.main:app \
+  -k uvicorn.workers.UvicornWorker \
+  -w 4 \
+  -b 0.0.0.0:8000 \
+  --graceful-timeout 30 \        # 优雅关闭等待在途请求的上限
+  --timeout 60 \                 # worker 静默超时：超过就认为卡死并强杀，必须大于最慢接口
+  --max-requests 5000 \          # 处理够这么多请求就换新进程，兜住缓慢的内存增长
+  --max-requests-jitter 500 \    # 加抖动，避免所有 worker 同时重启造成容量凹陷
+  --access-logfile - \
+  --forwarded-allow-ips '*'      # 在反向代理后面才能拿到真实客户端 IP
+
+# ---------- 形态二：K8s 里单 worker，用副本数扩展 ----------
+exec uvicorn myapp.main:app \
+  --host 0.0.0.0 --port 8000 \
+  --workers 1 \
+  --timeout-graceful-shutdown 25 \
+  --no-access-log                # 访问日志交给网关，避免每请求两条
+
+# ---------- 定 worker 数之前先量单进程内存 ----------
+# 启动后打一次流量，看 RSS 稳定在多少（单位 KB）
+ps -o rss=,cmd= -p $(pgrep -f 'uvicorn myapp')
+# worker 数上限 = (容器内存限额 × 0.8 - 共享部分) / 单进程 RSS
+# 连接数上限 = 数据库 max_connections × 0.8 / (worker 数 × 每 worker 池大小)
+</code></pre>
+
+<h2>优雅关闭：四个超时必须对齐</h2>
+<p>关得不干净的表现是发布期间出现一小波 502 或超时。原因几乎总是同一个：<strong>进程收到 SIGTERM 与上游停止转发流量之间存在时间差</strong>。端点摘除是异步生效的，等你开始拒绝新连接时，可能还有请求正在路上。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    participant K as 编排系统
+    participant EP as 负载均衡端点表
+    participant P as 应用进程
+    participant U as 在途请求
+    K->>P: 发送 SIGTERM
+    K->>EP: 同时开始摘除端点（异步，有延迟）
+    Note over P: preStop 先睡 5 到 10 秒<br/>让端点摘除先完成
+    EP-->>P: 期间仍可能有新请求打进来
+    P->>P: 停止接受新连接，已有连接继续处理
+    P->>U: 等在途请求完成，上限 = 优雅超时
+    U-->>P: 全部完成
+    P->>P: 执行 lifespan 关闭段<br/>关连接池、flush 缓冲、注销注册中心
+    P-->>K: 正常退出，退出码 0
+    Note over K,P: 终止宽限期必须大于<br/>preStop 等待 + 优雅超时<br/>否则进程收尾时被 SIGKILL
+</div>
+
+<table>
+<thead><tr><th>层</th><th>参数</th><th>建议值</th><th>配错的后果</th></tr></thead>
+<tbody>
+<tr><td>应用</td><td><code>lifespan</code> 关闭段</td><td>关连接池、HTTP 客户端、flush 日志与指标</td><td>连接不释放，下游看到一批半开连接</td></tr>
+<tr><td>uvicorn</td><td><code>--timeout-graceful-shutdown</code></td><td>略大于最慢接口的 P99，如 25s</td><td>设太小则在途请求被直接断开</td></tr>
+<tr><td>gunicorn</td><td><code>--graceful-timeout</code></td><td>30s</td><td>同上；且它与 <code>--timeout</code> 是两件事，后者是卡死判定</td></tr>
+<tr><td>编排</td><td><code>terminationGracePeriodSeconds</code></td><td><strong>大于</strong> preStop 等待 + 优雅超时，如 45s</td><td>进程正在收尾时被 SIGKILL，在途请求全丢</td></tr>
+<tr><td>编排</td><td><code>preStop</code> 等待</td><td>5~10s</td><td>不加就会有请求被打到正在关闭的实例，表现为发布期 502</td></tr>
+<tr><td>代码</td><td>不吞 <code>CancelledError</code></td><td>捕获后必须重抛</td><td>协程无法被取消，优雅关闭直接失效</td></tr>
+</tbody>
+</table>
+
+<p>探针、preStop 与滚动更新的完整机制见站内 <a href="../../../../devops/kubernetes/">Kubernetes 专题</a>，这里只给与 Python 侧对齐的参数。</p>
+
+<h2>内存：只涨不降通常不是泄漏</h2>
+<p>这是 Python 服务最常见的误判。CPython 的小对象走自带的分配器，按池和区（arena）管理，<strong>一个区只有在完全空闲时才可能还给操作系统</strong>。实际运行中总有零散的长命对象散落在各个区里，于是 RSS 停在历史峰值附近不再下降。这是分配器行为，不是泄漏。</p>
+<p>判断标准是<strong>趋势而不是绝对值</strong>：流量平稳后曲线走平，就是正常水位；持续单调上涨、没有平台期、重启后又从低位开始重复同样的上涨，才按泄漏查。</p>
+
+<div class="mermaid">
+flowchart TB
+    A["内存曲线上涨"] --> B{"流量平稳后是否走平"}
+    B -->|"走平在某个水位"| C["正常：分配器不归还内存<br/>调整容器 limit 与 worker 数即可"]
+    B -->|"持续单调上涨"| D{"对象数是否同步增长<br/>len(gc.get_objects())"}
+    D -->|"对象数增长"| E["真泄漏：tracemalloc 差异快照<br/>定位到分配行"]
+    D -->|"对象数平稳但 RSS 涨"| F["碎片或 C 扩展内部缓存<br/>试 MALLOC_ARENA_MAX 限制 glibc 分配区"]
+    E --> G["objgraph 找引用链<br/>看谁一直持有"]
+    G --> H["常见三类：模块级缓存无淘汰<br/>无上限 lru_cache<br/>注册回调不注销"]
+    C --> I["兜底手段：max-requests 定期换进程"]
+    F --> I
+</div>
+
+<pre><code class="language-python">import gc
+import linecache
+import tracemalloc
+
+
+def start_leak_probe() -&gt; tracemalloc.Snapshot:
+    # tracemalloc 会给每次分配记录调用栈，开销明显（内存与 CPU 都涨），
+    # 只在排查期临时开启，绝不常驻生产
+    tracemalloc.start(10)          # 保留 10 层栈帧，够定位到业务代码
+    return tracemalloc.take_snapshot()
+
+
+def diff_leak_probe(baseline: tracemalloc.Snapshot, top: int = 10) -&gt; None:
+    current = tracemalloc.take_snapshot()
+    # 按分配位置比较两个时间点的差异：持续为正且不断变大的那几行就是嫌疑
+    for stat in current.compare_to(baseline, "lineno")[:top]:
+        frame = stat.traceback[0]
+        print(f"{frame.filename}:{frame.lineno} +{stat.size_diff / 1024:.1f}KB "
+              f"({stat.count_diff:+d} 个对象)")
+        print("   ", linecache.getline(frame.filename, frame.lineno).strip())
+
+
+def object_census(top: int = 10) -&gt; None:
+    """不开 tracemalloc 时的轻量手段：看哪类对象在变多"""
+    from collections import Counter
+    counter = Counter(type(o).__name__ for o in gc.get_objects())
+    for name, cnt in counter.most_common(top):
+        print(name, cnt)
+    # 确认可疑类型后用 objgraph 找引用链：
+    #   import objgraph
+    #   objgraph.show_backrefs(objgraph.by_type("MyCache")[:3], max_depth=5, filename="refs.png")
+
+
+# ---------- 多进程部署的内存优化 ----------
+def before_fork() -&gt; None:
+    # 在 fork 出 worker 之前调用：先回收启动期垃圾，再把常驻对象移出 GC 追踪，
+    # 避免子进程的 GC 遍历修改对象头的标记位而触发写时复制，
+    # 把本来父子共享的内存页变成各自私有
+    gc.collect()
+    gc.freeze()
+</code></pre>
+
+<table>
+<thead><tr><th>现象</th><th>结论</th><th>手段</th></tr></thead>
+<tbody>
+<tr><td>上涨后走平，重启回到低位再走平</td><td>正常水位</td><td>按峰值设容器 limit，别追着「优化」</td></tr>
+<tr><td>持续上涨无平台期，对象数同步增长</td><td>真泄漏</td><td><code>tracemalloc</code> 差异快照 + <code>objgraph</code> 引用链</td></tr>
+<tr><td>对象数平稳但 RSS 持续涨</td><td>碎片或 C 扩展内部缓存</td><td>试 <code>MALLOC_ARENA_MAX=2</code>；定期轮换进程</td></tr>
+<tr><td>多 worker 时总内存远超预估</td><td>fork 后共享页被写时复制打散</td><td>fork 前 <code>gc.freeze()</code>；升级到 3.12 享受不朽对象的收益</td></tr>
+<tr><td>某类请求后内存跳升且不回落</td><td>缓存了大对象</td><td>检查 <code>lru_cache</code> 有没有 <code>maxsize</code>，模块级 dict 有没有淘汰</td></tr>
+<tr><td>OOM 被 kill，日志里什么都没有</td><td>容器限额被击穿</td><td>看内核 OOM 记录与容器退出码 137；先降 worker 数止血</td></tr>
+</tbody>
+</table>
+
+<h2>可观测性：多进程是最大的坑</h2>
+<p>默认的 <code>prometheus_client</code> 把指标存在进程内存里。多 worker 下请求被随机分到某个进程，每次抓取只拿到其中一个的数据，<strong>计数器会跳变甚至倒退</strong>。必须开多进程模式：各进程把指标写成文件，暴露端点时聚合。</p>
+
+<pre><code class="language-python">import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from prometheus_client import CollectorRegistry, Counter, Histogram, generate_latest, multiprocess
+from starlette.responses import Response
+
+# 必须在导入 prometheus_client 之前就设好这个环境变量（通常在 Dockerfile 或启动脚本里）
+#   PROMETHEUS_MULTIPROC_DIR=/tmp/prom
+# 而且容器启动时要清空该目录，否则上次运行残留的文件会被算进来
+MULTIPROC_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+
+REQUESTS = Counter("http_requests_total", "请求总数", ["method", "path", "status"])
+LATENCY = Histogram(
+    "http_request_duration_seconds", "请求耗时", ["method", "path"],
+    # 显式给桶边界：默认桶对 Web 接口太粗，算不准 P99
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    if MULTIPROC_DIR:
+        # 进程退出时标记自己已死，否则它的指标文件会永远被计入总量
+        multiprocess.mark_process_dead(os.getpid(), MULTIPROC_DIR)
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/metrics")
+def metrics() -&gt; Response:
+    if MULTIPROC_DIR:
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)   # 聚合所有 worker 的文件
+    else:
+        from prometheus_client import REGISTRY as registry   # 单进程直接用默认注册表
+    return Response(generate_latest(registry), media_type="text/plain; version=0.0.4")
+</code></pre>
+
+<table>
+<thead><tr><th>维度</th><th>做法</th><th>注意</th></tr></thead>
+<tbody>
+<tr><td>指标</td><td><code>prometheus_client</code>，按接口打计数与直方图</td><td>多进程必须配 <code>PROMETHEUS_MULTIPROC_DIR</code> 并在启动时清空；<strong>path 标签要用路由模板</strong>，用原始 URL 会标签爆炸</td></tr>
+<tr><td>链路</td><td>OpenTelemetry 自动埋点（FastAPI、httpx、SQLAlchemy 各有 instrumentation）</td><td>采样率要配，全采样在高 QPS 下开销可观</td></tr>
+<tr><td>日志与 trace 关联</td><td>把 trace_id 注入日志字段</td><td>用 <code>contextvars</code> 透传；细节见站内<a href="../../../../devops/logging/">日志专题</a></td></tr>
+<tr><td>事件循环健康</td><td>常驻上报事件循环延迟</td><td>asyncio 服务最该看的指标，见<a href="../async-performance/">《asyncio 的性能陷阱》</a></td></tr>
+<tr><td>进程级指标</td><td>RSS、GC 各代计数、打开的文件描述符数</td><td>fd 数缓慢上涨往往是连接泄漏的第一个信号</td></tr>
+<tr><td>接口耗时拆解</td><td>按阶段打点</td><td>方法论见站内<a href="../../../performance/">后端性能优化专题</a>，这里不重复</td></tr>
+</tbody>
+</table>
+
+<h2>健康检查：存活与就绪不是一回事</h2>
+<table>
+<thead><tr><th>探针</th><th>检查什么</th><th>失败后的动作</th><th>绝对不要做</th></tr></thead>
+<tbody>
+<tr><td>存活（liveness）</td><td>进程还在、事件循环没卡死，返回固定响应即可</td><td>重启容器</td><td>查数据库——下游抖动会导致全部实例被反复重启</td></tr>
+<tr><td>就绪（readiness）</td><td>本地初始化是否完成：配置已加载、连接池已建、缓存已预热</td><td>从端点表摘除，不重启</td><td><strong>级联下游依赖</strong>——下游抖一下所有副本同时不就绪，服务整体不可用</td></tr>
+<tr><td>启动（startup）</td><td>慢启动服务的初始化窗口</td><td>在此期间不执行存活检查</td><td>用超长的存活初始延迟代替它</td></tr>
+</tbody>
+</table>
+
+<p>就绪检查为什么不能级联下游、以及服务发现侧的摘除逻辑，见站内 <a href="../../../microservice/">微服务与服务治理专题</a>。</p>
+
+<h2>容器化：几个必设的环境变量</h2>
 <pre><code class="language-dockerfile">FROM python:3.12-slim
 
+# PYTHONUNBUFFERED=1 最关键：不设的话 stdout 是块缓冲，
+# 日志会攒在缓冲区里，进程被 kill 时直接丢失，排查故障时什么都看不到
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONFAULTHANDLER=1 \
+    PROMETHEUS_MULTIPROC_DIR=/tmp/prom \
+    MALLOC_ARENA_MAX=2
+
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
+COPY src ./src
 
-COPY . .
+# 非 root 运行；同时准备指标目录
+RUN useradd --create-home --uid 10001 appuser \
+ && mkdir -p /tmp/prom && chown -R appuser:appuser /tmp/prom /app
+USER appuser
 
-CMD ["gunicorn", "app:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000"]</code></pre>
+EXPOSE 8000
+# 用 exec 形式（JSON 数组）：进程 PID 为 1 且能直接收到 SIGTERM。
+# 写成 shell 形式会被 /bin/sh -c 包一层，信号到不了 Python，优雅关闭直接失效
+CMD ["uvicorn", "myapp.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--workers", "1", "--timeout-graceful-shutdown", "25"]
+</code></pre>
 
-<h2>配置管理</h2>
-<pre><code class="language-python">from pydantic_settings import BaseSettings
+<table>
+<thead><tr><th>设置</th><th>作用</th><th>不设的后果</th></tr></thead>
+<tbody>
+<tr><td><code>PYTHONUNBUFFERED=1</code></td><td>stdout 不做块缓冲</td><td>日志延迟出现，进程被杀时缓冲区内容全部丢失</td></tr>
+<tr><td><code>PYTHONDONTWRITEBYTECODE=1</code></td><td>不生成 pyc</td><td>只读文件系统下报错，镜像层里多出无用文件</td></tr>
+<tr><td><code>PYTHONFAULTHANDLER=1</code></td><td>段错误时打印 Python 栈</td><td>C 扩展崩溃时只有一行 Segmentation fault</td></tr>
+<tr><td>exec 形式的 CMD</td><td>进程直接收到 SIGTERM</td><td>信号被 shell 吞掉，优雅关闭完全不生效</td></tr>
+<tr><td>非 root 用户</td><td>降低容器逃逸影响面</td><td>安全基线不过，细节见站内<a href="../../../../devops/security/">安全专题</a></td></tr>
+<tr><td>多阶段构建 + slim 基础镜像</td><td>镜像从 1GB 级降到 200MB 级</td><td>拉取慢、扩容慢、攻击面大</td></tr>
+</tbody>
+</table>
 
-class Settings(BaseSettings):
-    database_url: str
-    redis_url: str
-    secret_key: str
-    debug: bool = False
-    
-    class Config:
-        env_file = ".env"
+<h2>定时任务与后台 worker</h2>
+<p>最容易出事的一条：<strong>进程内调度器在多副本下会重复执行</strong>。三个副本各跑一个 APScheduler，每天的对账任务就跑三遍；如果任务不幂等，数据直接错。</p>
 
-settings = Settings()</code></pre>
+<div class="mermaid">
+sequenceDiagram
+    participant S1 as 副本 1 内置调度器
+    participant S2 as 副本 2 内置调度器
+    participant S3 as 副本 3 内置调度器
+    participant DB as 数据库
+    Note over S1,S3: 00:00 三个副本的定时器同时触发
+    S1->>DB: 执行对账，写入结果
+    S2->>DB: 同一批数据再算一遍
+    S3->>DB: 第三遍
+    Note over DB: 非幂等任务导致重复扣款或重复发送
+    Note over S1,S3: 改造：抢分布式锁，只有一个副本执行
+    S1->>DB: SET lock NX EX 3600 成功，执行
+    S2--xDB: 抢锁失败，直接跳过
+    S3--xDB: 抢锁失败，直接跳过
+</div>
 
-<h2>生产检查清单</h2>
-<ul>
-<li>关闭 Swagger 文档（生产环境不要暴露 API 文档）</li>
-<li>配置 CORS 白名单</li>
-<li>添加请求 ID 日志中间件</li>
-<li>配置健康检查端点 /health</li>
-<li>用 HTTPS，证书自动续期</li>
-</ul>
+<table>
+<thead><tr><th>方案</th><th>多副本安全</th><th>可观测性</th><th>适用</th></tr></thead>
+<tbody>
+<tr><td>进程内 APScheduler，多副本</td><td><strong>不安全，会重复执行</strong></td><td>无</td><td>只有单副本时可用</td></tr>
+<tr><td>进程内调度 + 分布式锁</td><td>安全（锁要带过期时间）</td><td>一般</td><td>任务少、不想加组件</td></tr>
+<tr><td>独立的调度进程 / CronJob</td><td>安全</td><td>好，有独立的成功失败记录</td><td>推荐，业务副本与任务解耦</td></tr>
+<tr><td>Celery beat + worker</td><td>安全（beat 单实例）</td><td>好</td><td>已有 Celery 体系时</td></tr>
+<tr><td>队列驱动的后台 worker</td><td>安全</td><td>最好，有积压与重试指标</td><td>异步任务的标准形态，见站内<a href="../../../mq/">消息队列专题</a></td></tr>
+</tbody>
+</table>
 
+<h2>反模式速查</h2>
+<table>
+<thead><tr><th>反模式</th><th>现象</th><th>修法</th></tr></thead>
+<tbody>
+<tr><td>单 worker 部署却期待多核性能</td><td>CPU 卡在 1/N，升配无效</td><td>worker 数或副本数对齐核数</td></tr>
+<tr><td>不处理 SIGTERM</td><td>每次发布都有一波 502 与超时</td><td>配齐四个超时，加 preStop</td></tr>
+<tr><td>忘记 <code>PYTHONUNBUFFERED</code></td><td>故障时最后几秒的日志全丢</td><td>Dockerfile 里设为 1</td></tr>
+<tr><td>多副本各跑进程内定时任务</td><td>任务重复执行，数据出错</td><td>分布式锁或独立调度</td></tr>
+<tr><td><code>tracemalloc</code> 常开</td><td>内存与 CPU 都被自己的排查工具吃掉</td><td>只在排查期开，用完关</td></tr>
+<tr><td>prometheus 多进程不配目录</td><td>计数器跳变甚至倒退，告警全靠不住</td><td>配 <code>PROMETHEUS_MULTIPROC_DIR</code> 并聚合</td></tr>
+<tr><td>就绪探针检查数据库</td><td>下游抖一下，所有副本同时被摘</td><td>就绪只看本地初始化状态</td></tr>
+<tr><td>shell 形式的 CMD</td><td>信号被 sh 吞掉，优雅关闭失效</td><td>用 JSON 数组形式</td></tr>
+</tbody>
+</table>
+
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+        <li>照抄「2 × 核数 + 1」设 worker：Python 每进程独占数十到上百 MB，内存先爆的概率远高于 CPU 打满。</li>
+        <li><code>terminationGracePeriodSeconds</code> 小于服务器的优雅超时：进程正在收尾时被 SIGKILL，在途请求全丢。</li>
+        <li>不加 preStop 等待：端点摘除是异步的，SIGTERM 之后仍有请求被打进来，发布期必然出现 502。</li>
+        <li>忘记 <code>PYTHONUNBUFFERED=1</code>：stdout 块缓冲，崩溃前最关键的那几行日志永远看不到。</li>
+        <li>把「内存只涨不降」直接当泄漏查：分配器本来就不归还内存，看趋势有没有平台期才是正确判断。</li>
+        <li><code>tracemalloc</code> 或 asyncio 调试模式常开在生产：排查工具本身成了性能问题。</li>
+        <li><code>lru_cache</code> 不设 <code>maxsize</code>：参数一多就成了无上限缓存，这是最常见的真泄漏来源。</li>
+        <li>prometheus 多进程模式没配目录、或没在启动时清空目录：指标跳变、上次运行的残留被计入，告警彻底不可信。</li>
+        <li>指标的 path 标签用原始 URL：带 ID 的路径让标签基数爆炸，能把监控系统打挂。</li>
+        <li>进程退出时不调 <code>mark_process_dead</code>：死掉的 worker 指标永远留在总量里，数值只增不减。</li>
+        <li>就绪探针级联下游依赖：下游抖动导致所有副本同时不就绪，把局部故障放大成整体不可用。</li>
+        <li>多副本各自跑进程内定时任务：对账、发券、清理这类任务被执行多遍，事后对账才发现。</li>
+    </ul>
+</div>
                     </div>
                 </article>
             </main>
@@ -132,6 +413,7 @@ settings = Settings()</code></pre>
             <p>© 2026 资深码农. 保留所有权利。</p>
         </div>
     </footer>
+    <script>window.SITE_BASE = "../../../../";window.SITE_GROUP = "backend";</script>
     <script defer src="../../../../vendor/highlight.min.js"></script>
     <script defer src="../../../../js/main.js?v=2"></script>
 </body>

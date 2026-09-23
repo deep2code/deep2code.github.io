@@ -6,17 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>Migration 与生产部署 - Drizzle ORM - 资深码农</title>
+    <title>迁移管理：生成、应用与生产流程 - Drizzle ORM - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="drizzle-kit / 生成迁移 / 应用迁移 / 生产最佳实践">
+    <meta name="description" content="Drizzle 迁移管理生产实践：drizzle-kit generate 从 schema diff 生成 SQL、migrate 应用迁移、为什么生产必须提交 SQL 文件而不是运行时 push、危险变更识别清单（改列类型/加 NOT NULL/删列的数据丢失风险）、与 expand-migrate-contract 三阶段的配合、多环境与并发部署的迁移锁、以及向前修复而不是回退 DDL 的回滚策略。">
     <meta name="keywords" content="Drizzle ORM,Migration 与生产部署,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/drizzle/migrations/">
-    <meta property="og:title" content="Migration 与生产部署 - Drizzle ORM - 资深码农">
-    <meta property="og:description" content="drizzle-kit / 生成迁移 / 应用迁移 / 生产最佳实践">
+    <meta property="og:title" content="迁移管理：生成、应用与生产流程 - Drizzle ORM - 资深码农">
+    <meta property="og:description" content="Drizzle 迁移管理生产实践：drizzle-kit generate 从 schema diff 生成 SQL、migrate 应用迁移、为什么生产必须提交 SQL 文件而不是运行时 push、危险变更识别清单（改列类型/加 NOT NULL/删列的数据丢失风险）、与 expand-migrate-contract 三阶段的配合、多环境与并发部署的迁移锁、以及向前修复而不是回退 DDL 的回滚策略。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/drizzle/migrations/">
     <meta property="og:site_name" content="资深码农">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Migration 与生产部署 - Drizzle ORM">
-    <meta name="twitter:description" content="drizzle-kit / 生成迁移 / 应用迁移 / 生产最佳实践">
+    <meta name="twitter:title" content="迁移管理：生成、应用与生产流程 - Drizzle ORM">
+    <meta name="twitter:description" content="Drizzle 迁移管理生产实践：drizzle-kit generate 从 schema diff 生成 SQL、migrate 应用迁移、为什么生产必须提交 SQL 文件而不是运行时 push、危险变更识别清单（改列类型/加 NOT NULL/删列的数据丢失风险）、与 expand-migrate-contract 三阶段的配合、多环境与并发部署的迁移锁、以及向前修复而不是回退 DDL 的回滚策略。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Drizzle 迁移：从你遇到的问题出发：生产用迁移？", "acceptedAnswer": {"@type": "Answer", "text": "生产环境不要用 push，用生成的迁移文件。"}}, {"@type": "Question", "name": "Drizzle 迁移：从你遇到的问题出发：迁移文件提交 Git？", "acceptedAnswer": {"@type": "Answer", "text": "迁移文件要提交 Git，团队共享。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "drizzle-kit push 和 generate 有什么区别，生产该用哪个？", "acceptedAnswer": {"@type": "Answer", "text": "push 直接对比 schema 和数据库并即时执行 ALTER 语句，不留下任何 SQL 文件，你无法审查它做了什么，也无法在其他环境重放。generate 把 diff 写成带序号的 SQL 文件，可以提交到 git、在 code review 里审查、在各环境按顺序重放。生产必须用 generate 加 migrate，push 只适合本地原型阶段。"}}, {"@type": "Question", "name": "为什么必须把生成的迁移 SQL 提交到 git？", "acceptedAnswer": {"@type": "Answer", "text": "三个原因。第一是可审查：DDL 变更的风险必须在 code review 里被看见，diff 工具不会替你判断业务影响。第二是可重放：开发、预发、生产必须执行完全相同的 SQL，从 schema 重新生成可能因为工具版本不同产生差异。第三是可追溯：出问题时需要知道数据库结构在哪个 commit 变成了现在这样。"}}, {"@type": "Question", "name": "drizzle-kit 能自动识别危险的 schema 变更吗？", "acceptedAnswer": {"@type": "Answer", "text": "不能完全识别。它能检测到重命名 vs 删除加新增的歧义并提示你选择，也会在 strict 模式下对数据丢失操作二次确认。但它无法判断业务影响：加 NOT NULL 会不会因为已有 NULL 数据失败、改列类型会不会截断数据、删列会不会有服务还在读。这些必须人工审查生成的 SQL。"}}, {"@type": "Question", "name": "Drizzle 迁移怎么回滚？", "acceptedAnswer": {"@type": "Answer", "text": "drizzle-kit 没有内置的 down 迁移。生产环境的正确做法是向前修复而不是回退 DDL：写一个新的迁移把结构改回去，而不是逆向执行上一个迁移。因为回退 DDL 通常会丢数据（删掉的列回不来），而且如果已经有新版本代码在跑，回退结构会让代码报错。真正需要回滚的是应用版本，不是数据库结构。"}}, {"@type": "Question", "name": "多个实例同时启动时迁移会冲突吗？", "acceptedAnswer": {"@type": "Answer", "text": "会有竞态。Drizzle 的 migrate 函数在 PostgreSQL 下会在事务里执行并依赖 __drizzle_migrations 表的检查，但多实例并发仍可能出现重复执行或部分失败。生产环境的正确做法是把迁移从应用启动流程里剥离出来，作为独立的部署前置步骤（Kubernetes 的 initContainer 或 CI 的单独 job），保证只有一个进程执行。"}}, {"@type": "Question", "name": "加一个 NOT NULL 列为什么会导致线上故障？", "acceptedAnswer": {"@type": "Answer", "text": "如果表里已有数据且没给默认值，ALTER TABLE ADD COLUMN NOT NULL 会直接失败。即使给了默认值，在老版本 PostgreSQL（11 之前）会重写整张表并持有 ACCESS EXCLUSIVE 锁，大表上锁几分钟等于服务不可用。正确做法是分三步：先加 nullable 列、回填数据、再加 NOT NULL 约束，每步单独一个迁移。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -64,68 +64,348 @@
             <main id="body-content">
                 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Drizzle 迁移：从你遇到的问题出发</h1>
+                        <h1 class="article-title">迁移管理：生成、应用与生产流程</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ Drizzle 迁移</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Drizzle 迁移怎么帮你解决。</p>
+<p>迁移是 ORM 里唯一会不可逆地毁掉生产数据的环节。查询写错了最多报错，迁移写错了列就没了。这篇讲清 drizzle-kit 的工作机制、危险变更的识别、以及生产环境应该怎么组织迁移流程。</p>
 
-<div class="mermaid">
-flowchart LR
-    A[改表结构] --> B[drizzle-kit generate]
-    B --> C[生成迁移文件]
-    C --> D[migrate 执行]
-</div>
+<h2>drizzle-kit 的三条路径</h2>
 
-<h2>1. 改了表结构怎么同步</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>改了 Drizzle 的 schema，数据库表怎么同步？</p>
-</div>
-
-<p><strong>怎么解决？</strong>用 drizzle-kit generate 生成迁移文件，再执行迁移。</p>
-
-<h2>2. 怎么生成迁移</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>drizzle-kit 怎么用？</p>
-</div>
-
-<p><strong>怎么解决？</strong>npm 装 drizzle-kit，配置好，跑 generate 生成 SQL。</p>
-
-<h2>3. 怎么回滚</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>迁移出问题了怎么回滚？</p>
-</div>
-
-<p><strong>怎么解决？</strong>drizzle-kit 也支持回滚迁移。</p>
-
-<h2>常用命令</h2>
+<p>drizzle-kit 提供三种让数据库和 schema 对齐的方式，它们的适用边界差别很大：</p>
 
 <table>
-<thead><tr><th>命令</th><th>用途</th></tr></thead>
+<thead><tr><th>命令</th><th>做什么</th><th>留下 SQL 文件</th><th>可审查</th><th>可重放</th><th>适用阶段</th></tr></thead>
 <tbody>
-<tr><td>generate</td><td>生成迁移</td></tr>
-<tr><td>migrate</td><td>执行迁移</td></tr>
-<tr><td>push</td><td>直接推到数据库（开发用）</td></tr>
-</tbody></table>
+<tr><td>generate</td><td>对比 schema 与上次快照，生成 SQL 文件</td><td>是</td><td>是</td><td>是</td><td><strong>生产唯一正确选择</strong></td></tr>
+<tr><td>migrate</td><td>读取 SQL 文件并按顺序执行未应用的迁移</td><td>不产生，只执行</td><td>—</td><td>—</td><td>生产部署</td></tr>
+<tr><td>push</td><td>直连数据库对比并即时执行 ALTER</td><td><strong>否</strong></td><td><strong>否</strong></td><td><strong>否</strong></td><td>只适合本地原型</td></tr>
+<tr><td>pull</td><td>从现有数据库反向生成 TS schema</td><td>生成 schema 文件</td><td>是</td><td>—</td><td>接管遗留数据库</td></tr>
+<tr><td>check</td><td>检查迁移文件之间是否有冲突</td><td>—</td><td>—</td><td>—</td><td>CI 里做前置校验</td></tr>
+<tr><td>up</td><td>升级旧版本的迁移元数据格式</td><td>改写 snapshot</td><td>—</td><td>—</td><td>drizzle-kit 大版本升级时</td></tr>
+</tbody>
+</table>
 
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>生产用迁移</strong>生产环境不要用 push，用生成的迁移文件。</li>
-<li><strong>迁移文件提交 Git</strong>迁移文件要提交 Git，团队共享。</li>
-</ul>
+<p><strong>为什么生产绝不能用 push</strong>：push 的执行过程没有任何产物。你不知道它执行了什么 SQL，code review 里看不到 DDL 变更，出问题时无法追溯，不同环境可能执行出不同结果（因为 push 依赖当前数据库的实际状态）。更危险的是 push 遇到歧义变更（比如列重命名）时会交互式询问，在 CI 里就会卡住或选错。</p>
+
+<div class="mermaid">
+flowchart TB
+    A["修改 TS schema 文件"] --> B{"什么环境？"}
+    B -->|本地原型探索| C["drizzle-kit push<br/>快速迭代不留痕"]
+    B -->|需要进版本控制| D["drizzle-kit generate"]
+    D --> E["drizzle/0003_xxx.sql<br/>drizzle/meta/0003_snapshot.json"]
+    E --> F{"人工审查 SQL"}
+    F -->|发现危险变更| G["拆分成多个安全迁移<br/>或改写 schema"]
+    F -->|安全| H["git commit 迁移文件"]
+    G --> D
+    H --> I["CI: drizzle-kit check"]
+    I --> J["部署前置步骤<br/>drizzle-kit migrate"]
+    J --> K["__drizzle_migrations 记录哈希"]
+    C -.->|"绝不能用于生产"| L["无 SQL 文件<br/>无法审查无法重放"]
 </div>
 
-                    </div>
+<h2>generate 的工作原理与产物</h2>
+
+<p>generate 不是对比 schema 和数据库，而是<strong>对比当前 schema 与上一次的 JSON 快照</strong>。快照存在 <code>drizzle/meta/</code> 目录下，每次 generate 会生成一个新快照和一个 SQL 文件。这个设计意味着：快照文件必须和 SQL 文件一起提交，否则下次 generate 会重新生成已有的变更。</p>
+
+<pre><code class="language-bash"># 1. 生成迁移（对比 schema 与上次快照）
+npx drizzle-kit generate --name add_user_role
+# 产物：
+#   drizzle/0003_add_user_role.sql          实际执行的 DDL
+#   drizzle/meta/0003_snapshot.json         本次 schema 快照
+#   drizzle/meta/_journal.json              迁移清单与时间戳
+
+# 2. 审查生成的 SQL —— 这一步绝不能跳过
+cat drizzle/0003_add_user_role.sql
+
+# 3. 检查迁移之间是否有冲突（多人并行开发时必跑）
+npx drizzle-kit check
+
+# 4. 应用迁移（生产用独立步骤，不要放在应用启动里）
+npx drizzle-kit migrate
+
+# 5. 查看数据库当前已应用的迁移
+psql "$DATABASE_URL" -c \
+  'SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY created_at;'
+
+# 排查：schema 和数据库不一致时，用 pull 导出真实结构做对比
+npx drizzle-kit pull --out ./tmp-introspect
+# 然后 diff ./tmp-introspect/schema.ts 与你的 src/schema/
+# 这能发现「有人手动改了生产库」这类漂移问题</code></pre>
+
+<table>
+<thead><tr><th>文件</th><th>作用</th><th>必须提交 git</th><th>丢失的后果</th></tr></thead>
+<tbody>
+<tr><td>drizzle/NNNN_name.sql</td><td>实际执行的 DDL</td><td>必须</td><td>无法在其他环境重放结构变更</td></tr>
+<tr><td>drizzle/meta/NNNN_snapshot.json</td><td>该版本的 schema 快照</td><td>必须</td><td>下次 generate 会重复生成已有变更</td></tr>
+<tr><td>drizzle/meta/_journal.json</td><td>迁移清单与顺序</td><td>必须</td><td>migrate 不知道该执行哪些文件</td></tr>
+<tr><td>__drizzle_migrations 表</td><td>数据库侧的已应用记录（含哈希）</td><td>在数据库里</td><td>迁移会被重复执行导致报错</td></tr>
+</tbody>
+</table>
+
+<h2>危险变更识别清单</h2>
+
+<p>这是这篇最重要的一节。<strong>diff 工具只对比结构，不判断业务影响</strong>。以下变更 drizzle-kit 会老老实实生成 SQL，但执行后可能丢数据或锁表。</p>
+
+<table>
+<thead><tr><th>schema 变更</th><th>生成的 DDL</th><th>风险</th><th>安全做法</th></tr></thead>
+<tbody>
+<tr><td>删除一列</td><td>ALTER TABLE DROP COLUMN</td><td><strong>数据永久丢失</strong>；仍在读该列的老版本代码直接报错</td><td>先发布不读该列的代码，观察一到两周，再删列</td></tr>
+<tr><td>改列类型（text 到 integer）</td><td>ALTER COLUMN TYPE ... USING</td><td>无法转换的值导致迁移失败；能转换但精度丢失更危险</td><td>加新列、双写、回填校验、切读、删老列</td></tr>
+<tr><td>给已有数据的列加 NOT NULL</td><td>ALTER COLUMN SET NOT NULL</td><td>存在 NULL 行时迁移失败；大表全表扫描持锁</td><td>先回填 NULL 值，再加约束，分两个迁移</td></tr>
+<tr><td>新增 NOT NULL 列无默认值</td><td>ADD COLUMN NOT NULL</td><td>表非空时直接失败</td><td>加 nullable 列 → 回填 → 加约束，三步</td></tr>
+<tr><td>重命名列</td><td>drizzle-kit 会询问是 rename 还是 drop+add</td><td><strong>选错就是删列建列，数据全丢</strong></td><td>交互式确认时看清；CI 里绝不能跑交互式命令</td></tr>
+<tr><td>缩短 varchar 长度</td><td>ALTER COLUMN TYPE varchar(n)</td><td>超长数据导致迁移失败</td><td>先查最大长度，确认无超长数据</td></tr>
+<tr><td>加唯一约束</td><td>ADD CONSTRAINT UNIQUE</td><td>已有重复数据导致失败；建索引期间持锁</td><td>先查重清理，PG 用 CREATE UNIQUE INDEX CONCURRENTLY</td></tr>
+<tr><td>加索引（大表）</td><td>CREATE INDEX</td><td>PG 默认持 SHARE 锁阻塞写；MySQL 5.6+ 在线但仍有开销</td><td>PG 改成 CREATE INDEX CONCURRENTLY（不能在事务里）</td></tr>
+<tr><td>加外键</td><td>ADD CONSTRAINT FOREIGN KEY</td><td>校验现有数据时全表扫描并持锁；孤儿行导致失败</td><td>先 NOT VALID 加约束，再单独 VALIDATE CONSTRAINT</td></tr>
+<tr><td>修改枚举值</td><td>ALTER TYPE / drizzle-kit 支持有限</td><td>删除枚举值在 PG 里根本不支持</td><td>手写迁移；或用 text + CHECK 约束替代 enum</td></tr>
+</tbody>
+</table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">审查清单：每个生成的 SQL 文件必须过一遍</div>
+    <p>有没有 DROP COLUMN 或 DROP TABLE？有没有 ALTER COLUMN TYPE？有没有 SET NOT NULL？有没有在大表上 CREATE INDEX 而没加 CONCURRENTLY？有没有 ADD CONSTRAINT FOREIGN KEY 而没先 NOT VALID？有没有在一个迁移里混了 DDL 和大批量 UPDATE（会长时间持锁）？重命名是真 rename 还是 drop 加 add？以上任一为是，就不能直接合并。</p>
+</div>
+
+<h2>与 expand-migrate-contract 的配合</h2>
+
+<p>安全的结构演进遵循三阶段模式：<strong>先扩展（expand）让新旧代码都能工作，再迁移数据和流量（migrate），最后收缩（contract）删掉旧结构</strong>。每个阶段都是独立的部署，中间有观察期。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> Expand: 阶段一 扩展
+    Expand --> ExpandDeploy: 加 nullable 新列<br/>不删不改任何旧结构
+    ExpandDeploy --> DualWrite: 部署双写代码<br/>新旧列同时写
+    DualWrite --> Backfill: 阶段二 迁移
+    Backfill --> Verify: 批量回填历史数据<br/>分批提交避免长事务
+    Verify --> SwitchRead: 校验新旧列一致性
+    SwitchRead --> Observe: 切换读取到新列
+    Observe --> Contract: 观察一到两周
+    Contract --> DropOld: 阶段三 收缩
+    DropOld --> AddConstraint: 停止写旧列并删除
+    AddConstraint --> [*]: 给新列加 NOT NULL
+    note right of Expand
+        每个阶段是独立的迁移文件
+        和独立的部署
+    end note
+    note right of Observe
+        观察期内可以随时回滚代码
+        因为旧列还在
+    end note
+</div>
+
+<table>
+<thead><tr><th>阶段</th><th>迁移内容</th><th>代码变更</th><th>可回滚性</th></tr></thead>
+<tbody>
+<tr><td>Expand 1</td><td>ADD COLUMN new_col（nullable）</td><td>无</td><td>完全可回滚（删列即可）</td></tr>
+<tr><td>Expand 2</td><td>无</td><td>双写 old_col 和 new_col</td><td>完全可回滚（回退代码）</td></tr>
+<tr><td>Migrate 1</td><td>分批 UPDATE 回填 new_col</td><td>无</td><td>可回滚（new_col 无人读）</td></tr>
+<tr><td>Migrate 2</td><td>无</td><td>读取切到 new_col</td><td>可回滚（old_col 仍在写）</td></tr>
+<tr><td>Contract 1</td><td>无</td><td>停止写 old_col</td><td>可回滚（数据尚未删）</td></tr>
+<tr><td>Contract 2</td><td>SET NOT NULL + DROP old_col</td><td>无</td><td><strong>不可回滚</strong></td></tr>
+</tbody>
+</table>
+
+<p>回填的关键是<strong>分批提交</strong>。一条 <code>UPDATE posts SET new_col = old_col</code> 在百万行表上会产生巨大的事务、大量 WAL、以及长时间的行锁。正确做法是按主键范围分批，每批几千行，批间 sleep。schema 演进的完整模式与兼容性策略详见站内模式演进篇。</p>
+
+<pre><code class="language-sql">-- Expand 阶段：只加 nullable 列，零风险
+ALTER TABLE posts ADD COLUMN author_uuid uuid;
+
+-- Migrate 阶段：分批回填，避免长事务和锁表
+-- 在应用代码里循环调用，每批之间 sleep 100ms
+UPDATE posts
+SET author_uuid = u.id
+FROM users u
+WHERE posts.author_legacy_id = u.legacy_id
+  AND posts.author_uuid IS NULL
+  AND posts.id IN (
+    SELECT id FROM posts
+    WHERE author_uuid IS NULL
+    ORDER BY id
+    LIMIT 2000                    -- 每批 2000 行
+    FOR UPDATE SKIP LOCKED        -- 跳过被锁行，允许并发回填
+  );
+
+-- 校验：回填完成后确认没有遗漏和不一致
+SELECT count(*) AS still_null FROM posts WHERE author_uuid IS NULL;
+SELECT count(*) AS mismatched
+FROM posts p JOIN users u ON p.author_legacy_id = u.legacy_id
+WHERE p.author_uuid IS DISTINCT FROM u.id;
+
+-- Contract 阶段：确认无人读旧列后才执行
+-- 索引用 CONCURRENTLY 避免阻塞写（注意：不能在事务块里）
+CREATE INDEX CONCURRENTLY posts_author_uuid_idx ON posts (author_uuid);
+-- 外键分两步：先不校验现有数据，再后台校验
+ALTER TABLE posts ADD CONSTRAINT posts_author_uuid_fk
+  FOREIGN KEY (author_uuid) REFERENCES users(id) NOT VALID;
+ALTER TABLE posts VALIDATE CONSTRAINT posts_author_uuid_fk;
+ALTER TABLE posts ALTER COLUMN author_uuid SET NOT NULL;
+ALTER TABLE posts DROP COLUMN author_legacy_id;</code></pre>
+
+<h2>多环境与并发部署的迁移锁</h2>
+
+<p>最常见的错误是把迁移写在应用启动代码里。滚动更新时 5 个 Pod 同时启动，5 个进程同时尝试执行同一个迁移，结果可能是重复执行、部分失败、或者数据库被并发 DDL 搞出死锁。</p>
+
+<p><strong>正确做法是把迁移剥离成独立的部署前置步骤</strong>，保证全局只有一个进程执行。</p>
+
+<table>
+<thead><tr><th>方案</th><th>并发安全</th><th>失败可见性</th><th>适用场景</th></tr></thead>
+<tbody>
+<tr><td>应用启动时跑 migrate</td><td><strong>不安全</strong></td><td>混在应用日志里难发现</td><td>只适合单实例的小项目</td></tr>
+<tr><td>Kubernetes Job（部署前）</td><td>安全，Job 只跑一次</td><td>Job 失败阻塞部署，清晰</td><td>推荐，K8s 环境标准做法</td></tr>
+<tr><td>initContainer</td><td>不安全，每个 Pod 都跑</td><td>Pod 起不来</td><td>只在单副本时可用</td></tr>
+<tr><td>CI/CD 流水线单独 stage</td><td>安全</td><td>流水线失败，最清晰</td><td>推荐，任何环境通用</td></tr>
+<tr><td>手动执行 + 审批</td><td>安全</td><td>人工确认</td><td>高风险迁移、金融类系统</td></tr>
+<tr><td>代码里加 advisory lock</td><td>安全但复杂</td><td>需自己打日志</td><td>无法改部署流程时的兜底</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-typescript">// migrate.ts —— 独立的迁移脚本，不在应用启动流程里
+import { drizzle } from 'drizzle-orm/postgres-js';
+import { migrate } from 'drizzle-orm/postgres-js/migrator';
+import postgres from 'postgres';
+import { sql } from 'drizzle-orm';
+
+async function main() {
+  // 迁移连接用 max: 1，DDL 不需要连接池
+  // 单连接也保证了 advisory lock 在整个迁移期间持有
+  const client = postgres(process.env.DATABASE_URL!, { max: 1 });
+  const db = drizzle(client);
+
+  // 兜底的并发保护：PG advisory lock 保证全局只有一个进程在迁移
+  // 常量 20260923 随便取，只要全项目一致
+  const [{ locked }] = await db.execute&lt;{ locked: boolean }&gt;(
+    sql`select pg_try_advisory_lock(20260923) as locked`,
+  );
+  if (!locked) {
+    console.error('另一个进程正在执行迁移，退出');
+    process.exit(1);
+  }
+
+  try {
+    console.log('开始迁移...');
+    await migrate(db, {
+      migrationsFolder: './drizzle',
+      migrationsTable: '__drizzle_migrations',
+      migrationsSchema: 'drizzle',        // 把元数据表放独立 schema
+    });
+    console.log('迁移完成');
+  } finally {
+    await db.execute(sql`select pg_advisory_unlock(20260923)`);
+    await client.end();
+  }
+}
+
+main().catch((e) =&gt; {
+  console.error('迁移失败:', e);
+  process.exit(1);   // 非零退出码让 CI/K8s Job 感知失败并阻塞部署
+});</code></pre>
+
+<pre><code class="language-yaml"># .github/workflows/deploy.yml —— 迁移作为独立 stage
+name: deploy
+on:
+  push:
+    branches: [main]
+
+jobs:
+  check-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - run: npm ci
+      # 校验迁移文件之间无冲突（多人并行开发时的关键检查）
+      - run: npx drizzle-kit check
+      # 校验 schema 与已有迁移一致：如果 generate 产生新文件说明有人忘了提交
+      - name: 检查是否有未生成的 schema 变更
+        run: |
+          npx drizzle-kit generate --name ci_check
+          if [ -n "$(git status --porcelain drizzle/)" ]; then
+            echo "schema 有变更但未生成迁移文件，请本地跑 drizzle-kit generate"
+            git status --porcelain drizzle/
+            exit 1
+          fi
+
+  migrate:
+    needs: check-migrations
+    runs-on: ubuntu-latest
+    environment: production        # 走 GitHub 的审批门禁
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - run: npm ci
+      # 关键：迁移在应用部署之前，且只有这一个 job 执行
+      - run: npx tsx migrate.ts
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+  deploy-app:
+    needs: migrate               # 迁移成功才部署应用
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "部署应用..."</code></pre>
+
+<h2>回滚策略：向前修复而不是回退 DDL</h2>
+
+<p>drizzle-kit 没有内置 down 迁移，这不是缺陷，是符合生产现实的设计。<strong>回退 DDL 在生产环境几乎总是错误的选择</strong>：</p>
+
+<table>
+<thead><tr><th>情况</th><th>回退 DDL 的后果</th><th>向前修复的做法</th></tr></thead>
+<tbody>
+<tr><td>加错了一列</td><td>DROP COLUMN 把已写入的数据删了</td><td>写新迁移删列，但先确认无人写</td></tr>
+<tr><td>删错了一列</td><td>无法回退，数据已经没了</td><td>只能从备份恢复，这就是为什么删列要分阶段</td></tr>
+<tr><td>改错了列类型</td><td>反向转换可能再次丢精度</td><td>新迁移加正确类型的列并从备份回填</td></tr>
+<tr><td>迁移执行到一半失败</td><td>数据库处于中间状态</td><td>PG 的 DDL 在事务里，整个迁移原子回滚；MySQL 8.0 之前 DDL 不可回滚，需手动清理</td></tr>
+<tr><td>新代码有 bug 需要回滚版本</td><td>回退结构会让新旧代码都跑不起来</td><td>只回滚应用版本，保留结构（这正是 expand 阶段的价值）</td></tr>
+</tbody>
+</table>
+
+<p><strong>核心原则</strong>：让每次结构变更都向后兼容（旧代码能在新结构上跑），这样应用版本可以独立回滚，数据库结构只需向前演进。这正是 expand-migrate-contract 的意义所在。</p>
+
+<p>真正需要恢复数据时的手段是备份和 PITR（point-in-time recovery），不是 down 迁移。生产环境必须确认：备份策略是什么、PITR 窗口多长、恢复演练做过没有。删列类操作前主动打一个快照。</p>
+
+<div class="mermaid">
+flowchart TB
+    A["生产发现迁移有问题"] --> B{"数据有丢失吗？"}
+    B -->|是| C["从备份或 PITR 恢复<br/>down 迁移救不了"]
+    B -->|否| D{"新代码在跑吗？"}
+    D -->|是| E{"结构向后兼容吗？"}
+    D -->|否| F["写新迁移改回去<br/>向前修复"]
+    E -->|兼容| G["只回滚应用版本<br/>保留数据库结构"]
+    E -->|不兼容| H["紧急前滚修复<br/>这是设计失误"]
+    F --> I["纳入下次部署"]
+    G --> J["修好代码再发"]
+    C --> K["复盘：为什么删列<br/>没走三阶段"]
+</div>
+
+<div class="callout callout-tip">
+    <div class="callout-icon">✅</div>
+    <div class="callout-title">最容易踩的坑</div>
+<ul>
+<li><strong>生产用 push</strong>：没有 SQL 文件、无法审查、无法重放、CI 里遇到歧义会卡住或选错。push 只能用于本地原型。</li>
+<li><strong>只提交 SQL 忘了提交 meta 快照</strong>：drizzle/meta/ 下的 snapshot 和 _journal.json 必须一起提交。缺了快照，下次 generate 会把已有的变更重新生成一遍。</li>
+<li><strong>把 migrate 写在应用启动里</strong>：滚动更新时多个实例并发执行同一迁移，可能重复执行、部分失败或 DDL 死锁。必须剥离成独立的部署前置步骤。</li>
+<li><strong>跳过 SQL 审查</strong>：diff 工具只看结构不看业务。DROP COLUMN、ALTER TYPE、SET NOT NULL 它都会照生成，执行后数据就没了。</li>
+<li><strong>重命名列时选错</strong>：drizzle-kit 交互式询问「这是 rename 还是 drop+add」，选错就是删列建列，数据全丢。CI 里绝不能跑交互式命令。</li>
+<li><strong>大表上 CREATE INDEX 不加 CONCURRENTLY</strong>：PostgreSQL 默认持 SHARE 锁阻塞所有写入，百万行表能锁几十秒。但 CONCURRENTLY 不能在事务块里，需要手动改生成的 SQL。</li>
+<li><strong>加外键不用 NOT VALID 两步走</strong>：直接 ADD CONSTRAINT 会全表扫描校验现有数据并持锁。先 NOT VALID 加约束再 VALIDATE 可以把锁时间压到最短。</li>
+<li><strong>一次性 UPDATE 回填百万行</strong>：产生巨大事务、大量 WAL、长时间行锁，还可能触发复制延迟告警。必须按主键分批，每批几千行。</li>
+<li><strong>把 DDL 和大批量 DML 放在同一个迁移</strong>：DDL 拿到的锁会一直持有到事务结束，混入慢 UPDATE 等于长时间锁表。拆成两个迁移。</li>
+<li><strong>期待 down 迁移能救命</strong>：删掉的列回不来。真正的恢复手段是备份和 PITR，而防御手段是让删列走三阶段。</li>
+<li><strong>枚举变更交给 diff 工具</strong>：drizzle-kit 对 ALTER TYPE ADD VALUE 支持有限，删除枚举值 PostgreSQL 根本不支持。枚举变更建议手写迁移，或一开始就用 text 加 CHECK 约束。</li>
+<li><strong>多人并行开发导致迁移序号冲突</strong>：两个分支各生成 0004，合并后序号重复。CI 里必须跑 drizzle-kit check，且合并后重新生成序号。</li>
+<li><strong>预发和生产的迁移不一致</strong>：如果预发用 push 生产用 migrate，两边结构会漂移。所有环境必须用同一套 SQL 文件。用 drizzle-kit pull 定期对比可以发现漂移。</li>
+<li><strong>MySQL 的 DDL 不可回滚</strong>：MySQL 8.0 之前 DDL 不在事务里，迁移执行到一半失败会留下中间状态，需要手动清理。PostgreSQL 的 DDL 在事务里可原子回滚，这是一个实质差异。</li>
+</ul>
+</div>
+</div>
                 </article>
             </main>
         </div>
