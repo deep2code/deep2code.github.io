@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>消息可靠投递：五个丢失点与跨产品通用防法 - 消息队列深入 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+    <meta name="description" content="消息从产生到处理完的五个丢失点与通用防法：生产端确认的三种形态（RabbitMQ 的 publisher confirm 与 mandatory、RocketMQ 的 SendResult 状态判断、Kafka 的 acks）、Broker 持久化的三种取舍与为什么多副本比单机同步刷盘更划算、RabbitMQ 持久化三件套与 Quorum Queue 的 Raft 复制、RocketMQ 刷盘与复制的四种组合及各自丢失窗口、消费端确认语义与 requeue 死循环、消息完整状态机、故障注入清单与对账兜底。">
+    <meta name="keywords" content="消息队列深入,可靠投递与消费,技术博客,资深码农">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/architecture/messaging/reliable/">
+    <meta property="og:title" content="消息可靠投递：五个丢失点与跨产品通用防法 - 消息队列深入 - 资深码农">
+    <meta property="og:description" content="消息从产生到处理完的五个丢失点与通用防法：生产端确认的三种形态（RabbitMQ 的 publisher confirm 与 mandatory、RocketMQ 的 SendResult 状态判断、Kafka 的 acks）、Broker 持久化的三种取舍与为什么多副本比单机同步刷盘更划算、RabbitMQ 持久化三件套与 Quorum Queue 的 Raft 复制、RocketMQ 刷盘与复制的四种组合及各自丢失窗口、消费端确认语义与 requeue 死循环、消息完整状态机、故障注入清单与对账兜底。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/architecture/messaging/reliable/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="消息可靠投递：五个丢失点与跨产品通用防法">
+    <meta name="twitter:description" content="消息从产生到处理完的五个丢失点与通用防法：生产端确认的三种形态（RabbitMQ 的 publisher confirm 与 mandatory、RocketMQ 的 SendResult 状态判断、Kafka 的 acks）、Broker 持久化的三种取舍与为什么多副本比单机同步刷盘更划算、RabbitMQ 持久化三件套与 Quorum Queue 的 Raft 复制、RocketMQ 刷盘与复制的四种组合及各自丢失窗口、消费端确认语义与 requeue 死循环、消息完整状态机、故障注入清单与对账兜底。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "RabbitMQ 消息持久化为什么配了还会丢？", "acceptedAnswer": {"@type": "Answer", "text": "因为持久化是三件套，缺一个就漏。交换机要声明为 durable，否则 Broker 重启后交换机定义消失，消息被路由到不存在的交换机；队列要声明为 durable，否则队列本身消失，队列里的消息一起没；消息要设 delivery_mode 等于 2，否则消息只在内存里，队列虽然还在但消息不在。此外即使三件套都齐，Broker 也是先写内存后批量落盘，所以宕机仍有一个很小的丢失窗口，要彻底消除这个窗口就要用 Quorum Queue，靠 Raft 多数派确认而不是靠单机刷盘。"}}, {"@type": "Question", "name": "RocketMQ 的刷盘和复制该怎么组合？", "acceptedAnswer": {"@type": "Answer", "text": "四种组合里生产环境几乎只用一种：同步主从加异步刷盘。同步主从保证消息至少在两台机器的内存与页缓存里，异步刷盘避免每条消息等一次磁盘 fsync，延迟从十毫秒级降回毫秒级。异步主从加异步刷盘吞吐最高但主机宕机会丢，只适合日志类。同步刷盘加异步主从看起来很安全，实际抗不住整机损坏，性价比最低。同步刷盘加同步主从延迟最高，只有金融账务类场景才值得。要注意同步主从在从节点不可用时会返回 SLAVE_NOT_AVAILABLE，这不是成功也不是彻底失败，需要单独处理。"}}, {"@type": "Question", "name": "为什么 requeue 等于 true 会把 CPU 打满？", "acceptedAnswer": {"@type": "Answer", "text": "因为 basic_nack 或 basic_reject 带 requeue 等于 true 时，消息会立刻回到队列头部并马上被再次投递，没有任何延迟。如果失败原因是确定性的，比如字段缺失或下游持续不可用，那么这条消息会在毫秒级里被反复投递和拒绝，形成一个纯 CPU 空转的死循环，同时把日志刷爆并阻塞后面的正常消息。正确做法是 requeue 用 false，让消息进死信交换机，再由延迟重试队列按退避策略重投；如果确实要回队，必须在消息头里记重试次数并配合延迟队列，不能原地立即重投。"}}, {"@type": "Question", "name": "为什么说多副本比单机同步刷盘更划算？", "acceptedAnswer": {"@type": "Answer", "text": "两点原因。第一是故障覆盖面：单机同步刷盘只能防进程崩溃与操作系统崩溃，防不住磁盘损坏、整机故障、机架断电，而这些恰恰是生产中更常见的丢数据原因；多副本能覆盖整机与机架级故障。第二是延迟成本：一次 fsync 在机械盘上是毫秒到十毫秒量级，在 SSD 上也有可观的抖动，而同机房一次网络往返通常在亚毫秒级，所以把数据同步到另一台机器的内存往往比落到本机磁盘更快。所以现代设计的主流是多副本加异步刷盘，而不是单副本加同步刷盘。"}}, {"@type": "Question", "name": "既然做了这么多可靠性配置，还需要对账吗？", "acceptedAnswer": {"@type": "Answer", "text": "需要，任何 MQ 方案都必须有定时对账兜底。原因是链路上总有配置覆盖不到的极端情况：运维从旧备份恢复导致位点回退、跨机房网络分区期间的双主写入、消费端把毒消息误判为可丢弃、死信堆积没人处理、以及人为操作重置位点。对账的最小实现是让生产方把已发出的业务单据落一张流水表，消费方把处理结果落一张结果表，每小时或每天比对两表的差集，差集非空就告警并触发补偿。对账逻辑必须独立于消息链路，否则消息链路本身出问题时对账也会一起失效。"}}, {"@type": "Question", "name": "怎么验证可靠性配置真的有效？", "acceptedAnswer": {"@type": "Answer", "text": "唯一可信的方式是故障注入，在预发环境边发消息边制造故障，并核对收发条数。最少要做五项：杀掉主节点看切换期间生产端是否收到明确失败而不是静默丢弃；断开生产端与集群的网络看重试与本地兜底是否生效；把数据盘写满看 Broker 是否进入只读保护而不是丢消息；让消费者进程被强杀看未确认消息是否被重新投递；触发一次主从切换看位点是否回退以及回退了多少。每项都要事先写下预期现象，实测与预期不符的地方就是你真正的风险点。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture" class="active">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">架构与分布式</a><span class="separator">/</span><a href="../index.html">消息队列到底解决什么问题，又带来什么问题</a><span class="separator">/</span><span>可靠投递与消费</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">消息可靠投递：五个丢失点与跨产品通用防法</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ 可靠投递</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>「消息不丢」不是一个开关，而是链路上<strong>五个独立环节</strong>各自都要做对。任何一环漏掉，其他四环配得再完美也会丢。这篇讲跨产品通用的原理，并落到 RabbitMQ 与 RocketMQ 的具体机制上；Kafka 侧的 acks 与 min.insync.replicas 组合、幂等 Producer、事务边界见站内 Kafka 可靠性专篇，这里只给结论。</p>
+
+<h2>消息全链路的五个丢失点</h2>
+<div class="mermaid">
+flowchart TB
+    subgraph L1["环节一 业务与发送之间"]
+        A1["业务事务已提交"] --> A2["准备发送"]
+        A2 --> X1["丢失点 1<br/>进程崩溃或发送异常被吞<br/>业务成功但消息从未发出"]
+    end
+    subgraph L2["环节二 网络传输"]
+        A2 --> B1["客户端发往 Broker"]
+        B1 --> X2["丢失点 2<br/>连接断开或超时<br/>不知道 Broker 收到没有"]
+    end
+    subgraph L3["环节三 Broker 接收与落盘"]
+        B1 --> C1["写入内存与页缓存"]
+        C1 --> X3["丢失点 3<br/>返回成功后尚未落盘就宕机"]
+        C1 --> C2["异步或同步刷盘"]
+    end
+    subgraph L4["环节四 副本与整机故障"]
+        C2 --> D1["单副本"]
+        D1 --> X4["丢失点 4<br/>磁盘损坏或整机不可恢复"]
+        C2 --> D2["多副本 多数派确认"]
+    end
+    subgraph L5["环节五 消费端处理"]
+        D2 --> E1["投递给消费者"]
+        E1 --> X5["丢失点 5<br/>先确认后处理 或自动确认<br/>处理失败但消息已被删除"]
+        E1 --> E2["处理成功后确认"]
+    end
+    subgraph FIX["兜底 与链路无关"]
+        E2 --> F1["定时对账<br/>比对生产流水与处理结果"]
+    end
+</div>
+<table>
+<thead><tr><th>丢失点</th><th>典型现场</th><th>跨产品通用防法</th><th>仍然存在的残留风险</th></tr></thead>
+<tbody>
+<tr><td>1 业务成功但消息未发出</td><td>订单表有数据，下游完全没收到；日志里能看到发送异常被 catch 后只打了一行 warn</td><td>业务与消息记录写在<strong>同一个本地事务</strong>（outbox 表），投递线程扫表重发直到确认成功</td><td>outbox 表本身要清理与索引，扫表延迟构成端到端延迟下限（落地细节见站内分布式一致性篇）</td></tr>
+<tr><td>2 网络中丢失</td><td>发送超时，不确定 Broker 是否已写入；重试则可能产生重复</td><td>必须用<strong>带确认的发送</strong>并检查返回状态；超时按「可能已成功」处理，靠消费端幂等消化重复</td><td>超时语义天然不确定，这就是「至少一次」的来源，无法消除</td></tr>
+<tr><td>3 收到但未持久化就宕机</td><td>生产端拿到了成功，Broker 进程被 kill 后消息不见了</td><td>要么同步刷盘，要么多副本同步确认；两者至少有一个</td><td>纯异步刷盘加单副本时这个窗口是几百毫秒量级，看起来很小但大流量下就是成百上千条</td></tr>
+<tr><td>4 持久化了但只有单副本</td><td>磁盘损坏或整机报废，消息随机器一起消失</td><td>副本数至少 3，写入要求多数派确认（Quorum Queue、同步主从、ISR 机制）</td><td>同机架同电源的三副本抗不住机架级故障，重要业务要跨机架或跨可用区</td></tr>
+<tr><td>5 拿到消息但处理失败却已确认</td><td>开了自动确认，或先 ack 再处理；消费者一崩溃这批消息就永久消失</td><td><strong>处理成功后再确认</strong>；失败走重试与死信；关闭自动确认</td><td>处理成功但确认前崩溃会产生重复，所以幂等是必需品</td></tr>
+</tbody>
+</table>
+
+<h2>生产端确认的三种形态</h2>
+<p>三家的 API 名字完全不同，但要解决的是同一件事：<strong>让客户端知道 Broker 到底收没收到</strong>。区别在于确认的粒度和失败时能拿到多少信息。</p>
+<table>
+<thead><tr><th>产品</th><th>机制</th><th>失败信息粒度</th><th>必须额外处理的场景</th></tr></thead>
+<tbody>
+<tr><td>RabbitMQ</td><td><code>publisher confirm</code>：信道开启确认模式后，Broker 对每条消息回 <code>basic.ack</code> 或 <code>basic.nack</code>；可用异步回调批量处理</td><td>按 delivery tag 精确到单条，<code>multiple</code> 标志可批量确认</td><td><strong>路由不到队列是独立的丢失场景</strong>：消息被 Broker 接受（ack）但没有任何队列匹配，消息被静默丢弃。必须加 <code>mandatory</code> 标志接收 <code>basic.return</code>，或给交换机配 alternate exchange</td></tr>
+<tr><td>RocketMQ</td><td>同步发送返回 <code>SendResult</code>，<code>sendStatus</code> 有四种取值；异步发送用回调</td><td>状态区分刷盘超时、从节点超时、从节点不可用</td><td><strong>只判断没抛异常是错的</strong>：<code>FLUSH_DISK_TIMEOUT</code> 等三种非 OK 状态表示消息已写入主节点但可靠性未达标，需要按业务重要性决定是否重发（重发会重复）</td></tr>
+<tr><td>Kafka</td><td><code>acks</code> 取 0 / 1 / all，配合 <code>min.insync.replicas</code></td><td>回调里拿到 metadata 或异常</td><td>组合语义与幂等 Producer、事务边界见站内 Kafka 可靠性专篇，这里不重复</td></tr>
+</tbody>
+</table>
+<p>RabbitMQ 的两个独立失败通道值得画出来——很多人只处理了 confirm，漏了 return：</p>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant P as Producer
+    participant B as Broker
+    participant E as Exchange
+    participant Q as Queue
+    P->>B: confirm.select 开启确认模式
+    B-->>P: confirm.select-ok
+    P->>E: basic.publish 带 mandatory 标志
+    E->>Q: 按 binding 路由成功
+    Q-->>B: 入队并按需落盘
+    B-->>P: basic.ack 确认已接收
+    Note over P,B: 情况二 没有队列匹配路由键
+    P->>E: basic.publish 带 mandatory
+    E--xQ: 无匹配 binding
+    B-->>P: basic.return 退回消息
+    B-->>P: basic.ack 仍然返回确认
+    Note over P,B: 只看 ack 会误判为发送成功<br/>不加 mandatory 消息被静默丢弃
+    Note over P,B: 情况三 Broker 内部错误
+    B-->>P: basic.nack 需要重发
+</div>
+<pre><code class="language-python"># RabbitMQ 生产端：confirm 与 mandatory 必须同时处理，否则有两类静默丢失
+import pika, json, uuid
+
+conn = pika.BlockingConnection(pika.ConnectionParameters(host="127.0.0.1"))
+ch = conn.channel()
+ch.confirm_delivery()   # 开启后 basic_publish 会同步等待确认，失败抛异常
+
+props = pika.BasicProperties(
+    delivery_mode=2,               # 消息持久化，三件套之一，缺了就只在内存里
+    message_id=str(uuid.uuid4()),  # 便于排查
+    headers={
+        "bizKey": "O20260923001",  # 业务唯一键，消费端据此幂等
+        "retryCount": 0,           # 重试次数放消息头，不要放消息体
+        "traceId": trace_id,
+    },
+    content_type="application/json",
+)
+
+def publish(payload: dict) -> bool:
+    try:
+        ch.basic_publish(
+            exchange="order.topic",
+            routing_key="order.created",
+            body=json.dumps(payload).encode(),
+            properties=props,
+            mandatory=True,   # 路由不到队列时退回，否则 Broker 会静默丢弃
+        )
+        return True
+    except pika.exceptions.UnroutableError:
+        # 交换机存在但没有 binding 匹配：这是配置事故，告警而不是重试
+        alert("routing key 无匹配队列，检查 binding")
+        return False
+    except pika.exceptions.NackError:
+        # Broker 明确拒绝（如磁盘告警触发流控），退避后重试
+        return False
+    except pika.exceptions.AMQPError:
+        # 连接类异常：消息可能已写入也可能没有，按"可能成功"处理
+        # 保留 outbox 记录让兜底线程重发，重复由消费端幂等消化
+        return False</code></pre>
+
+<h2>Broker 端持久化的通用取舍</h2>
+<p>三种策略的本质区别是「返回成功」这句话的含金量。这里有一个现代共识值得强调：<strong>多副本比单机同步刷盘更划算</strong>。</p>
+<table>
+<thead><tr><th>策略</th><th>返回成功意味着</th><th>延迟量级</th><th>能防住什么 / 防不住什么</th></tr></thead>
+<tbody>
+<tr><td>写内存立即返回</td><td>消息在一台机器的进程内存里</td><td>亚毫秒</td><td>只防客户端重试；进程崩溃即丢。仅适合可丢的埋点与日志</td></tr>
+<tr><td>单机同步刷盘</td><td>数据已 fsync 到本机磁盘</td><td>毫秒到十毫秒，机械盘更差且抖动大</td><td>能防进程崩溃与操作系统崩溃；<strong>防不住磁盘损坏、整机故障、机架断电</strong></td></tr>
+<tr><td>多副本同步复制加异步刷盘</td><td>数据在多台机器的内存与页缓存中，多数派已确认</td><td>毫秒级，同机房网络往返通常快于 fsync</td><td>能防整机与机架级故障；防不住多数副本同时断电这种极端情况</td></tr>
+<tr><td>多副本加同步刷盘</td><td>多台机器都已落盘</td><td>最高，两项延迟叠加</td><td>接近零丢失，代价是吞吐显著下降。只有账务类场景值得</td></tr>
+</tbody>
+</table>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">为什么共识是「多副本加异步刷盘」而不是「单副本加同步刷盘」</div>
+    <p>一是<strong>故障覆盖面</strong>：生产中丢数据更常见的原因是磁盘坏、机器没了、机架断电，同步刷盘对这三类完全无效。二是<strong>延迟成本</strong>：一次 fsync 在机械盘上是毫秒到十毫秒量级，SSD 上也有明显抖动；而同机房一次网络往返通常在亚毫秒级——把数据送到另一台机器的内存往往比落到本机磁盘更快。所以主流做法是靠副本数换可靠性，靠异步刷盘保延迟。前提是副本要<strong>真的分散</strong>：三个副本放在同一台物理机的三个容器里，等于没有副本。</p>
+</div>
+<div class="mermaid">
+flowchart TB
+    S["确定这条消息的可靠性等级"] --> Q1{"丢了会造成<br/>资金或合规问题吗"}
+    Q1 -->|是| Q2{"能接受吞吐<br/>下降三成以上吗"}
+    Q2 -->|能| A1["多副本加同步刷盘<br/>再加定时对账"]
+    Q2 -->|不能| A2["多副本同步复制加异步刷盘<br/>加对账加人工补偿入口"]
+    Q1 -->|否| Q3{"丢了需要<br/>人工补数据吗"}
+    Q3 -->|需要| A3["多副本同步复制加异步刷盘<br/>消费端幂等"]
+    Q3 -->|不需要| Q4{"是埋点日志这类<br/>允许小比例丢失吗"}
+    Q4 -->|是| A4["异步复制加异步刷盘<br/>优先吞吐"]
+    Q4 -->|否| A3
+</div>
+
+<h2>RabbitMQ 的持久化三件套与 Quorum Queue</h2>
+<p>「我配了持久化怎么还会丢」几乎都是因为只配了其中一件。三件套<strong>缺任何一个都会丢</strong>，而且丢的方式各不相同：</p>
+<table>
+<thead><tr><th>要件</th><th>怎么配</th><th>缺了它会怎样</th></tr></thead>
+<tbody>
+<tr><td>Exchange 持久化</td><td>声明时 <code>durable=True</code></td><td>Broker 重启后交换机定义消失，生产端继续往一个不存在的交换机发，消息直接被丢；此时连 <code>mandatory</code> 也救不了，因为报的是 channel 级错误</td></tr>
+<tr><td>Queue 持久化</td><td>声明时 <code>durable=True</code></td><td>Broker 重启后队列消失，队列里所有消息一起没，绑定关系也要重建</td></tr>
+<tr><td>Message 持久化</td><td>发布时 <code>delivery_mode=2</code></td><td>队列还在但消息只存在内存，重启后队列变空。这是最容易漏的一项</td></tr>
+<tr><td>多副本</td><td><code>x-queue-type=quorum</code>，副本数 3 或 5</td><td>三件套齐了也只防重启不防整机故障；单副本队列所在节点报废，消息无法恢复</td></tr>
+</tbody>
+</table>
+<p>即使三件套齐全，经典队列仍然是<strong>先写内存再批量落盘</strong>，宕机存在数百毫秒量级的丢失窗口。Quorum Queue 的价值就在这里：它用 Raft 把写入变成多数派确认，只要多数副本存活，<strong>已确认的消息就不会丢</strong>，故障切换也不需要人工介入。代价是单队列吞吐低于经典队列、不支持全局 QoS、队列数量极多时内存开销更高（详见<a href="../compare/">机制对比篇</a>）。</p>
+
+<h2>RocketMQ 的四种组合与丢失窗口</h2>
+<p><code>flushDiskType</code> 与 <code>brokerRole</code> 正交，四种组合的丢失窗口差别很大：</p>
+<table>
+<thead><tr><th>组合</th><th>返回成功时消息在哪</th><th>丢失窗口</th><th>延迟与适用</th></tr></thead>
+<tbody>
+<tr><td><code>SYNC_MASTER</code> 加 <code>ASYNC_FLUSH</code></td><td>主从两台机器的页缓存中</td><td>两台机器同时断电才丢，概率极低</td><td>毫秒级，<strong>生产环境默认推荐</strong></td></tr>
+<tr><td><code>ASYNC_MASTER</code> 加 <code>ASYNC_FLUSH</code></td><td>仅主节点页缓存</td><td>主节点宕机即丢未复制未落盘部分，量级为数百毫秒内的消息</td><td>吞吐最高，只适合日志与埋点</td></tr>
+<tr><td><code>SYNC_MASTER</code> 加 <code>SYNC_FLUSH</code></td><td>主从都已 fsync 落盘</td><td>接近零</td><td>延迟最高，吞吐显著下降，账务类才值得</td></tr>
+<tr><td><code>ASYNC_MASTER</code> 加 <code>SYNC_FLUSH</code></td><td>仅主节点磁盘</td><td>整机损坏即丢全部未复制数据</td><td>性价比最差的组合：付了 fsync 的延迟，却没买到整机级保护</td></tr>
+</tbody>
+</table>
+<pre><code class="language-properties"># broker.conf 关键可靠性项，注释说明为什么这么配
+brokerClusterName=DefaultCluster
+brokerName=broker-a
+brokerId=0
+
+# 主从角色：SYNC_MASTER 表示消息复制到从节点后才返回成功
+# 从节点不可用时发送会返回 SLAVE_NOT_AVAILABLE，客户端必须识别这个状态
+brokerRole=SYNC_MASTER
+
+# 刷盘方式：ASYNC_FLUSH 配合 SYNC_MASTER 是可靠性与延迟的最佳折中
+# 改成 SYNC_FLUSH 后每条消息都等一次 fsync，吞吐会掉一个档
+flushDiskType=ASYNC_FLUSH
+
+# 磁盘水位保护：超过阈值后 Broker 拒绝写入而不是丢消息
+# 默认 0.90 偏高，大流量场景留更多余量，给清理与告警留时间
+diskMaxUsedSpaceRatio=85
+
+# 消息保留时长（小时）。回溯与故障重放都依赖它，不要为了省盘调太小
+fileReservedTime=72
+
+# 允许自动创建 Topic 在生产环境必须关掉：
+# 打错一个字母就会凭空多出一个 Topic，消息进去无人消费且难以发现
+autoCreateTopicEnable=false
+autoCreateSubscriptionGroup=false
+
+# 事务消息回查参数：回查间隔与最大次数，超过次数按回滚处理
+transactionCheckInterval=60000
+transactionCheckMax=15</code></pre>
+
+<h2>消费端确认：唯一原则是先处理后确认</h2>
+<p>自动确认（auto-ack）等于放弃可靠性——Broker 一投递出去就删除消息，消费者崩溃时这批消息永久消失，而且你连丢了哪些都不知道。下面这张表是 RabbitMQ 三个确认动作的语义差异，<code>requeue</code> 参数是事故高发点：</p>
+<table>
+<thead><tr><th>动作</th><th>语义</th><th>Broker 行为</th><th>什么时候用</th></tr></thead>
+<tbody>
+<tr><td><code>basic.ack</code></td><td>处理成功</td><td>删除消息；<code>multiple=true</code> 时确认该 tag 之前的所有消息</td><td>唯一的成功路径。批量确认要确保前面的消息真的都处理完了</td></tr>
+<tr><td><code>basic.nack</code> 加 <code>requeue=false</code></td><td>处理失败，不要回队</td><td>若配了死信交换机则进死信，否则丢弃</td><td><strong>推荐的失败路径</strong>。前提是必须配死信交换机，否则等于丢消息</td></tr>
+<tr><td><code>basic.nack</code> 加 <code>requeue=true</code></td><td>处理失败，放回队列</td><td><strong>立刻</strong>重新入队并马上再次投递，没有任何延迟</td><td>几乎不该用。确定性失败会形成毫秒级死循环，打满 CPU 并刷爆日志</td></tr>
+<tr><td><code>basic.reject</code></td><td>拒绝单条消息</td><td>同 nack 但不支持批量</td><td>毒消息（结构错误）时直接 reject 加 <code>requeue=false</code></td></tr>
+<tr><td>连接断开（未确认）</td><td>消费者失联</td><td>该消费者所有 unacked 消息<strong>自动重新投递</strong>给其他消费者</td><td>这是可靠性的基础机制，也是重复的主要来源之一</td></tr>
+</tbody>
+</table>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">requeue=true 的死循环</div>
+    <p>失败消息带 <code>requeue=true</code> 会立刻回到队列并马上被再次投递。如果失败原因是确定性的（字段缺失、下游持续不可用），这条消息就会在毫秒级里被无限次投递与拒绝：CPU 被空转打满、日志几分钟内涨到几十 GB、后面的正常消息全被这一条挤住。正确做法是 <code>requeue=false</code> 加死信交换机，再由延迟重试队列按退避策略重投。另外要注意 unacked 消息会占 Broker 内存，<code>prefetch</code> 乘以消费者数就是上限估算；prefetch 设得很大又处理很慢时，消费者断连会导致大批消息同时重投，形成二次冲击。</p>
+</div>
+<pre><code class="language-java">// RocketMQ 并发消费：返回值即确认语义，绝不要 try-catch 后无条件返回 SUCCESS
+consumer.registerMessageListener(new MessageListenerConcurrently() {
+    @Override
+    public ConsumeConcurrentlyStatus consumeMessage(
+            List&lt;MessageExt&gt; msgs, ConsumeConcurrentlyContext ctx) {
+        for (MessageExt m : msgs) {
+            String bizKey = m.getKeys();   // 业务唯一键，发送时用 setKeys 设置
+            try {
+                // 幂等第一位：先用唯一键占位，重复消息直接跳过
+                if (!dedup.tryLock(bizKey)) {
+                    continue;              // 已处理过，视为成功
+                }
+                handle(m);
+            } catch (PoisonMessageException e) {
+                // 结构错误重试无意义：主动落库加告警，然后按成功返回放行
+                deadLetterRepo.save(m, e);
+                alert("poison message", bizKey);
+                continue;
+            } catch (Exception e) {
+                // 可重试错误：返回 RECONSUME_LATER 进入重试主题
+                // 默认按延迟级别递增重试，达到 16 次后自动进死信主题
+                // 注意重试与死信主题是按消费组划分的，别找错地方
+                log.warn("consume fail, will retry, key={}, times={}",
+                         bizKey, m.getReconsumeTimes(), e);
+                return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+            }
+        }
+        return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
+    }
+});
+
+// 反例：这样写等于自动确认，所有失败消息被静默吞掉
+// try { handle(m); } catch (Exception e) { log.error(e); }
+// return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;</code></pre>
+
+<h2>「至少一次」是现实中唯一可靠的语义</h2>
+<p>三种语义里，最多一次会丢，精确一次只在「单个系统内部、且状态更新与位点提交能落进同一个事务」这个前提下成立——一旦消费逻辑要写外部数据库、调外部接口、发短信，端到端的精确一次就不存在了。所以现实选择只有至少一次，<strong>消费端幂等因此是必需品而不是可选项</strong>。</p>
+<p>重复的四个来源都不是配置能消除的：发送超时但服务端已写入导致重试产生第二条；处理成功但确认前进程被杀；消费组重平衡或消费者断连导致未确认消息重新投递；运维做主从切换或从备份恢复导致位点回退。幂等的具体落地（唯一索引、去重表、状态机单向流转、乐观锁版本号四种方式）站内分布式一致性篇已展开，这里只强调两点工程约束：<strong>幂等键必须是业务唯一键</strong>（订单号加事件类型），不能用每次重试都会变的随机 ID；<strong>去重表要有保留期与清理任务</strong>，并且清理窗口要大于消息最大可能延迟，否则超期的迟到重复会被当成新消息处理一遍。</p>
+
+<h2>一条消息的完整状态机</h2>
+<p>把上面所有环节合起来，一条消息的生命周期是这样。值得注意的是有<strong>三条回边</strong>：发送失败回到待发送、消费者断连回到 Broker 待投递、人工处理后回到待投递——这三条回边正是重复投递的来源。</p>
+<div class="mermaid">
+stateDiagram-v2
+    state "待发送 outbox 中" as S1
+    state "发送失败" as S2
+    state "已入 Broker 待投递" as S3
+    state "已投递未确认" as S4
+    state "消费处理中" as S5
+    state "已确认 完成" as S6
+    state "重试中 延迟队列" as S7
+    state "死信" as S8
+    state "人工处理" as S9
+    [*] --> S1: 业务事务提交
+    S1 --> S3: 生产确认成功
+    S1 --> S2: 超时或被拒绝
+    S2 --> S1: 退避后重发
+    S3 --> S4: 推送或拉取
+    S4 --> S5: 开始处理
+    S5 --> S6: 处理成功后确认
+    S5 --> S7: 可重试错误
+    S4 --> S3: 消费者断连 未确认消息重投
+    S7 --> S4: 到达下次重试时间
+    S7 --> S8: 超过重试上限
+    S5 --> S8: 毒消息 直接进死信
+    S8 --> S9: 告警后人工介入
+    S9 --> S3: 修数据后重投
+    S9 --> [*]: 判定可丢弃并留档
+    S6 --> [*]
+    note right of S6
+        已确认只代表消费端处理完
+        不代表业务最终正确
+        仍需定时对账兜底
+    end note
+</div>
+
+<h2>验证可靠性：故障注入与监控</h2>
+<p>配置写对了不等于生效。唯一可信的验证方式是在预发环境边发消息边制造故障，然后<strong>核对收发条数</strong>。下面每一项都要先写下预期现象，实测与预期不符的地方就是真实风险点。</p>
+<table>
+<thead><tr><th>故障注入</th><th>操作</th><th>预期现象</th><th>不符预期说明什么</th></tr></thead>
+<tbody>
+<tr><td>杀掉主节点</td><td>对主节点进程发 KILL，持续发送不停</td><td>发送短时失败并明确报错，客户端重试后切到新主；切换完成后总条数无缺口</td><td>若生产端收到成功但消息不见了，说明确认机制没生效或副本配置无效</td></tr>
+<tr><td>断开网络</td><td>用防火墙规则丢弃生产端到 Broker 的包 30 秒</td><td>发送超时并触发重试，超时消息落 outbox，网络恢复后补发，消费端出现少量重复</td><td>若出现丢失，说明超时被当成失败后未落兜底；若无重复，说明可能压根没重发</td></tr>
+<tr><td>磁盘写满</td><td>用大文件填满数据盘到 90% 以上</td><td>Broker 进入只读或触发流控，生产端收到明确的拒绝</td><td>若生产端仍收到成功，检查磁盘水位阈值配置，这是静默丢消息的高危场景</td></tr>
+<tr><td>消费者 OOM</td><td>给消费者设小堆并强杀进程</td><td>未确认消息在超时后重新投递给其他实例，无消息丢失，可能有重复</td><td>若消息丢失，说明开了自动确认或先确认后处理</td></tr>
+<tr><td>主从切换</td><td>手动触发切换或让主节点失联</td><td>切换期间生产短暂失败，消费位点可能小幅回退，出现少量重复</td><td>若位点回退很多（比如几万条），说明位点提交间隔过长或复制严重滞后</td></tr>
+<tr><td>下游持续不可用</td><td>把消费逻辑依赖的下游停掉 10 分钟</td><td>消费失败进重试队列，退避生效，重试耗尽后进死信并告警</td><td>若 CPU 被打满，检查是否用了立即回队；若死信无告警，监控缺失</td></tr>
+</tbody>
+</table>
+<div class="callout callout-tip">
+    <div class="callout-icon">✅</div>
+    <div class="callout-title">必须上看板的六个指标</div>
+    <ul>
+        <li><strong>生产失败率与失败分类</strong>：区分超时、拒绝、路由失败（RabbitMQ 的 return 数必须单独看，它在 ack 里是不可见的）。</li>
+        <li><strong>未确认消息数</strong>：RabbitMQ 的 unacked、RocketMQ 的处理中数量。持续上涨说明消费者卡在处理逻辑里。</li>
+        <li><strong>队列深度与增长斜率</strong>：只看绝对值会在大促时天天误报，斜率才是判断依据。</li>
+        <li><strong>重试速率与死信速率</strong>：死信速率任何非零都应该有人看；重试速率突增通常早于下游故障告警。</li>
+        <li><strong>端到端延迟</strong>：消息里带发送时间戳，在消费端算差值。这是唯一能反映用户感受的指标。</li>
+        <li><strong>outbox 滞留条数与最老记录年龄</strong>：这是丢失点 1 的唯一可观测信号，比任何 Broker 指标都靠前。</li>
+    </ul>
+</div>
+<p><strong>对账是必须有的兜底</strong>，不是可选加分项。原因是链路上永远有配置覆盖不到的极端情况：运维从旧备份恢复导致位点回退、网络分区期间的异常写入、毒消息被误判为可丢弃、死信堆积无人处理、以及人为重置位点。最小实现是生产方把已发出的业务单据落一张流水表，消费方把处理结果落一张结果表，每小时或每天比对差集，差集非空就告警并触发补偿。两条硬要求：对账逻辑<strong>必须独立于消息链路</strong>（不要用消息去驱动对账，否则消息链路故障时对账一起失效）；对账发现的差异要能<strong>一键补偿</strong>，只告警不提供修复入口的对账在真出问题时依然救不了场。</p>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+        <li><strong>只配了消息持久化没配队列持久化</strong>：Broker 重启后队列直接消失，消息一起没。三件套必须齐：Exchange、Queue、<code>delivery_mode=2</code>。</li>
+        <li><strong>RabbitMQ 不加 mandatory</strong>：路由不到队列时 Broker 照样回 ack，消息被静默丢弃，看监控一切正常。</li>
+        <li><strong>RocketMQ 只判断 send 没抛异常</strong>：<code>FLUSH_DISK_TIMEOUT</code> 与 <code>SLAVE_NOT_AVAILABLE</code> 都不是完全成功，重要消息要单独处置。</li>
+        <li><strong>用 <code>requeue=true</code> 做重试</strong>：确定性失败会形成毫秒级死循环，CPU 打满、日志刷爆、正常消息被挤住。</li>
+        <li><strong>开了自动确认</strong>：Broker 一投递就删消息，消费者一崩就永久丢失，而且不知道丢了哪些。</li>
+        <li><strong>先确认再处理</strong>：为了「防止重复」把 ack 挪到处理之前，等于用丢消息换重复，方向完全错了——重复能靠幂等解决，丢失不能。</li>
+        <li><strong>三副本放在同一台物理机或同一机架</strong>：整机或机架故障时三个副本一起没，副本数是账面数字。</li>
+        <li><strong>以为同步刷盘就万无一失</strong>：它防不住磁盘损坏和整机故障，优先级应该低于多副本。</li>
+        <li><strong>配了死信交换机但没人看死信</strong>：死信队列堆了几千条，发现时只能写一次性脚本。死信必须告警并有重投入口。</li>
+        <li><strong>prefetch 设得很大且处理很慢</strong>：unacked 堆积占 Broker 内存，消费者一断连大批消息同时重投，形成二次冲击。</li>
+        <li><strong>去重表没有清理任务或清理窗口太短</strong>：前者磁盘被打满，后者超期的迟到重复被当新消息处理一遍。</li>
+        <li><strong>生产环境开着自动创建 Topic</strong>：打错一个字母就凭空多一个 Topic，消息进去无人消费，排查时极难发现。</li>
+        <li><strong>没有对账</strong>：以为配置到位就零丢失。任何 MQ 方案都要有独立于消息链路的定时对账与一键补偿。</li>
+    </ul>
+</div>
+
+                    </div>
+                </article>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <p>© 2026 资深码农. 保留所有权利。</p>
+        </div>
+    </footer>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "architecture";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>Kafka 是什么：提交日志模型与选型边界 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="把 Kafka 当普通消息队列用是多数误用的起点。本文从「可重放的分布式提交日志」这一本质出发，讲清 Cluster/Broker/Topic/Partition/Segment 与 Consumer Group 的归属关系、消费后不删除只按 retention 过期的模型、与传统 MQ 在位点归属与重放能力上的六项差异、四类该用与三类不该用 Kafka 的场景、Connect/Streams/Schema Registry 的分工，以及 KRaft 取代 ZooKeeper 的意义与版本时间线。">
+    <meta name="keywords" content="Kafka,消息队列,分布式日志,Partition,Consumer Group,架构原理">
+    <meta name="author" content="资深码农">
+    <meta name="generator" content="deep2code generator">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/intro/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="Kafka 是什么：提交日志模型与选型边界 - 资深码农">
+    <meta property="og:description" content="把 Kafka 当普通消息队列用是多数误用的起点。本文从「可重放的分布式提交日志」这一本质出发，讲清 Cluster/Broker/Topic/Partition/Segment 与 Consumer Group 的归属关系、消费后不删除只按 retention 过期的模型、与传统 MQ 在位点归属与重放能力上的六项差异、四类该用与三类不该用 Kafka 的场景、Connect/Streams/Schema Registry 的分工，以及 KRaft 取代 ZooKeeper 的意义与版本时间线。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/intro/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Kafka 是什么：提交日志模型与选型边界 - 资深码农">
+    <meta name="twitter:description" content="把 Kafka 当普通消息队列用是多数误用的起点。本文从「可重放的分布式提交日志」这一本质出发，讲清 Cluster/Broker/Topic/Partition/Segment 与 Consumer Group 的归属关系、消费后不删除只按 retention 过期的模型、与传统 MQ 在位点归属与重放能力上的六项差异、四类该用与三类不该用 Kafka 的场景、Connect/Streams/Schema Registry 的分工，以及 KRaft 取代 ZooKeeper 的意义与版本时间线。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="架构与分布式">
+    <meta property="article:tag" content="Kafka,消息队列,分布式系统">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 是什么：提交日志模型与选型边界","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"把 Kafka 当普通消息队列用是多数误用的起点。本文从「可重放的分布式提交日志」这一本质出发，讲清 Cluster/Broker/Topic/Partition/Segment 与 Consumer Group 的归属关系、消费后不删除只按 retention 过期的模型、与传统 MQ 在位点归属与重放能力上的六项差异、四类该用与三类不该用 Kafka 的场景、Connect/Streams/Schema Registry 的分工，以及 KRaft 取代 ZooKeeper 的意义与版本时间线。","url":"https://www.yijunjun.asia/architecture/kafka/intro/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/intro/"},"articleSection":"后端开发"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "Kafka 架构原理", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Kafka 和 RabbitMQ 到底差在哪里，不只是吞吐量吗？", "acceptedAnswer": {"@type": "Answer", "text": "吞吐量只是结果，根本差异是数据模型。RabbitMQ 是队列：消息投递成功后从队列里删除，投递状态由 broker 维护，同一条消息原则上只被消费一次。Kafka 是提交日志：消息追加写入分区后按 retention 策略保留，消费动作只是顺序读并把位点记到内部 offsets 主题，日志本身不变。所以 Kafka 天然支持多个消费组各自独立读同一份数据、支持把位点拨回去重放历史。反过来，RabbitMQ 的按属性路由、优先级队列、延迟投递、单条消息重试这些能力 Kafka 原生都没有。"}}, {"@type": "Question", "name": "Kafka 消息被消费后会删除吗，磁盘会不会一直涨？", "acceptedAnswer": {"@type": "Answer", "text": "不会因为被消费而删除。Kafka 的删除完全由保留策略驱动：cleanup.policy 为 delete 时按 retention.ms（默认 7 天）或 retention.bytes 删除整个日志段文件，而不是逐条删除；cleanup.policy 为 compact 时只保留每个 key 的最新值。所以磁盘占用取决于写入速率乘以保留时长乘以副本数，跟有没有消费者、消费得快不快无关。没人消费的 topic 一样会占满磁盘，反之消费完的数据也依然能被另一个消费组重新读到。"}}, {"@type": "Question", "name": "Kafka 消费者数量可以超过分区数吗？", "acceptedAnswer": {"@type": "Answer", "text": "可以启动，但多出来的消费者拿不到任何分区，处于空转状态。在同一个消费组内，一个分区在任一时刻只会被一个消费者实例占有，因此分区数是这个消费组并行度的硬上限。想提高消费并行度只能先加分区。注意不同消费组之间互不影响，十个消费组都可以同时各自消费全部分区。实例数略多于分区数的唯一价值是作为热备，在某个实例挂掉后通过重平衡快速接手。"}}, {"@type": "Question", "name": "什么场景明确不应该用 Kafka？", "acceptedAnswer": {"@type": "Answer", "text": "三类场景不建议用。第一类是需要延迟消息或定时任务，Kafka 原生不支持按消息设定投递时间，只能靠多级延迟主题或外部调度绕，远不如 RocketMQ 定时消息或 RabbitMQ 延迟插件。第二类是需要按消息属性做复杂路由、需要优先级队列或单条重试与死信精细控制，Kafka 只有分区级路由，消费端只能全量拉取再过滤。第三类是只有几个服务且流量很低的小系统，引入 Kafka 意味着要维护集群、监控堆积、处理重平衡和磁盘容量，运维复杂度远超收益，数据库任务表或 Redis Stream 通常更合适。"}}, {"@type": "Question", "name": "KRaft 取代 ZooKeeper 之后有什么实际变化？", "acceptedAnswer": {"@type": "Answer", "text": "元数据本身也变成了一个 Kafka 日志。KRaft 模式下集群元数据存在内部的 metadata 主题里，由 controller quorum 用 Raft 协议复制，broker 以订阅日志的方式增量同步元数据，不再需要单独部署和运维 ZooKeeper 集群。实际收益有三点：少一个组件和一套监控、controller 故障切换从秒级降到百毫秒级、单集群可承载的分区数量级显著提升，因为新 controller 上任时不再需要从 ZooKeeper 全量加载分区状态。Kafka 3.3 起 KRaft 生产可用，3.5 起 ZooKeeper 模式标记废弃，4.0 已彻底移除。"}}, {"@type": "Question", "name": "Kafka 生态里 Connect、Streams、Schema Registry 都需要装吗？", "acceptedAnswer": {"@type": "Answer", "text": "大多数团队只需要 core。Connect 解决的是把外部系统的数据搬进搬出 Kafka，如果只有两三个数据源，自己写生产者消费者比维护一套 Connect 集群更省事，但做数据库变更捕获时 Debezium 这类 Connect 插件价值很大。Streams 是一个客户端库而不是独立集群，需要窗口聚合或流表连接时再引入，纯过滤映射用普通消费者就够。Schema Registry 解决的是消息格式演进时上下游不同步的问题，多团队共用主题且消息结构会变时才值得引入。ksqlDB 属于锦上添花，能力边界被 Flink 覆盖得更好。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture" class="active">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">架构与分布式</a><span class="separator">/</span><a href="../index.html">Kafka 深度原理：存储、副本、Rebalance 与投递语义</a><span class="separator">/</span><span>Kafka 架构原理</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">Kafka 是什么：提交日志模型与选型边界</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ Kafka</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>几乎所有 Kafka 的误用，都能追溯到同一个起点：把它当成一个「吞吐量特别大的消息队列」。这个类比在前十分钟很好用，在之后的每一次事故里都会害人。这篇不讲实现细节，只解决一个问题——<strong>Kafka 是哪一类系统，什么时候该用，什么时候明确不该用</strong>。分段日志、稀疏索引、零拷贝、ISR 水位、acks 组合这些机制不在这里展开，详见站内 Kafka 深度原理一篇。</p>
+
+<h2>Kafka 的本质是可重放的提交日志，不是队列</h2>
+
+<p>用一句话给 Kafka 下定义：<strong>它是一个分布式的、可重放的、分区内有序的提交日志（commit log）</strong>。「日志」在这里不是 <code>log.info()</code> 那种日志，而是数据库领域的 WAL 概念——一个只能在尾部追加、每条记录有单调递增编号、按编号顺序读取的文件。Kafka 做的事就是把这个结构分布式化、分区化，然后开放给任意多个读者。</p>
+
+<p>队列和日志的区别在于<strong>读取是否是破坏性的</strong>。队列的出队操作会改变队列本身：消息被取走，别人再也看不到。日志的读取只是「从第 N 个字节开始顺序扫」，扫完什么都没变，另一个读者可以从第 0 个字节重新扫一遍。这个差别听起来很小，但它单方面决定了 Kafka 的几乎全部特性：</p>
+
+<ul>
+<li><strong>消息被消费后不删除。</strong>删除的唯一触发条件是保留策略到期，跟有没有消费者完全无关。</li>
+<li><strong>位点属于消费方，不属于 broker。</strong>Kafka 只是替你把这个数字存在内部主题里，你完全可以自己存到数据库。位点既然是个可读可写的数字，就可以拨回去。</li>
+<li><strong>多个消费组能独立读同一份数据。</strong>它们各有一份位点，互不干扰，加一个下游不需要生产者做任何改动。</li>
+<li><strong>顺序性的粒度是分区，不是 topic。</strong>因为「有序」来自单个文件的追加顺序，跨文件无法定义顺序。</li>
+<li><strong>天然适合做数据管道和事件溯源。</strong>因为它保存的是「发生过什么」的完整序列，而不是「待处理的任务」。</li>
+</ul>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">一个能立刻用上的判断标准</div>
+    <p>如果你的需求是「把一个任务交给某个 worker 处理掉」，那是队列语义，Kafka 只是勉强能做。如果你的需求是「记录下所有发生的事实，让现在和将来的多个系统各自解读」，那是日志语义，Kafka 就是为此设计的。前者选 Kafka 会在延迟消息、单条重试、优先级上处处别扭；后者选 RabbitMQ 会在第二个下游接入时就卡住。</p>
+</div>
+
+<h2>核心概念的归属关系</h2>
+
+<p>Kafka 的概念不多，但很多人记不住它们的层级关系，于是把 Topic 当成并行度单位、把 Consumer 当成订阅单位。下面这张图把物理归属（谁存在谁里面）和逻辑对应（谁消费谁）画在一起。</p>
+
+<div class="mermaid">
+flowchart TB
+    subgraph CLUSTER["Kafka Cluster 元数据由 KRaft Controller Quorum 管理"]
+        subgraph BR1["Broker 1"]
+            direction TB
+            L0["orders-0 Leader<br/>Segment 数据文件加索引文件"]
+            L1["orders-1 Leader<br/>Segment 数据文件加索引文件"]
+            R2["orders-2 Follower 副本"]
+        end
+        subgraph BR2["Broker 2"]
+            direction TB
+            L2["orders-2 Leader<br/>Segment 数据文件加索引文件"]
+            R0["orders-0 Follower 副本"]
+            R1["orders-1 Follower 副本"]
+        end
+    end
+    PROD["Producer 在客户端决定分区<br/>无 key 走粘性分区器<br/>有 key 走 murmur2 取模"]
+    PROD --> L0
+    PROD --> L1
+    PROD --> L2
+    subgraph CGA["Consumer Group billing 并行度被 3 个分区卡死"]
+        CA1["Consumer A1 占有 orders-0"]
+        CA2["Consumer A2 占有 orders-1 与 orders-2"]
+    end
+    subgraph CGB["Consumer Group analytics 独立位点独立进度"]
+        CB1["Consumer B1 占有全部 3 个分区"]
+    end
+    L0 --> CA1
+    L1 --> CA2
+    L2 --> CA2
+    L0 --> CB1
+    L1 --> CB1
+    L2 --> CB1
+    OFF["内部主题 consumer offsets<br/>按消费组分别记录每个分区的位点"]
+    CGA -.-> OFF
+    CGB -.-> OFF
+</div>
+
+<p>图里有三条容易被忽略的事实：<strong>Topic 是一个纯逻辑名字，它在磁盘上并不存在</strong>，存在的是 <code>orders-0</code>、<code>orders-1</code> 这些分区目录；<strong>同一个分区的 Leader 和 Follower 一定在不同 broker 上</strong>，否则副本毫无意义；<strong>两个消费组消费同一批分区时读的是同一份文件</strong>，不会产生数据拷贝，多接一个下游的存储成本是零。</p>
+
+<table>
+<thead><tr><th>概念</th><th>它是什么的单位</th><th>硬约束与最容易搞错的点</th></tr></thead>
+<tbody>
+<tr><td>Cluster</td><td>元数据与副本调度的边界</td><td>跨集群不共享元数据，多机房同步要靠 MirrorMaker2 或商业版 Cluster Linking，不是原生能力</td></tr>
+<tr><td>Broker</td><td>进程与磁盘的单位</td><td>副本数不能超过 broker 数，否则创建 topic 直接报错 InvalidReplicationFactor</td></tr>
+<tr><td>Topic</td><td>业务语义的分类单位</td><td>纯逻辑概念，不存在「topic 级别的顺序」，也不存在「topic 级别的吞吐上限」</td></tr>
+<tr><td>Partition</td><td>并行度、顺序性、存储分布的单位</td><td>唯一同时承载这三件事的概念；只能增不能减，且增加会立刻改变 key 到分区的映射</td></tr>
+<tr><td>Segment</td><td>磁盘文件与删除的单位</td><td>保留策略删的是整个段文件，所以磁盘释放是阶梯式的，不是随时间平滑下降</td></tr>
+<tr><td>Producer</td><td>写入与分区选择的单位</td><td>分区选择发生在客户端而不是 broker，broker 不会帮你重新路由</td></tr>
+<tr><td>Consumer Group</td><td>订阅的单位</td><td>订阅关系挂在组上而不是实例上；换 group.id 等于一个全新订阅方，会从 auto.offset.reset 指定的位置开始</td></tr>
+<tr><td>Consumer</td><td>组内并行执行的单位</td><td>同组内实例数超过分区数时多余实例空转，分区数是并行度天花板</td></tr>
+<tr><td>Offset</td><td>位置的单位</td><td>在单个分区内唯一且单调递增，跨分区之间没有可比性，不存在「全局第 100 条消息」</td></tr>
+</tbody></table>
+
+<div class="echart-container" id="kafka-throughput-compare"></div>
+
+
+<h2>与传统消息队列的模型差异</h2>
+
+<p>下面这张表是选型时真正该看的。它不比较吞吐量，只比较模型能力——吞吐量可以加机器，模型能力加不了。</p>
+
+<table>
+<thead><tr><th>维度</th><th>Kafka 日志模型</th><th>RabbitMQ 等队列模型</th><th>这个差异什么时候会咬你</th></tr></thead>
+<tbody>
+<tr><td>消息删除时机</td><td>retention 到期或 compact 清理，与消费完全无关</td><td>消费者 ack 后立即从队列移除</td><td>Kafka 磁盘用量与消费速度无关，没人消费也会涨满；反之误消费后还能救回来</td></tr>
+<tr><td>位点归属</td><td>消费组自己维护，存在内部 offsets 主题，可任意重置到时间或位置</td><td>broker 维护投递状态，客户端无法回拨</td><td>需要重刷历史数据时，队列模型只能请上游重新发一遍</td></tr>
+<tr><td>重复消费同一份数据</td><td>换一个 group.id 即可，上游零改动</td><td>需要 fanout exchange 或镜像队列，拓扑要改</td><td>新增数据分析、新增风控系统时，接入成本差一个数量级</td></tr>
+<tr><td>路由能力</td><td>只有分区级路由，按 key 哈希或自定义 Partitioner，消费端要自己过滤</td><td>topic exchange 支持通配符按 routing key 精确投递</td><td>需要「只收金额大于阈值的订单」时，Kafka 端必须全量读再丢弃</td></tr>
+<tr><td>延迟与定时消息</td><td>原生不支持，只能用多级延迟主题或外部调度器绕</td><td>RabbitMQ 延迟插件、RocketMQ 定时消息原生支持任意时刻</td><td>订单 30 分钟未支付自动关闭这类需求，用 Kafka 会写出一堆脆弱的胶水代码</td></tr>
+<tr><td>并发下的有序性</td><td>分区内严格有序，且并发消费者数等于分区数时仍然保序</td><td>队列内有序，但多个消费者并发消费同一队列时顺序立刻失效</td><td>Kafka 能同时拿到有序和并行，队列模型二者只能取一</td></tr>
+<tr><td>单条重试与死信</td><td>无原生单条重试，位点是连续推进的，跳过一条要自己实现死信主题</td><td>逐条 ack 与 nack、重试次数、死信队列都是内置能力</td><td>一条脏数据会阻塞整个分区，必须自己写容错与旁路逻辑</td></tr>
+</tbody></table>
+
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">流传最广的错误说法：Kafka 快是因为它不删消息</div>
+    <p>顺序写和不逐条删确实有帮助，但「Kafka 比 RabbitMQ 快」的主因是批量化与分区并行：生产端把成百上千条消息攒成一个批次一次网络往返写入，消费端一次 fetch 拉回整个批次，单条消息的协议开销被摊薄到接近零；同时一个 topic 的写入被摊到多个 broker 的多个分区上。如果你把 <code>linger.ms</code> 设成 0、每条消息都同步等待确认、只建一个分区，Kafka 的吞吐会掉到和传统 MQ 同一量级甚至更低。攒批与零拷贝的具体机制详见站内 Kafka 深度原理一篇。</p>
+</div>
+
+<h2>一条消息的生命周期：写入、被多组消费、过期</h2>
+
+<p>把「消费不删除、过期才删除」完整走一遍，比任何文字解释都直观。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant P as Producer
+    participant L as 分区 Leader
+    participant F as Follower 副本
+    participant G1 as 消费组 billing
+    participant G2 as 消费组 analytics
+    participant C as 日志清理线程
+    P->>L: 追加一批消息到活跃 Segment 尾部
+    L->>L: 分配连续 offset 1040 到 1042 并写入 page cache
+    F->>L: Follower 主动发起 Fetch 拉取复制
+    F-->>L: 上报已复制到 1042
+    L-->>P: 返回分区号与起始 offset
+    G1->>L: Fetch from offset 1040
+    L-->>G1: 返回消息批次，日志内容不变
+    G1->>L: 提交位点 1043
+    G2->>L: Fetch from offset 0 从头重放同一份数据
+    L-->>G2: 返回同一份磁盘数据，上游无需重发
+    Note over G1,G2: 两个消费组各有独立位点互不影响<br/>谁都无法删掉对方还要读的数据
+    C->>L: 检查到某 Segment 最后写入时间超过 retention.ms
+    C->>L: 整个段文件被删除，逐条删除机制不存在
+    Note over L,C: 若此时有消费组位点落在被删段内<br/>它会收到位点越界错误并按 auto.offset.reset 跳位
+</div>
+
+<p>最后那条 Note 描述的是一个真实的线上事故形态：消费者停机超过保留期后再启动，位点指向的数据已经被清理，<code>auto.offset.reset=latest</code> 会让它<strong>静默跳到队尾，中间的数据被无声丢弃</strong>；设成 <code>earliest</code> 则会从最早可用位点重新消费，造成大量重复。这两种行为都不是你想要的，正确做法是监控消费组位点与最早可用位点之间的距离。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> Appended
+    Appended: 已追加到活跃 Segment 尾部
+    Appended --> Visible: 副本复制达到水位后对消费者可见
+    Visible: 可被任意数量的消费组读取
+    Visible --> Visible: 被消费只改变消费组位点<br/>不改变日志内容
+    Visible --> Expired: 所属 Segment 超过 retention.ms 或 retention.bytes
+    Visible --> Superseded: cleanup.policy 为 compact 且同一 key 出现更新值
+    Superseded: 旧版本等待被压实回收
+    Superseded --> [*]
+    Expired --> [*]
+    note right of Visible
+        这是唯一的稳定态
+        被消费多少次都不影响它停留多久
+    end note
+</div>
+
+<pre><code class="language-bash"># 建一个 3 分区 3 副本的 topic，保留 7 天
+bin/kafka-topics.sh --bootstrap-server localhost:9092 --create \
+  --topic orders --partitions 3 --replication-factor 3 \
+  --config retention.ms=604800000
+
+# 消费组 billing 从头完整读一遍
+bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic orders --group billing --from-beginning
+
+# 关键验证：只换一个 group.id，同一份数据能再完整读一遍
+# 队列模型里消息被 billing 消费掉就没了，这里两组各有独立位点
+bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic orders --group analytics --from-beginning</code></pre>
+
+<pre><code class="language-bash"># 判读消费组状态：CURRENT-OFFSET 是消费组的进度，LOG-END-OFFSET 是数据的进度
+bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+  --group billing --describe
+# TOPIC   PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG   CONSUMER-ID
+# orders  0          10240           10240           0     consumer-billing-1
+# orders  1          9980            10100           120   consumer-billing-2
+# orders  2          10050           10050           0     consumer-billing-2
+# 只有 P1 堆积 120 条，说明瓶颈在单个分区而不是整体消费能力
+
+# 数据还在磁盘上，所以位点可以拨回去重放
+# 前提是先停掉该组所有消费者，否则会报 assignment 冲突
+bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+  --group billing --topic orders --reset-offsets \
+  --to-datetime 2026-09-20T00:00:00.000 --execute
+
+# 查每个分区当前最早可用位点，与上面的 CURRENT-OFFSET 对比
+# 如果 CURRENT-OFFSET 已小于这个值，说明数据被 retention 清掉了，必然丢数据
+bin/kafka-run-class.sh kafka.tools.GetOffsetShell \
+  --bootstrap-server localhost:9092 --topic orders --time -2</code></pre>
+
+<h2>四类真正适合 Kafka 的场景</h2>
+
+<table>
+<thead><tr><th>场景</th><th>核心诉求</th><th>为什么必须是 Kafka</th><th>典型配置取向</th></tr></thead>
+<tbody>
+<tr><td>日志与埋点收集</td><td>写入量极大，允许秒级延迟，下游多且会不断新增</td><td>攒批加分区并行让单集群轻松扛住每秒百万条；同一份日志可被实时告警、离线数仓、ClickHouse 三路独立消费</td><td>分区数偏大，副本 2 到 3，保留 3 到 7 天，可用 acks=1 换吞吐</td></tr>
+<tr><td>数据库变更捕获 CDC</td><td>严格保持同一行的变更顺序，下游可从任意时点重建</td><td>按主键做 key 保证同一行落同一分区即天然有序；compact 策略能把日志压成「每个主键的最终态」，新下游可直接从日志重建全量快照</td><td>key 用主键，cleanup.policy 用 compact，acks=all</td></tr>
+<tr><td>流处理与实时指标</td><td>算子需要重放历史回填状态，需要有序输入</td><td>状态算子崩溃后可把位点拨回去重算，这一点队列模型根本做不到；Flink 的 exactly-once 依赖的正是可重放的源</td><td>分区数对齐算子并行度，保留期覆盖最长回溯窗口</td></tr>
+<tr><td>服务解耦与事件驱动</td><td>一个事件多方订阅，上游不该知道下游是谁</td><td>新增下游只需新增一个 group.id，上游代码零改动；事件日志同时充当审计与对账依据</td><td>按聚合根做 key，分区数适中，配 Schema Registry 管演进</td></tr>
+</tbody></table>
+
+<p>这四类的共同特征是<strong>同一份数据有多个读者，或者需要回溯</strong>。只要你的场景里出现了这两个词之一，Kafka 的运维复杂度就买到了对应的价值；两个都没有，就该往下看。</p>
+
+<h2>三类明确不该用 Kafka 的场景</h2>
+
+<div class="mermaid">
+flowchart TB
+    START["有一个异步化或解耦需求"] --> Q1{"需要按消息指定投递时间<br/>或做定时任务"}
+    Q1 -->|"需要"| NO1["不要用 Kafka<br/>选 RocketMQ 定时消息<br/>或 RabbitMQ 延迟插件"]
+    Q1 -->|"不需要"| Q2{"需要按属性精细路由<br/>或优先级或单条重试死信"}
+    Q2 -->|"需要"| NO2["不要用 Kafka<br/>选 RabbitMQ Exchange 路由<br/>Kafka 只有分区级路由"]
+    Q2 -->|"不需要"| Q3{"是否有多个下游读同一份数据<br/>或需要回溯重放"}
+    Q3 -->|"都不需要"| Q4{"日均量级是否已超出<br/>单机 MQ 的舒适区"}
+    Q4 -->|"没超过"| NO3["不要用 Kafka<br/>数据库任务表加轮询或 Redis Stream<br/>运维成本远低于收益"]
+    Q4 -->|"超过了"| YES2["可以用 Kafka<br/>但要接受重试与死信全靠自己实现"]
+    Q3 -->|"需要"| YES1["用 Kafka<br/>这是它的主场"]
+</div>
+
+<table>
+<thead><tr><th>不该用的场景</th><th>硬上 Kafka 会写出什么</th><th>更合适的方案</th></tr></thead>
+<tbody>
+<tr><td>延迟消息与定时任务</td><td>建一串 delay-5s、delay-1m、delay-30m 主题，靠消费者卡住不提交位点来等待；延迟档位一旦不匹配精度就崩坏，而且卡住会直接触发重平衡</td><td>RocketMQ 定时消息、RabbitMQ 延迟队列插件，或用 Redis ZSet 加调度器自己实现</td></tr>
+<tr><td>复杂路由与优先级</td><td>消费端全量拉取再 if-else 丢弃九成消息，带宽与 CPU 全浪费；优先级只能建 high 和 low 两个主题再手写权重轮询，还要自己防低优先级饿死</td><td>RabbitMQ topic exchange 通配符路由与优先级队列</td></tr>
+<tr><td>只有几个接口的小系统</td><td>为了一个「发邮件异步化」的需求，多出一个需要监控堆积、处理重平衡、规划磁盘、应对版本升级的分布式集群，以及一个没人愿意值班的组件</td><td>数据库任务表加定时轮询、Redis Stream，或语言内置的异步任务框架</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">用消费者 sleep 实现延迟，是最危险的一种绕法</div>
+    <p>很多团队用 Kafka 做延迟消息时，让消费者拉到消息后 sleep 到目标时间再处理。问题是两次 poll 之间的间隔一旦超过 <code>max.poll.interval.ms</code>（默认 5 分钟），协调者会认为这个实例已死并触发重平衡，分区被转给别人，你 sleep 的那条消息会被另一个实例重新拉到并再 sleep 一次，形成无限重平衡加重复处理。重平衡的触发条件详见站内 Kafka 深度原理一篇。</p>
+</div>
+
+<h2>生态组件各自解决什么，为什么多数团队只需要 core</h2>
+
+<table>
+<thead><tr><th>组件</th><th>解决的具体问题</th><th>形态与运维成本</th><th>什么时候值得引入</th></tr></thead>
+<tbody>
+<tr><td>Kafka Connect</td><td>外部系统与 Kafka 之间的批量搬运，自带位点管理、失败重试、格式转换</td><td>distributed 模式需要独立 worker 集群，要管插件版本与 connector 状态机</td><td>做 CDC 时配 Debezium 很值；只有两三个数据源时自己写生产者更省事</td></tr>
+<tr><td>Kafka Streams</td><td>有状态流处理：窗口聚合、流表 join、本地状态存储与故障恢复</td><td>只是一个 Java 客户端库，不需要额外集群；但状态落在本地 RocksDB，扩缩容要迁状态</td><td>需要窗口聚合或 join 时引入；纯过滤映射用普通消费者就够</td></tr>
+<tr><td>Schema Registry</td><td>消息格式演进时上下游不同步的问题，提供向前、向后、全兼容三种校验</td><td>一个独立服务，自身把 schema 存在 Kafka 主题里；客户端要换序列化器</td><td>多团队共用主题且结构会变时；单团队自用且用 JSON 可以先不上</td></tr>
+<tr><td>ksqlDB</td><td>用类 SQL 写流处理，降低开发门槛</td><td>独立集群，社区活跃度一般，能力边界比 Flink 窄</td><td>基本可以跳过，需要 SQL 化流处理直接上 Flink</td></tr>
+<tr><td>MirrorMaker 2</td><td>跨集群复制，用于多机房容灾或集群迁移</td><td>基于 Connect 运行；两集群的位点不是天然对应的，切换时要处理 offset 映射</td><td>确实需要跨机房时用于迁移；不要指望它做「随时无损切换」的热备</td></tr>
+</tbody></table>
+
+<p>判断标准很简单：<strong>这些组件都是为了省掉你自己写的代码，如果你要写的代码比维护它们更少，就别引入</strong>。绝大多数业务只用 core 的生产者消费者 API 加一套 Lag 监控，就覆盖了全部需求。</p>
+
+<h2>KRaft 取代 ZooKeeper 意味着什么</h2>
+
+<p>KRaft 不是「换了个协调服务」，它的思路是<strong>把元数据也当成一个 Kafka 日志来存</strong>。集群里的主题列表、分区分配、ISR 状态、配置变更全部变成内部元数据主题里的一条条记录，由 controller quorum 用 Raft 协议复制，broker 像普通消费者一样订阅这个日志并增量应用。实际变化有三点：</p>
+
+<ul>
+<li><strong>少一个组件。</strong>不用再部署、监控、调优、升级一套 ZooKeeper 集群，也不用再向新人解释「为什么 ZK 挂了 Kafka 还能读写但建不了 topic」。</li>
+<li><strong>controller 故障切换更快。</strong>ZooKeeper 模式下新 controller 上任要从 ZK 全量拉取所有分区的状态，分区数上万时这个过程是秒级甚至十秒级的；KRaft 模式下新 controller 内存里已持有最新元数据，切换是百毫秒级的。</li>
+<li><strong>单集群能承载的分区数量级显著提升。</strong>瓶颈从「ZK 写入与全量加载」变成「Raft 日志复制」，官方压测从早期的数千分区提升到百万级。</li>
+</ul>
+
+<table>
+<thead><tr><th>版本</th><th>KRaft 状态</th><th>你需要做什么</th></tr></thead>
+<tbody>
+<tr><td>2.8</td><td>早期预览，明确不可用于生产</td><td>只能试玩，缺少 ACL、动态配置等能力</td></tr>
+<tr><td>3.3</td><td>标记为生产可用</td><td>新集群可以直接上 KRaft</td></tr>
+<tr><td>3.5</td><td>ZooKeeper 模式标记废弃，提供 ZK 到 KRaft 的迁移路径</td><td>存量集群开始规划迁移，迁移是单向的，无法回退</td></tr>
+<tr><td>3.6 到 3.9</td><td>KRaft 功能补齐，迁移工具成熟</td><td>迁移的最佳窗口，3.9 是最后一个支持 ZooKeeper 的大版本</td></tr>
+<tr><td>4.0 及以后</td><td>ZooKeeper 支持彻底移除</td><td>必须先在 3.x 上完成迁移，不能从 ZK 模式直接升到 4.0</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+    <div class="callout-icon">✅</div>
+    <div class="callout-title">新集群不要再纠结这件事</div>
+    <p>今天搭的任何新集群都应该直接用 KRaft，网上大量「先启动 ZooKeeper 再启动 Kafka」的教程已经过时。存量 ZK 集群的迁移不要拖到 4.0 逼上门再做，因为官方迁移路径只存在于 3.5 到 3.9，跨过这个区间就只能重建集群加数据搬迁。具体的 <code>process.roles</code>、quorum 规划和 <code>kafka-storage.sh format</code> 步骤见站内 Kafka 安装部署一篇。</p>
+</div>
+
+<h2>常见认知误区</h2>
+
+<table>
+<thead><tr><th>流传很广的说法</th><th>实际情况</th></tr></thead>
+<tbody>
+<tr><td>Kafka 消息消费完就删了</td><td>删除只由 retention 或 compact 触发。消费组把 LAG 清零后数据仍完整躺在磁盘上，可以被拨回位点或被新消费组重读</td></tr>
+<tr><td>Kafka 保证消息全局有序</td><td>只保证分区内有序。想要全局有序只能用单分区，代价是吞吐退化成单文件顺序写且无法并行消费</td></tr>
+<tr><td>消费者越多消费越快</td><td>同组内有效消费者数被分区数卡死，多出来的实例完全空转。要提速必须先加分区，而加分区会破坏 key 的顺序性</td></tr>
+<tr><td>分区数越多吞吐越高</td><td>存在明显拐点。每个分区在每台 broker 上占文件句柄，生产端为每个分区维护独立批次缓冲，故障恢复时选举耗时随分区数线性增长。详见站内 Kafka 分区设计一篇</td></tr>
+<tr><td>Kafka 不会丢消息</td><td>默认配置下会丢。<code>acks=1</code> 时 Leader 落盘前宕机即丢；<code>unclean.leader.election.enable=true</code> 时落后副本上任也会丢。可靠性参数组合详见站内 Kafka 深度原理一篇</td></tr>
+<tr><td>log compaction 就是压缩</td><td>compaction 是按 key 去重保留最新值，与压缩算法毫无关系。压缩是 <code>compression.type</code>，取值 gzip、snappy、lz4、zstd</td></tr>
+<tr><td>Kafka 延迟一定比 RabbitMQ 高</td><td>Kafka 的延迟主要来自 <code>linger.ms</code> 攒批，设成 0 后端到端延迟可做到毫秒级，只是吞吐下降。延迟是可调的，不是固有的</td></tr>
+<tr><td>位点必须存在 Kafka 内部主题里</td><td>那只是默认实现。完全可以关掉自动提交，把位点与业务数据写进同一个数据库事务，这是实现端到端 exactly-once 最朴素的办法</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">入门阶段最容易踩的坑</div>
+    <ul>
+    <li><strong>随手改了 group.id 导致数据从头重放。</strong>新 group.id 没有历史位点，按 <code>auto.offset.reset</code> 决定起点。灰度时改组名，等于让下游重刷整个保留期的数据。</li>
+    <li><strong>auto.offset.reset 留默认 latest 导致静默丢数据。</strong>消费者停机超过保留期后重启，位点失效，直接跳到队尾，中间数据无声消失，日志里只有一行 WARN。</li>
+    <li><strong>消费者实例数配得比分区数多。</strong>多出的实例不报错也不干活，监控上看到十个 pod 全部 Running，实际只有三个在消费。</li>
+    <li><strong>指望加消费者实例解决堆积。</strong>分区数没变时加实例毫无作用，必须先看每个分区的 LAG 分布，再决定是加分区还是优化单条处理耗时。</li>
+    <li><strong>以为删除 topic 是同步完成的。</strong>删除只是打标记，实际清理受 <code>delete.topic.enable</code> 和文件清理调度影响，删完立刻同名重建可能读到残留数据。</li>
+    <li><strong>在消费线程里 sleep 做延迟。</strong>超过 <code>max.poll.interval.ms</code> 会被踢出组并触发无限重平衡。</li>
+    <li><strong>没有 key 却指望同一实体的消息有序。</strong>无 key 时消息被粘性分区器分散到各分区，同一订单的创建和支付事件可能落在不同分区，顺序完全不保证。</li>
+    <li><strong>把 retention 设得很短来省磁盘。</strong>保留期短于「消费者最长停机时间加故障响应时间」，就等于放弃了重放能力，也就放弃了选 Kafka 的主要理由。</li>
+    <li><strong>单条消息超过上限导致生产失败。</strong>broker 端默认约 1MB，broker、topic、producer、consumer 四处的大小上限必须一起调，只改一处会在另一环节被拒。</li>
+    <li><strong>只监控总 LAG 不看分区分布。</strong>总 LAG 一万可能是均匀堆积，也可能是一个热点分区堆了一万而其余为零，两者的处理方式完全不同。</li>
+    <li><strong>把 Kafka 当数据库来查。</strong>它没有按 key 随机读的能力，只能顺序扫或按 offset 与时间戳定位。需要点查就把数据落到 KV 存储里。</li>
+    <li><strong>生产环境只部一个 broker。</strong>副本数被限制为 1，任何一次重启都是一次数据不可用，磁盘损坏就是永久丢失。</li>
+    </ul>
+</div>
+
+                    </div>
+                </article>
+                <nav class="article-nav">
+                    
+                    <a class="nav-next" href="../install/"><span class="nav-label">下一篇 →</span><span class="nav-title">Kafka 安装部署</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · Kafka 消息队列</h2><ul class="related-list"><li><a class="side-post" href="../install/">Kafka 安装部署</a></li><li><a class="side-post" href="../producer-consumer/">生产者与消费者</a></li><li><a class="side-post" href="../topic-partition/">Kafka 分区与副本</a></li><li><a class="side-post" href="../reliability/">消息可靠性</a></li><li><a class="side-post" href="../performance/">消息队列对比</a></li></ul></aside>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+    <button class="back-to-top" title="回到顶部">↑</button>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "architecture";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script>
+        function initKafkaCharts() {
+            if (typeof echarts === 'undefined') {
+                setTimeout(initKafkaCharts, 100);
+                return;
+            }
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var textColor = isDark ? '#c9d1d9' : '#333';
+            var splitColor = isDark ? '#30363d' : '#e8e8e8';
+
+            var el = document.getElementById('kafka-throughput-compare');
+            if (el) {
+                var chart = echarts.init(el);
+                var option = {
+                    title: { text: '主流消息队列吞吐量对比（单机）', left: 'center', textStyle: { color: textColor, fontSize: 15, fontWeight: 600 } },
+                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                    grid: { left: '8%', right: '8%', bottom: '10%', top: '18%', containLabel: true },
+                    xAxis: {
+                        type: 'category',
+                        data: ['RabbitMQ', 'RocketMQ', 'Kafka'],
+                        axisLabel: { color: textColor, fontSize: 12 },
+                        axisLine: { lineStyle: { color: splitColor } }
+                    },
+                    yAxis: {
+                        type: 'value',
+                        name: '吞吐量 (万条/秒)',
+                        axisLabel: { color: textColor },
+                        splitLine: { lineStyle: { color: splitColor } }
+                    },
+                    series: [{
+                        name: '单机吞吐量',
+                        type: 'bar',
+                        data: [
+                            { value: 1, itemStyle: { color: '#f59e0b' } },
+                            { value: 10, itemStyle: { color: '#8b5cf6' } },
+                            { value: 100, itemStyle: { color: '#10b981' } }
+                        ],
+                        itemStyle: { borderRadius: [6, 6, 0, 0] },
+                        label: { show: true, position: 'top', formatter: '{c} 万/s', color: textColor, fontSize: 12 }
+                    }]
+                };
+                chart.setOption(option);
+                window.addEventListener('resize', function() { chart.resize(); });
+            }
+        }
+        initKafkaCharts();
+    </script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

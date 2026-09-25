@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../images/logo.jpeg">
+    <title>Git 的对象模型与常见操作的真实语义 - 资深码农</title>
+    <link rel="stylesheet" href="../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="从 blob/tree/commit/tag 四种对象与内容寻址存储讲起：索引为什么是独立于工作区和 HEAD 的第三状态、分支与 HEAD 只是引用文件、detached HEAD 的六种成因；再逐条对齐命令的真实语义——merge 与 rebase 在提交图上的差异、reset 五种模式各改哪一层、cherry-pick 与 revert 的补丁语义、reflog 与可达性如何让「丢失」的提交仍可找回、gc 保留期参数默认值，以及 --force-with-lease 为什么会被一次后台 fetch 破防。破坏性命令均标注风险与前置检查。">
+    <meta name="keywords" content="Git,版本控制,分支管理,merge,rebase,stash,reset,checkout,工作区,暂存区,远程仓库,conventional commits">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/tools/vcs/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="Git 的对象模型与常见操作的真实语义 - 资深码农">
+    <meta property="og:description" content="从 blob/tree/commit/tag 四种对象与内容寻址存储讲起：索引为什么是独立于工作区和 HEAD 的第三状态、分支与 HEAD 只是引用文件、detached HEAD 的六种成因；再逐条对齐命令的真实语义——merge 与 rebase 在提交图上的差异、reset 五种模式各改哪一层、cherry-pick 与 revert 的补丁语义、reflog 与可达性如何让「丢失」的提交仍可找回、gc 保留期参数默认值，以及 --force-with-lease 为什么会被一次后台 fetch 破防。破坏性命令均标注风险与前置检查。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/tools/vcs/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Git 的对象模型与常见操作的真实语义 - 资深码农">
+    <meta name="twitter:description" content="从 blob/tree/commit/tag 四种对象与内容寻址存储讲起：索引为什么是独立于工作区和 HEAD 的第三状态、分支与 HEAD 只是引用文件、detached HEAD 的六种成因；再逐条对齐命令的真实语义——merge 与 rebase 在提交图上的差异、reset 五种模式各改哪一层、cherry-pick 与 revert 的补丁语义、reflog 与可达性如何让「丢失」的提交仍可找回、gc 保留期参数默认值，以及 --force-with-lease 为什么会被一次后台 fetch 破防。破坏性命令均标注风险与前置检查。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="开发工具与工程效率">
+    <meta property="article:tag" content="开发工具与效率">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Git 的对象模型与常见操作的真实语义","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"从 blob/tree/commit/tag 四种对象与内容寻址存储讲起：索引为什么是独立于工作区和 HEAD 的第三状态、分支与 HEAD 只是引用文件、detached HEAD 的六种成因；再逐条对齐命令的真实语义——merge 与 rebase 在提交图上的差异、reset 五种模式各改哪一层、cherry-pick 与 revert 的补丁语义、reflog 与可达性如何让「丢失」的提交仍可找回、gc 保留期参数默认值，以及 --force-with-lease 为什么会被一次后台 fetch 破防。破坏性命令均标注风险与前置检查。","url":"https://www.yijunjun.asia/tools/vcs/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/vcs/"},"articleSection":"开发工具与效率"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "开发工具与工程效率", "item": "https://www.yijunjun.asia/tools/"}, {"position": 3, "name": "Git", "item": "https://www.yijunjun.asia/tools/vcs/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
+
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"git reset --hard 之后还能找回来吗？","acceptedAnswer":{"@type":"Answer","text":"分三种情况。已经提交过的内容一定能找回：旧提交仍被引用日志 reflog 记录，属于可达对象，gc 不会删，用 git reflog 找到那一行的哈希，再基于它开一个新分支即可。只在工作区改过、从没执行过 git add 的内容找不回，因为它从未写入对象库。add 过但没提交的内容介于两者之间，blob 已经进了对象库，可以用 git fsck --lost-found 扫出游离对象。所以破坏性操作前的习惯动作是先做一次带未跟踪文件的储藏，或者打一个备份分支。"}},{"@type":"Question","name":"rebase 会不会把提交弄丢？","acceptedAnswer":{"@type":"Answer","text":"不会丢对象，丢的是引用。rebase 把每个待重放提交与其父提交的差异，依次应用到新基底上，生成一批全新的 commit 对象，分支指针指向新的那一串；原来的提交对象还躺在仓库里，只是没有分支指向它们，引用日志里仍能找到。真正的风险在协作层面：别人基于旧提交做的工作会与你重写后的历史分叉。另外 rebase 的默认后端从 Git 2.26 起是 merge 后端，比老的 am 后端更能正确处理重命名和空提交。"}},{"@type":"Question","name":"--force-with-lease 真的安全吗？","acceptedAnswer":{"@type":"Answer","text":"比裸 force 安全，但有一条很常见的破防路径。租约的期望值取自你本地的远端跟踪引用，而任何一次 fetch，包括编辑器后台自动 fetch 和 pull 内部隐含的 fetch，都会把它刷新成远端最新值，于是校验通过、同事刚推上去的提交照样被覆盖。可靠做法有两种：显式写出期望哈希，或者配合 Git 2.30 引入的 --force-if-includes，它额外要求被覆盖的远端提交确实已经出现在你本地的引用日志里。"}},{"@type":"Question","name":"改个文件名，为什么 Git 说没有新增对象？","acceptedAnswer":{"@type":"Answer","text":"因为 blob 只存文件内容，不存文件名和路径；名字和权限位记录在 tree 条目里。改名只会生成新的 tree 对象，blob 直接复用。这同时解释了另外两件事：Git 无法跟踪空目录，空目录在 tree 里没有任何条目可写；Git 的重命名检测是在 diff 阶段按内容相似度算出来的，不是提交时记下来的，所以相似度低于阈值时就识别不出重命名。"}},{"@type":"Question","name":"Git 到底存快照还是存差异？","acceptedAnswer":{"@type":"Answer","text":"两个层面要分开讲。对象模型层面存的是完整快照：每个提交指向一棵完整的 tree，tree 指向保存完整内容的 blob，没有任何差异语义。但存储层面并不是：Git 打包时会把相似对象做 delta 压缩塞进 packfile，同一个对象在 packfile 里可能只存相对另一个对象的增量。用 git count-objects -vH 可以看到松散对象和打包对象各占多少空间。所以「Git 不存差异」只在语义层成立，在磁盘层是错的。"}},{"@type":"Question","name":"cherry-pick 过去的提交，以后合并会不会再冲突一次？","acceptedAnswer":{"@type":"Answer","text":"有可能。cherry-pick 生成的是全新提交，提交图上与原提交没有任何父子关联，Git 只能靠 patch-id 判断两者是不是同一个补丁。差异完全一致时 rebase 会自动跳过，git log 加 cherry-mark 也能标出来；一旦中间有人改动了相邻代码导致差异不再完全一致，合并时就会再冲突一次。squash merge 有同类问题：压成一个提交后图上不记录已合入关系，同一分支再次合并会重放全部改动。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="./" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../programming/" data-group="programming">编程</a><a href="../../database/" data-group="database">数据库</a><a href="../../api/" data-group="api">接口</a><a href="../../architecture/" data-group="architecture">架构</a><a href="../../devops/" data-group="devops">运维</a><a href="../../observability/" data-group="observability">可观测</a><a href="../../frontend/" data-group="frontend">前端</a><a href="../../tools/" data-group="tools" class="active">工具</a><a href="../../ai/" data-group="ai">AI</a><a href="../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../index.html">主页</a><span class="separator">/</span><a href="../index.html">开发工具与工程效率</a><span class="separator">/</span><span>Git</span>
+</div>
+
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+    <header class="article-header">
+        <h1 class="article-title">Git 的对象模型与常见操作的真实语义</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ Git</span>
+        </div>
+    </header>
+
+    <p>Git 的表层命令不算多，语义却经常被口口相传的说法带偏：「Git 存快照不存差异」「rebase 会丢提交」「<code>reset --hard</code> 之后就彻底没救了」。这些说法都只对一半。要把 Git 用准，得先看清底下那套只有四种对象的内容寻址存储，再看每条命令到底动了 HEAD、索引、工作区中的哪一层。</p>
+
+    <h2>四种对象：一个内容寻址的键值库</h2>
+    <p><code>.git/objects</code> 本质上是个键值存储：key 是对象内容的哈希，value 是 zlib 压缩后的字节。写入前 Git 会拼一个头部，格式是「类型 空格 字节数 NUL」，再接原始内容，对整体求哈希。因此同样的内容在任何仓库、任何时间点都得到同一个 key，这就是「内容寻址」的含义，也是 Git 去重的全部机制。默认哈希算法是 SHA-1，自 2.13 起用的是带碰撞检测的 sha1dc 实现；新仓库可以用 <code>git init --object-format=sha256</code> 建成 SHA-256 格式，但这类仓库目前还不能和 SHA-1 仓库互相推送。</p>
+    <p>四种对象里只有三种会被日常提到，第四种（tag 对象）还经常和「轻量标签」混在一起讲，实际上轻量标签根本不产生对象。</p>
+    <table>
+        <thead>
+            <tr><th>对象类型</th><th>内部存了什么</th><th>明确不存什么</th><th>谁引用它</th><th>探查命令</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>blob</td><td>文件的原始字节，一个字节都不多</td><td>文件名、路径、权限、行号</td><td>tree 条目</td><td><code>git cat-file -p 哈希</code></td></tr>
+            <tr><td>tree</td><td>一组条目：模式 + 对象类型 + 哈希 + 名字</td><td>内容本身；也无法表示空目录</td><td>commit、父 tree</td><td><code>git cat-file -p HEAD^{tree}</code></td></tr>
+            <tr><td>commit</td><td>根 tree 哈希、0 到 N 个父提交、author、committer、消息</td><td>任何形式的文件差异</td><td>引用、其他 commit 的 parent 字段</td><td><code>git cat-file -p HEAD</code></td></tr>
+            <tr><td>tag（附注标签）</td><td>被指对象的哈希与类型、tagger、消息、可选 GPG 签名</td><td>文件内容</td><td><code>refs/tags/名字</code></td><td><code>git cat-file -p v1.0</code></td></tr>
+            <tr><td>轻量标签（不是对象）</td><td><code>refs/tags/</code> 下一行 40 位十六进制哈希</td><td>tagger、消息、签名一概没有</td><td>无</td><td><code>git rev-parse v1.0</code></td></tr>
+        </tbody>
+    </table>
+    <p>tree 条目里的模式位是个固定的小集合：<code>100644</code> 普通文件、<code>100755</code> 可执行文件、<code>120000</code> 符号链接、<code>040000</code> 子目录、<code>160000</code> 子模块引用（gitlink，只记一个提交哈希，不递归存内容）。Git 只认「可执行位」这一个权限，别指望它保存 owner、组或者其余 mode 位——部署脚本依赖文件权限时必须自己在流水线里补 <code>chmod</code>。</p>
+
+    <div class="mermaid">
+flowchart TB
+    subgraph REF["引用层：普通文本文件"]
+        H["HEAD 符号引用"]
+        B1["refs/heads/main"]
+        B2["refs/heads/feature"]
+        T1["refs/tags/v1.0"]
+        R1["refs/remotes/origin/main"]
+    end
+    subgraph OBJ["对象层：内容寻址，只增不改"]
+        C2["commit 9f2a"]
+        C1["commit 3c7e"]
+        TG["tag 对象 v1.0"]
+        TR["tree 根目录"]
+        TR2["tree 子目录 src"]
+        BL1["blob 源码内容"]
+        BL2["blob 说明文件内容"]
+    end
+    subgraph IDX["索引层：单个二进制文件"]
+        IX["路径 + blob 哈希 + 模式 + stat 缓存 + stage 号"]
+    end
+    H --> B1
+    B1 --> C2
+    B2 --> C1
+    T1 --> TG
+    TG --> C1
+    R1 --> C1
+    C2 --> C1
+    C2 --> TR
+    TR --> TR2
+    TR --> BL2
+    TR2 --> BL1
+    IX --> BL1
+    IX --> BL2
+    </div>
+
+    <pre><code class="language-bash"># 1) HEAD 到底是符号引用还是裸哈希，一条命令判断
+git symbolic-ref -q HEAD || echo "当前处于 detached HEAD"
+
+# 2) 任意对象的类型、大小、内容
+git cat-file -t HEAD            # 输出 commit
+git cat-file -s HEAD            # 对象字节数，不含头部
+git cat-file -p HEAD            # 看 tree 哈希、parent 行、author 与 committer 两个时间
+git cat-file -p HEAD^{tree}     # 根 tree 的条目：模式 类型 哈希 名字
+
+# 3) 验证内容寻址：手算哈希但不写入对象库，去掉 --stdin 前的管道可对文件求值
+printf 'hello\n' | git hash-object --stdin
+# 固定输出 ce013625030ba8dba906f756967f9e9ca394464a
+# 任何仓库里内容为 hello 换行的文件，blob 哈希都是这一串
+
+# 4) 看索引的真实内容，第一列就是 stage 号
+git ls-files --stage
+git ls-files -u                 # 只列 stage 非 0 的冲突条目，冲突残留一眼可见
+
+# 5) 松散对象与 packfile 各占多少空间，判断该不该 gc
+git count-objects -vH</code></pre>
+
+    <h2>索引是独立的第三状态，不是「工作区的缓存」</h2>
+    <p><code>.git/index</code> 是一个二进制文件，对每个被跟踪路径记录：路径名、blob 哈希、文件模式、一份 stat 缓存（设备号、inode、mtime、ctime、uid、gid、文件大小），以及一个 stage 号。stat 缓存的作用是让 <code>git status</code> 在绝大多数文件上不必读内容就能断定「没变」；这也是为什么把仓库放在时间戳不稳定的网络文件系统上时，status 会莫名其妙变慢。</p>
+    <p>stage 号是理解冲突的关键：正常情况恒为 0；合并冲突时同一路径会同时存在 stage 1（共同祖先）、stage 2（当前分支，ours）、stage 3（对方分支，theirs）三条记录，<code>git add</code> 的作用是把三条折叠成一条 stage 0，这就是「标记为已解决」的全部含义——Git 从不检查你解决得对不对。</p>
+    <p>由此推出两个常被忽略的事实。第一，<code>git commit</code> 只从索引构建 tree，完全不看工作区；<code>git add</code> 之后再修改文件，提交进去的是 add 那一刻的内容，这正是 <code>git add -p</code> 能拆分提交的原理，也是「我明明改了怎么没进去」的真凶。第二，<code>git status</code> 做的是两次 diff——HEAD 对索引得到「已暂存」，索引对工作区得到「未暂存」，两个区域互不相关，同一个文件可以同时出现在两边。</p>
+    <table>
+        <thead>
+            <tr><th>操作</th><th>HEAD</th><th>索引</th><th>工作区</th><th>备注 / 旧写法</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>git add 路径</code></td><td>不变</td><td>更新为工作区内容</td><td>不变</td><td>同时把 stage 1/2/3 折叠为 0</td></tr>
+            <tr><td><code>git restore --staged 路径</code></td><td>不变</td><td>还原为 HEAD</td><td>不变</td><td>旧写法 <code>git reset 路径</code></td></tr>
+            <tr><td><code>git restore 路径</code></td><td>不变</td><td>不变</td><td>还原为索引内容</td><td>旧写法 <code>git checkout -- 路径</code>，改动无处可寻</td></tr>
+            <tr><td><code>git restore -s HEAD -SW 路径</code></td><td>不变</td><td>还原为 HEAD</td><td>还原为 HEAD</td><td>旧写法 <code>git checkout HEAD -- 路径</code></td></tr>
+            <tr><td><code>git commit</code></td><td>指向新提交</td><td>不变</td><td>不变</td><td>tree 完全由索引生成</td></tr>
+            <tr><td><code>git commit -a</code></td><td>指向新提交</td><td>先被已跟踪文件刷新</td><td>不变</td><td>不会带上未跟踪文件</td></tr>
+            <tr><td><code>git stash push -u</code></td><td>不变</td><td>还原为 HEAD</td><td>还原为 HEAD</td><td>改动写入对象库并挂在 <code>refs/stash</code>，可找回</td></tr>
+        </tbody>
+    </table>
+    <p>还有一对被广泛误用的索引标记位。<code>--assume-unchanged</code> 只是给 Git 的性能提示，意思是「你可以不查这个文件」，Git 在切分支、合并时随时可以推翻它并覆盖你的本地改动；真要长期忽略对已跟踪文件的本地修改（典型场景是本地配置文件），应该用 <code>--skip-worktree</code>，它才是语义上的「别碰这个路径」。两者都只存在于本地索引，推送不过去，所以拿它们当团队约定一定会出事。</p>
+
+    <div class="mermaid">
+stateDiagram-v2
+    state "未跟踪" as U
+    state "已修改" as M
+    state "已暂存" as S
+    state "已提交" as C
+    state "冲突中" as X
+    [*] --> U
+    U --> S: 加入索引
+    S --> C: 提交
+    C --> M: 编辑工作区
+    M --> S: 加入索引
+    S --> M: 取消暂存
+    M --> C: 丢弃工作区改动
+    C --> X: 合并或变基产生冲突
+    X --> S: 标记为已解决
+    X --> C: 中止合并
+    note right of S
+        索引中该路径的 stage 号为 0
+        提交只读索引 不读工作区
+    end note
+    note right of X
+        同一路径在索引里同时存在 stage 1 2 3 三条记录
+        标记已解决只是把三条折叠成一条 内容对错 Git 不检查
+    end note
+    </div>
+
+    <h2>HEAD、分支与 detached HEAD 的成因</h2>
+    <p>分支不是目录副本，也不是提交序列，它就是 <code>refs/heads/</code> 下一个 41 字节的文本文件：40 位十六进制哈希加一个换行（打包引用后会被折叠进 <code>packed-refs</code>）。HEAD 是 <code>.git/HEAD</code> 里的一行，正常情况写着 <code>ref: refs/heads/main</code>，这叫符号引用。</p>
+    <p>于是切分支的真实动作是：改写 HEAD 那一行，再把索引和工作区刷成目标提交的 tree。创建分支是 O(1)，永远是毫秒级；切换分支的成本只和两棵 tree 的差异规模相关，跟仓库总历史大小无关——所以「仓库大所以切分支慢」这个说法不成立，真正的慢因是差异文件多、或者 status 前的 stat 扫描慢。</p>
+    <p>当 HEAD 里直接写了一个 40 位哈希而不是 <code>ref:</code> 开头的行，就是 detached HEAD。它本身不是错误状态，只是此时新提交没有任何分支指向，一旦切走就只能靠引用日志找回。</p>
+    <table>
+        <thead>
+            <tr><th>成因</th><th>此时 HEAD 内容</th><th>在这里提交会不会失去引用</th><th>正确收尾方式</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>检出一个提交哈希</td><td>裸哈希</td><td>会</td><td><code>git switch -c 新分支</code> 把当前位置固定下来</td></tr>
+            <tr><td>检出一个标签名</td><td>标签所指提交的哈希</td><td>会</td><td>同上；标签本身不可移动，不能在它上面推进</td></tr>
+            <tr><td>检出远端跟踪引用</td><td>裸哈希</td><td>会</td><td><code>git switch -c 名字 --track origin/名字</code></td></tr>
+            <tr><td>变基进行中</td><td>裸哈希，另有 REBASE_HEAD 等状态文件</td><td>不会，结束时分支会被移到新串顶端</td><td><code>git rebase --continue</code> 或 <code>--abort</code></td></tr>
+            <tr><td>二分查找进行中</td><td>裸哈希</td><td>会</td><td><code>git bisect reset</code> 回到原分支</td></tr>
+            <tr><td>子模块的默认状态</td><td>父仓库 gitlink 记录的哈希</td><td>会，且父仓库只会记住哈希</td><td>进子模块 <code>git switch</code> 到分支后再提交并推送</td></tr>
+            <tr><td>显式 <code>git switch --detach</code></td><td>裸哈希</td><td>会</td><td>本来就是临时试验用，用完直接切回</td></tr>
+        </tbody>
+    </table>
+
+    <h2>merge 与 rebase 在提交图上的差异</h2>
+    <p>merge 的算法是三方合并：先用 <code>git merge-base</code> 找共同祖先，再把两侧相对祖先的改动合起来。如果共同祖先就是当前 HEAD，Git 默认走 fast-forward——只移动引用，一个新对象都不产生，所谓「合并」其实什么都没合。这也是很多团队看不到合并提交的原因，要强制留痕得加 <code>--no-ff</code>。真正的合并提交有两个父，且父的顺序有语义：parent 1 是执行合并时所在的分支，<code>git log --first-parent</code> 能靠它把主干拉成一条线。默认合并策略自 Git 2.34 起是 ort，取代了旧的 recursive，在大仓库上快一个数量级，重命名检测也更准。</p>
+    <p>rebase 的算法完全不同：对每个待重放的提交，计算它与其父提交的差异，逐个应用到新基底上，生成一批全新的 commit 对象。tree 可能和原来一模一样，但 parent 变了、committer 时间戳变了，所以哈希必然变（author 时间会保留，这就是 rebase 后 <code>git log</code> 时间看起来乱序的原因）。原提交对象一个都没删，只是失去了引用——这才是「rebase 丢提交」错觉的来源。</p>
+    <p>工程上更值得记住的差别是冲突次数：merge 只在合并那一刻解一次冲突；rebase 要在每个被重放的提交上各解一次，10 个提交最多解 10 次。真的绕不开时，开 <code>git config --global rerere.enabled true</code>，Git 会记住冲突解法并在重复遇到时自动套用。</p>
+
+    <div class="mermaid">
+flowchart LR
+    subgraph S1["原始提交图：时间向右，箭头表示先后"]
+        A1["C1"] --> A2["C2 共同祖先"]
+        A2 --> A3["C3 主干推进"]
+        A2 --> A4["C4 特性分支"]
+        A4 --> A5["C5 特性分支"]
+    end
+    subgraph S2["merge 之后：新增一个双父提交"]
+        B3["C3"] --> B6["M 合并提交<br/>第一父是主干 第二父是特性分支"]
+        B5["C5"] --> B6
+        B4["C4"] --> B5
+    end
+    subgraph S3["rebase 之后：重放为新对象"]
+        D3["C3 新基底"] --> D4["C4 撇号 全新哈希"]
+        D4 --> D5["C5 撇号 全新哈希"]
+        D9["C4 与 C5 原对象仍在对象库<br/>只是没有引用指向 靠引用日志可达"]
+    end
+    </div>
+
+    <table>
+        <thead>
+            <tr><th>操作</th><th>提交图上的效果</th><th>哈希是否改变</th><th>最多解几次冲突</th><th>能否用在已推送的共享分支</th><th>典型场景</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>merge --no-ff</code></td><td>新增一个双父提交</td><td>只新增合并提交，原提交不动</td><td>1 次</td><td>可以</td><td>保留真实分叉，便于按分支回溯</td></tr>
+            <tr><td><code>merge --ff-only</code></td><td>只移动引用，不产生任何对象</td><td>无变化</td><td>0 次，不能快进就直接失败</td><td>可以</td><td>要求线性历史的仓库，失败即提示先变基</td></tr>
+            <tr><td><code>rebase</code></td><td>整串重放，旧提交变不可达</td><td>每个被重放的提交都换哈希</td><td>每个提交各 1 次</td><td>不可以，除非分支你独占</td><td>整理个人分支，跟上主干</td></tr>
+            <tr><td><code>cherry-pick</code></td><td>把单个提交的差异应用到 HEAD</td><td>新哈希，原提交保留</td><td>1 次</td><td>可以</td><td>把修复挑到发布分支</td></tr>
+            <tr><td><code>revert</code></td><td>新增一个反向差异的提交</td><td>新哈希，历史不改写</td><td>1 次</td><td>可以，是撤销已推送提交的唯一安全手段</td><td>线上回滚</td></tr>
+            <tr><td>squash merge</td><td>压成单个提交，图上不记录合并关系</td><td>新哈希</td><td>1 次</td><td>可以</td><td>主干只要一个提交；代价是同分支再次合并会重放全部改动</td></tr>
+        </tbody>
+    </table>
+
+    <h2>reset 的五种模式，各改哪一层</h2>
+    <p><code>git reset</code> 被讲成「撤销」，其实它做的事非常机械：把当前分支引用移到指定提交，然后按模式决定是否连带刷新索引和工作区。理解成「三层开关」就不会用错。</p>
+    <table>
+        <thead>
+            <tr><th>模式</th><th>分支引用</th><th>索引</th><th>工作区</th><th>未跟踪文件</th><th>丢了能否找回</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>--soft</code></td><td>移动</td><td>不变</td><td>不变</td><td>不动</td><td>安全，改动全留在索引里，适合重做提交</td></tr>
+            <tr><td><code>--mixed</code>（默认）</td><td>移动</td><td>重置为新位置</td><td>不变</td><td>不动</td><td>安全，改动落到工作区成为未暂存</td></tr>
+            <tr><td><code>--hard</code></td><td>移动</td><td>重置</td><td>强制覆盖</td><td>不动，不会删</td><td>提交过的可找回；未暂存改动永久丢失</td></tr>
+            <tr><td><code>--merge</code></td><td>移动</td><td>重置</td><td>保留未暂存改动，若与被重置的文件相交则整体中止</td><td>不动</td><td>较安全，冲突时不执行</td></tr>
+            <tr><td><code>--keep</code></td><td>移动</td><td>重置</td><td>保留未暂存改动，若目标提交会覆盖这些文件则整体中止</td><td>不动</td><td>较安全，日常切换比 hard 更该用</td></tr>
+            <tr><td><code>git reset 路径</code></td><td>不变</td><td>该路径重置为 HEAD</td><td>不变</td><td>不动</td><td>安全；带路径时不接受 <code>--hard</code></td></tr>
+        </tbody>
+    </table>
+    <p>两个必须纠正的认知。第一，<code>reset --hard</code> 不删除未跟踪文件，清空工作目录的是 <code>git clean -fd</code>，这两条命令经常被当成一条来记，结果该清的没清、不该丢的丢了。第二，<code>--hard</code> 真正不可逆的只有「从未进入对象库的工作区改动」；只要 <code>git add</code> 过，blob 就已经落盘，<code>git fsck --lost-found</code> 能捞出来（代价是只有内容、没有文件名）。</p>
+
+    <h2>cherry-pick 与 revert：补丁语义，不是「搬提交」</h2>
+    <p>cherry-pick 不会把提交移过来。它取的是「该提交与其父提交之间的差异」，然后以三方合并的方式应用到当前 HEAD，生成一个内容相似但哈希、父提交、时间全都不同的新提交。三个直接后果：提交图上看不出任何关联，除非加 <code>-x</code> 在消息里写一行来源哈希；对合并提交做 cherry-pick 必须用 <code>-m</code> 指明相对哪个父取差异；后续能否识别「这个补丁已经应用过」完全取决于 patch-id 是否一致，差异只要有一点偏移就识别不出来。</p>
+    <p>revert 同理，它生成的是反向补丁的新提交，历史一行都不改，这也是它唯一适合公共分支的原因。revert 一个合并提交时 <code>-m 1</code> 表示保留第一父（通常是主干）、撤销第二父带进来的改动。这里藏着一个经典坑：把某次合并 revert 掉之后，那条特性分支在图上依然可达，再次 merge 时 Git 认为「已经合过了」，什么都不会带回来；正确做法是 revert 那个 revert 提交，或者把分支重做一遍。</p>
+
+    <pre><code class="language-bash"># === 把主干上的修复挑到发布分支 ===
+git switch release/1.8
+# -x 会在提交消息尾部追加 cherry picked from commit ... 便于日后审计来源
+git cherry-pick -x 9f2a1c4
+
+# 挑一个区间，注意 A..B 是左开右闭，不含 A 本身
+git cherry-pick -x 9f2a1c4..d41b2ef
+
+# 挑一个合并提交：不指定 -m 会直接报错，1 表示相对第一父取差异
+git cherry-pick -m 1 合并提交哈希
+
+# === 线上回滚：对公共分支唯一安全的撤销方式，不改写历史 ===
+git revert --no-edit d41b2ef
+
+# 回滚一个合并提交，保留第一父（主干），撤销第二父引入的内容
+git revert -m 1 a77c901
+
+# 回滚一个区间并合成单个提交，避免中间态各自冲突
+git revert --no-commit d41b2ef~3..d41b2ef &amp;&amp; git commit -m "revert: 回滚灰度批次"
+
+# === 判断两条分支之间谁还差哪些补丁，等价性基于 patch-id ===
+# 输出里 = 号表示两边都有等价补丁，&lt; 和 &gt; 表示只在一侧
+git log --left-right --cherry-mark --oneline main...release/1.8</code></pre>
+
+    <div class="mermaid">
+flowchart TB
+    Q1{"改动已经推到共享分支了吗"} -->|"是"| Q2{"要撤销的是合并提交吗"}
+    Q1 -->|"否"| Q3{"这个提交本身还要保留吗"}
+    Q2 -->|"是"| R1["生成反向提交 并指定保留的主线父提交"]
+    Q2 -->|"否"| R2["生成反向提交"]
+    Q3 -->|"保留 只想改消息或重排顺序"| R3["修补末次提交 或交互式变基"]
+    Q3 -->|"不保留 但改动要留在工作区"| R4["回退引用与索引 保留工作区"]
+    Q3 -->|"全都不要"| Q4{"这些改动进过索引或被提交过吗"}
+    Q4 -->|"进过"| R5["硬回退后仍可由引用日志或对象扫描找回"]
+    Q4 -->|"没进过"| R6["硬回退会永久丢失 先做一次带未跟踪文件的储藏"]
+    R1 --> S["普通推送即可 不需要强推"]
+    R2 --> S
+    R3 --> F{"这条分支只有你一个人在用吗"}
+    R4 --> F
+    F -->|"是"| P1["带租约强推 并要求本地已包含远端提交"]
+    F -->|"否"| P2["改用反向提交 不要改写历史"]
+    </div>
+
+    <h2>reflog 与可达性：为什么「丢失」的提交还在</h2>
+    <p>对象的生死只由可达性决定。Git 从一组「根」出发做图遍历：所有 <code>refs/heads</code>、<code>refs/tags</code>、<code>refs/remotes</code>、<code>refs/stash</code>、HEAD、索引，以及引用日志里记录过的每一个旧值。遍历不到的对象才叫 unreachable，而 unreachable 也不等于立刻删除。</p>
+    <p>引用日志就是「引用的历史位置流水」，存在 <code>.git/logs/HEAD</code> 和 <code>.git/logs/refs/heads/</code> 下，每次 commit、checkout、reset、merge、rebase 移动引用都会追加一行，带上操作类型和时间。所以 <code>reset --hard</code> 之后，旧提交仍被引用日志引用，仍然可达，gc 根本不会碰它——这就是「救得回来」的机制。</p>
+    <table>
+        <thead>
+            <tr><th>参数</th><th>默认值</th><th>作用对象</th><th>过期之后会发生什么</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>gc.reflogExpire</code></td><td>90 天</td><td>仍可达提交的引用日志条目</td><td>条目被删，但提交若还被分支可达，对象不受影响</td></tr>
+            <tr><td><code>gc.reflogExpireUnreachable</code></td><td>30 天</td><td>指向已不可达提交的条目</td><td>条目被删，这些提交随即变成 unreachable</td></tr>
+            <tr><td><code>gc.pruneExpire</code></td><td>2 weeks</td><td>unreachable 对象</td><td>只有超过宽限期且 gc 运行时才真正删除</td></tr>
+            <tr><td><code>gc.auto</code></td><td>6700 个松散对象</td><td>是否触发自动 gc</td><td>超过阈值时，许多日常命令结束后会顺带跑一次 gc --auto</td></tr>
+            <tr><td><code>gc.autoPackLimit</code></td><td>50 个 packfile</td><td>是否触发重新打包</td><td>超过阈值时合并 packfile</td></tr>
+            <tr><td><code>git gc --prune=now</code></td><td>手动</td><td>所有 unreachable 对象</td><td>立即物理删除，这一步之后才真的没救</td></tr>
+        </tbody>
+    </table>
+    <p>一个容易误判的点：引用日志是纯本地数据，clone 不会带过来，CI 里的浅克隆更没有。所以「让同事在他机器上帮我找回」这条路通常走不通，除非那些提交真的推送过。</p>
+
+    <pre><code class="language-bash"># 1) reset 或 rebase 走歪了：先看 HEAD 都去过哪，别急着再 reset
+git reflog --date=iso | head -30
+# 每行形如：d41b2ef HEAD@{3}: commit: feat 灰度开关
+#          9f2a1c4 HEAD@{2}: reset: moving to HEAD~3
+# 操作类型（commit / reset / rebase finish / checkout）就是定位线索
+
+# 2) 不要直接 reset 回去，先在新分支上验证内容，确认无误再动原分支
+git switch -c rescue d41b2ef
+git log --oneline -5 &amp;&amp; git diff --stat main
+
+# 3) 分支删了、引用日志也过期了：绕开日志扫游离对象
+git fsck --full --no-reflogs --lost-found
+# 游离提交与游离 blob 会落到 .git/lost-found/ 目录，blob 只有内容没有文件名
+git fsck --no-reflogs 2&gt;/dev/null | awk '/dangling commit/{print $3}' | xargs -r git log --oneline -1
+
+# 4) 破坏性操作前的自保动作，两条任选其一
+git branch backup/before-reset-$(date +%Y%m%d-%H%M%S)
+git stash push -u -m "before hard reset"   # -u 连未跟踪文件一起写进对象库</code></pre>
+
+    <h2>推送的安全语义：--force-with-lease 与 --force</h2>
+    <p><code>git push --force</code> 是无条件覆盖：远端引用直接被设成你给的值，别人在这期间推上去的提交立刻变成不可达，等远端 gc 跑过就彻底没了。托管平台的 reflog 有时能救，但那是运气不是机制。</p>
+    <p><code>--force-with-lease</code> 加了一道乐观锁：只有远端引用的当前值等于你本地记录的远端跟踪引用时才更新，否则以 stale info 拒绝。它的可靠性完全依赖那个「期望值」有多可信，而这正是它的软肋——<strong>任何一次 fetch 都会刷新远端跟踪引用</strong>，包括 IDE 后台自动 fetch、<code>git pull</code> 内部隐含的 fetch。刷新之后期望值就等于远端最新值，校验必然通过，你依然会覆盖掉刚抓下来却根本没看过的提交。</p>
+    <p>两个补救手段：显式写出期望哈希 <code>--force-with-lease=分支名:你亲自确认过的哈希</code>；或者叠加 Git 2.30 引入的 <code>--force-if-includes</code>，它额外要求「将被覆盖的远端提交已经出现在你本地引用日志中」，也就是你变基时确实是基于它做的。</p>
+
+    <div class="mermaid">
+sequenceDiagram
+    participant D as 你的本地仓库
+    participant O as origin 远端
+    participant C as 同事的仓库
+    C->>O: 推送新提交 X
+    Note over D: 本地记录的远端跟踪引用仍是旧值 W
+    D->>O: 带租约强推 期望远端等于 W
+    O-->>D: 拒绝 远端实际是 X 租约不匹配
+    Note over D: 保护生效 此刻应该先看清 X 改了什么
+    D->>O: 执行一次抓取
+    O-->>D: 远端跟踪引用被刷新为 X
+    Note over D: 危险点 租约期望值随之变成 X 保护已失效
+    D->>O: 再次带租约强推 期望远端等于 X
+    O-->>D: 接受 提交 X 变为不可达
+    Note over D: 要真正防住 需额外要求本地引用日志包含 X
+    </div>
+
+    <pre><code class="language-bash"># 变基完成、推送之前的三步预检，顺序不要换
+# 1) 先抓取，再看这条分支最近是谁在推——确认是否真的独占
+git fetch origin
+git log --format='%h %an %cr %s' -5 origin/feature/x
+
+# 2) 确认你不会覆盖掉远端独有的提交：左箭头一侧就是远端独有
+git log --left-right --oneline origin/feature/x...HEAD
+
+# 3) 双保险推送：租约校验远端当前值，if-includes 校验你确实基于它变基
+git push --force-with-lease --force-if-includes origin feature/x
+
+# 明确写出期望值的版本，最不容易被后台 fetch 破防
+git push --force-with-lease=feature/x:1a2b3c4 origin feature/x
+
+# 仓库级兜底：把裸 force 从肌肉记忆里去掉
+git config --global alias.fpush 'push --force-with-lease --force-if-includes'</code></pre>
+
+    <h2>最容易踩的坑</h2>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">这些坑每一条都能复现</div>
+        <ul>
+            <li><code>git reset --hard</code> 前没有做储藏：提交过的能靠引用日志找回，从未 <code>git add</code> 的工作区改动永久消失，因为它从来没进对象库。前置检查是 <code>git status --porcelain</code> 为空，或先 <code>git stash push -u</code>。</li>
+            <li>把 <code>reset --hard</code> 当成「清空目录」：它不动未跟踪文件。真要清是 <code>git clean -fd</code>，而这条命令没有任何撤销手段，跑之前必须先 <code>git clean -nd</code> 看一遍清单。</li>
+            <li>用 <code>--force</code> 覆盖共享分支：别人的提交瞬间不可达，远端 gc 后不可恢复。改用 <code>--force-with-lease --force-if-includes</code>，并记住任何 fetch 都会削弱租约。</li>
+            <li><code>git add</code> 之后又改了文件就直接 commit：进去的是 add 那一刻的快照。提交前用 <code>git diff</code>（比的是索引对工作区）确认没有残留未暂存改动。</li>
+            <li>拿 <code>--assume-unchanged</code> 忽略本地配置改动：Git 随时可以推翻这个提示并覆盖你的文件。语义正确的是 <code>--skip-worktree</code>，而且两者都只存在本地，不能当团队约定。</li>
+            <li>在 detached HEAD 上连着提交好几次然后切分支：这些提交没有引用指向，30 天后引用日志过期就会被 gc 回收。发现自己 detached 的第一件事是 <code>git switch -c</code>。</li>
+            <li>revert 掉一次合并之后想重新合入那条分支：图上它仍然可达，merge 什么都不会带回来。必须 revert 那个 revert，或者把分支重做。</li>
+            <li>squash merge 之后不删分支继续在上面开发：合并关系没有记录在图里，下次合并会重放全部旧改动并再冲突一遍。squash 后应当删掉分支重新切。</li>
+            <li>并行 rebase 一条别人也在推的分支：每次重放都换哈希，对方 pull 时会拿到两套等价提交，patch-id 一旦对不上就要人工解一遍。共享分支只用 merge。</li>
+            <li>提交了大文件之后才加 <code>.gitignore</code>：对象已经永久存在于历史中，仓库体积降不下来。必须用 <code>git filter-repo</code> 重写历史并让所有人重新 clone，代价极高，所以初始化仓库时就要把忽略规则配好。</li>
+            <li>以为 CI 里能用引用日志排查：clone 和浅克隆都不带引用日志，<code>HEAD@{1}</code> 在 CI 里通常不存在，脚本里要用显式哈希或 <code>origin/main...HEAD</code>。</li>
+            <li>用 <code>git checkout</code> 同时干三件事导致误伤：切分支、丢弃改动、恢复文件全靠同一条命令。2.23 之后一律用 <code>git switch</code> 管引用、<code>git restore</code> 管内容，误操作面小得多。</li>
+        </ul>
+    </div>
+
+</article>
+                <nav class="article-nav">
+                    <a class="nav-next" href="github/"><span class="nav-label">下一篇 →</span><span class="nav-title">GitHub</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · 开发工具与效率</h2><ul class="related-list"><li><a class="side-post" href="github/">GitHub</a></li><li><a class="side-post" href="gitlab/">安装私有部署(内存最低2GB,机器配置越高越好，否则会有各种问题)</a></li><li><a class="side-post" href="svn/">SVN 速查</a></li><li><a class="side-post" href="open-source/">开源软件</a></li><li><a class="side-post" href="../devenv/vim/">Vim</a></li><li><a class="side-post" href="../docs/static-site/">Hugo</a></li><li><a class="side-post" href="../docs/mermaid/">Mermaid</a></li><li><a class="side-post" href="../docs/markdown/">Markdown 语法</a></li><li><a class="side-post" href="../devenv/make/">常见编译变量参数</a></li><li><a class="side-post" href="../../database/search/site-search/">intitle标题</a></li><li><a class="side-post" href="../../database/geocoding/">地理编码</a></li><li><a class="side-post" href="../../ai/ocr/">安装</a></li></ul></aside>
+                <div class="share-bar">
+                    <span class="share-label">分享：</span>
+                    <button class="share-btn" data-platform="copy" title="复制链接">🔗</button>
+                    <button class="share-btn" data-platform="twitter" title="分享到 X/Twitter">𝕏</button>
+                    <button class="share-btn" data-platform="weibo" title="分享到微博">📱</button>
+                    <button class="share-btn" data-platform="email" title="邮件分享">✉️</button>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+
+    <button class="back-to-top" title="回到顶部">↑</button>
+
+        <script defer src="../../vendor/highlight.min.js"></script>
+
+    
+    <script>window.SITE_BASE = "../../";window.SITE_GROUP = "tools";</script>
+    <script src="../../js/main.js?v=2" defer></script>
+</body>
+</html>

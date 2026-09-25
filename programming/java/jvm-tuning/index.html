@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>JVM 调优实战：GC 选型、参数配置与 OOM 排查 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="拿到一个卡顿或 OOM 现场该怎么办：从收集器选型表讲清 G1 为什么是多数场景的正解、ZGC 与 Shenandoah 的真实定位，拆解 G1 的一个完整回收周期与 MaxGCPauseMillis 被调小后反而更糟的原因；给出容器环境必配的启动参数清单（按百分比设堆、GC 日志轮转、OOM 自动导出快照）、一段 G1 日志的逐行判读、区分 GC 频繁与内存泄漏的决策路径、六种 OOM 的排查入口、堆外内存与进程 RSS 的真实构成，以及线上诊断命令集与容器化后的注意事项。">
+    <meta name="keywords" content="JVM,GC,G1,ZGC,Shenandoah,内存模型,Arthas,GC日志,内存泄漏,OOM,技术博客,性能调优">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/programming/java/jvm-tuning/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="JVM 调优实战：GC 选型、参数配置与 OOM 排查 - 资深码农">
+    <meta property="og:description" content="拿到一个卡顿或 OOM 现场该怎么办：从收集器选型表讲清 G1 为什么是多数场景的正解、ZGC 与 Shenandoah 的真实定位，拆解 G1 的一个完整回收周期与 MaxGCPauseMillis 被调小后反而更糟的原因；给出容器环境必配的启动参数清单（按百分比设堆、GC 日志轮转、OOM 自动导出快照）、一段 G1 日志的逐行判读、区分 GC 频繁与内存泄漏的决策路径、六种 OOM 的排查入口、堆外内存与进程 RSS 的真实构成，以及线上诊断命令集与容器化后的注意事项。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/programming/java/jvm-tuning/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="JVM 调优实战：GC 选型、参数配置与 OOM 排查 - 资深码农">
+    <meta name="twitter:description" content="拿到一个卡顿或 OOM 现场该怎么办：从收集器选型表讲清 G1 为什么是多数场景的正解、ZGC 与 Shenandoah 的真实定位，拆解 G1 的一个完整回收周期与 MaxGCPauseMillis 被调小后反而更糟的原因；给出容器环境必配的启动参数清单（按百分比设堆、GC 日志轮转、OOM 自动导出快照）、一段 G1 日志的逐行判读、区分 GC 频繁与内存泄漏的决策路径、六种 OOM 的排查入口、堆外内存与进程 RSS 的真实构成，以及线上诊断命令集与容器化后的注意事项。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="编程语言与代码功底">
+    <meta property="article:tag" content="后端与编程语言">
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "JVM 调优实战：GC 选型、参数配置与 OOM 排查", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "拿到一个卡顿或 OOM 现场该怎么办：从收集器选型表讲清 G1 为什么是多数场景的正解、ZGC 与 Shenandoah 的真实定位，拆解 G1 的一个完整回收周期与 MaxGCPauseMillis 被调小后反而更糟的原因；给出容器环境必配的启动参数清单（按百分比设堆、GC 日志轮转、OOM 自动导出快照）、一段 G1 日志的逐行判读、区分 GC 频繁与内存泄漏的决策路径、六种 OOM 的排查入口、堆外内存与进程 RSS 的真实构成，以及线上诊断命令集与容器化后的注意事项。", "url": "https://www.yijunjun.asia/programming/java/jvm-tuning/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/java/jvm-tuning/"}, "articleSection": "后端与编程语言"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Java 总览", "item": "https://www.yijunjun.asia/programming/java/"}, {"position": 4, "name": "JVM 调优与内存管理", "item": "https://www.yijunjun.asia/programming/java/jvm-tuning/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "怎么判断是 GC 参数没调好还是内存泄漏？", "acceptedAnswer": {"@type": "Answer", "text": "只看一个指标就够：Full GC 或老年代并发回收结束之后，老年代使用量有没有回落到一个稳定的低水位。回落了说明对象确实能被回收，问题是堆偏小或晋升速率太高，调整新生代大小或加堆会有效。如果每次回收后老年代都停在高位、并且水位随时间单调上升，那就是泄漏，此时加堆只是把故障推迟几个小时，还会让堆快照更大更难分析。用 jstat 每秒采样，连续观察十分钟就能得到结论，不需要等到 OOM。"}}, {"@type": "Question", "name": "MaxGCPauseMillis 设小一点是不是停顿就短了？", "acceptedAnswer": {"@type": "Answer", "text": "不是，这是最常见的错误调参。它是一个目标值而非保证值，G1 为了逼近这个目标会缩小新生代——每次回收的对象少了，单次停顿确实短了，但回收频率大幅上升，总停顿时间和 CPU 开销反而更高，同时新生代变小会推高晋升速率，把本该在新生代死掉的对象挤进老年代，最终导致更频繁的并发周期甚至退化为 Full GC。默认 200 毫秒适用于绝大多数业务服务，在确认停顿确实是瓶颈之前不要动它。"}}, {"@type": "Question", "name": "容器里为什么不能直接写死 Xmx？", "acceptedAnswer": {"@type": "Answer", "text": "写死意味着容器规格一变就必须同步改参数，很容易漏改，而堆比容器内存上限大的后果是进程被内核直接杀掉，没有任何 Java 异常。推荐用 MaxRAMPercentage 按容器 limit 的百分比计算堆，通常取 50 到 70，剩下的留给元空间、线程栈、直接内存、代码缓存和本地库。另外 JDK 8u191 之前 JVM 不感知 cgroup 限制，会按宿主机物理内存推算默认堆，一台大内存机器上的小容器会算出一个巨大的堆，启动后很快被 OOMKilled，老版本必须显式开启容器支持或写死堆大小。"}}, {"@type": "Question", "name": "什么时候该换成 ZGC？", "acceptedAnswer": {"@type": "Answer", "text": "先确认三件事：不存在内存泄漏、堆大小已经合理、停顿确实是业务指标的瓶颈。满足之后，如果堆在十几 GB 以上且对尾延迟极敏感，ZGC 或 Shenandoah 的亚毫秒级停顿才有意义。代价是吞吐量通常比 G1 低一些，并且需要更多内存做转发与读屏障的开销。绝大多数请求量正常的业务服务，把堆配对、把泄漏修掉之后 G1 完全够用，换收集器解决不了本质是泄漏或堆偏小的问题。"}}, {"@type": "Question", "name": "进程占用内存远大于 Xmx 是不是有问题？", "acceptedAnswer": {"@type": "Answer", "text": "通常是正常的。进程常驻内存等于 Java 堆加上一大堆非堆开销：元空间与类空间、线程栈总量、JIT 代码缓存、GC 自身的记忆集与卡表、符号表与字符串表、直接内存与内存映射文件、本地库自己分配的内存、以及分配器保留但未归还操作系统的部分。堆之外多出几百 MB 到一两 GB 都不奇怪。判断异常的方式是开启本地内存跟踪并做基线对比，看哪一类在持续增长；只有某一类单调上升才是泄漏。"}}, {"@type": "Question", "name": "抓堆快照会影响线上服务吗？", "acceptedAnswer": {"@type": "Answer", "text": "会。导出堆快照需要暂停应用线程，堆越大暂停越久，几 GB 的堆可能停顿数秒到数十秒，磁盘写入还会挤占 IO。正确顺序是先把实例从负载均衡摘除，再导出快照，最后重启恢复服务。不要使用强制模式导出，它是给进程已经无响应时用的兜底手段，在活着的进程上使用有把进程搞挂的风险。更稳妥的做法是提前配好发生内存溢出时自动导出快照，出事时现场自动留存，不必临场操作。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="./" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming" class="active">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">编程语言与代码功底</a><span class="separator">/</span><a href="../index.html">JVM 运行时原理：内存区域、GC 与类加载</a><span class="separator">/</span><span>JVM 调优与内存管理</span>
+</div>
+
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+    <header class="article-header">
+        <h1 class="article-title">JVM 调优实战：GC 选型、参数配置与 OOM 排查</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ JVM</span>
+        </div>
+    </header>
+    <p>调优这件事的真相是：<strong>绝大多数 GC 问题不是收集器选错了，而是堆太小或者有泄漏。</strong>换收集器、抄一份参数模板贴上去，是最没有性价比的两个动作。这篇按「拿到现场怎么办」的顺序组织：先判断问题类型，再决定动不动参数；给出容器环境真正必配的那几个参数、一段 G1 日志的逐行判读、六种 OOM 各自的排查入口、泄漏排查的完整流程，以及堆外内存和线上诊断命令怎么用。内存区域划分与对象晋升规则见 <a href="../">JVM 运行时原理</a>，这里只讲操作。</p>
+
+    <h2>调优的正确顺序：先定位，再动参数</h2>
+    <p>任何 GC 调参之前，必须先回答两个问题：停顿是否真的发生在 GC 期间，以及<strong>老年代回收后能不能回落</strong>。第二个问题把所有内存类故障切成两半：能回落的是容量与速率问题，可以用参数解决；不能回落的是泄漏，改参数只是延迟爆炸时间。</p>
+    <div class="mermaid">
+flowchart TB
+    S["接口变慢 或 出现超时"] --> A{"停顿是否集中在 GC 时间窗内"}
+    A -->|否| X["不是 GC 问题<br/>先看线程栈 锁竞争 与下游调用耗时"]
+    A -->|是| B{"老年代回收之后<br/>使用量是否回落到稳定低水位"}
+    B -->|不回落 且水位单调上升| L["内存泄漏<br/>加堆只会推迟故障<br/>去保留现场并抓堆快照"]
+    B -->|能回落| C{"是停顿次数多<br/>还是单次停顿长"}
+    C -->|次数多| D["晋升速率或分配速率过高<br/>先查新生代与 Survivor 是否被压得太小<br/>再查代码里的大对象与临时集合"]
+    C -->|单次长| E{"日志里真正回收耗时<br/>是否接近总停顿"}
+    E -->|接近| F["确实是回收慢<br/>先加堆 再考虑低延迟收集器"]
+    E -->|总停顿远大于回收耗时| G["线程到达安全点慢<br/>查长循环与大批量操作"]
+</div>
+    <div class="callout callout-tip">
+        <div class="callout-icon">✅</div>
+        <div class="callout-title">这一步不需要停机，也不需要改参数</div>
+        <p><code>jstat -gcutil &lt;pid&gt; 1000</code> 连续采样十分钟就能得出结论：看 <code>O</code> 列在 <code>FGC</code> 计数增加前后是否回落、<code>YGC</code> 每分钟多少次、<code>GCT</code> 占进程运行时间的比例。GC 总耗时占比长期超过 1% 值得关注，超过 5% 基本可以确定是主要瓶颈。不要跳过这一步直接改参数，否则你没有对照基线，改完也不知道是变好还是变差。</p>
+    </div>
+
+    <h2>收集器选型：G1 是多数场景的正解</h2>
+    <p>选型这件事在 2020 年之后已经没什么悬念：JDK 9 起 G1 就是服务端默认收集器，CMS 在 JDK 14 被彻底移除，因此「CMS 调优」这类资料对新项目已经没有参考价值。真正需要决策的只有一种情况：堆很大且尾延迟是硬指标时，是否上 ZGC。</p>
+    <table>
+        <thead>
+            <tr><th>收集器</th><th>停顿量级</th><th>吞吐</th><th>适用堆大小</th><th>是否需要调参</th><th>版本情况</th><th>什么时候选它</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Serial</td><td>百毫秒到秒级</td><td>小堆下反而最高，没有多线程协调开销</td><td>几百 MB 以内</td><td>几乎不用</td><td>一直保留</td><td>单核容器、CLI 工具、极小内存的边缘服务</td></tr>
+            <tr><td>Parallel</td><td>百毫秒到秒级，堆越大越长</td><td><strong>最高</strong></td><td>几 GB</td><td>少</td><td>一直保留</td><td>离线批处理、数据计算任务，只关心总吞吐不关心单次停顿</td></tr>
+            <tr><td>CMS</td><td>几十到几百毫秒，碎片化后会退化成长 Full GC</td><td>中</td><td>几 GB</td><td><strong>多，且易踩坑</strong></td><td>JDK 9 废弃，<strong>14 移除</strong></td><td>不要在新系统上选，遗留系统迁移时直接换 G1</td></tr>
+            <tr><td>G1</td><td>几十到两百毫秒，可设目标</td><td>比 Parallel 低一成左右</td><td>2 GB 到几十 GB</td><td><strong>少，默认值就很好</strong></td><td>JDK 9 起默认</td><td><strong>默认选它</strong>，在线业务服务的正解</td></tr>
+            <tr><td>ZGC</td><td>亚毫秒，几乎与堆大小无关</td><td>比 G1 略低</td><td>几 GB 到 TB 级</td><td>少，堆够就行</td><td>JDK 15 转正，<strong>21 起分代版本</strong>才建议生产使用</td><td>堆十几 GB 以上且尾延迟是硬性 SLA</td></tr>
+            <tr><td>Shenandoah</td><td>亚毫秒</td><td>比 G1 低，读屏障有成本</td><td>中到大堆</td><td>少</td><td>OpenJDK 发行版提供，Oracle JDK 不带</td><td>与 ZGC 定位重叠，看发行版支持情况</td></tr>
+        </tbody>
+    </table>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">先别换收集器</div>
+        <p>「换了 ZGC 停顿就短了」在压测报告里成立，在故障现场基本不成立。泄漏场景下 ZGC 只是把长停顿换成了持续的高 CPU 占用和更晚到来的 OOM；堆偏小场景下它会因为回收跟不上分配而退化。换收集器是把堆配对、泄漏修完、GC 日志读明白之后的<strong>最后一步</strong>，而不是第一步。</p>
+    </div>
+
+    <h2>G1 的一个完整周期，以及 MaxGCPauseMillis 的误用</h2>
+    <p>G1 把堆切成 1 MB 到 32 MB 的等大 Region，每个 Region 动态扮演 Eden、Survivor、Old 或 Humongous 角色，「分代」从固定的连续空间变成了逻辑标签。这带来两个特性：一是可以只挑<strong>回收收益最高</strong>的那批 Region 来回收，从而把停顿控制在目标附近，这也是它名字里 Garbage First 的含义；二是超过半个 Region 的对象被当作 Humongous 对象特殊处理，直接占用连续 Region 并计入老年代。</p>
+    <div class="mermaid">
+stateDiagram-v2
+    state "Young GC 全程 STW" as YGC
+    state "并发标记 与业务线程同时跑" as CM
+    state "最终标记 短暂 STW" as RM
+    state "清理与统计 部分 STW" as CU
+    state "Mixed GC 回收 young 加一部分 old" as MIX
+    state "Full GC 整堆整理 兜底手段" as FULL
+    [*] --> YGC
+    YGC --> YGC: 老年代占比未到启动阈值 只回收新生代
+    YGC --> CM: 老年代占比达到 InitiatingHeapOccupancyPercent 默认 45
+    CM --> RM
+    RM --> CU
+    CU --> MIX: 按回收收益排序 挑性价比最高的 old region
+    MIX --> YGC: 老年代降下来 回到常态
+    CM --> FULL: 并发标记期间堆被填满 标记来不及 退化
+    MIX --> FULL: 疏散失败 没有空闲 region 可搬
+    FULL --> YGC: 整理完继续常态循环
+</div>
+    <table>
+        <thead>
+            <tr><th>参数</th><th>默认值</th><th>真实语义</th><th>调错的后果</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>-XX:MaxGCPauseMillis</code></td><td>200</td><td>停顿<strong>目标</strong>，不是保证。G1 靠调整新生代大小来逼近它</td><td><strong>调小到几十毫秒</strong>会让 G1 持续收缩新生代，停顿次数暴涨、总停顿更长、晋升速率飙升，最终更容易 Full GC。这是最高频的错误调参</td></tr>
+            <tr><td><code>-XX:InitiatingHeapOccupancyPercent</code></td><td>45</td><td>老年代占比达到该值启动并发标记周期；JDK 9 起 G1 会自适应调整</td><td>设太高会让并发标记来不及，出现标记失败退化为 Full GC；一般不要手动设</td></tr>
+            <tr><td><code>-XX:G1HeapRegionSize</code></td><td>按堆自动推算</td><td>Region 大小，决定 Humongous 判定阈值</td><td>堆很大时 Region 过小会导致 Region 数量过多、记忆集开销上升；有大数组时过小会产生大量 Humongous 分配</td></tr>
+            <tr><td><code>-XX:G1NewSizePercent</code></td><td>5</td><td>新生代下限占比</td><td>需要它通常说明 <code>MaxGCPauseMillis</code> 被设得太激进，应该先把后者还原</td></tr>
+            <tr><td><code>-XX:ParallelGCThreads</code></td><td>按可用 CPU 推算</td><td>STW 阶段的工作线程数</td><td>容器里 CPU 感知不准会算出过多线程，造成严重上下文切换；见下文容器化小节</td></tr>
+        </tbody>
+    </table>
+    <p>日志里出现 <code>to-space exhausted</code> 或 <code>Pause Full</code>，意味着 G1 已经失败退化。这两条比停顿时长更值得告警——它们说明回收速度跟不上分配速度，而 Full GC 在 G1 里是单线程整理，停顿可能是平时的几十倍。</p>
+
+    <h2>必配的启动参数：容器环境尤其不能写死堆</h2>
+    <table>
+        <thead>
+            <tr><th>参数</th><th>建议</th><th>为什么</th><th>不配的后果</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>-Xms</code> 与 <code>-Xmx</code></td><td><strong>设成相等</strong></td><td>避免运行期动态扩容缩容带来的抖动与额外 Full GC；容器内存本来就是预留好的，没必要省</td><td>启动后堆逐步扩张，压测前期数据不可比，扩容瞬间还会引发停顿</td></tr>
+            <tr><td><code>-XX:MaxRAMPercentage</code></td><td>容器里<strong>用它替代写死 <code>-Xmx</code></strong>，取 50 到 70</td><td>堆随容器 limit 自动伸缩，改规格不用改参数</td><td>规格调整后漏改参数，堆超过 limit 被内核杀掉，<strong>没有任何 Java 异常</strong></td></tr>
+            <tr><td><code>-XX:MaxMetaspaceSize</code></td><td>显式设置，如 256m</td><td>默认不限，元空间泄漏会一路吃到容器上限</td><td>进程被静默 <code>OOMKilled</code>，而不是抛一个可定位的 <code>OutOfMemoryError: Metaspace</code></td></tr>
+            <tr><td><code>-XX:MaxDirectMemorySize</code></td><td>显式设置</td><td>默认约等于 <code>-Xmx</code>，等于堆外可以再吃掉一个堆的量</td><td>堆加堆外一起超过容器 limit 被杀</td></tr>
+            <tr><td><code>-XX:+HeapDumpOnOutOfMemoryError</code> 与 <code>-XX:HeapDumpPath</code></td><td><strong>必配，且指向持久卷</strong></td><td>出事时自动留现场，这是最廉价的可观测性投资</td><td>容器重启后现场全灭，只能等下一次复现；写到容器内层文件系统等于没配</td></tr>
+            <tr><td><code>-XX:+ExitOnOutOfMemoryError</code></td><td>容器环境建议开</td><td>OOM 后 JVM 往往处于半死状态，能接请求但处理不了，比直接挂更糟</td><td>实例留在负载均衡里持续返回错误，健康检查还可能显示正常</td></tr>
+            <tr><td><code>-Xlog:gc*</code></td><td>必配，带轮转</td><td>没有 GC 日志的调优等于盲调</td><td>事后无法复盘，只能靠监控图的分钟级采样猜</td></tr>
+        </tbody>
+    </table>
+    <pre><code class="language-bash">#!/usr/bin/env bash
+# 容器内 JDK 17 在线服务启动参数模板。用数组组织便于逐条加注释。
+OPTS=()
+
+# --- 堆：容器里按 limit 百分比算，不要写死 Xmx ---
+# 留 30% 给元空间、线程栈、直接内存、代码缓存和本地库，
+# 堆外这些加起来几百 MB 很常见，不留余量就是等着被 OOMKilled。
+OPTS+=(-XX:MaxRAMPercentage=70.0 -XX:InitialRAMPercentage=70.0)
+
+# --- 非堆上限：默认不限等于故障时进程静默消失 ---
+OPTS+=(-XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=512m)
+
+# --- 收集器：G1 是默认，显式写出来是为了让参数自解释 ---
+# 不要动 MaxGCPauseMillis，默认 200ms 适合绝大多数在线服务
+OPTS+=(-XX:+UseG1GC)
+
+# --- 出事前就要配好的现场保全三件套 ---
+# HeapDumpPath 必须指向挂载出来的持久卷，否则容器一重启就没了
+OPTS+=(-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/data/dump/)
+OPTS+=(-XX:+ExitOnOutOfMemoryError)
+
+# --- GC 日志：统一日志框架写法，带轮转，10 个文件各 20M ---
+# filecount 和 filesize 缺一个就会无限长大，把磁盘写满
+OPTS+=(-Xlog:gc*,gc+heap=debug,safepoint:file=/data/log/gc.log:time,uptime,level,tags:filecount=10,filesize=20M)
+
+# --- 容器 CPU 感知：cpu limit 是小数时尤其要显式指定 ---
+# 否则 availableProcessors 可能按宿主机核数算，GC 线程和业务线程池全都开过头
+OPTS+=(-XX:ActiveProcessorCount=2)
+
+# --- 禁止业务代码用 System.gc 触发 Full GC ---
+# 注意：若用到大量直接内存且依赖显式 GC 回收堆外，开这个之前先评估
+OPTS+=(-XX:+DisableExplicitGC)
+
+exec java "${OPTS[@]}" -jar /app/app.jar</code></pre>
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">JDK 8u191 之前的容器坑</div>
+        <p>老版本 JVM <strong>不读 cgroup 限制</strong>，默认堆按<strong>宿主机</strong>物理内存的 1/4 推算。一台 256 GB 的机器上跑一个 limit 为 2 GB 的容器，JVM 会认为自己能用 64 GB 堆，于是完全不着急 GC，一路涨到 2 GB 被内核杀掉，日志里什么都没有，只在编排平台上看到 <code>OOMKilled</code> 和反复重启。8u191 起 <code>UseContainerSupport</code> 默认开启才解决；如果被迫停留在更老的版本，必须显式写死 <code>-Xmx</code>。</p>
+    </div>
+
+    <h2>GC 日志逐行判读</h2>
+    <p>下面是一段真实形态的 G1 统一日志。判读顺序是：先看停顿类型和耗时，再看各区域 Region 数量的变化，最后看触发原因。</p>
+    <pre><code class="language-bash">[2026-09-22T10:14:03.412+0800][info][gc,start] GC(842) Pause Young (Normal) (G1 Evacuation Pause)
+# 上面这行：Normal 表示普通 young 回收；括号里的 Evacuation Pause 是疏散停顿，即复制存活对象。
+# 如果这里是 G1 Humongous Allocation，说明是大对象分配不下触发的回收，要去查大数组。
+
+[...][info][gc,task] GC(842) Using 8 workers of 8 for evacuation
+# 8 个工作线程全用上了。容器 cpu limit 只有 2 核却起 8 个线程，就是 CPU 感知不准，
+# 表现为停顿时间莫名偏长且伴随限流，需要 ActiveProcessorCount。
+
+[...][info][gc,heap] GC(842) Eden regions: 240-&gt;0(216)
+# Eden 从 240 个 region 清空；括号里的 216 是 G1 为下一轮设定的新 Eden 目标。
+# 这个目标持续下降，通常是 MaxGCPauseMillis 被设得太小，G1 正在收缩新生代。
+[...][info][gc,heap] GC(842) Survivor regions: 12-&gt;24(32)
+[...][info][gc,heap] GC(842) Old regions: 380-&gt;392
+# 关键指标：老年代一次 young GC 涨了 12 个 region，这就是晋升量。
+# 持续盯这个增量，比看 Full GC 次数能早几个小时发现问题。
+[...][info][gc,heap] GC(842) Humongous regions: 6-&gt;4
+
+[...][info][gc] GC(842) Pause Young (Normal) (G1 Evacuation Pause) 4784M-&gt;4208M(8192M) 23.412ms
+# 回收前 4784M，回收后 4208M，堆总量 8192M，本次停顿 23.4ms。正常。
+
+[...][info][safepoint] Safepoint G1CollectForAllocation, Time since last: 812ms, Reaching safepoint: 198ms, At safepoint: 23ms
+# 这一行最容易被忽略：到达安全点花了 198ms，真正停顿只有 23ms，业务感知到的是 221ms。
+# 这种情况换收集器完全无效，要去找没有安全点的长循环。
+
+[...][info][gc] GC(901) To-space exhausted
+[...][info][gc] GC(902) Pause Full (G1 Compaction Pause) 8150M-&gt;7920M(8192M) 3821.5ms
+# 疏散失败后退化成 Full GC，单线程整理，停顿 3.8 秒，而且回收后仍然 7920M 高位不落。
+# 两个信号叠加：回收跟不上分配，且老年代回收不掉，基本可以判定为内存泄漏。</code></pre>
+
+    <h2>六种 OOM 与各自的排查入口</h2>
+    <table>
+        <thead>
+            <tr><th>报错</th><th>典型成因</th><th>第一步查什么</th><th>常见误修</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>Java heap space</code></td><td>一次性查询装载过多数据、无上限缓存、静态集合只增不减、大文件全量读进内存</td><td>堆快照的支配树，看最大保留集属于哪个类；同时看是不是单次请求就能打爆</td><td>直接加堆。泄漏场景下只是推迟故障</td></tr>
+            <tr><td><code>GC overhead limit exceeded</code></td><td>连续多次 GC 只回收极少内存且耗时占比过高，是堆满或泄漏的晚期表现</td><td>与上一条同源，按泄漏流程走</td><td>用 <code>-XX:-UseGCOverheadLimit</code> 关掉这个检查，等于把告警拆了</td></tr>
+            <tr><td><code>Metaspace</code></td><td>动态生成类、反复热部署、类加载器被长生命周期对象持有</td><td>已加载类计数是否单调上升；同名类是否存在多个加载器副本</td><td>无脑加大 <code>MaxMetaspaceSize</code>，涨得慢一点但还是会满</td></tr>
+            <tr><td><code>Direct buffer memory</code></td><td>堆外缓冲未释放、Netty 缓冲区泄漏、上限没设或设得过大</td><td>开本地内存跟踪做基线对比；看 <code>DirectByteBuffer</code> 实例数与容量</td><td>加大上限。堆外泄漏和堆内一样不会因为空间变大而消失</td></tr>
+            <tr><td><code>unable to create new native thread</code></td><td>线程池无界、每请求一线程、容器 pid 上限或 <code>ulimit -u</code> 卡住</td><td>数线程总数与线程名前缀，找出是谁在无限建线程</td><td><strong>加堆</strong>，这会让可用于线程栈的内存更少，故障来得更快</td></tr>
+            <tr><td><code>Requested array size exceeds VM limit</code></td><td>申请的数组长度接近整型上限，多数是长度计算溢出或反序列化时读到了畸形长度字段</td><td>看栈轨迹里数组长度是怎么算出来的，重点查外部输入</td><td>当成堆不足处理，完全跑偏</td></tr>
+        </tbody>
+    </table>
+
+    <h2>内存泄漏排查流程与常见泄漏源</h2>
+    <p>处置顺序比工具重要。<strong>直接重启是最常见也最致命的错误</strong>——服务恢复了，证据全没了，下一次还会发生，而且你依然不知道原因。</p>
+    <div class="mermaid">
+sequenceDiagram
+    participant M as 监控告警
+    participant O as 值班工程师
+    participant J as 故障实例 JVM
+    participant K as 编排平台
+    participant T as 离线分析工具
+    M->>O: 老年代使用率持续高位 且 Full GC 频繁
+    O->>K: 先把这个实例从负载均衡摘除 但不要删掉它
+    O->>J: jstat 采样 确认回收后老年代不回落
+    O->>J: jcmd 导出堆快照
+    Note over J: 这一步会 STW 停顿数秒到数十秒<br/>文件可能数 GB 要先确认磁盘空间足够
+    J-->>O: 快照落盘到持久卷
+    O->>K: 现场已保全 扩一个新实例并重启故障实例
+    O->>T: 加载快照 看支配树找最大保留集
+    T-->>O: 给出该对象到 GC Roots 的完整引用链
+    Note over O,T: 引用链上第一个业务类就是持有者<br/>集合本身从不是原因 谁一直往里放才是
+</div>
+    <pre><code class="language-bash"># 0) 先确认到底是不是泄漏：看 O 列在 FGC 增加后是否回落
+jstat -gcutil &lt;pid&gt; 1000 20
+
+# 1) 不导出大文件的快速摸底：看实例数排前几的类是谁
+#    加 :live 会先触发一次 Full GC，线上慎用；不加则包含待回收对象
+jcmd &lt;pid&gt; GC.class_histogram | head -40
+
+# 2) 导出完整堆快照。优先用 jcmd，它比 jmap 稳
+jcmd &lt;pid&gt; GC.heap_dump /data/dump/heap.hprof
+
+# 3) 确认非堆是否也在涨。需要启动时带 -XX:NativeMemoryTracking=summary
+jcmd &lt;pid&gt; VM.native_memory baseline
+jcmd &lt;pid&gt; VM.native_memory summary.diff
+
+# 4) 线程数爆炸的排查：按线程名前缀聚合，一眼看出哪个池在失控
+jstack &lt;pid&gt; | grep -oE '^"[^"]+"' | sed -E 's/-?[0-9]+"$/"/' | sort | uniq -c | sort -rn | head
+
+# 绝对不要用 jmap -F 在活着的进程上强制导出：
+# 它走调试通道，会长时间挂住进程，有把进程直接搞死的先例。</code></pre>
+    <table>
+        <thead>
+            <tr><th>泄漏源</th><th>为什么会泄漏</th><th>在堆快照里的特征</th><th>修法</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>静态集合</td><td>静态字段是 GC Root，里面的对象永远可达</td><td>支配树顶部是某个类的静态 <code>Map</code> 或 <code>List</code></td><td>加容量上限与过期，或改成非静态并随生命周期释放</td></tr>
+            <tr><td><code>ThreadLocal</code> 未 <code>remove</code></td><td>线程池线程长期复用，<code>ThreadLocalMap</code> 里的 value 是强引用</td><td>引用链形如线程对象到 <code>ThreadLocalMap</code> 再到业务对象</td><td><code>set</code> 与 <code>remove</code> 在同一个 <code>try-finally</code> 里成对出现</td></tr>
+            <tr><td>监听器与回调未注销</td><td>注册进全局事件总线后对象被长期持有</td><td>大量同类对象被某个注册中心的集合持有</td><td>提供注销入口，并在销毁回调里调用</td></tr>
+            <tr><td>连接与流未关闭</td><td>每个未关闭的连接背后还挂着缓冲区与本地资源</td><td>连接对象数量随运行时间线性增长</td><td><code>try-with-resources</code>，并给连接池配泄漏检测</td></tr>
+            <tr><td>缓存无上限</td><td>用普通 <code>Map</code> 当缓存，而 key 是用户 ID 之类的无限集合</td><td>单个 <code>Map</code> 保留了绝大部分堆</td><td>换成带容量与过期策略的缓存实现</td></tr>
+            <tr><td>类加载器泄漏</td><td>旧加载器被静态字段或线程持有，它加载的类全部无法卸载</td><td>元空间涨而堆不涨；同名类有多份</td><td>查谁持有加载器，通常是第三方库的静态缓存或未关闭的线程</td></tr>
+            <tr><td>堆外缓冲泄漏</td><td>引用对象被长期持有，清理动作得不到执行时机</td><td>堆里看不出来，只有本地内存跟踪能看到</td><td>显式释放，或改用池化并确认归还路径</td></tr>
+        </tbody>
+    </table>
+
+    <h2>堆外内存、RSS 构成与线上诊断命令集</h2>
+    <p>「进程占了 6 GB 但 <code>-Xmx</code> 只有 4 GB，是不是漏了」——多数时候不是。堆之外还有一长串开销，全部算进进程常驻内存。</p>
+    <div class="mermaid">
+flowchart TB
+    subgraph RSS["进程常驻内存的真实构成"]
+        subgraph JH["受 Xmx 约束"]
+            H["Java 堆<br/>对象与数组"]
+        end
+        subgraph NH["JVM 管理 但不在堆里"]
+            MS["元空间与类指针压缩空间"]
+            TS["线程栈总量<br/>线程数乘以单栈容量"]
+            CC["JIT 代码缓存"]
+            GM["GC 自身结构<br/>记忆集与卡表<br/>G1 下可占堆的百分之几"]
+            SY["符号表与字符串表"]
+        end
+        subgraph OH["完全在 JVM 之外"]
+            DB["直接内存与内存映射文件"]
+            NL["本地库自行分配<br/>压缩 加解密 JNI 调用"]
+            MA["分配器已保留但未归还系统的空间"]
+        end
+    end
+</div>
+    <p>判断堆外是否异常的唯一可靠方法是<strong>基线对比</strong>：启动时加 <code>-XX:NativeMemoryTracking=summary</code>，服务稳定后打一个基线，隔一段时间做差值，看哪一类在单调上升。只有单调上升才是泄漏，来回波动是正常的。注意本地内存跟踪本身有 5% 到 10% 的性能开销，长期开启要评估。</p>
+    <table>
+        <thead>
+            <tr><th>命令</th><th>看什么字段</th><th>怎么判读</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>jps -lv</code></td><td>进程号与启动参数</td><td>第一步确认线上实际生效的参数和你以为配的是不是一回事，参数被运维脚本覆盖非常常见</td></tr>
+            <tr><td><code>jstat -gcutil &lt;pid&gt; 1000</code></td><td><code>E</code> <code>O</code> <code>M</code> <code>YGC</code> <code>YGCT</code> <code>FGC</code> <code>FGCT</code></td><td><code>O</code> 回收后不回落是泄漏；<code>YGC</code> 每秒多次说明分配速率过高；<code>FGCT</code> 除以进程运行时间超过 5% 基本可以定为主瓶颈</td></tr>
+            <tr><td><code>jstack &lt;pid&gt;</code></td><td>线程状态、死锁提示、重复出现的栈顶</td><td>大量 <code>BLOCKED</code> 停在同一个锁上是锁竞争；大量线程栈顶相同且是 IO 等待说明下游慢；连抓三次对比，一直不动的那些才是真卡住</td></tr>
+            <tr><td><code>jcmd &lt;pid&gt; VM.flags -all</code></td><td>所有生效参数的最终值</td><td>确认自动推算出来的堆大小、GC 线程数、Region 大小到底是多少，比猜可靠</td></tr>
+            <tr><td><code>jcmd &lt;pid&gt; GC.heap_info</code></td><td>各代当前容量与使用量</td><td>比 <code>jstat</code> 更直观地看一眼当前水位，适合快速确认</td></tr>
+            <tr><td><code>jcmd &lt;pid&gt; Thread.print</code></td><td>同 <code>jstack</code></td><td>部分容器环境里 <code>jstack</code> 受限时的替代方案</td></tr>
+            <tr><td>Arthas <code>dashboard</code></td><td>线程 CPU 占比、堆各代水位、GC 次数</td><td>一屏看全局，判断问题是 CPU 型还是内存型的最快入口</td></tr>
+            <tr><td>Arthas <code>thread -n 3</code></td><td>CPU 占用最高的三个线程及其栈</td><td>CPU 飙高先看这个。最忙的是 GC 线程才去查 GC，否则是业务代码或死循环</td></tr>
+            <tr><td>Arthas <code>trace</code></td><td>方法内部各调用的耗时占比</td><td>定位慢在哪一层，但它有字节码增强开销，只在可疑方法上用，别对高频入口全开</td></tr>
+        </tbody>
+    </table>
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">容器化之后必须补的两件事</div>
+        <p>第一，<strong>CPU limit 会影响 JVM 的并行度决策</strong>。<code>availableProcessors</code> 的返回值决定了 GC 线程数、JIT 编译线程数，以及几乎所有默认线程池的大小。cpu limit 是小数时取整结果常常不符合预期，用 <code>-XX:ActiveProcessorCount</code> 显式指定最省心。第二，<strong>内存 limit 不等于堆上限</strong>，必须给上面那一整串非堆开销留出余量，通常堆占 limit 的 50% 到 70%。至于 CPU 配额本身怎么被内核限流、为什么配额卡着会出现周期性毛刺，属于容器编排范畴，详见站内 <a href="../../../devops/kubernetes/">Kubernetes 原理篇</a>。</p>
+    </div>
+
+    <h2>反模式与最容易踩的坑</h2>
+    <table>
+        <thead>
+            <tr><th>反模式</th><th>为什么错</th><th>正确做法</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>一上来就换 ZGC</td><td>没定位问题就换实现，泄漏和堆偏小一个都解决不了，还引入新的未知</td><td>先按决策图判断类型，把堆配对、泄漏修掉</td></tr>
+            <tr><td>把 <code>MaxGCPauseMillis</code> 设成 10ms</td><td>G1 会疯狂收缩新生代，停顿次数暴涨、晋升速率飙升，总体更差</td><td>保持默认 200，真要降先确认停顿是瓶颈</td></tr>
+            <tr><td>堆设得比容器 limit 还大</td><td>内核直接 kill，没有 Java 异常、没有堆快照，只看到容器反复重启</td><td>用 <code>MaxRAMPercentage</code>，并给非堆留 30% 余量</td></tr>
+            <tr><td>没配 <code>HeapDumpOnOutOfMemoryError</code></td><td>出事时现场随容器重启消失，排查只能等复现</td><td>出事前就配好，路径指向持久卷</td></tr>
+            <tr><td>用 <code>jmap -F</code> 强制导出</td><td>走调试通道，长时间挂住进程，有把进程搞挂的实际案例</td><td>用 <code>jcmd GC.heap_dump</code>；进程已无响应时才考虑强制手段</td></tr>
+            <tr><td>只看堆不看堆外</td><td>堆快照里完全看不到直接内存与本地库分配，查一整天也找不到</td><td>堆水位正常但 RSS 持续涨，直接上本地内存跟踪做基线对比</td></tr>
+            <tr><td>GC 日志不配轮转</td><td>单文件无限增长，几周后把磁盘写满，连带整台机器上其他服务出故障</td><td><code>filecount</code> 与 <code>filesize</code> 必须同时给</td></tr>
+            <tr><td>关掉 GC 开销检查让报错消失</td><td>这是 JVM 在替你报警，关掉只是把明确的异常变成无限卡顿</td><td>去查为什么回收不掉</td></tr>
+            <tr><td>抄一份「线上通用 JVM 参数」几十个开关</td><td>大量参数在新版本里已失效、语义变了或彼此冲突，出问题时无法归因</td><td>只配本文表格里那几类，其余交给默认值与自适应</td></tr>
+        </tbody>
+    </table>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">最容易踩的坑</div>
+        <ul>
+            <li>故障时第一反应是重启。服务恢复了，堆快照、线程栈、GC 日志全部随容器消失，下一次照样发生。<strong>先摘流量，再取现场，最后重启。</strong></li>
+            <li>把 <code>-Xmx</code> 写死在镜像里，容器规格从 4 GB 调成 2 GB 后忘了改，上线即 <code>OOMKilled</code>。</li>
+            <li>元空间和直接内存都不设上限，于是 JVM 眼里内存永远够用，最后由内核来做决定。</li>
+            <li><code>HeapDumpPath</code> 指向容器内的临时路径，快照确实生成了，容器一重启就没了。</li>
+            <li>高峰期直连线上进程导出几 GB 的堆快照，STW 十几秒把所有接口打超时，把一个内存告警升级成全站故障。</li>
+            <li>用 <code>jstat</code> 只看一眼截图就下结论。必须连续采样，单点数据分不出「正在回收」和「回收不掉」。</li>
+            <li>看到 Full GC 就紧张，看到 <code>to-space exhausted</code> 和 <code>Reaching safepoint</code> 却没感觉——后两者才是真信号。</li>
+            <li>容器里不设 <code>ActiveProcessorCount</code>，GC 线程按宿主机核数开，在 1 核配额里起十几个工作线程，停顿反而更长。</li>
+            <li>把「消除报错」的参数当修复手段，比如关掉 GC 开销上限检查。</li>
+            <li>在堆快照里看到字节数组占比最高就下结论。字节数组当然最大，要看的是<strong>支配树</strong>以及它到 GC Roots 的引用链上第一个业务类。</li>
+            <li>只加大堆不看晋升速率。老年代涨得快往往是新生代被压得太小，加堆而不调比例，问题只是变慢了一点。</li>
+            <li>压测在预热完成前就开始计数，得出「优化有效」的结论，其实是 JIT 编译完成带来的差异。</li>
+        </ul>
+    </div>
+</article>
+                <nav class="article-nav">
+                    <a class="nav-prev" href="../orm/"><span class="nav-label">← 上一篇</span><span class="nav-title">MyBatis 与 JPA 实战</span></a>
+                    <a class="nav-next" href="../"><span class="nav-label">下一篇 →</span><span class="nav-title">Java 总览</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · 后端与编程语言</h2><ul class="related-list"><li><a class="side-post" href="../">Java 总览</a></li><li><a class="side-post" href="../java17-springboot3/">Java 17+ 与 Spring Boot 3</a></li><li><a class="side-post" href="../spring-core/">Spring Boot 核心原理</a></li><li><a class="side-post" href="../spring-cloud/">Spring Cloud 微服务全家桶</a></li><li><a class="side-post" href="../orm/">MyBatis 与 JPA 实战</a></li><li><a class="side-post" href="./">JVM 调优与内存管理</a></li></ul></aside>
+
+                <div class="share-bar">
+                    <span class="share-label">分享：</span>
+                    <button class="share-btn" data-platform="copy" title="复制链接">🔗</button>
+                    <button class="share-btn" data-platform="twitter" title="分享到 X/Twitter">𝕏</button>
+                    <button class="share-btn" data-platform="weibo" title="分享到微博">📱</button>
+                    <button class="share-btn" data-platform="email" title="邮件分享">✉️</button>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+
+    <button class="back-to-top" title="回到顶部">↑</button>
+
+        <script defer src="../../../vendor/highlight.min.js"></script>
+
+    
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "programming";</script>
+    <script src="../../../js/main.js?v=2" defer></script>
+</body>
+</html>

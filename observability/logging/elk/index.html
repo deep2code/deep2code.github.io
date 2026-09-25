@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="日志平台的架构取舍与容量规划：ELK、EFK、ELK 加 Kafka 三种形态的适用规模，为什么中间要加 Kafka（削峰、解耦、Logstash 重启不丢日志）；Filebeat 与 Logstash 的分工，以及用 ES Ingest Pipeline 替代 Logstash 的边界；索引设计才是核心——按天分索引、index template、ILM 的 hot-warm-cold-delete 各阶段、单分片 20 到 50GB 的经验值与分片数创建后不可改这个硬约束；动态映射导致字段爆炸、text 与 keyword 的取舍；查询反模式与容量估算公式；结构化日志、trace_id、脱敏与日志注入风险。">
+    <meta name="keywords" content="ELK 日志栈,监控,可观测性,Prometheus,Grafana,监控与可观测性">
+    <meta name="author" content="资深码农">
+    <meta name="generator" content="deep2code generator">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/observability/logging/elk/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM - 资深码农">
+    <meta property="og:description" content="日志平台的架构取舍与容量规划：ELK、EFK、ELK 加 Kafka 三种形态的适用规模，为什么中间要加 Kafka（削峰、解耦、Logstash 重启不丢日志）；Filebeat 与 Logstash 的分工，以及用 ES Ingest Pipeline 替代 Logstash 的边界；索引设计才是核心——按天分索引、index template、ILM 的 hot-warm-cold-delete 各阶段、单分片 20 到 50GB 的经验值与分片数创建后不可改这个硬约束；动态映射导致字段爆炸、text 与 keyword 的取舍；查询反模式与容量估算公式；结构化日志、trace_id、脱敏与日志注入风险。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/observability/logging/elk/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM">
+    <meta name="twitter:description" content="日志平台的架构取舍与容量规划：ELK、EFK、ELK 加 Kafka 三种形态的适用规模，为什么中间要加 Kafka（削峰、解耦、Logstash 重启不丢日志）；Filebeat 与 Logstash 的分工，以及用 ES Ingest Pipeline 替代 Logstash 的边界；索引设计才是核心——按天分索引、index template、ILM 的 hot-warm-cold-delete 各阶段、单分片 20 到 50GB 的经验值与分片数创建后不可改这个硬约束；动态映射导致字段爆炸、text 与 keyword 的取舍；查询反模式与容量估算公式；结构化日志、trace_id、脱敏与日志注入风险。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="可观测性与性能">
+    <meta property="article:tag" content="监控,可观测性,Prometheus,Grafana">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"日志平台的架构取舍与容量规划：ELK、EFK、ELK 加 Kafka 三种形态的适用规模，为什么中间要加 Kafka（削峰、解耦、Logstash 重启不丢日志）；Filebeat 与 Logstash 的分工，以及用 ES Ingest Pipeline 替代 Logstash 的边界；索引设计才是核心——按天分索引、index template、ILM 的 hot-warm-cold-delete 各阶段、单分片 20 到 50GB 的经验值与分片数创建后不可改这个硬约束；动态映射导致字段爆炸、text 与 keyword 的取舍；查询反模式与容量估算公式；结构化日志、trace_id、脱敏与日志注入风险。","url":"https://www.yijunjun.asia/observability/logging/elk/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/observability/logging/elk/"},"articleSection":"运维与云原生"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "可观测性与性能", "item": "https://www.yijunjun.asia/observability/"}, {"position": 3, "name": "ELK 日志栈", "item": "https://www.yijunjun.asia/observability/logging/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "日志链路中间为什么要加一层 Kafka？", "acceptedAnswer": {"@type": "Answer", "text": "三个理由。一是削峰：应用在故障时打日志的速率可能是平时的十倍，直接打到 Elasticsearch 会让写入队列打满、拒绝请求，而 Kafka 能把这个尖峰摊平到后面几十分钟。二是解耦：Logstash 或 Elasticsearch 升级重启期间，采集端不需要停，日志留在 Kafka 里等消费，重启后按位点继续，不丢数据。三是多消费者：同一份日志既要进搜索引擎，又要进数仓和实时风控，加一层消息队列后下游可以各自独立消费、独立重放。代价是多一套有状态组件要运维，以及端到端延迟增加数秒。"}}, {"@type": "Question", "name": "Elasticsearch 索引的分片数应该怎么定？", "acceptedAnswer": {"@type": "Answer", "text": "经验值是让单个主分片落在 20 到 50GB 之间，日志这种以时间为序、很少更新的数据可以取上限。算法是用预估的单索引主数据量除以目标分片大小，再向上取整，并尽量取数据节点数的整数倍以便均衡。分片过多会让集群元数据和线程开销暴涨，几万个分片会拖慢主节点上的集群状态更新；分片过少则无法并行，单分片过大时恢复和迁移都会很慢。最重要的一点是主分片数在索引创建后不可修改，只能通过拆分、收缩或者重建索引来改，所以必须配合按时间滚动创建新索引，让错误的规划最多影响一天的数据。"}}, {"@type": "Question", "name": "text 和 keyword 到底该怎么选？", "acceptedAnswer": {"@type": "Answer", "text": "要全文检索的字段用 text，它会被分词，适合日志正文里搜关键词，但默认不能做聚合和排序，对它做聚合会直接报错，提示字段数据默认关闭。要做精确匹配、聚合、排序、去重的字段用 keyword，它整体作为一个词存储，并且默认生成列式结构供聚合使用。两种需求都有的字段用多字段写法，主类型设成 text，再挂一个 keyword 子字段。注意 keyword 单值长度上限约三万二千字节，超过会写入失败，所以给日志正文的 keyword 子字段一定要设置一个长度上限参数，超长自动不索引。"}}, {"@type": "Question", "name": "日志平台的磁盘容量怎么估算？", "acceptedAnswer": {"@type": "Answer", "text": "公式是每天原始日志量乘以结构化后的膨胀比、乘以索引膨胀系数、乘以副本份数、乘以保留天数，最后再除以磁盘可用率。结构化成 JSON 会因为字段名重复增加两到三成体积；索引膨胀系数取决于映射，全字段索引且不压缩时可能到一点五倍，开启高压缩编码并关掉无用字段索引后能接近一倍甚至更低；副本一份意味着乘以二；磁盘可用率建议取零点七，因为超过百分之八十五就会停止分配分片，超过百分之九十五会把索引置为只读。举例每天两百 GB、保留十五天、一副本，大约需要九到十 TB 可用磁盘。"}}, {"@type": "Question", "name": "为什么日志突然写不进去，报索引只读？", "acceptedAnswer": {"@type": "Answer", "text": "这是磁盘水位触发的保护。Elasticsearch 有三条线：低水位百分之八十五后不再往该节点分配新分片，高水位百分之九十后开始把分片迁走，洪泛水位百分之九十五会给所有相关索引加上只读且仅允许删除的阻塞标记。关键陷阱是这个标记不会随磁盘清理自动解除，必须手工把该索引设置项置空才能恢复写入。因此日志平台一定要给磁盘使用率配告警，并且用生命周期策略保证旧索引按期删除，而不是靠人工清理。"}}, {"@type": "Question", "name": "非结构化日志用 grok 正则解析有什么问题？", "acceptedAnswer": {"@type": "Answer", "text": "既慢又脆。grok 本质是一串复杂正则，在 Logstash 里是 CPU 消耗最大的环节，写得不好还会发生灾难性回溯，一条畸形日志能把整个处理管道卡住。更麻烦的是它和日志格式强耦合，开发改了一处日志文案，解析规则就失配，字段变成未解析状态，往往几周后才被发现。正确做法是在应用侧直接输出 JSON 结构化日志，把级别、服务名、追踪标识、耗时、状态码都作为独立字段输出，采集端只做透传，既省掉解析成本，也让字段契约变成代码的一部分。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability" class="active">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">可观测性与性能</a><span class="separator">/</span><a href="../index.html">应用侧日志工程：记什么、分级判据与性能开销</a><span class="separator">/</span><span>ELK 日志栈</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ ELK</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>日志平台上线容易，活得久很难。装完 Filebeat 加 Elasticsearch 加 Kibana 只需要一个下午，但三个月后你会遇到：磁盘写满后索引被自动置成只读、字段数量爆到上限导致写入直接报错、一次大促把写入队列打满丢了一整段日志、某个字段想做聚合却发现类型选错了改不了。<strong>这些问题的根源全部在架构取舍和索引设计上，而不是在安装步骤上。</strong>这篇讲这两件事。</p>
+
+<h2>三种架构形态与它们的适用规模</h2>
+<p>ELK 这个词现在指代的其实是三种不同复杂度的架构。选错的代价很直接：小规模上 Kafka 是浪费，大规模不上 Kafka 是等着丢数据。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph C["采集层：每台主机或每个 Pod 一个"]
+        FB["Filebeat：Go 实现，几十 MB 内存"]
+        FT["Fluent Bit：C 实现，几 MB 内存"]
+    end
+    subgraph Q["缓冲层：规模上来后必需"]
+        KF["Kafka：按业务线分 topic<br/>保留 2 到 3 天，兼作重放缓冲"]
+    end
+    subgraph T["处理层：三选一"]
+        LS["Logstash：JVM，重解析与富化，可多路输出"]
+        IP["ES Ingest Pipeline：少一个组件，吃 ES 自己的 CPU"]
+        NO["不处理：应用侧已输出 JSON，直接透传"]
+    end
+    subgraph S["存储层"]
+        ES["Elasticsearch：hot / warm / cold 角色分离"]
+        OB["对象存储：快照与可搜索快照"]
+    end
+    subgraph V["查询层"]
+        KB["Kibana：Discover / Lens / 告警"]
+    end
+    FB --> KF
+    FT --> KF
+    KF --> LS
+    KF --> IP
+    KF --> NO
+    LS --> ES
+    IP --> ES
+    NO --> ES
+    ES --> OB
+    ES --> KB
+</div>
+<table>
+    <thead>
+        <tr>
+            <th>架构</th>
+            <th>组件链路</th>
+            <th>适用日均量</th>
+            <th>尖峰与重启时的行为</th>
+            <th>运维成本</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>精简 ELK</td>
+            <td>Filebeat 直写 Elasticsearch，用 Ingest Pipeline 解析</td>
+            <td>50GB 以下</td>
+            <td>ES 写入拒绝时靠 Filebeat 背压顶住，磁盘队列撑不住就开始丢</td>
+            <td>最低，两个组件</td>
+        </tr>
+        <tr>
+            <td>EFK</td>
+            <td>Fluent Bit 或 Fluentd 采集，直写或经 Fluentd 聚合</td>
+            <td>50GB 到 200GB，容器场景为主</td>
+            <td>Fluent Bit 内存占用极小，适合每个节点都跑；聚合层挂掉时有丢失风险</td>
+            <td>低，Kubernetes 生态默认选择</td>
+        </tr>
+        <tr>
+            <td>ELK 加 Kafka</td>
+            <td>Filebeat 到 Kafka 到 Logstash 到 ES</td>
+            <td>200GB 以上，或有明显尖峰</td>
+            <td>尖峰被摊平；Logstash 与 ES 可随时重启，按位点续传不丢</td>
+            <td>高，多一套有状态集群，端到端延迟增加数秒</td>
+        </tr>
+        <tr>
+            <td>轻量替代（Loki 等）</td>
+            <td>只索引标签，日志正文按块压缩存对象存储</td>
+            <td>不需要全文检索、以标签加时间范围定位为主</td>
+            <td>存储成本可低一个数量级，但复杂全文查询能力弱</td>
+            <td>低，但要接受查询模式受限</td>
+        </tr>
+    </tbody>
+</table>
+<p><strong>为什么中间要加 Kafka</strong>，值得单独说清楚，因为这是最常被省掉、也最常被后悔的一层：</p>
+<ul>
+    <li><strong>削峰</strong>。故障时的日志量通常是平时的 5 到 10 倍（堆栈、重试、降级日志同时爆发）。Elasticsearch 的写入线程池队列满了就会拒绝请求，而这恰恰发生在你最需要日志的时刻。Kafka 能把这个尖峰摊到后面几十分钟慢慢消化。</li>
+    <li><strong>解耦与不丢</strong>。Logstash 扩容、ES 滚动升级、索引模板变更，这些操作都要重启下游。有 Kafka 时采集端完全不受影响，重启后按消费位点续传；没有 Kafka 时只能靠 Filebeat 的本地队列硬扛，队列满了就开始丢。</li>
+    <li><strong>多消费者与重放</strong>。同一份日志往往既要进搜索引擎，又要进数仓、实时风控、审计归档。加一层消息队列后各下游独立消费、独立重放；解析规则写错了，重置位点重跑一遍就行。</li>
+</ul>
+<div class="mermaid">
+flowchart TB
+    S["估算日均日志量与尖峰倍数"] --> Q1{"日均量级"}
+    Q1 -->|"小于 50 GB"| A1["Filebeat 直写 ES<br/>解析放 Ingest Pipeline"]
+    Q1 -->|"50 GB 到 500 GB"| Q2{"有集中打日志的尖峰吗"}
+    Q1 -->|"大于 500 GB"| A3["必须上 Kafka<br/>并做 hot-warm-cold 分层"]
+    Q2 -->|"有：大促、定时任务、故障风暴"| A3
+    Q2 -->|"平稳"| Q3{"解析逻辑复杂吗"}
+    Q3 -->|"复杂：多源关联、外部富化、多路输出"| A2["Filebeat 加 Kafka 加 Logstash"]
+    Q3 -->|"简单：应用已输出 JSON"| A1
+</div>
+
+<h2>采集与处理的分工：谁该干什么</h2>
+<p>一个常见误解是「Filebeat 只是简化版 Logstash」。它们的定位完全不同：<strong>Filebeat 负责可靠采集与背压，Logstash 负责重解析与富化</strong>。Filebeat 用 Go 写、内存占用几十 MB，可以在每台机器上跑；Logstash 跑在 JVM 上，堆内存通常要 1GB 以上，只适合集中部署几个实例。</p>
+<table>
+    <thead>
+        <tr>
+            <th>组件</th>
+            <th>运行开销</th>
+            <th>核心能力</th>
+            <th>不适合做什么</th>
+            <th>失败时的行为</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Filebeat</td>
+            <td>Go，几十 MB 内存</td>
+            <td>文件跟踪与位点记录、多行合并、简单 JSON 解析、背压</td>
+            <td>复杂正则解析、跨事件聚合、调用外部服务富化</td>
+            <td>输出阻塞时停止读取文件，等下游恢复；位点存在 registry 里，重启续传</td>
+        </tr>
+        <tr>
+            <td>Fluent Bit</td>
+            <td>C，几 MB 内存</td>
+            <td>与 Filebeat 类似，容器元数据补全更强，插件更轻</td>
+            <td>同上，且插件生态不如 Logstash 丰富</td>
+            <td>同样支持磁盘缓冲；内存缓冲满了会丢，必须显式开启文件系统缓冲</td>
+        </tr>
+        <tr>
+            <td>Logstash</td>
+            <td>JVM，1GB 以上堆</td>
+            <td>grok 与 dissect 解析、字段变换、地理与字典富化、多路输出、条件分流</td>
+            <td>部署在每台业务机器上（资源开销不可接受）</td>
+            <td>无持久队列时重启会丢内存中的批次，必须开启持久队列或依赖 Kafka 位点</td>
+        </tr>
+        <tr>
+            <td>ES Ingest Pipeline</td>
+            <td>复用 ES 节点资源</td>
+            <td>常见处理器齐全：grok、dissect、date、gsub、remove、set、条件判断</td>
+            <td>需要跨事件状态、调用外部服务、极重的正则；它和查询抢同一份 CPU</td>
+            <td>处理失败时按 on_failure 兜底，配不好会整批写入失败</td>
+        </tr>
+    </tbody>
+</table>
+<p>结论很实用：<strong>如果应用已经输出 JSON，Logstash 基本可以省掉</strong>，把剩下的一点点处理（补时间戳、脱敏、删无用字段）放进 Ingest Pipeline，链路少一个有状态组件。只有当你需要跨多种异构日志格式做重解析、或者要把同一份数据分发到多个异构后端时，Logstash 才值得留。</p>
+<pre><code class="language-yaml">filebeat.inputs:
+  - type: filestream            # 7.14 起推荐，取代已废弃的 log 类型
+    id: app-json-log            # filestream 必须有唯一 id；改动这个 id 等于让它从头重读一遍
+    paths:
+      - /var/log/app/*.json
+    parsers:
+      - ndjson:
+          target: ""            # 解析出的字段平铺到根层级，而不是嵌到某个对象下
+          overwrite_keys: true
+          add_error_key: true   # 解析失败时打标记，不要静默丢掉
+    prospector.scanner.check_interval: 10s
+    close.on_state_change.inactive: 5m   # 5 分钟无写入就关闭文件句柄，防止句柄泄漏
+    clean_removed: true         # 文件删除后清理位点记录，否则 registry 会无限膨胀
+
+  - type: filestream
+    id: app-stacktrace
+    paths:
+      - /var/log/app/error.log
+    parsers:
+      - multiline:              # 不做多行合并，一个 Java 异常会变成 40 条互不相关的日志
+          type: pattern
+          pattern: '^\d{4}-\d{2}-\d{2}'   # 以日期开头的才是新事件
+          negate: true
+          match: after
+          max_lines: 200        # 上限保护，防止死循环堆栈把内存撑爆
+
+queue.mem:
+  events: 4096
+  flush.min_events: 2048       # 攒批发送，比逐条发吞吐高一个量级
+  flush.timeout: 1s            # 低流量时也要保证 1 秒内发出，否则查不到最新日志
+
+output.kafka:
+  hosts: ["kafka-1:9092", "kafka-2:9092", "kafka-3:9092"]
+  topic: 'logs-%{[fields.env]}'
+  partition.round_robin:
+    reachable_only: true       # 只写可达分区，避免单个 broker 故障阻塞整体
+  required_acks: 1             # 日志场景 1 足够；用 -1 吞吐大约掉一半
+  compression: lz4             # 文本日志能压到五分之一到十分之一，省网络也省 Kafka 磁盘
+  max_message_bytes: 1000000
+
+processors:
+  # 默认开启的元数据处理器会给每条日志塞进大量主机与云信息，体积明显变大，按需裁剪
+  - add_host_metadata:
+      netinfo.enabled: false   # 默认会带上所有网卡 IP，字段多且几乎用不到
+  - drop_fields:
+      fields: ["agent.ephemeral_id", "ecs.version", "input.type"]
+      ignore_missing: true</code></pre>
+
+<h2>索引设计：这套系统真正的核心</h2>
+<p>日志平台的成败几乎全部由索引设计决定。要点有四个：按时间滚动、用模板统一、用 ILM 自动分层、把分片数算对。</p>
+<p><strong>按时间分索引</strong>的理由不是「好看」，而是：删除整个索引是常数时间操作，而按条件删除文档要走一遍查询加标记删除，代价高且不回收空间；同时时间范围查询可以直接跳过整个索引。日均 100GB 以下按天分，超过就按小时分或者用 rollover 按大小滚动。</p>
+<p><strong>分片数怎么定</strong>：目标是单个主分片落在 20 到 50GB，日志这种写入后几乎不更新、以时间过滤为主的数据可以取上限。计算方式是「单索引预估主数据量 ÷ 目标分片大小」向上取整，并尽量取数据节点数的整数倍以便均衡分布。</p>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">主分片数创建后不可修改</div>
+    <p>这是硬约束。想改只能 <code>_split</code>（成倍放大）、<code>_shrink</code>（成因子缩小，且要求所有分片先迁到同一节点）或者 reindex 重建，三种方式在数据量大时都很痛。正确的应对是按时间滚动创建索引，让一次错误的规划最多影响一天的数据，而不是影响全部历史。</p>
+</div>
+<table>
+    <thead>
+        <tr>
+            <th>日均日志量</th>
+            <th>索引粒度</th>
+            <th>单索引主数据</th>
+            <th>建议主分片数</th>
+            <th>说明</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>10GB 以下</td>
+            <td>按天或按周</td>
+            <td>10 到 70GB</td>
+            <td>1 到 2</td>
+            <td>别为了「看起来专业」切成 5 个分片，小分片只会增加开销</td>
+        </tr>
+        <tr>
+            <td>50GB</td>
+            <td>按天</td>
+            <td>约 55GB</td>
+            <td>2</td>
+            <td>单分片约 27GB，落在经验区间中段</td>
+        </tr>
+        <tr>
+            <td>200GB</td>
+            <td>按天</td>
+            <td>约 220GB</td>
+            <td>5 或 6</td>
+            <td>取数据节点数的整数倍，避免某个节点分到两个分片而别的只有一个</td>
+        </tr>
+        <tr>
+            <td>1TB 以上</td>
+            <td>按小时，或按 50GB 做 rollover</td>
+            <td>按滚动条件控制</td>
+            <td>用 <code>max_primary_shard_size</code> 交给 ILM 自动决定</td>
+            <td>手工按天规划一定会失准，必须交给 rollover</td>
+        </tr>
+        <tr>
+            <td>任何规模</td>
+            <td>——</td>
+            <td>——</td>
+            <td>集群总分片数控制在每 GB 堆内存 20 个以内</td>
+            <td>分片过多会让主节点上的集群状态更新变慢，几万分片时新建索引可能要等几十秒</td>
+        </tr>
+    </tbody>
+</table>
+<p><strong>ILM（索引生命周期管理）</strong>把「索引老了要做什么」变成声明式配置，是控制成本的主要手段：</p>
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> Hot
+    Hot --> Warm: 满足 rollover 条件后进入老化
+    Warm --> Cold: 通常 7 到 14 天
+    Cold --> Frozen: 30 天以上，改为可搜索快照
+    Frozen --> Delete: 到达保留期
+    Cold --> Delete: 没有 frozen 阶段时直接删除
+    Warm --> Delete: 短保留期场景跳过冷阶段
+    Delete --> [*]
+</div>
+<table>
+    <thead>
+        <tr>
+            <th>阶段</th>
+            <th>这个阶段做什么</th>
+            <th>硬件与副本</th>
+            <th>是否可写</th>
+            <th>注意点</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>hot</td>
+            <td>承接全部写入；按大小或时间 rollover</td>
+            <td>SSD，副本 1</td>
+            <td>可写可查</td>
+            <td>只有 hot 阶段的索引在写，所以 SSD 只需买这一层的容量</td>
+        </tr>
+        <tr>
+            <td>warm</td>
+            <td><code>forcemerge</code> 合并段、<code>shrink</code> 减分片、降低分配优先级</td>
+            <td>SATA 或低配 SSD，副本 1</td>
+            <td>只读</td>
+            <td>forcemerge 很吃 IO，要放在低峰期；shrink 要求分片先集中到一个节点</td>
+        </tr>
+        <tr>
+            <td>cold</td>
+            <td>副本降到 0 或转为可搜索快照，进一步压缩</td>
+            <td>大容量机械盘</td>
+            <td>只读，查询变慢</td>
+            <td>副本降到 0 意味着节点故障会丢这段数据，要先确认有快照</td>
+        </tr>
+        <tr>
+            <td>frozen</td>
+            <td>数据主体放对象存储，节点只留元数据</td>
+            <td>对象存储</td>
+            <td>只读，查询延迟从秒级到分钟级</td>
+            <td>适合审计与合规留存，不适合日常排查</td>
+        </tr>
+        <tr>
+            <td>delete</td>
+            <td>整个索引删除，空间立即回收</td>
+            <td>——</td>
+            <td>——</td>
+            <td>删除前如有留存要求，先确认快照策略已生效</td>
+        </tr>
+    </tbody>
+</table>
+<pre><code class="language-bash"># 1) ILM 策略：自动滚动 + 分层 + 到期删除
+curl -X PUT "localhost:9200/_ilm/policy/logs-policy" -H 'Content-Type: application/json' -d '
+{
+  "policy": {
+    "phases": {
+      "hot": {
+        "actions": {
+          "rollover": {
+            "max_primary_shard_size": "50gb",
+            "max_age": "1d"
+          },
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "warm": {
+        "min_age": "2d",
+        "actions": {
+          "forcemerge": { "max_num_segments": 1 },
+          "set_priority": { "priority": 50 }
+        }
+      },
+      "cold": {
+        "min_age": "14d",
+        "actions": {
+          "allocate": { "number_of_replicas": 0 },
+          "set_priority": { "priority": 0 }
+        }
+      },
+      "delete": {
+        "min_age": "30d",
+        "actions": { "delete": {} }
+      }
+    }
+  }
+}'
+
+# 2) 索引模板：模板只对「之后新建」的索引生效，改了不会影响已存在的索引
+curl -X PUT "localhost:9200/_index_template/logs-template" -H 'Content-Type: application/json' -d '
+{
+  "index_patterns": ["logs-*"],
+  "data_stream": {},
+  "priority": 200,
+  "template": {
+    "settings": {
+      "index.number_of_shards": 3,
+      "index.number_of_replicas": 1,
+      "index.refresh_interval": "30s",
+      "index.lifecycle.name": "logs-policy",
+      "index.codec": "best_compression",
+      "index.mapping.total_fields.limit": 2000
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp":  { "type": "date" },
+        "trace_id":    { "type": "keyword" },
+        "span_id":     { "type": "keyword" },
+        "level":       { "type": "keyword" },
+        "service":     { "type": "keyword" },
+        "env":         { "type": "keyword" },
+        "http_status": { "type": "short" },
+        "duration_ms": { "type": "integer" },
+        "user_id":     { "type": "keyword", "doc_values": true },
+        "message": {
+          "type": "text",
+          "fields": {
+            "raw": { "type": "keyword", "ignore_above": 1024 }
+          }
+        }
+      }
+    }
+  }
+}'</code></pre>
+<p>两个参数值得单独解释。<code>refresh_interval</code> 默认是 1 秒，意思是写入后最多 1 秒可被搜索到，代价是频繁生成新段；日志场景把它放宽到 30 秒，写入吞吐通常能提升三成以上，而「日志晚 30 秒能搜到」完全可以接受。<code>index.codec</code> 设成 <code>best_compression</code> 会换用压缩率更高的算法，存储能省两到三成，代价是取原文时 CPU 略高——日志是典型的写多读少，这笔交易很划算。</p>
+
+<h2>mapping 的坑：字段爆炸与 text/keyword</h2>
+<p><strong>动态映射是字段爆炸的源头。</strong>默认情况下 ES 见到新字段就自动推断类型并加进 mapping。日志里只要有人把变量拼进了字段名（比如把用户 ID 当成 key），字段数就会无限增长，先是 mapping 变成几 MB 拖慢集群状态同步，接着撞上 <code>index.mapping.total_fields.limit</code>（默认 1000）导致写入直接报错。</p>
+<p>三种应对策略：<code>"dynamic": true</code> 是默认（危险）；<code>"dynamic": false</code> 表示未声明的字段照样存进原始文档、但不建索引也不能检索（推荐的折中，出问题时至少数据还在）；<code>"dynamic": "strict"</code> 表示遇到未声明字段直接拒绝写入（契约最强，但一次上线加字段忘了改模板就会丢日志）。日志平台建议用 <code>false</code>，并配合 mapping 评审。</p>
+<table>
+    <thead>
+        <tr>
+            <th>需求</th>
+            <th>字段类型</th>
+            <th>能否聚合排序</th>
+            <th>能否全文检索</th>
+            <th>代价与陷阱</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>日志正文里搜关键词</td>
+            <td><code>text</code></td>
+            <td>不能，直接聚合会报「字段数据默认关闭」</td>
+            <td>能，会分词</td>
+            <td>倒排索引体积最大；中文需要额外分词器，否则单字切分效果很差</td>
+        </tr>
+        <tr>
+            <td>按服务名、级别、状态码统计</td>
+            <td><code>keyword</code></td>
+            <td>能，默认生成列式结构</td>
+            <td>不能，只支持整体精确匹配</td>
+            <td>单值上限约 32766 字节，超长写入失败，必须配 <code>ignore_above</code></td>
+        </tr>
+        <tr>
+            <td>两种都要（正文既搜又统计）</td>
+            <td><code>text</code> 加 <code>fields</code> 子字段</td>
+            <td>用子字段聚合</td>
+            <td>用主字段检索</td>
+            <td>存两份，体积增加；子字段一定要设 <code>ignore_above</code> 兜住超长正文</td>
+        </tr>
+        <tr>
+            <td>耗时、状态码等数值</td>
+            <td><code>integer</code> / <code>short</code> / <code>float</code></td>
+            <td>能，支持范围查询</td>
+            <td>不适用</td>
+            <td>别用 <code>keyword</code> 存数字，范围查询会退化成词项枚举</td>
+        </tr>
+        <tr>
+            <td>只存不查的大字段（请求体快照）</td>
+            <td><code>text</code> 且 <code>"index": false</code>，或存进 <code>_source</code> 不声明</td>
+            <td>不能</td>
+            <td>不能</td>
+            <td>这是省存储最有效的一招，很多团队给所有字段都建了索引</td>
+        </tr>
+        <tr>
+            <td>标签式的动态键值</td>
+            <td><code>flattened</code></td>
+            <td>有限支持</td>
+            <td>有限</td>
+            <td>专门用来避免字段爆炸：整个对象只占一个字段，代价是查询能力受限</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>查询性能：哪些写法会把集群拖垮</h2>
+<table>
+    <thead>
+        <tr>
+            <th>反模式</th>
+            <th>为什么慢</th>
+            <th>替代做法</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>前导通配符，例如查 <code>*timeout*</code></td>
+            <td>无法利用倒排索引的前缀定位，必须扫描词典里所有词项</td>
+            <td>正文用 <code>match</code> 走分词检索；确实需要任意位置匹配时改用 <code>wildcard</code> 类型字段</td>
+        </tr>
+        <tr>
+            <td>不带时间范围过滤</td>
+            <td>查询会打到全部索引与分片，保留 30 天就等于扫 30 倍数据</td>
+            <td>时间范围永远作为第一个过滤条件，放进 <code>filter</code> 子句以便走缓存</td>
+        </tr>
+        <tr>
+            <td>把过滤条件写在 <code>must</code> 里</td>
+            <td><code>must</code> 参与打分，无法使用过滤缓存</td>
+            <td>不需要打分的条件全部放 <code>filter</code>，日志检索绝大多数条件都不需要打分</td>
+        </tr>
+        <tr>
+            <td>对 <code>text</code> 字段做聚合</td>
+            <td>需要把倒排索引反转成内存结构，默认被禁止；强行开启会吃掉大量堆内存</td>
+            <td>用 <code>keyword</code> 子字段聚合；千万不要打开 <code>fielddata</code></td>
+        </tr>
+        <tr>
+            <td>深分页翻到第 10000 条之后</td>
+            <td>每个分片都要返回前 N 条再全局排序，代价随偏移线性增长</td>
+            <td>用 <code>search_after</code> 或 <code>point in time</code> 游标，导出场景用滚动查询</td>
+        </tr>
+        <tr>
+            <td>高基数字段的 terms 聚合不限 size</td>
+            <td>每个分片都要维护巨大的桶集合，容易触发熔断</td>
+            <td>限制 <code>size</code>，或改用 <code>composite</code> 聚合分页</td>
+        </tr>
+        <tr>
+            <td>用脚本字段做实时计算</td>
+            <td>每个文档都要执行一次脚本，无法走索引</td>
+            <td>写入时就把派生字段算好，例如直接输出 <code>duration_ms</code> 而不是查询时相减</td>
+        </tr>
+    </tbody>
+</table>
+<pre><code class="language-bash"># 一、索引与分片体积是否合理
+curl -s "localhost:9200/_cat/indices/logs-*?v&amp;h=index,pri,rep,docs.count,pri.store.size&amp;s=pri.store.size:desc"
+# 判读：pri.store.size 除以 pri 得到单个主分片大小。
+#       小于 5GB 说明切太碎，大于 60GB 说明过大，查询与分片恢复都会明显变慢。
+
+# 二、分片分布是否倾斜、有没有未分配分片
+curl -s "localhost:9200/_cat/shards/logs-*?v&amp;h=index,shard,prirep,state,docs,store,node&amp;s=store:desc" | head -20
+curl -s "localhost:9200/_cluster/allocation/explain?pretty"
+# 判读：state 为 UNASSIGNED 时用第二条命令看原因，最常见是磁盘水位或副本无处可放。
+
+# 三、磁盘水位：日志平台「突然写不进去」的第一嫌疑
+curl -s "localhost:9200/_cat/allocation?v&amp;h=node,disk.percent,disk.avail"
+# 判读：超过 85% 停止向该节点分配新分片；超过 90% 开始迁移分片；
+#       超过 95% 触发洪泛保护，索引被加上只读阻塞，且清理磁盘后不会自动解除，必须手工放开：
+curl -X PUT "localhost:9200/logs-*/_settings" -H 'Content-Type: application/json' \
+     -d '{"index.blocks.read_only_allow_delete": null}'
+
+# 四、字段数量是否接近上限（字段爆炸的早期信号）
+curl -s "localhost:9200/logs-2026.09.23/_mapping?pretty" | grep -c '"type"'
+# 判读：逼近 index.mapping.total_fields.limit（默认 1000）时写入会整批失败。
+
+# 五、把慢查询记下来，而不是等用户抱怨
+curl -X PUT "localhost:9200/logs-*/_settings" -H 'Content-Type: application/json' -d '
+{
+  "index.search.slowlog.threshold.query.warn": "5s",
+  "index.search.slowlog.threshold.fetch.warn": "1s"
+}'</code></pre>
+
+<h2>容量估算与成本控制</h2>
+<p>容量估算不要拍脑袋，按下面这个链条逐步乘：</p>
+<table>
+    <thead>
+        <tr>
+            <th>步骤</th>
+            <th>系数</th>
+            <th>示例（日均 200GB 原始文本）</th>
+            <th>说明</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>结构化膨胀</td>
+            <td>1.2 到 1.3</td>
+            <td>240GB</td>
+            <td>转成 JSON 后每条都重复一遍字段名，字段越多越明显</td>
+        </tr>
+        <tr>
+            <td>索引膨胀</td>
+            <td>0.9 到 1.5</td>
+            <td>约 260GB</td>
+            <td>全字段索引且不压缩时接近 1.5；开高压缩、关掉无用字段索引后可低于 1</td>
+        </tr>
+        <tr>
+            <td>副本</td>
+            <td>1 加副本数</td>
+            <td>520GB</td>
+            <td>1 副本即乘 2。冷阶段把副本降到 0 可以显著省钱，前提是有快照</td>
+        </tr>
+        <tr>
+            <td>保留天数</td>
+            <td>按需</td>
+            <td>15 天约 7.8TB</td>
+            <td>审计日志与调试日志分索引、分保留期，是最有效的省钱手段</td>
+        </tr>
+        <tr>
+            <td>磁盘可用率</td>
+            <td>除以 0.7</td>
+            <td>约 11TB</td>
+            <td>85% 是低水位线，必须留足余量，不能按 100% 规划</td>
+        </tr>
+        <tr>
+            <td>堆内存</td>
+            <td>物理内存一半，且不超过 31GB</td>
+            <td>每节点 64GB 内存配 31GB 堆</td>
+            <td>超过 31GB 会失去对象指针压缩，实际可用反而变少；剩下的留给文件缓存</td>
+        </tr>
+    </tbody>
+</table>
+<p>成本控制的四个抓手，按性价比排：<strong>按用途分索引并设不同保留期</strong>（调试日志留 3 天、业务日志 15 天、审计日志 180 天，比统一 30 天省一半以上）；<strong>冷热分层</strong>（只有 hot 层需要 SSD）；<strong>关掉不需要检索的大字段的索引</strong>；<strong>采样低价值日志</strong>（比如健康检查的访问日志按 1% 采样，或者干脆在采集层丢掉）。</p>
+
+<h2>结构化日志是前提，日志规范是底线</h2>
+<p><strong>用 grok 正则解析非结构化日志，是整条链路里最脆的一环。</strong>它是 CPU 消耗最大的处理器，写得不好会发生灾难性回溯把管道卡死；更要命的是它与日志文案强耦合——开发改一句日志措辞，解析就失配，字段变成未解析状态，往往几周后才有人发现。正确做法是在应用侧直接输出 JSON，把级别、服务、追踪标识、耗时、状态码都作为独立字段，采集端只做透传。</p>
+<p>下面这条 Ingest Pipeline 演示了结构化之后处理层还需要做的几件事：脱敏、清掉换行、删无用字段、失败兜底。</p>
+<pre><code class="language-bash">curl -X PUT "localhost:9200/_ingest/pipeline/logs-sanitize" -H 'Content-Type: application/json' -d '
+{
+  "description": "结构化日志的轻量处理：换行清理、脱敏、字段裁剪",
+  "processors": [
+    { "set": { "field": "ingest_at", "value": "{{{_ingest.timestamp}}}" } },
+
+    { "gsub": { "field": "message", "pattern": "[\\r\\n]+", "replacement": " ", "ignore_missing": true } },
+
+    { "gsub": { "field": "message", "pattern": "(\\d{6})\\d{6,9}(\\d{4})",
+                "replacement": "$1******$2", "ignore_missing": true } },
+
+    { "gsub": { "field": "message", "pattern": "(?i)(password|passwd|token|secret)([=:])[^,;\\s]+",
+                "replacement": "$1$2***", "ignore_missing": true } },
+
+    { "remove": { "field": ["host.ip", "agent.ephemeral_id"], "ignore_missing": true } }
+  ],
+  "on_failure": [
+    { "set": { "field": "ingest_error", "value": "{{{_ingest.on_failure_message}}}" } },
+    { "set": { "field": "_index", "value": "logs-failed" } }
+  ]
+}'</code></pre>
+<p>第二条 <code>gsub</code> 不只是为了好看。<strong>日志注入</strong>是真实存在的风险：用户输入里带换行符时，一条日志会被采集端切成两条，攻击者可以伪造出一行「看起来像系统日志」的内容，比如伪造一条登录成功记录来污染审计。防御要做两层——应用侧对写进日志的用户输入做转义，采集或处理侧再把残留的换行替换掉。</p>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant A as 应用进程
+    participant F as Filebeat harvester
+    participant K as Kafka
+    participant L as 处理层
+    participant E as Elasticsearch
+    participant U as Kibana 用户
+    A->>A: 输出一行 JSON，含 trace_id 与 duration_ms
+    F->>F: 读到行尾，更新 registry 中的位点
+    F->>K: 攒批发送，默认 2048 条或 1 秒触发
+    Note over F,K: 下游写不进去时 Filebeat 停止读取文件<br/>靠背压保护自己，不会无限吃内存
+    K-->>F: 确认写入
+    L->>K: 按消费组拉取，记录位点
+    L->>L: 脱敏、清换行、删无用字段
+    L->>E: _bulk 批量写入
+    Note over E: 写入后要等一个 refresh_interval 才可被搜索<br/>默认 1 秒，日志场景常调到 30 秒
+    U->>E: 用 trace_id 精确检索整条链路
+    E-->>U: 返回跨服务的全部日志
+</div>
+<p>与之配套的日志规范，每一条都对应一类真实踩过的坑：</p>
+<ul>
+    <li><strong>必须有 <code>trace_id</code></strong>：入口生成或从请求头继承，全链路透传并打进每条日志。没有它就只能靠时间加关键词凑，跨服务排查从几分钟变成几小时。</li>
+    <li><strong>时间戳带时区</strong>：统一用带偏移量的 ISO 8601 格式、统一字段名。否则跨机房日志排序错乱，故障时间线拼不起来。</li>
+    <li><strong>级别语义统一</strong>：ERROR 必须是需要人介入的；可预期的业务失败用 WARN 或 INFO。否则 ERROR 每天几万条，基于错误日志的告警彻底失效。</li>
+    <li><strong>禁止记录敏感信息</strong>：密码、完整卡号、身份证、令牌、完整手机号一律不落盘。日志平台权限通常比数据库宽，泄露影响面更大。</li>
+    <li><strong>用户输入必须转义</strong>：换行与制表符等控制字符转义后再写入，否则会发生日志注入——一条日志被切成多条，审计记录可被伪造。</li>
+    <li><strong>单条日志有长度上限</strong>：应用侧截断（比如 8KB），别把整个请求体或大结果集打进去。keyword 字段超过约 32766 字节会写入失败，单条巨型日志还会撑爆整个批次。</li>
+    <li><strong>按用途分索引</strong>：审计、业务、调试日志分开，各自设保留期与权限。混在一起时保留期只能就高不就低，成本翻倍且无法细分权限。</li>
+</ul>
+
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+        <li>没有缓冲层就上生产：故障时日志量涨 5 到 10 倍，ES 写入队列满后开始拒绝，你最需要日志的那段恰好缺失。</li>
+        <li>指望改模板修复已有索引：index template 只对之后新建的索引生效，改完必须等下一次 rollover 或手工 reindex 才见效。</li>
+        <li>分片数拍脑袋定成 5：主分片数创建后不可改，只能 split、shrink 或重建。按单分片 20 到 50GB 反推，并按天滚动兜住误差。</li>
+        <li>分片切太碎：每天几十个只有几百 MB 的索引，集群分片数上万，主节点的集群状态更新变慢，新建索引都要等十几秒。</li>
+        <li>动态映射全开：日志里出现以变量命名的字段后，mapping 无限膨胀，撞上字段数上限后写入整批失败。用 <code>"dynamic": false</code> 加 mapping 评审。</li>
+        <li>对 <code>text</code> 字段做聚合后打开 <code>fielddata</code> 救急：这会把倒排索引反转进堆内存，高基数字段直接把节点 OOM。应该用 <code>keyword</code> 子字段。</li>
+        <li><code>keyword</code> 字段不设 <code>ignore_above</code>：超过约 32766 字节直接写入失败，而失败的是整个批次，连带好的文档一起丢。</li>
+        <li>磁盘涨到 95% 后触发只读保护：<code>read_only_allow_delete</code> 不会随磁盘清理自动解除，必须手工置空，很多人清完磁盘还在纳闷为什么写不进去。</li>
+        <li>JVM 堆开到 32GB 以上：失去对象指针压缩，实际可用内存反而变少。上限 31GB，且不超过物理内存的一半，剩下留给文件系统缓存。</li>
+        <li>用 grok 硬解析非结构化日志：CPU 消耗最大、最容易被一次文案改动搞失效，还可能因正则回溯把管道卡死。应用侧直接输出 JSON。</li>
+        <li>忘了多行合并：一个 Java 异常堆栈变成 40 条独立日志，既查不全也把文档数放大几十倍。</li>
+        <li><code>refresh_interval</code> 留默认 1 秒：写入吞吐白损失三成，而日志晚 30 秒可搜索完全可以接受。</li>
+        <li>查询不带时间范围，或者把过滤条件写进 <code>must</code>：前者扫全部历史索引，后者放弃过滤缓存并做无意义的打分。</li>
+        <li>前导通配符查询：从词典头扫到尾，一个人查一次就能让集群抖动。需要任意位置匹配就改用 <code>wildcard</code> 类型。</li>
+        <li>所有日志一个索引一个保留期：调试日志和审计日志混在一起，保留期只能就高不就低，成本翻倍还没法分权限。</li>
+        <li>日志里记了密码或完整卡号：日志平台的查询权限通常比数据库宽得多，泄露影响面更大。要在应用侧和处理层做两道脱敏。</li>
+        <li>用户输入不转义直接打日志：换行符会把一条日志切成多条，攻击者能伪造出以假乱真的系统日志行。</li>
+    </ul>
+</div>
+
+                    </div>
+                </article>
+                <nav class="article-nav">
+                    <a class="nav-prev" href="../../metrics/grafana/"><span class="nav-label">← 上一篇</span><span class="nav-title">Grafana 仪表盘</span></a>
+                    <a class="nav-next" href="../../tracing/opentelemetry/"><span class="nav-label">下一篇 →</span><span class="nav-title">OpenTelemetry 分布式追踪</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · 监控与可观测性</h2><ul class="related-list"><li><a class="side-post" href="../../metrics/">可观测性三支柱</a></li><li><a class="side-post" href="../../metrics/prometheus/">Prometheus 架构原理</a></li><li><a class="side-post" href="../../metrics/promql/">PromQL 查询优化</a></li><li><a class="side-post" href="../../metrics/grafana/">Grafana 仪表盘</a></li><li><a class="side-post" href="../../tracing/opentelemetry/">OpenTelemetry 分布式追踪</a></li></ul></aside>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+    <button class="back-to-top" title="回到顶部">↑</button>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "observability";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

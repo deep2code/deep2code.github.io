@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../images/logo.jpeg">
+    <title>JVM 运行时原理：内存区域、GC 与类加载 - 资深码农</title>
+    <link rel="stylesheet" href="../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="拆解 JVM 运行时数据区的精确划分：线程私有的程序计数器与虚拟机栈、线程共享的堆与元空间、以及计入进程 RSS 的直接内存，给出每个区域放什么、由谁回收、溢出报什么错的对照表；讲清堆的分代结构与对象晋升的四条分支、弱分代假说、元空间取代永久代的真实原因、可达性分析与三种回收算法的取舍、四种引用类型、STW 与安全点造成的长停顿、类加载五阶段与双亲委派被打破的三种场景，以及 JIT 分层编译带来的预热问题。">
+    <meta name="keywords" content="Java,Java 17,Java 21,Spring Boot,Spring Cloud,JVM,MyBatis,JPA,GraalVM,虚拟线程,技术博客,程序员,踩坑,实践">
+    <meta name="author" content="资深码农">
+    <meta name="generator" content="deep2code generator">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/programming/java/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="JVM 运行时原理：内存区域、GC 与类加载 - 资深码农">
+    <meta property="og:description" content="拆解 JVM 运行时数据区的精确划分：线程私有的程序计数器与虚拟机栈、线程共享的堆与元空间、以及计入进程 RSS 的直接内存，给出每个区域放什么、由谁回收、溢出报什么错的对照表；讲清堆的分代结构与对象晋升的四条分支、弱分代假说、元空间取代永久代的真实原因、可达性分析与三种回收算法的取舍、四种引用类型、STW 与安全点造成的长停顿、类加载五阶段与双亲委派被打破的三种场景，以及 JIT 分层编译带来的预热问题。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/programming/java/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="JVM 运行时原理：内存区域、GC 与类加载 - 资深码农">
+    <meta name="twitter:description" content="拆解 JVM 运行时数据区的精确划分：线程私有的程序计数器与虚拟机栈、线程共享的堆与元空间、以及计入进程 RSS 的直接内存，给出每个区域放什么、由谁回收、溢出报什么错的对照表；讲清堆的分代结构与对象晋升的四条分支、弱分代假说、元空间取代永久代的真实原因、可达性分析与三种回收算法的取舍、四种引用类型、STW 与安全点造成的长停顿、类加载五阶段与双亲委派被打破的三种场景，以及 JIT 分层编译带来的预热问题。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="编程语言与代码功底">
+    <meta property="article:tag" content="后端与编程语言">
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "JVM 运行时原理：内存区域、GC 与类加载", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "拆解 JVM 运行时数据区的精确划分：线程私有的程序计数器与虚拟机栈、线程共享的堆与元空间、以及计入进程 RSS 的直接内存，给出每个区域放什么、由谁回收、溢出报什么错的对照表；讲清堆的分代结构与对象晋升的四条分支、弱分代假说、元空间取代永久代的真实原因、可达性分析与三种回收算法的取舍、四种引用类型、STW 与安全点造成的长停顿、类加载五阶段与双亲委派被打破的三种场景，以及 JIT 分层编译带来的预热问题。", "url": "https://www.yijunjun.asia/programming/java/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/java/"}, "articleSection": "后端与编程语言"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Java 总览", "item": "https://www.yijunjun.asia/programming/java/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "OutOfMemoryError 和 StackOverflowError 有什么区别？", "acceptedAnswer": {"@type": "Answer", "text": "两者指向的内存区域不同。StackOverflowError 是单个线程的虚拟机栈深度超限，典型成因是递归没有终止条件或递归层数过深，栈帧放不下了；它是线程私有区域的错误，通常和堆大小无关。OutOfMemoryError 则表示某块内存申请不到了，后面必须看它跟的那半句话：Java heap space 指堆、Metaspace 指类元数据区、Direct buffer memory 指堆外直接内存、unable to create new native thread 指操作系统已无法再创建线程。看清具体后缀再决定改哪个参数，否则很容易把堆加大反而挤掉堆外空间。"}}, {"@type": "Question", "name": "元空间 OOM 是不是类太多导致的？", "acceptedAnswer": {"@type": "Answer", "text": "绝大多数不是。一个普通业务服务加载的类数量是收敛的，启动完就不再增长。元空间持续上涨几乎都来自三种情况：运行期不断动态生成类，比如反射代理、CGLIB 子类、脚本引擎、动态编译的表达式；开发或测试环境反复热部署，旧的类加载器没被回收；自定义类加载器或线程上下文类加载器被静态字段、线程池线程持有，导致它加载的所有类都无法卸载。判断方法是观察已加载类计数是否随时间单调上升，以及同一个类名是否存在多个不同加载器的副本。"}}, {"@type": "Question", "name": "为什么堆要分成新生代和老年代？", "acceptedAnswer": {"@type": "Answer", "text": "基于弱分代假说：绝大多数对象在第一次垃圾回收时就已经死亡，而活过多次回收的对象往往会继续活很久。把朝生夕死的对象集中放在一块小区域里，每次只扫描这块小区域，代价远小于扫描整个堆；新生代存活率低，用复制算法只需搬运少量存活对象，回收几乎不产生碎片。老年代存活率高，复制成本太大，改用标记整理或标记清除。分代不是为了省内存，而是为了让单次停顿时间和存活对象数量成正比，而不是和堆大小成正比。"}}, {"@type": "Question", "name": "GC 停顿为什么有时候比日志里写的回收时间长很多？", "acceptedAnswer": {"@type": "Answer", "text": "完整停顿等于所有线程走到安全点的时间加上真正回收的时间。JVM 只能在安全点挂起线程，安全点插在方法返回、循环回边、异常抛出等位置。如果某个线程正在跑一个索引类型为 int 的可数循环，JIT 会把循环内的安全点轮询优化掉，这个线程必须把整个循环跑完才会检查挂起标志，其余线程只能干等。表现就是回收本身只有几毫秒，实际停顿却上百毫秒。排查时把日志里到达安全点的时间和回收时间分开看，长的那一段才是要优化的地方。"}}, {"@type": "Question", "name": "软引用适合做缓存吗？", "acceptedAnswer": {"@type": "Answer", "text": "不适合做正式缓存。软引用的回收时机由 JVM 根据内存压力决定，回收策略不可控也不可预测：堆充裕时它一直不回收，看起来像内存泄漏；堆紧张时它可能在一次回收里被整批清掉，命中率瞬间归零，随后大量回源请求打到下游。更糟的是它会拖长回收过程，因为清理软引用需要额外的引用处理阶段。生产上应该用带容量上限和过期策略的本地缓存实现，把淘汰规则交给自己控制，而不是交给垃圾回收器。"}}, {"@type": "Question", "name": "为什么服务刚启动时接口特别慢？", "acceptedAnswer": {"@type": "Answer", "text": "因为字节码一开始是解释执行的。方法调用次数和循环回边计数达到阈值后才会被 C1 快速编译，更热的方法才会进入 C2 做深度优化，包括方法内联、逃逸分析和栈上分配。在这段预热期里,同一段代码的执行效率可能比稳定期差几倍到十几倍，同时类加载、连接池建立、缓存填充也都挤在这个阶段。因此新发布的实例不能立刻承接满流量，正确做法是配合就绪探针加上流量渐进放量或启动预热请求，让实例先跑热再进负载均衡。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="./" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../programming/" data-group="programming" class="active">编程</a><a href="../../database/" data-group="database">数据库</a><a href="../../api/" data-group="api">接口</a><a href="../../architecture/" data-group="architecture">架构</a><a href="../../devops/" data-group="devops">运维</a><a href="../../observability/" data-group="observability">可观测</a><a href="../../frontend/" data-group="frontend">前端</a><a href="../../tools/" data-group="tools">工具</a><a href="../../ai/" data-group="ai">AI</a><a href="../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../index.html">主页</a><span class="separator">/</span><a href="../index.html">编程语言与代码功底</a><span class="separator">/</span><span>Java 总览</span>
+</div>
+
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+    <header class="article-header">
+        <h1 class="article-title">JVM 运行时原理：内存区域、GC 与类加载</h1>
+        <div class="article-meta">
+            <span class="meta-item">🏷️ Java</span>
+        </div>
+    </header>
+    <p>线上抛一个 <code>OutOfMemoryError</code>，第一件事不是加 <code>-Xmx</code>，而是看它后面跟的那半句话。<code>Java heap space</code>、<code>Metaspace</code>、<code>Direct buffer memory</code>、<code>unable to create new native thread</code> 指向四个完全不同的内存区域，成因、修法没有一条重合，其中有两种越加堆越容易复发。GC 日志同样如此：不知道分代结构，日志里每一行的数字都读不出意义。这篇讲 JVM 运行时的内存布局、对象生命周期、垃圾判定与回收算法、停顿的来源、类加载与 JIT——它是所有调优动作的地基。具体参数怎么配、现场怎么排查，见站内 <a href="jvm-tuning/">JVM 调优实战</a>。</p>
+
+    <h2>运行时数据区的精确划分</h2>
+    <p>「JVM 内存分为堆和栈」是一句被说了二十年的错话。准确的划分维度是<strong>线程私有还是线程共享</strong>，因为这决定了它由谁分配、由谁释放、以及能不能被 GC 管到。线程私有区域随线程创建、随线程结束自动销毁，根本不需要垃圾回收器介入；线程共享区域才是 GC 的工作范围。另外还有一类内存既不属于堆也不由 JVM 直接管理，但实打实占着进程的物理内存，它是「进程 RSS 远大于 <code>-Xmx</code>」的主要来源。</p>
+    <div class="mermaid">
+flowchart TB
+    subgraph TP["线程私有 · 随线程创建与销毁"]
+        PC["程序计数器<br/>当前字节码指令地址<br/>唯一不会溢出的区域"]
+        VS["虚拟机栈<br/>栈帧 局部变量表 操作数栈<br/>方法调用即压栈"]
+        NS["本地方法栈<br/>native 方法调用<br/>HotSpot 里与虚拟机栈合并"]
+    end
+    subgraph SH["线程共享 · 随 JVM 启停"]
+        HEAP["堆<br/>对象实例与数组<br/>GC 主战场"]
+        META["元空间<br/>类元数据 字段方法信息<br/>位于本地内存"]
+        RCP["运行时常量池<br/>字面量与符号引用<br/>随 Class 一起进元空间"]
+        SCP["字符串常量池<br/>JDK 7 起搬到堆里<br/>所以能被 GC 回收"]
+    end
+    subgraph OFF["JVM 不直接管理 但计入进程 RSS"]
+        DM["直接内存<br/>堆外缓冲区<br/>靠 Cleaner 或显式释放"]
+        CODE["JIT 代码缓存<br/>编译后的机器码"]
+        TSK["线程栈总量<br/>线程数乘以单个栈容量"]
+    end
+    META --> RCP
+    HEAP --> SCP
+</div>
+    <table>
+        <thead>
+            <tr><th>区域</th><th>放什么</th><th>由谁回收</th><th>溢出报什么错</th><th>关键参数</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>程序计数器</td><td>当前线程执行到的字节码地址，native 方法时为空</td><td>线程结束自动释放</td><td>规范中唯一不会 OOM 的区域</td><td>无</td></tr>
+            <tr><td>虚拟机栈</td><td>每次方法调用压入一个栈帧：局部变量表、操作数栈、返回地址</td><td>方法返回即弹栈，不需要 GC</td><td>深度超限 <code>StackOverflowError</code>；无法为新线程分配栈 <code>OutOfMemoryError: unable to create new native thread</code></td><td><code>-Xss</code>，默认 1M 量级</td></tr>
+            <tr><td>本地方法栈</td><td>JNI/native 调用栈，HotSpot 与虚拟机栈是同一块</td><td>同上</td><td>同上</td><td>同上</td></tr>
+            <tr><td>堆</td><td>所有对象实例、数组、JDK 7 起的字符串常量池</td><td>GC，分代管理</td><td><code>OutOfMemoryError: Java heap space</code>、<code>GC overhead limit exceeded</code></td><td><code>-Xms</code> <code>-Xmx</code> <code>-XX:MaxRAMPercentage</code></td></tr>
+            <tr><td>元空间</td><td>类元数据、方法字节码、运行时常量池、JIT 相关元信息</td><td>GC，但必须整个类加载器都不可达才能卸载</td><td><code>OutOfMemoryError: Metaspace</code></td><td><code>-XX:MaxMetaspaceSize</code>，默认不限</td></tr>
+            <tr><td>直接内存</td><td><code>DirectByteBuffer</code> 背后的堆外缓冲、NIO 与 Netty 的读写缓冲</td><td>依赖 <code>Cleaner</code> 在引用被回收后释放，不回收就不释放</td><td><code>OutOfMemoryError: Direct buffer memory</code></td><td><code>-XX:MaxDirectMemorySize</code>，默认约等于 <code>-Xmx</code></td></tr>
+            <tr><td>代码缓存</td><td>JIT 编译产物</td><td>有淘汰机制</td><td>满了会关闭编译并打印 <code>CodeCache is full</code>，性能断崖式下降</td><td><code>-XX:ReservedCodeCacheSize</code></td></tr>
+        </tbody>
+    </table>
+    <div class="callout callout-tip">
+        <div class="callout-icon">✅</div>
+        <div class="callout-title">按报错定位区域，是排查的第一步</div>
+        <p>同一个 <code>OutOfMemoryError</code> 类名下藏着五种完全不同的故障。把后缀读准，能省掉一半的无效尝试：<code>Java heap space</code> 查对象引用链；<code>Metaspace</code> 查类加载器；<code>Direct buffer memory</code> 查堆外缓冲有没有释放；<code>unable to create new native thread</code> 要减线程数或减 <code>-Xss</code>，而这一条<strong>加大堆只会让它更早发生</strong>——堆占得越多，留给线程栈的地址空间和物理内存就越少。</p>
+    </div>
+    <table>
+        <thead>
+            <tr><th>报错文本</th><th>对应区域</th><th>最常见的真实成因</th><th>第一步做什么</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>StackOverflowError</code></td><td>虚拟机栈</td><td>递归缺少出口、互相调用形成环、JSON 序列化遇到双向引用、AOP 代理自调用形成死循环</td><td>看栈轨迹里重复出现的那一段方法名，不要动 <code>-Xss</code></td></tr>
+            <tr><td><code>OOM: Java heap space</code></td><td>堆</td><td>一次查询把百万行捞进内存、无上限缓存、静态集合只增不减</td><td>看 heap dump 的支配树，找占比最大的那一棵</td></tr>
+            <tr><td><code>OOM: GC overhead limit exceeded</code></td><td>堆</td><td>老年代已经装满但回收不掉，GC 反复空转；本质是堆太小或泄漏的晚期表现</td><td>与上一条同源，按泄漏排查</td></tr>
+            <tr><td><code>OOM: Metaspace</code></td><td>元空间</td><td>动态生成类、反复热部署、类加载器泄漏</td><td>统计已加载类数量是否单调上升，看同名类有几份</td></tr>
+            <tr><td><code>OOM: Direct buffer memory</code></td><td>直接内存</td><td>堆外缓冲未释放、Netty 缓冲区泄漏、堆外用量没设上限</td><td>开 NMT 看非堆增长在哪一类</td></tr>
+            <tr><td><code>OOM: unable to create new native thread</code></td><td>线程栈 / 系统限制</td><td>线程池无界创建、每请求一个线程、容器 pid 上限或 <code>ulimit</code> 卡住</td><td>数线程数和线程名前缀，找是谁在无限建线程</td></tr>
+        </tbody>
+    </table>
+
+    <h2>堆的分代结构与对象晋升的四条分支</h2>
+    <p>新生代由一个 Eden 和两个 Survivor 组成，默认比例 8:1:1，同一时刻只有一个 Survivor 在用。这个设计的依据是<strong>弱分代假说</strong>：绝大多数对象在第一次回收时就已经死了，活过多次回收的则倾向于继续活很久。于是 Minor GC 只扫描新生代这一小块，而且用复制算法——只搬运存活的少数对象，死的那批连碰都不用碰，回收成本和<strong>存活对象数量</strong>成正比，而不是和堆大小成正比。这才是分代的真正价值。</p>
+    <p>对象分配也不是直接进 Eden。每个线程在 Eden 里有一小块私有的 TLAB，分配时只需移动一个指针，不需要加锁，这是 Java 里 new 一个小对象比想象中便宜得多的原因。只有 TLAB 放不下时才走共享的 Eden 慢路径。</p>
+    <div class="mermaid">
+stateDiagram-v2
+    state "线程私有 TLAB" as TLAB
+    state "Eden 区" as Eden
+    state "Survivor from" as S0
+    state "Survivor to" as S1
+    state "老年代" as Old
+    [*] --> TLAB: new 一个对象
+    TLAB --> Eden: TLAB 装不下 走共享慢路径
+    TLAB --> Old: 大小超过大对象阈值 直接分配到老年代
+    Eden --> S0: Minor GC 后存活 复制过去 年龄置为 1
+    S0 --> S1: 下一次 Minor GC 再复制 年龄加一
+    S1 --> S0: 两个 Survivor 每轮互换 from 与 to
+    S0 --> Old: 年龄达到晋升阈值
+    S1 --> Old: 同龄对象总量超过 Survivor 一半 触发动态年龄判定 提前晋升
+    Eden --> Old: Survivor 放不下 直接晋升
+    Eden --> [*]: 多数对象在这里就被回收 不产生任何搬运成本
+    Old --> [*]: 被 Full GC 或并发回收清理
+</div>
+    <table>
+        <thead>
+            <tr><th>晋升分支</th><th>触发条件</th><th>相关参数</th><th>调错的后果</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>年龄晋升</td><td>每活过一次 Minor GC 年龄加一，达到阈值进老年代</td><td><code>-XX:MaxTenuringThreshold</code>，默认 15</td><td>设太小导致短命对象被过早搬到老年代，老年代涨得飞快</td></tr>
+            <tr><td>大对象直连</td><td>对象超过阈值，跳过新生代直接进老年代，避免在 Survivor 之间反复复制</td><td><code>-XX:PretenureSizeThreshold</code>；G1 里是超过 Region 一半的 Humongous 对象</td><td>大数组、大 byte 缓冲频繁创建会直接推高老年代和 Full GC 频率</td></tr>
+            <tr><td>动态年龄判定</td><td>Survivor 中同一年龄的对象累计超过其空间一半，该年龄及以上全部立即晋升，<strong>不等阈值</strong></td><td>无直接开关</td><td>这是「明明阈值 15 却一上来就进老年代」的常见原因，很多人误以为是参数没生效</td></tr>
+            <tr><td>空间不足晋升</td><td>Survivor 装不下本次存活对象，直接放老年代</td><td>Survivor 比例、新生代大小</td><td>新生代或 Survivor 太小会让晋升速率飙升，老年代被短命对象填满</td></tr>
+        </tbody>
+    </table>
+    <p>看懂这张图，就能解释一类很常见的现象：<strong>老年代增长速度异常</strong>，往往不是老年代自己的问题，而是新生代太小或 Survivor 太小，本该在新生代死掉的对象被挤进了老年代。这个指标叫晋升速率，它比 Full GC 次数更早暴露问题。</p>
+
+<div class="echart-container" id="java-version-support"></div>
+
+    <h2>元空间取代永久代：为什么换，以及它为什么会满</h2>
+    <p>JDK 8 之前类元数据放在永久代，它是堆的一部分，受 <code>-XX:MaxPermSize</code> 限制。这个设计有两个硬伤：一是大小必须在启动时定死，而类元数据的用量很难预估，配少了报 <code>PermGen space</code>，配多了白占堆；二是它和堆共用一套回收逻辑，回收时机受堆的回收节奏牵制。元空间改用<strong>本地内存</strong>，默认不设上限，按需向操作系统申请，从此这类报错在大部分场景下消失了。</p>
+    <p>但「默认不限」是把内存溢出换成了另一种形态：不再报 <code>Metaspace</code>，而是整个进程的内存被撑爆，在容器里就是无声的 <code>OOMKilled</code>——JVM 连一行日志都来不及打。所以生产上<strong>仍然应该设置 <code>-XX:MaxMetaspaceSize</code></strong>，让它以一个能看见的 Java 异常暴露出来，而不是以进程消失的方式暴露。</p>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">元空间 OOM 的成因几乎从来不是「类太多」</div>
+        <p>一个业务服务加载的类数量启动后就收敛了。持续上涨只有三种来源：<strong>运行期动态生成类</strong>（反射代理、CGLIB 子类、脚本引擎、表达式动态编译，每生成一个就多一份元数据）；<strong>反复热部署</strong>，每次部署新建一个类加载器，旧的没被回收；<strong>类加载器泄漏</strong>，加载器被静态字段或线程池中的长生命周期线程持有，它加载的所有类就永远不能卸载。判定方法：同一个类名下出现多个不同加载器的副本，就是泄漏。类的卸载条件是<strong>整个类加载器不可达</strong>，单个类无法单独卸载，这是最关键的一点。</p>
+    </div>
+
+    <h2>GC 的两个基础问题：怎么找垃圾，怎么回收</h2>
+    <p>所有收集器的差异都建立在这两个问题的答案上。<strong>第一个问题是判定存活</strong>。引用计数法看起来简单，但它解决不了循环引用：两个对象互相引用、外界都不再持有它们，计数都不为零，永远回收不掉。所以 HotSpot 用<strong>可达性分析</strong>——从一组确定活着的根出发遍历引用图，遍历不到的就是垃圾。这组根叫 GC Roots：正在执行的方法栈帧里的局部变量与参数、类的静态字段、运行时常量池里的引用、JNI 全局引用、被 <code>synchronized</code> 持有的锁对象、以及 JVM 内部引用如基本类型对应的 Class 对象。</p>
+    <p>注意其中最容易被忽略的一条：<strong>静态字段是 GC Root</strong>。一个 <code>static Map</code> 只往里放不往外删，里面的对象永远可达，这就是最高频的内存泄漏形态，而它在代码审查里长得完全像正常代码。</p>
+    <p><strong>第二个问题是怎么把死对象的空间拿回来</strong>。三种基础算法各有取舍，现代收集器都是把它们按区域混搭使用。</p>
+    <table>
+        <thead>
+            <tr><th>算法</th><th>怎么做</th><th>是否移动对象</th><th>碎片</th><th>空间开销</th><th>耗时与什么成正比</th><th>用在哪</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>标记清除</td><td>标记存活，直接把死对象所在空间标记为可用</td><td>否</td><td>严重，大对象可能明明总空闲够却分配不到</td><td>无额外</td><td>堆中对象总数</td><td>CMS 老年代、并发标记阶段</td></tr>
+            <tr><td>标记整理</td><td>标记存活后把它们向一端压紧，更新所有指向它们的引用</td><td>是</td><td>无</td><td>无额外</td><td>存活对象数 + 引用更新量</td><td>老年代 Full GC、G1 的兜底回收</td></tr>
+            <tr><td>复制</td><td>把存活对象整体搬到另一块空闲区，原区一次性清空</td><td>是</td><td>无</td><td>需预留一块空闲区</td><td><strong>仅存活对象数</strong>，死对象零成本</td><td>新生代，因为存活率低</td></tr>
+        </tbody>
+    </table>
+    <p>移动对象带来一个绕不开的约束：<strong>对象地址变了，所有指向它的引用都必须同步修正</strong>，这件事无法和正在运行的业务线程并发安全地完成（除非引入读屏障与转发指针，这正是 ZGC 与 Shenandoah 的做法）。这就是 STW 的根源。</p>
+
+    <h2>四种引用类型与它们的真实用途</h2>
+    <p>引用强度决定了对象在什么条件下会被回收。这四种不是面试题，其中两种就藏在你每天用的 <code>ThreadLocal</code> 和缓存里。</p>
+    <table>
+        <thead>
+            <tr><th>类型</th><th>回收时机</th><th>真实用途</th><th>坑</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>强引用</td><td>只要可达就绝不回收</td><td>普通赋值，占代码里 99.9%</td><td>集合、静态字段、监听器列表里的强引用是泄漏主因</td></tr>
+            <tr><td>软引用</td><td>内存不足时回收，时机由 JVM 决定</td><td>理论上适合做缓存</td><td><strong>实际上不适合</strong>：堆宽松时一直不回收像泄漏，堆紧张时可能整批清空导致缓存命中率归零、回源请求打穿下游，而且延长回收过程。用带容量上限和过期策略的缓存实现替代</td></tr>
+            <tr><td>弱引用</td><td>下一次 GC 一定回收，不管内存够不够</td><td><code>ThreadLocalMap</code> 的 key、<code>WeakHashMap</code>、各种规范化缓存</td><td>只有 key 是弱引用，<strong>value 仍是强引用</strong>，这正是 <code>ThreadLocal</code> 在线程池里必须 <code>remove</code> 的原因</td></tr>
+            <tr><td>虚引用</td><td>无法通过它访问对象，仅在对象被回收时收到通知</td><td>堆外内存释放（<code>DirectByteBuffer</code> 的 <code>Cleaner</code>）、资源清理</td><td>不要用 <code>finalize</code> 替代，它的执行时机不确定且会拖慢回收</td></tr>
+        </tbody>
+    </table>
+    <pre><code class="language-java">// ThreadLocal 在线程池下为什么必须 remove：
+// ThreadLocalMap 的 Entry 继承 WeakReference，key 弱引用指向 ThreadLocal 实例，
+// 但 value 是强引用。ThreadLocal 实例被回收后，key 变 null，value 却还挂在
+// 线程的 ThreadLocalMap 上；而线程池里的线程是复用的、几乎不销毁的，
+// 于是 value 指向的对象链永远无法回收 —— 这是最典型的线程池内存泄漏。
+private static final ThreadLocal&lt;TraceContext&gt; CTX = new ThreadLocal&lt;&gt;();
+
+public void handle(Request req) {
+    CTX.set(TraceContext.from(req));
+    try {
+        process(req);
+    } finally {
+        CTX.remove();   // 必须在 finally 里，异常路径同样要清
+    }
+}
+
+// 更隐蔽的一种：value 里放了大对象，而 remove 漏在了 return 之后
+// 正确的判断标准是：set 和 remove 必须在同一个 try-finally 结构里成对出现。</code></pre>
+
+    <h2>STW 与安全点：停顿到底来自哪里</h2>
+    <p>GC 必须停顿，是因为可达性分析要求引用关系在分析期间保持一致。但 JVM 无法在任意指令处挂起线程——它需要线程停在一个「引用关系已知、栈上数据结构完整」的位置，这个位置叫<strong>安全点</strong>。安全点由编译器插在方法返回、循环回边、异常抛出、native 调用返回等处，线程执行到那里会轮询一个全局标志，发现置位就主动挂起。</p>
+    <p>问题就出在这里：<strong>如果一段代码里没有安全点，其他线程只能等它。</strong> 典型场景是 JIT 编译的可数循环（索引为 <code>int</code> 且边界确定）——编译器认为它会很快结束，把回边上的安全点轮询优化掉了。如果这个循环实际要跑几千万次，那么一次 GC 的真实停顿会被拉长到这个循环跑完为止。</p>
+    <div class="mermaid">
+sequenceDiagram
+    participant A as 业务线程 A
+    participant B as 业务线程 B 正在跑长循环
+    participant V as VM Thread
+    participant G as GC 工作线程
+    V->>V: 决定发起回收 置位全局安全点标志
+    A->>A: 下一个轮询点检查到标志
+    A-->>V: 立即挂起 已进入安全点
+    Note over B: 可数循环的回边轮询被 JIT 优化掉了<br/>必须把整个循环执行完才会检查标志
+    B-->>V: 数百毫秒后才到达安全点
+    V->>G: 所有线程就位 开始标记与回收
+    G-->>V: 回收结束
+    V->>A: 恢复执行
+    V->>B: 恢复执行
+    Note over A,B: 实际停顿 等于 最慢线程到达安全点的耗时 加上 真正回收的耗时
+</div>
+    <p>由此推出两条实用结论。一是遇到「回收时间很短但停顿很长」，要去看到达安全点的耗时而不是调收集器；二是除了 GC，还有很多操作需要 STW：抓线程栈、导出堆快照、偏向锁撤销、类重定义，所以<strong>诊断动作本身也会造成停顿</strong>，在高峰期对着线上进程连续导出堆快照可能直接把接口打超时。</p>
+    <p>并发领域的 <code>volatile</code>、happens-before、内存屏障属于 Java 内存模型（JMM），它讨论的是多线程间可见性与重排序，和这里讲的运行时数据区是两个不同层面的「内存模型」，别混为一谈——这也是面试里最常被问混的一对概念。</p>
+
+    <h2>类加载：五个阶段、双亲委派，与它被打破的三种场景</h2>
+    <p>类不是一次性全部加载的，用到才加载。五个阶段里最容易被忽略的是<strong>准备</strong>和<strong>初始化</strong>的区别：准备阶段给静态变量分配内存并赋<strong>零值</strong>，初始化阶段才执行 <code>static</code> 代码块和静态赋值语句给出真正的值。这个差异能解释一类诡异的 <code>null</code>：静态字段被另一个类的静态初始化在更早的时机读到了。</p>
+    <table>
+        <thead>
+            <tr><th>阶段</th><th>做什么</th><th>可观察到的行为</th><th>相关报错</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>加载</td><td>由类加载器读取字节流，生成 Class 对象</td><td>能用 <code>-Xlog:class+load</code> 打印每个类是谁加载的、从哪个 jar 来</td><td><code>ClassNotFoundException</code>（找不到）、<code>NoClassDefFoundError</code>（曾经找到过但初始化失败）</td></tr>
+            <tr><td>验证</td><td>校验字节码合法性与类型安全</td><td>字节码增强工具改错了会在这里炸</td><td><code>VerifyError</code></td></tr>
+            <tr><td>准备</td><td>静态变量分配内存并赋零值；<code>static final</code> 的编译期常量在此直接赋值</td><td>常量会被内联到使用方，改了常量不重新编译使用方等于没改</td><td>无</td></tr>
+            <tr><td>解析</td><td>符号引用转直接引用，部分可延迟到首次使用</td><td>接口方法可以延迟到运行期才解析</td><td><code>NoSuchMethodError</code>、<code>IncompatibleClassChangeError</code>，典型是依赖版本冲突</td></tr>
+            <tr><td>初始化</td><td>执行 <code>&lt;clinit&gt;</code>：静态代码块与静态赋值，JVM 保证线程安全且只执行一次</td><td>静态内部类的懒加载单例就是靠这条保证</td><td><code>ExceptionInInitializerError</code>，常由静态块里读配置失败引起</td></tr>
+        </tbody>
+    </table>
+    <p><strong>双亲委派</strong>的规则是：收到加载请求先交给父加载器，父加载不了自己才加载。它保证了核心类库不会被应用代码替换掉——你写一个 <code>java.lang.String</code> 放进 classpath 也没用，请求会一路委派到 Bootstrap 拿到真正的 String。但这条规则在三类场景下必须被打破。</p>
+    <div class="mermaid">
+flowchart TB
+    subgraph L["双亲委派 · 向上委派 向下加载"]
+        CUS["自定义 ClassLoader"]
+        APP["Application ClassLoader<br/>加载 classpath 与应用 jar"]
+        PLAT["Platform ClassLoader<br/>JDK 9 起取代 Extension"]
+        BOOT["Bootstrap ClassLoader<br/>C++ 实现 加载核心模块"]
+    end
+    CUS --> APP
+    APP --> PLAT
+    PLAT --> BOOT
+    subgraph BR["必须打破它的三种场景"]
+        SPI["SPI 服务发现<br/>核心库里的接口 需要加载应用侧实现<br/>靠线程上下文类加载器反向委派"]
+        MOD["OSGi 与模块化容器<br/>同级模块之间平级委派<br/>形成网状而非树状"]
+        HOT["热部署与多应用隔离<br/>每次加载新建一个加载器<br/>丢弃旧加载器以替换实现"]
+    end
+    BOOT -.-> SPI
+    APP -.-> MOD
+    APP -.-> HOT
+</div>
+    <p>第三种场景直接关联前面说的元空间泄漏：热部署每次新建加载器，只要旧加载器被任何一个 GC Root 间接持有（最常见的是线程池里的线程、注册了但没注销的监听器、第三方库的静态缓存），它加载的全部类就都卸载不掉，元空间单向上涨。这也是「本地开发反复热部署一会儿就卡死」的真正原因。</p>
+
+    <h2>JIT 编译与预热：为什么刚发布的实例不能满流量</h2>
+    <p>Java 代码先解释执行，同时统计方法调用次数和循环回边次数。达到阈值的方法被 C1 快速编译成机器码，更热的方法进 C2 做深度优化。这套<strong>分层编译</strong>的取舍是：C1 编译快、优化浅，让代码尽早脱离解释执行；C2 编译慢、优化深，只投给真正的热点。C2 的关键优化有两个——<strong>方法内联</strong>把被调方法体直接嵌进调用方，消掉调用开销并为后续优化打开视野（这也是为什么方法体过大会失去内联资格，它有字节码大小限制）；<strong>逃逸分析</strong>判定一个对象是否只在方法内部使用，如果不逃逸就可以做标量替换、把字段拆成局部变量放在栈上，对象根本不会在堆里出现，也就不产生任何 GC 压力。</p>
+    <pre><code class="language-bash"># 观察预热过程：看类加载与编译到底花在哪
+# 1) 打印每个类由哪个加载器从哪个来源加载，排查 jar 冲突与重复加载
+java -Xlog:class+load=info:file=/tmp/classload.log -jar app.jar
+
+# 2) 打印编译事件。输出里 % 表示进入 OSR 栈上替换，n 表示 native 方法，
+#    s 表示 synchronized，! 表示方法有异常处理器；
+#    同一个方法反复出现 made not entrant 说明发生了去优化重编译
+java -XX:+UnlockDiagnosticVMOptions -XX:+PrintCompilation -jar app.jar
+
+# 3) 验证逃逸分析的效果：关掉它再跑同一个基准，对比分配速率
+java -XX:-DoEscapeAnalysis -jar app.jar
+
+# 4) 代码缓存用满会导致编译被关闭、性能断崖下跌，压测长跑要盯这个指标
+jcmd &lt;pid&gt; Compiler.codecache</code></pre>
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">预热是容器化之后最容易忽略的性能问题</div>
+        <p>实例刚启动的几十秒里，热点方法还没被 C2 编译、连接池还没建满、本地缓存还是空的、类还在陆续加载。这时候如果就绪探针一通过负载均衡就把它和老实例等权重对待，新实例的响应时间可能是稳定期的数倍，表现为<strong>每次发布都有一波超时和错误率尖刺</strong>，而监控上看 CPU 和内存都正常。解法是就绪探针里带上预热请求，或在网关侧对新实例做渐进放量。把这个问题归因于「JVM 慢」是错的，它是可以工程化解决的。</p>
+    </div>
+
+    <h2>反模式与最容易踩的坑</h2>
+    <table>
+        <thead>
+            <tr><th>反模式</th><th>为什么错</th><th>正确做法</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>看到 OOM 就加 <code>-Xmx</code></td><td>如果是泄漏，加堆只是把爆炸时间推后，而且让每次 Full GC 更慢、heap dump 更大更难分析</td><td>先判断 Full GC 后老年代是否回落；不回落就是泄漏，加堆无用</td></tr>
+            <tr><td>用 <code>System.gc()</code> 「释放内存」</td><td>它触发的是 Full GC，会带来一次完整 STW，且不保证真的回收任何东西</td><td>生产环境加 <code>-XX:+DisableExplicitGC</code>；注意堆外内存的回收依赖它，禁用前先确认没有依赖</td></tr>
+            <tr><td>用 <code>finalize</code> 释放资源</td><td>执行时机完全不确定，由一个优先级很低的单线程处理，队列堵住会直接导致内存泄漏；已被标记废弃</td><td><code>try-with-resources</code> 显式关闭，需要兜底用 <code>Cleaner</code></td></tr>
+            <tr><td><code>static Map</code> 当缓存</td><td>静态字段是 GC Root，里面的对象永远可达，只进不出</td><td>用带容量上限与过期策略的缓存库，或显式做淘汰</td></tr>
+            <tr><td>把 <code>-XX:MaxTenuringThreshold</code> 调小「减少 Survivor 复制开销」</td><td>短命对象被提前推进老年代，老年代增长速率飙升，Full GC 变频繁</td><td>先看晋升速率，多数情况下该调的是新生代大小</td></tr>
+            <tr><td>字符串拼接用 <code>+</code> 放在循环里</td><td>每轮新建一个 <code>StringBuilder</code> 与一个 <code>String</code>，制造大量短命对象推高 Minor GC 频率</td><td>循环外复用一个 <code>StringBuilder</code></td></tr>
+            <tr><td>把 <code>-Xss</code> 调大来解决 <code>StackOverflowError</code></td><td>掩盖了递归缺少出口这个真 bug，并且线程数一多就吃掉大量内存，转而触发无法创建线程</td><td>先读栈轨迹里重复的那一段，修递归逻辑</td></tr>
+            <tr><td>认为「JVM 内存模型」就是内存分区</td><td>JMM 讨论的是多线程可见性与重排序，与运行时数据区是两件事</td><td>说清是哪一个，避免沟通时互相误解</td></tr>
+        </tbody>
+    </table>
+    <div class="callout callout-danger">
+        <div class="callout-icon">❌</div>
+        <div class="callout-title">最容易踩的坑</div>
+        <ul>
+            <li>只看 <code>OutOfMemoryError</code> 不看后缀，把 <code>unable to create new native thread</code> 当堆不足处理，加堆后故障来得更快。</li>
+            <li>元空间不设 <code>MaxMetaspaceSize</code>，元数据无声涨到容器内存上限，进程被 <code>OOMKilled</code>，连一行 Java 异常都没留下。</li>
+            <li>以为单个类能被卸载。类卸载的前提是<strong>整个类加载器不可达</strong>，一个静态引用就能钉住整批类。</li>
+            <li>用软引用做缓存，压测时表现正常，线上内存一紧张缓存整批失效，回源流量瞬间打穿数据库。</li>
+            <li><code>ThreadLocal</code> 在线程池里 <code>set</code> 后不 <code>remove</code>。key 是弱引用但 <strong>value 是强引用</strong>，线程复用导致 value 永不释放，还会串到下一个请求读到上一个请求的数据。</li>
+            <li>把 <code>remove</code> 写在业务逻辑末尾而不是 <code>finally</code>，一抛异常就漏清。</li>
+            <li>遇到长停顿直接换收集器，没看「到达安全点耗时」。长循环里缺少安全点造成的停顿，换任何收集器都没用。</li>
+            <li>高峰期对线上进程连续导出堆快照。dump 本身要 STW，几 GB 的堆足以把接口全部打超时。</li>
+            <li><code>static final</code> 常量被编译期内联到调用方，只改常量所在类不重新编译使用方，线上跑的还是旧值。</li>
+            <li>在 <code>static</code> 代码块里读远程配置或连数据库，失败后抛 <code>ExceptionInInitializerError</code>，而真实原因藏在 cause 里，日志里只看到 <code>NoClassDefFoundError</code>。</li>
+            <li>本地反复热部署越来越卡，以为是 IDE 问题，其实是旧类加载器泄漏把元空间堆满了。</li>
+            <li>发布后必现一波超时，归因为「Java 启动慢」而不做流量预热，每次发布都在重复踩同一个 JIT 预热坑。</li>
+        </ul>
+    </div>
+</article>
+
+                <nav class="article-nav">
+<span></span>
+<a class="nav-next" href="java17-springboot3/"><span class="nav-label">下一篇 →</span><span class="nav-title">Java 17+ 与 Spring Boot 3</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · 后端与编程语言</h2><ul class="related-list"><li><a class="side-post" href="./">Java 总览</a></li><li><a class="side-post" href="java17-springboot3/">Java 17+ 与 Spring Boot 3</a></li><li><a class="side-post" href="spring-core/">Spring Boot 核心原理</a></li><li><a class="side-post" href="spring-cloud/">Spring Cloud 微服务全家桶</a></li><li><a class="side-post" href="orm/">MyBatis 与 JPA 实战</a></li><li><a class="side-post" href="jvm-tuning/">JVM 调优与内存管理</a></li></ul></aside>
+            </main>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+
+    <button class="back-to-top" title="回到顶部">↑</button>
+
+        <script defer src="../../vendor/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script>
+        function initCharts() {
+            if (typeof echarts === 'undefined') {
+                setTimeout(initCharts, 100);
+                return;
+            }
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var textColor = isDark ? '#c9d1d9' : '#333';
+            var splitColor = isDark ? '#30363d' : '#e8e8e8';
+
+            var el = document.getElementById('java-version-support');
+            if (el) {
+                var chart = echarts.init(el);
+                var option = {
+                    title: { text: 'Java LTS 版本支持周期', left: 'center', textStyle: { color: textColor, fontSize: 15, fontWeight: 600 } },
+                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                    legend: { top: 30 },
+                    grid: { left: '8%', right: '5%', bottom: '10%', top: '20%', containLabel: true },
+                    xAxis: {
+                        type: 'category',
+                        data: ['Java 8', 'Java 11', 'Java 17', 'Java 21', 'Java 25'],
+                        axisLabel: { color: textColor, fontSize: 11 },
+                        axisLine: { lineStyle: { color: splitColor } }
+                    },
+                    yAxis: {
+                        type: 'value',
+                        max: 10,
+                        axisLabel: { color: textColor },
+                        splitLine: { lineStyle: { color: splitColor } }
+                    },
+                    series: [
+                        {
+                            name: '官方支持年限',
+                            type: 'bar',
+                            data: [8, 8, 8, 8, 8],
+                            itemStyle: { borderRadius: [4, 4, 0, 0], color: '#ef4444' }
+                        },
+                    ]
+                };
+                chart.setOption(option);
+                window.addEventListener('resize', function() { chart.resize(); });
+            }
+        }
+        initCharts();
+    </script>
+    
+
+    <script>window.SITE_BASE = "../../";window.SITE_GROUP = "programming";</script>
+    <script src="../../js/main.js?v=2" defer></script>
+</body>
+</html>

@@ -41,10 +41,10 @@
     <meta name="twitter:description" content="讲清 Terraform state 存的是什么（资源真实 ID、属性、依赖关系与 provider 元数据）、丢了会发生什么，以及为什么远端后端是唯一可接受的生产做法；对照 S3 加 DynamoDB、Terraform Cloud、GCS、OSS 加 TableStore 在锁、版本历史、加密与权限粒度上的差异；用时序图解释状态锁如何拦住并发 apply 以及 force-unlock 的真实风险；逐条给出 state mv、state rm、import、replace 的用法与误用后果；说明代码重构必须配 moved 块、按爆炸半径拆分 state 的原则，以及 workspace 为什么不适合做环境隔离。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
-    <meta property="article:section" content="运维">
+    <meta property="article:section" content="运维与云原生">
     <meta property="article:tag" content="IaC">
         <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Terraform State 管理：远端后端、锁与拆分","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"讲清 Terraform state 存的是什么（资源真实 ID、属性、依赖关系与 provider 元数据）、丢了会发生什么，以及为什么远端后端是唯一可接受的生产做法；对照 S3 加 DynamoDB、Terraform Cloud、GCS、OSS 加 TableStore 在锁、版本历史、加密与权限粒度上的差异；用时序图解释状态锁如何拦住并发 apply 以及 force-unlock 的真实风险；逐条给出 state mv、state rm、import、replace 的用法与误用后果；说明代码重构必须配 moved 块、按爆炸半径拆分 state 的原则，以及 workspace 为什么不适合做环境隔离。","url":"https://www.yijunjun.asia/devops/iac/state/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/iac/state/"},"articleSection":"运维"}</script>
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "IaC 基础设施即代码总览", "item": "https://www.yijunjun.asia/devops/iac/"}, {"position": 4, "name": "Terraform 状态管理", "item": "https://www.yijunjun.asia/devops/iac/state/"}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "IaC 基础设施即代码总览", "item": "https://www.yijunjun.asia/devops/iac/"}, {"position": 4, "name": "Terraform 状态管理", "item": "https://www.yijunjun.asia/devops/iac/state/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Terraform state 丢了会发生什么，怎么救？", "acceptedAnswer": {"@type": "Answer", "text": "Terraform 会认为自己管的资源全都不存在，下一次 plan 变成全量新建。结果分两种：资源名唯一的（S3 桶、IAM 角色）会因为撞名报错，而能重复创建的（ECS 实例、安全组）会真的给你造出一整套重复资源，账单和流量都会出问题。救的顺序是：先从后端的版本历史或备份取回最近一份 state，取不回来就只能对着云控制台逐个 terraform import，大环境下这是几天的工作量。所以后端必须开版本控制，并且定期做一次真正的恢复演练。"}}, {"@type": "Question", "name": "state 文件能提交到 Git 吗？", "acceptedAnswer": {"@type": "Answer", "text": "不能，两个理由都是硬伤。一是 state 里会明文出现敏感属性：数据库初始密码、生成的私钥、访问密钥、连接串，标记了 sensitive 只是不在命令行输出里打印，写进 state 时照旧是明文；进了 Git 就等于永久泄露，改密码也删不掉历史。二是 Git 没有排他锁，两个人同时 apply 再各自提交，冲突落在一个巨大的 JSON 上，合出来的 state 通常已经损坏。正确做法是远端后端加对象加密加严格的访问策略，并把 tfstate 与 tfstate.backup 写进 gitignore。"}}, {"@type": "Question", "name": "force-unlock 什么时候能用？", "acceptedAnswer": {"@type": "Answer", "text": "只有在确认持锁进程已经死亡时才能用。正确顺序是：先看报错里的锁信息，它会给出持锁者、操作类型、时间和锁 ID；再去确认那个人或那条流水线是不是真的已经结束；确认之后才用对应的锁 ID 执行解锁，不要用通配或猜的 ID。风险在于如果对方其实还在 apply，解锁后你的 apply 会和它并发写同一份 state，最终 state 只保留后写入的那份，另一批已经创建出来的真实资源就此脱管，变成没人知道的孤儿资源。"}}, {"@type": "Question", "name": "改了资源名或把资源移进 module，Terraform 说要删了重建怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "因为 Terraform 认的是 state 里的资源地址，地址变了就等于旧的消失、新的出现。处理方式有两种：推荐在代码里写 moved 块，声明旧地址到新地址的映射，plan 时会显示为移动而不是替换，这份声明还能留在仓库里被评审；老版本或跨 state 的场景用 terraform state mv 手工搬，但它是命令式操作，没有评审痕迹。无论哪种，动手前先备份 state，并且一定要看 plan 结果确认是零新增零销毁。"}}, {"@type": "Question", "name": "一个 state 管所有资源有什么问题，该怎么拆？", "acceptedAnswer": {"@type": "Answer", "text": "问题有三个：plan 要刷新全部资源，规模上去后每次几分钟甚至十几分钟；锁是整份 state 的，网络组改 DNS 会把应用组的发布卡住；爆炸半径等于整个环境，一次误操作能毁掉全部。拆分按三条线：变更频率（网络与账号基座很少动，应用层天天动）、爆炸半径（数据库与 VPC 单独隔离）、团队归属（谁负责谁持有）。拆完跨 state 取值优先用 data 源直接查真实资源，少用 terraform_remote_state，后者会让下游依赖上游的输出结构，形成隐式耦合。"}}, {"@type": "Question", "name": "用 workspace 做环境隔离可以吗？", "acceptedAnswer": {"@type": "Answer", "text": "不建议。workspace 的所有环境共用同一份 backend 配置、同一套代码和同一个凭证上下文，你唯一的安全边界就是当前选中的是哪个 workspace，一条 select 忘了敲就把 apply 打到生产上，而这种事故在命令行里没有任何提示。而且多个 workspace 的 state 放在同一个后端同一个前缀下，权限无法按环境收紧。推荐每个环境一个目录加一份独立的 backend 配置，甚至独立的账号，环境差异靠 tfvars 表达。workspace 更适合临时的评审环境或短期实验。"}}]}</script>
@@ -61,7 +61,7 @@
             <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
                 <span></span><span></span><span></span>
             </button>
-            <nav class="header-nav" aria-label="分组导航"><a href="../../../backend/">后端</a><a href="../../../database/">数据库</a><a href="../../../ai/">AI</a><a href="../../../devops/">运维</a><a href="../../../frontend/">前端</a><a href="../../../tools/">工具</a><a href="../../../game/">游戏</a><a href="../../../os/">系统</a><a href="../../../other/">更多</a></nav>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops" class="active">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
             <div class="header-search">
                 <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                 <input type="search" id="search-input" placeholder="搜索...">
@@ -76,7 +76,7 @@
 
     <div id="main-area">
         <div class="breadcrumbs">
-<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">运维</a><span class="separator">/</span><a href="../index.html">IaC 基础设施即代码总览</a><span class="separator">/</span><span>Terraform 状态管理</span>
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">运维与云原生</a><span class="separator">/</span><a href="../index.html">IaC 核心模型与工程纪律：声明式、状态与漂移</a><span class="separator">/</span><span>Terraform 状态管理</span>
 </div>
 
         <div id="content-wrapper" class="article-layout">
@@ -505,7 +505,7 @@ resource "aws_instance" "app" {
     <script defer src="../../../vendor/highlight.min.js"></script>
 
     
-    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "iac";</script>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "devops";</script>
     <script src="../../../js/main.js?v=2" defer></script>
 </body>
 </html>

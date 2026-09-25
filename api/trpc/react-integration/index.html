@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>React 集成：查询缓存、失效与乐观更新 - tRPC - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+    <meta name="description" content="tRPC 的 React 集成本质是 TanStack Query 的一层包装，真正要理解的是它的缓存模型。本文讲清 queryKey 的构成、staleTime 与 gcTime 的区别与各自默认值、后台重新获取的四个触发条件、mutation 成功后精确失效与过度失效的取舍、乐观更新从 onMutate 快照到 onError 回滚再到 onSettled 失效的完整写法、游标分页与无限滚动的配合、Next.js 下的预取与 hydration，以及 batching 造成的慢接口拖累整批等常见性能问题。">
+    <meta name="keywords" content="tRPC,React 集成与实践,技术博客,资深码农">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/api/trpc/react-integration/">
+    <meta property="og:title" content="React 集成：查询缓存、失效与乐观更新 - tRPC - 资深码农">
+    <meta property="og:description" content="tRPC 的 React 集成本质是 TanStack Query 的一层包装，真正要理解的是它的缓存模型。本文讲清 queryKey 的构成、staleTime 与 gcTime 的区别与各自默认值、后台重新获取的四个触发条件、mutation 成功后精确失效与过度失效的取舍、乐观更新从 onMutate 快照到 onError 回滚再到 onSettled 失效的完整写法、游标分页与无限滚动的配合、Next.js 下的预取与 hydration，以及 batching 造成的慢接口拖累整批等常见性能问题。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/api/trpc/react-integration/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="React 集成：查询缓存、失效与乐观更新 - tRPC">
+    <meta name="twitter:description" content="tRPC 的 React 集成本质是 TanStack Query 的一层包装，真正要理解的是它的缓存模型。本文讲清 queryKey 的构成、staleTime 与 gcTime 的区别与各自默认值、后台重新获取的四个触发条件、mutation 成功后精确失效与过度失效的取舍、乐观更新从 onMutate 快照到 onError 回滚再到 onSettled 失效的完整写法、游标分页与无限滚动的配合、Next.js 下的预取与 hydration，以及 batching 造成的慢接口拖累整批等常见性能问题。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "staleTime 和 gcTime 有什么区别？", "acceptedAnswer": {"@type": "Answer", "text": "两个参数管的是完全不同的事。staleTime 决定数据多久之后被视为过期，默认是 0 毫秒，也就是拿到数据的下一刻就已经过期，于是任何重新挂载或窗口聚焦都会触发一次后台请求。gcTime 决定没有任何组件订阅的缓存条目多久后被回收，默认 5 分钟，它只影响缓存能不能被复用，不影响是否发请求。绝大多数重复请求的抱怨都来自没设 staleTime，把它设成 30 秒到 5 分钟能立刻消掉大部分冗余流量，而 gcTime 一般不需要动。"}}, {"@type": "Question", "name": "mutation 之后该失效哪些 query？", "acceptedAnswer": {"@type": "Answer", "text": "原则是失效范围要刚好覆盖被这次写操作影响的数据，不多也不少。tRPC 的 utils 对象是按 router 路径分层的，可以精确到单个 procedure 加单个输入，也可以粗到整个 router。过度失效的代价非常直观：在 utils 根上调一次失效，页面上十几个活跃 query 会同时重新拉取，一次点赞变成十几个请求，还可能触发 batch 里的慢接口。反过来失效不足会让界面显示旧数据。实践做法是显式列出受影响的两三个 query，并在 code review 里盯住任何全局失效的写法。"}}, {"@type": "Question", "name": "乐观更新为什么必须写回滚？", "acceptedAnswer": {"@type": "Answer", "text": "因为乐观更新是先改本地缓存再发请求，如果请求失败而没有回滚，界面会长期停留在一个服务端并不认可的状态，用户以为操作成功了。完整的正确写法是四步：onMutate 里先取消正在进行的相关请求，用 getData 保存快照，再用 setData 写入预期结果并把快照 return 出去；onError 里用这个快照 setData 回滚并提示失败；onSettled 里无论成功失败都做一次失效，让服务端数据成为最终真相。缺了 onError 就是埋一个数据不一致的雷，缺了 onSettled 则会让本地计算结果与服务端的细微差异永久留存。"}}, {"@type": "Question", "name": "为什么页面上会出现大量重复请求？", "acceptedAnswer": {"@type": "Answer", "text": "最常见的原因有三个。一是 staleTime 保持默认 0，每次组件重挂载、窗口聚焦、网络恢复都会重新拉取，路由切换来回几次就是十几个请求。二是 queryKey 里带了每次渲染都新建的对象或数组，导致 key 不稳定，缓存永远命中不了。三是把 mutation 之后的失效写在了 utils 根上，一次写操作引发全页刷新。排查方式是打开浏览器网络面板按 procedure path 分组看重复次数，再配合 React Query 的开发者工具看每个 query 的 key 与状态。"}}, {"@type": "Question", "name": "batching 在 React 集成里会带来什么问题？", "acceptedAnswer": {"@type": "Answer", "text": "httpBatchLink 会把同一事件循环 tick 内发起的所有查询合并成一个 HTTP 请求，这在请求数上是优化，但在体验上可能是负优化：整批的完成时间等于最慢的那个 procedure，一个 800 毫秒的报表查询会让同批的三个 20 毫秒查询一起等 800 毫秒，页面上四块内容同时卡住。此外整批响应的 HTTP 状态码通常是 200，按状态码做的监控会漏报错误。解决方式是用 splitLink 把明显慢的 procedure 分流到不合并的链路上，并把监控打点下沉到 procedure path 粒度。"}}, {"@type": "Question", "name": "无限滚动该用 offset 还是 cursor 分页？", "acceptedAnswer": {"@type": "Answer", "text": "用游标分页。offset 分页在数据频繁增删的列表上会产生重复项和漏项：你翻到第二页时第一页插入了新记录，原本第 20 条会被挤到第 21 条，于是第二页又把它返回一次。游标分页以某条记录的唯一有序值为锚点向后取，天然不受插入影响，深翻页时数据库也不需要跳过前面的大量行。在 tRPC 里服务端的 input 接受可空的 cursor，多取一条判断是否还有下一页并返回 nextCursor，客户端用 useInfiniteQuery 配 getNextPageParam 消费。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api" class="active">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">接口、协议与安全</a><span class="separator">/</span><a href="../index.html">tRPC 的端到端类型安全：原理与适用边界</a><span class="separator">/</span><span>React 集成与实践</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">React 集成：查询缓存、失效与乐观更新</h1>
+                    </header>
+                    <div class="article-content">
+
+<p><code>@trpc/react-query</code> 这个包名已经把答案写出来了：<strong>tRPC 的 React 集成本质上是 TanStack Query 的一层类型化包装</strong>。它做的事就是把 <code>trpc.user.byId.useQuery(input)</code> 翻译成一个 <code>useQuery({ queryKey: [['user','byId'], { input, type: 'query' }], queryFn })</code>。所以这一篇几乎所有内容都不是 tRPC 特有的，你遇到的问题也基本都是 Query 缓存模型的问题——但正因为被包了一层，很多人从没读过 Query 的文档，于是踩遍所有坑。</p>
+
+<div class="mermaid">
+flowchart TB
+    subgraph C["组件层"]
+        H1["trpc.post.list.useQuery"]
+        H2["trpc.post.create.useMutation"]
+        H3["trpc.useUtils 取到失效与读写缓存的句柄"]
+    end
+    subgraph Q["TanStack Query 层"]
+        K["queryKey 由 path 加 input 生成"]
+        CA["QueryCache 按 key 存数据与时间戳"]
+        OB["观察者 订阅同一 key 的组件共享一条 query"]
+    end
+    subgraph T["tRPC 客户端层"]
+        LK["link 链 loggerLink splitLink httpBatchLink"]
+    end
+    H1 --> K
+    H2 --> LK
+    H3 --> CA
+    K --> CA
+    CA --> OB
+    CA --> LK
+    LK --> S["服务端 procedure"]
+</div>
+
+<h2>缓存模型：queryKey、staleTime 与 gcTime</h2>
+
+<p>三个概念必须分清。<strong>queryKey 决定「这是不是同一份数据」</strong>，tRPC 自动用 procedure path 加输入生成，所以你几乎不用手写 key，但也因此要注意输入的稳定性。<strong>staleTime 决定「要不要重新发请求」</strong>，<strong>gcTime 决定「缓存条目什么时候被丢掉」</strong>——后两者经常被搞混，而它们的默认值组合恰好是「最容易产生冗余请求」的那一组。</p>
+
+<table>
+<thead><tr><th>参数</th><th>默认值</th><th>管什么</th><th>设错的后果</th></tr></thead>
+<tbody>
+<tr><td><code>staleTime</code></td><td><code>0</code> 毫秒</td><td>数据多久后被视为过期</td><td>保持默认时，任何重挂载或窗口聚焦都会重新请求，路由来回切几次就是十几个请求</td></tr>
+<tr><td><code>gcTime</code></td><td>5 分钟</td><td>无订阅的缓存条目多久被回收</td><td>设太小会让返回上一页时没有缓存可用，白屏一闪；设太大占内存但通常无害</td></tr>
+<tr><td><code>refetchOnWindowFocus</code></td><td><code>true</code></td><td>窗口重新聚焦时是否刷新过期数据</td><td>配合 staleTime 为 0 时，每次切回标签页就全量刷新</td></tr>
+<tr><td><code>refetchOnMount</code></td><td><code>true</code></td><td>组件挂载时是否刷新过期数据</td><td>列表页与详情页来回跳会反复请求同一数据</td></tr>
+<tr><td><code>refetchOnReconnect</code></td><td><code>true</code></td><td>网络恢复时是否刷新</td><td>地铁里网络抖动会引发请求风暴</td></tr>
+<tr><td><code>retry</code></td><td>3 次，指数退避</td><td>查询失败重试次数</td><td>对 401、403、404 这类确定性错误重试是纯浪费，应按错误码短路</td></tr>
+<tr><td><code>refetchInterval</code></td><td><code>false</code></td><td>轮询间隔</td><td>被当成实时方案时会产生持续的无效流量</td></tr>
+</tbody></table>
+
+<pre><code class="language-typescript">// app/providers.tsx —— 全局默认值是收益最高的一处配置
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { TRPCClientError } from '@trpc/client'
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // 默认 0 是绝大多数重复请求的根源，30 秒是通用起点
+      // 强实时性数据（余额、库存）单独在调用处覆盖为 0
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+      // 对确定性错误不重试：重试 401 只会多三次失败请求
+      retry: (failureCount, error) =&gt; {
+        if (error instanceof TRPCClientError) {
+          const code = error.data?.code
+          if (code === 'UNAUTHORIZED' || code === 'FORBIDDEN' || code === 'NOT_FOUND') return false
+          if (code === 'BAD_REQUEST') return false
+        }
+        return failureCount &lt; 2
+      },
+      // 表单页频繁切标签时不希望输入区被后台刷新打断
+      refetchOnWindowFocus: true,
+    },
+    mutations: {
+      // mutation 默认不重试，这是对的：写操作重试需要幂等保证
+      retry: 0,
+    },
+  },
+})</code></pre>
+
+<h2>一条 query 的状态流转</h2>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> fetching: 组件首次挂载
+    fetching --> fresh: 请求成功 写入缓存并记时间戳
+    fetching --> failed: 请求失败
+    failed --> fetching: 按 retry 策略退避重试
+    failed --> [*]: 重试耗尽 交给 error 分支渲染
+    fresh --> stale: 超过 staleTime
+    stale --> fetching: 窗口聚焦 组件重挂载 网络恢复 或手动失效
+    fresh --> inactive: 最后一个订阅组件卸载
+    stale --> inactive: 最后一个订阅组件卸载
+    inactive --> stale: 组件重新挂载 先返回旧数据再后台刷新
+    inactive --> [*]: 超过 gcTime 被回收
+    note right of stale
+        stale 只表示可以刷新
+        不代表数据不能用
+        UI 依然渲染缓存里的值
+    end note
+</div>
+
+<p>这张图里最该记住的是 <code>inactive --&gt; stale</code> 这条边：<strong>重新挂载时组件会先拿到缓存里的旧数据立刻渲染，再在后台发请求</strong>。这就是为什么列表页返回时不会白屏，也是为什么很多人误以为「没发请求」——实际上请求发了，只是 UI 没有 loading 态。判断是否在后台刷新要看 <code>isFetching</code> 而不是 <code>isLoading</code>，后者只在没有任何缓存数据时为真。</p>
+
+<h2>失效：写操作之后最重要的一步</h2>
+
+<p>mutation 成功后服务端数据已经变了，但客户端缓存不会自己知道。<code>trpc.useUtils()</code> 返回的对象按 router 路径分层，可以在任意粒度上调用 <code>invalidate()</code>。<strong>失效范围的选择直接决定一次点击会引发几个请求</strong>。</p>
+
+<div class="mermaid">
+flowchart TB
+    M["mutation 成功"] --> Q1{"这次写操作影响了<br/>哪些数据"}
+    Q1 -->|只改了一条记录的字段| A1["utils.post.byId.invalidate 传 id<br/>1 个请求"]
+    Q1 -->|列表的成员或顺序变了| A2["utils.post.list.invalidate<br/>该 router 下所有 list 变体"]
+    Q1 -->|跨模块的聚合数字也变了| A3["显式再失效 dashboard.summary<br/>列清楚 不要靠根失效兜"]
+    Q1 -->|说不清| A4["utils.invalidate 全局失效<br/>十几个请求 应当禁止"]
+    A4 --> W["batch 里夹一个慢接口<br/>整页一起卡住"]
+</div>
+
+<table>
+<thead><tr><th>失效写法</th><th>影响范围</th><th>典型请求数</th><th>什么时候用</th></tr></thead>
+<tbody>
+<tr><td><code>utils.post.byId.invalidate({ id })</code></td><td>该输入对应的单条 query</td><td>1</td><td>详情页字段更新</td></tr>
+<tr><td><code>utils.post.byId.invalidate()</code></td><td>该 procedure 的所有输入变体</td><td>页面上活跃的详情数量</td><td>批量操作后</td></tr>
+<tr><td><code>utils.post.invalidate()</code></td><td>整个 post router</td><td>通常 3 到 8</td><td>结构性变更，如删除记录</td></tr>
+<tr><td><code>utils.invalidate()</code></td><td>全部 query</td><td>10 以上</td><td>只有登录、切换租户、退出登录时才合理</td></tr>
+<tr><td><code>utils.post.list.setData(...)</code></td><td>直接改缓存，不发请求</td><td>0</td><td>服务端已返回新实体，可以直接写入</td></tr>
+<tr><td><code>utils.post.byId.prefetch({ id })</code></td><td>提前拉取并写入缓存</td><td>1（提前发生）</td><td>鼠标悬停在列表项上时预取详情</td></tr>
+</tbody></table>
+
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">过度失效是最隐蔽的性能问题</div>
+    <p>写 <code>utils.invalidate()</code> 永远不会出功能 bug，所以它会在代码库里无声扩散。后果是一次点赞触发十几个请求，配合 <code>httpBatchLink</code> 合并后，其中任何一个慢 procedure 都会让整页数据一起卡住。审查时把「根失效」和「router 级失效」当成需要解释的写法，默认只允许精确失效。</p>
+</div>
+
+<h2>乐观更新的完整正确写法</h2>
+
+<p>乐观更新有四个回调，<strong>缺任何一个都会留下一类问题</strong>：缺 <code>onMutate</code> 就没有即时反馈，缺 cancel 会让飞行中的旧请求覆盖你的乐观值，缺 <code>onError</code> 会让失败后的界面与服务端长期不一致，缺 <code>onSettled</code> 会让本地计算与服务端的细微差异永久留存。</p>
+
+<table>
+<thead><tr><th>回调</th><th>职责</th><th>漏掉的后果</th></tr></thead>
+<tbody>
+<tr><td><code>onMutate</code> 里的 <code>cancel()</code></td><td>取消同 key 的进行中请求</td><td>飞行中的旧响应落地，把乐观值覆盖回旧数据，表现为「点了又跳回去」</td></tr>
+<tr><td><code>onMutate</code> 里的 <code>getData()</code></td><td>保存回滚快照并 return</td><td><code>onError</code> 拿不到快照，无法回滚</td></tr>
+<tr><td><code>onMutate</code> 里的 <code>setData()</code></td><td>写入预期结果</td><td>没有即时反馈，乐观更新本身失去意义</td></tr>
+<tr><td><code>onError</code></td><td>用快照回滚并提示</td><td>请求失败但界面显示成功，用户以为改动已保存</td></tr>
+<tr><td><code>onSettled</code></td><td>无论成败都失效重拉</td><td>本地推算的计数、排序、时间戳与服务端不一致且永不纠正</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+sequenceDiagram
+    participant U as 用户
+    participant C as 组件
+    participant Q as Query 缓存
+    participant S as 服务端
+    U->>C: 点击点赞
+    C->>Q: onMutate cancel 同 key 的进行中请求
+    C->>Q: getData 保存快照
+    C->>Q: setData 写入 liked 为真 计数加一
+    Q-->>U: UI 立刻变化 无等待
+    C->>S: post.like mutate 发出
+    S-->>C: 失败 例如 409 或网络中断
+    C->>Q: onError 用快照 setData 回滚
+    Q-->>U: UI 恢复原状 并提示失败
+    C->>Q: onSettled 失效该 query
+    Q->>S: 重新拉取 以服务端为最终真相
+</div>
+
+<pre><code class="language-typescript">function LikeButton({ postId }: { postId: string }) {
+  const utils = trpc.useUtils()
+
+  const like = trpc.post.like.useMutation({
+    async onMutate({ id }) {
+      // 1. 必须先取消：否则飞行中的旧请求返回后会覆盖乐观值
+      await utils.post.byId.cancel({ id })
+
+      // 2. 保存快照，它会作为 context 传给 onError 与 onSettled
+      const previous = utils.post.byId.getData({ id })
+
+      // 3. 写入预期结果，UI 立刻更新
+      utils.post.byId.setData({ id }, (old) =&gt;
+        old ? { ...old, liked: true, likeCount: old.likeCount + 1 } : old,
+      )
+
+      return { previous }
+    },
+    onError(err, { id }, context) {
+      // 4. 回滚。没有这一步，失败后界面会长期与服务端不一致
+      if (context?.previous) utils.post.byId.setData({ id }, context.previous)
+      toast.error('点赞失败，已撤销')
+    },
+    onSettled(_data, _err, { id }) {
+      // 5. 无论成败都失效：本地推算的 likeCount 可能和服务端差几个并发点赞
+      void utils.post.byId.invalidate({ id })
+      // 列表里的点赞数也要同步，显式列出而不是用根失效
+      void utils.post.list.invalidate()
+    },
+  })
+
+  return &lt;button onClick={() =&gt; like.mutate({ id: postId })} disabled={like.isPending}&gt;点赞&lt;/button&gt;
+}</code></pre>
+
+<h2>分页与无限滚动</h2>
+
+<p>服务端多取一条来判断有没有下一页，返回 <code>nextCursor</code>；客户端用 <code>useInfiniteQuery</code> 配 <code>getNextPageParam</code> 消费。<strong>这里必须用游标分页而不是 offset 分页</strong>：列表在翻页过程中有插入时，offset 会让同一条记录在两页里重复出现，也会漏掉记录。游标分页的必要性与实现细节见站内 <a href="../../design/best-practices/">API 设计最佳实践</a>。</p>
+
+<pre><code class="language-typescript">// 服务端：多取一条判断是否还有下一页
+list: publicProcedure
+  .input(z.object({
+    cursor: z.string().uuid().nullish(),
+    limit: z.number().int().min(1).max(50).default(20),
+  }))
+  .query(async ({ ctx, input }) =&gt; {
+    const rows = await ctx.db.post.findMany({
+      take: input.limit + 1,                       // 多取一条作为探针
+      cursor: input.cursor ? { id: input.cursor } : undefined,
+      skip: input.cursor ? 1 : 0,                  // 跳过游标本身，否则会重复
+      orderBy: { id: 'desc' },                     // 排序字段必须唯一且有序
+    })
+    let nextCursor: string | null = null
+    if (rows.length &gt; input.limit) {
+      nextCursor = rows.pop()!.id                  // 探针不返回给客户端，只用来给游标
+    }
+    return { items: rows, nextCursor }
+  })
+
+// 客户端
+const { data, fetchNextPage, hasNextPage, isFetchingNextPage } =
+  trpc.post.list.useInfiniteQuery(
+    { limit: 20 },
+    {
+      getNextPageParam: (lastPage) =&gt; lastPage.nextCursor,
+      // 无限列表的缓存很宝贵，返回时不希望从第一页重新开始
+      staleTime: 60_000,
+      gcTime: 10 * 60_000,
+    },
+  )
+
+// 注意 data 是分页结构，渲染时要摊平；不要在渲染里每次新建数组做重计算
+const items = useMemo(() =&gt; data?.pages.flatMap((p) =&gt; p.items) ?? [], [data])</code></pre>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">无限列表上不要用 invalidate</div>
+    <p>对 <code>useInfiniteQuery</code> 调失效会让已加载的所有页一起重新拉取：用户滚了十页，一次写操作就触发十个请求，并且滚动位置往往会跳。正确做法是用 <code>setInfiniteData</code> 精确修改目标那一页里的那一项，只有在列表结构发生变化（删除、重排）时才失效。</p>
+</div>
+
+<h2>SSR 与预取</h2>
+
+<p>预取的价值是消掉「首屏白屏加转圈」。Next.js 下有两种形态：服务端组件里用 <code>await</code> 直接拿数据再 hydrate，或者在服务端发起预取把结果塞进 <code>QueryClient</code> 随 HTML 一起下发。</p>
+
+<table>
+<thead><tr><th>方案</th><th>首屏表现</th><th>代价</th><th>适用</th></tr></thead>
+<tbody>
+<tr><td>服务端预取加 hydration</td><td>无 loading，数据随 HTML 到达</td><td>HTML 体积增加，服务端要承担查询耗时</td><td>首屏关键数据、SEO 需要的内容</td></tr>
+<tr><td>客户端 <code>prefetch</code>（悬停时）</td><td>点进去几乎瞬开</td><td>可能预取用户最终没点的内容</td><td>列表到详情的跳转</td></tr>
+<tr><td><code>initialData</code></td><td>无 loading</td><td>不会被记为已获取，<code>staleTime</code> 过后仍会刷新；数据陈旧时会闪一下</td><td>已经从别处拿到完整实体时</td></tr>
+<tr><td><code>placeholderData</code></td><td>先显示占位结构</td><td>不写入缓存，仅当次渲染有效</td><td>骨架屏式过渡</td></tr>
+<tr><td>不预取</td><td>白屏加转圈</td><td>体验差，但实现最简单</td><td>后台管理系统的非首屏页面</td></tr>
+</tbody></table>
+
+<p><code>initialData</code> 与 <code>placeholderData</code> 的区别是高频面试题也是高频 bug 源：<strong><code>initialData</code> 会被真正写入缓存并被其他组件复用，<code>placeholderData</code> 不会</strong>。如果你手上的对象只是列表里的简化版（缺少详情字段），用 <code>initialData</code> 会把这个残缺对象污染进缓存，其他组件读到后可能直接崩在缺失字段上，这种情况必须用 <code>placeholderData</code>。</p>
+
+<h2>常见性能问题与排查</h2>
+
+<table>
+<thead><tr><th>症状</th><th>根因</th><th>怎么确认</th><th>修法</th></tr></thead>
+<tbody>
+<tr><td>同一接口一分钟内请求十几次</td><td><code>staleTime</code> 为默认 0，叠加聚焦与重挂载刷新</td><td>网络面板按 path 分组看重复次数</td><td>全局设 <code>staleTime</code> 30 秒起</td></tr>
+<tr><td>缓存永远命中不了</td><td>输入里带了每次渲染新建的对象或数组，queryKey 不稳定</td><td>Query 开发者工具里看是否堆积了大量相似 key</td><td>输入用原始值或 <code>useMemo</code> 固定</td></tr>
+<tr><td>整页四块内容一起卡 800 毫秒</td><td>batch 里夹了一个慢 procedure</td><td>看单个批量请求的耗时与其包含的 path</td><td><code>splitLink</code> 把慢接口分流到 <code>httpLink</code></td></tr>
+<tr><td>一次点击发出十几个请求</td><td>mutation 里用了根失效</td><td>搜索代码里的全局 <code>invalidate</code> 调用</td><td>改成精确失效，显式列出受影响 query</td></tr>
+<tr><td>列表滚到十页后写操作导致跳动</td><td>对无限查询调了失效</td><td>看失败后 <code>data.pages</code> 是否整体重建</td><td>用 <code>setInfiniteData</code> 精确改</td></tr>
+<tr><td>失败请求被重试三次</td><td><code>retry</code> 默认 3 次，对 4xx 也生效</td><td>网络面板里同一请求连续失败三次</td><td>按错误 code 短路重试</td></tr>
+<tr><td>切回标签页时输入框内容被覆盖</td><td>聚焦刷新把服务端数据写回表单</td><td>观察 <code>isFetching</code> 与表单重置时机</td><td>表单页把该 query 的 <code>refetchOnWindowFocus</code> 关掉</td></tr>
+</tbody></table>
+
+<h2>反模式对照</h2>
+
+<table>
+<thead><tr><th>反模式</th><th>后果</th><th>正确做法</th></tr></thead>
+<tbody>
+<tr><td>不设 <code>staleTime</code></td><td>冗余请求占请求总量一半以上</td><td>全局 30 秒起步，强实时数据单独覆盖</td></tr>
+<tr><td>mutation 后 <code>utils.invalidate()</code></td><td>一次写操作引发全页刷新</td><td>显式列出受影响的两三个 query</td></tr>
+<tr><td>乐观更新不写 <code>onError</code></td><td>失败后界面与服务端长期不一致</td><td>onMutate 存快照，onError 回滚</td></tr>
+<tr><td>乐观更新不写 <code>onSettled</code></td><td>本地推算的计数永远偏差</td><td>无论成败都失效一次</td></tr>
+<tr><td>把副作用放进 query</td><td>被缓存跳过、被预取提前触发、被重试重复执行</td><td>任何有副作用的都用 mutation</td></tr>
+<tr><td>用 <code>refetchInterval</code> 做实时</td><td>持续无效流量，延迟仍有一个轮询周期</td><td>用 subscription，或至少按页面可见性暂停轮询</td></tr>
+<tr><td>在 <code>useQuery</code> 的 <code>select</code> 里做重计算</td><td>每次缓存更新都重算一遍，掉帧</td><td>用 <code>useMemo</code> 或把计算下移到服务端</td></tr>
+<tr><td>用 <code>initialData</code> 塞残缺对象</td><td>缺失字段污染缓存，其他组件崩溃</td><td>数据不完整时用 <code>placeholderData</code></td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+<li><strong><code>staleTime</code> 保持默认 0</strong>：这是重复请求的头号原因，光调这一个参数常能砍掉一半请求。</li>
+<li><strong>把 <code>gcTime</code> 当成 <code>staleTime</code> 用</strong>：改 <code>gcTime</code> 不会减少请求，只会影响缓存能不能复用。</li>
+<li><strong>mutation 后用根失效</strong>：功能永远正确，所以没人会去修，但一次点击就是十几个请求。</li>
+<li><strong>乐观更新忘了 <code>cancel()</code></strong>：飞行中的旧响应落地覆盖乐观值，表现是「点完变了又跳回去」。</li>
+<li><strong>乐观更新没有回滚</strong>：失败后界面显示成功，用户离开页面前都不会发现改动没保存。</li>
+<li><strong>对无限查询调 <code>invalidate</code></strong>：已加载的十页会一起重拉，滚动位置丢失。</li>
+<li><strong>queryKey 里混入不稳定输入</strong>：每次渲染新建的对象让缓存永不命中，还会撑爆缓存条目数。</li>
+<li><strong>用 <code>isLoading</code> 判断后台刷新</strong>：它只在没有任何缓存时为真，后台刷新要看 <code>isFetching</code>。</li>
+<li><strong>慢接口和快接口共用一个 batch</strong>：整批耗时等于最慢那个，四块 UI 一起卡住。</li>
+<li><strong>对 401、404 也重试三次</strong>：纯浪费，且会把用户卡在转圈里多等几秒。</li>
+<li><strong>用 <code>refetchInterval</code> 当实时推送</strong>：流量持续消耗，延迟仍有一个周期，该用 subscription。</li>
+<li><strong><code>initialData</code> 塞进列表里的简化对象</strong>：残缺实体被写入缓存并被详情页复用，直接崩在缺失字段上。</li>
+    </ul>
+</div>
+
+                    </div>
+                </article>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <p>© 2026 资深码农. 保留所有权利。</p>
+        </div>
+    </footer>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "api";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

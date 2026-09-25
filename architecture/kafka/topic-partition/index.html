@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>Kafka 分区设计：分区数、分区键与顺序性代价 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="分区数和分区键是 Kafka 里最关键也最难改的设计决策。本文给出分区数的可操作估算方法与文件句柄、生产端批次缓冲、Leader 选举耗时三重上限约束，说明分区只能增不能减且扩分区会立刻改变 key 取模映射从而当场打断顺序，讲清粘性分区器与 murmur2 取模的行为差异、自定义 Partitioner 打散热点 key 的写法、数据倾斜的逐分区判定与三种治法、顺序性四个层级的代价对照、副本数与 min.insync.replicas 的组合约束、机架感知、compact 与墓碑消息语义，以及分区重分配为什么必须限流。">
+    <meta name="keywords" content="Kafka分区,副本机制,ISR,Leader选举,日志段,HW,LEO">
+    <meta name="author" content="资深码农">
+    <meta name="generator" content="deep2code generator">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/topic-partition/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="Kafka 分区设计：分区数、分区键与顺序性代价 - 资深码农">
+    <meta property="og:description" content="分区数和分区键是 Kafka 里最关键也最难改的设计决策。本文给出分区数的可操作估算方法与文件句柄、生产端批次缓冲、Leader 选举耗时三重上限约束，说明分区只能增不能减且扩分区会立刻改变 key 取模映射从而当场打断顺序，讲清粘性分区器与 murmur2 取模的行为差异、自定义 Partitioner 打散热点 key 的写法、数据倾斜的逐分区判定与三种治法、顺序性四个层级的代价对照、副本数与 min.insync.replicas 的组合约束、机架感知、compact 与墓碑消息语义，以及分区重分配为什么必须限流。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/topic-partition/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Kafka 分区设计：分区数、分区键与顺序性代价 - 资深码农">
+    <meta name="twitter:description" content="分区数和分区键是 Kafka 里最关键也最难改的设计决策。本文给出分区数的可操作估算方法与文件句柄、生产端批次缓冲、Leader 选举耗时三重上限约束，说明分区只能增不能减且扩分区会立刻改变 key 取模映射从而当场打断顺序，讲清粘性分区器与 murmur2 取模的行为差异、自定义 Partitioner 打散热点 key 的写法、数据倾斜的逐分区判定与三种治法、顺序性四个层级的代价对照、副本数与 min.insync.replicas 的组合约束、机架感知、compact 与墓碑消息语义，以及分区重分配为什么必须限流。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="架构与分布式">
+    <meta property="article:tag" content="Kafka,分区,副本,存储引擎">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 分区设计：分区数、分区键与顺序性代价","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"分区数和分区键是 Kafka 里最关键也最难改的设计决策。本文给出分区数的可操作估算方法与文件句柄、生产端批次缓冲、Leader 选举耗时三重上限约束，说明分区只能增不能减且扩分区会立刻改变 key 取模映射从而当场打断顺序，讲清粘性分区器与 murmur2 取模的行为差异、自定义 Partitioner 打散热点 key 的写法、数据倾斜的逐分区判定与三种治法、顺序性四个层级的代价对照、副本数与 min.insync.replicas 的组合约束、机架感知、compact 与墓碑消息语义，以及分区重分配为什么必须限流。","url":"https://www.yijunjun.asia/architecture/kafka/topic-partition/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/topic-partition/"},"articleSection":"后端开发"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "Kafka 分区与副本", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Kafka 分区数应该设多少？", "acceptedAnswer": {"@type": "Answer", "text": "用两个下限取最大值，再向上留余量。第一个下限是吞吐：目标峰值吞吐除以实测的单分区吞吐，单分区吞吐必须在自己的硬件上压出来，通常在每秒几十 MB 这个量级，不要抄网上的数字。第二个下限是并行度：分区数不能小于该主题预计的最大消费者实例数，否则多出来的实例会空转。两者取大值后向上取整，再留三到五成余量应对增长。同时要满足上限约束：单 broker 的分区副本数控制在两千到四千以内，否则文件句柄、生产端批次内存和故障恢复时的选举耗时都会成为问题。"}}, {"@type": "Question", "name": "为什么增加分区会破坏消息顺序？", "acceptedAnswer": {"@type": "Answer", "text": "因为默认分区器用的是 key 的哈希值对分区总数取模。分区数从 3 变成 6 之后，同一个 key 的取模结果几乎一定会变，该实体的新消息开始落到一个新分区，而旧分区里还残留着它尚未被消费的老消息。这两个分区由不同消费者并行处理，新事件可能先于老事件被处理，同一实体的顺序性当场失效。Kafka 不会做任何数据搬迁来修正这一点。所以扩分区必须选在业务低峰，并且先确认该主题的积压已经清零，必要时短暂停止生产再操作。"}}, {"@type": "Question", "name": "Kafka 分区可以减少吗？", "acceptedAnswer": {"@type": "Answer", "text": "不可以，命令会直接报错说分区数只能增加。原因是减少分区需要决定被删分区里的数据怎么办：搬到别的分区会破坏 offset 连续性和分区内有序性，直接丢弃则是静默丢数据，两种都不可接受。实践上的处理办法是新建一个分区数正确的主题，让生产端双写或切换写入，消费端把老主题消费干净后下线，也就是一次主题级别的迁移。正因为不可逆，分区数是 Kafka 使用中最需要在上线前想清楚的参数，宁可一开始略微多设一些。"}}, {"@type": "Question", "name": "不设 key 的时候消息是轮询分配到各分区的吗？", "acceptedAnswer": {"@type": "Answer", "text": "2.4 版本之后不是了。老版本的默认分区器对无 key 消息做轮询，导致每条消息都可能进入不同分区的批次，批次很难攒满，请求数量多、延迟反而更高。2.4 引入粘性分区器后，无 key 消息会粘住一个分区持续写入，直到当前批次被发出才换下一个分区，这样批次更容易攒满，吞吐和延迟同时改善，长期看各分区的数据量仍然是均衡的。副作用是短时间内观察单个分区的写入速率会看到明显的粘性波动，不要误判成数据倾斜。"}}, {"@type": "Question", "name": "怎么判断 Kafka 出现了数据倾斜，怎么治？", "acceptedAnswer": {"@type": "Answer", "text": "判断必须逐分区看，不能看总和。用消费组描述命令观察每个分区的 LAG，再用 offset 查询工具两次采样计算每个分区的 offset 增速，如果某个分区的增速或堆积是其他分区的数倍，就是写入倾斜。常见原因有三种：热点 key 集中了大部分流量、key 的取值分布本身不均匀、同一主题里混用了有 key 和无 key 的消息。治法也有三种：换一个基数更大分布更均匀的分区键、对热点 key 追加随机后缀打散但放弃该 key 的有序性、或者确认业务不需要有序后直接不设 key 交给粘性分区器。"}}, {"@type": "Question", "name": "cleanup.policy 设成 compact 和 delete 有什么区别？", "acceptedAnswer": {"@type": "Answer", "text": "delete 按时间或容量删除整个日志段，语义是保留最近一段时间发生的所有事件，适合日志、埋点、事件流。compact 按 key 去重，只保证每个 key 的最新值一定保留，语义是保留当前状态的快照，适合 CDC 的最终态、配置下发、维表同步，新下游可以直接读完整个主题重建出全量状态。要删除某个 key 需要写一条 value 为空的墓碑消息，它会在保留窗口后被彻底清理，这个窗口必须足够长，否则慢速消费者会错过删除事件、本地状态里留下幽灵数据。两者可以同时启用，先压实再按时间删。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture" class="active">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">架构与分布式</a><span class="separator">/</span><a href="../index.html">Kafka 深度原理：存储、副本、Rebalance 与投递语义</a><span class="separator">/</span><span>Kafka 分区与副本</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">Kafka 分区设计：分区数、分区键与顺序性代价</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ Kafka 分区</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>Kafka 的绝大多数参数都能在线改，改错了改回来就行。分区数和分区键不是——<strong>分区只能增不能减，而增加分区会立刻改变 key 到分区的映射；分区键一旦上线，改了就等于换一套顺序性语义</strong>。这两个决策做错，代价是一次主题级别的数据迁移。这篇只谈这两件事怎么定。分段日志、稀疏索引、ISR 与水位机制不在这里展开，详见站内 Kafka 深度原理一篇。</p>
+
+<h2>分区数决定什么，以及怎么估</h2>
+
+<table>
+<thead><tr><th>分区数决定的事</th><th>具体机制</th><th>估算方式</th></tr></thead>
+<tbody>
+<tr><td>消费并行度上限</td><td>同一消费组内一个分区只能被一个实例占有，多出的实例空转</td><td>分区数不小于该主题预计的最大消费者实例数，并为未来扩容预留</td></tr>
+<tr><td>单分区吞吐上限</td><td>一个分区的写入落在单台 broker 的单个日志目录上，受单盘顺序写与单线程复制限制</td><td>在自己硬件上实测单分区吞吐，通常每秒几十 MB 量级，不要抄别人的数字</td></tr>
+<tr><td>有序性粒度</td><td>只有分区内有序，同一 key 落同一分区才能保证该实体的事件顺序</td><td>由分区键设计决定，不是由分区数决定；分区数只影响这个粒度的分布</td></tr>
+<tr><td>存储分布均匀度</td><td>分区是分配到 broker 与磁盘上的最小单位</td><td>分区数最好是 broker 数的整数倍，否则各节点负载天然不均</td></tr>
+</tbody></table>
+
+<p>可操作的估算顺序是：<strong>先算吞吐下限（目标峰值吞吐 ÷ 实测单分区吞吐），再算并行度下限（预计最大消费者实例数），取两者的最大值，最后向上取整并留三到五成余量</strong>。举例：目标峰值 300 MB/s、实测单分区 25 MB/s，吞吐下限是 12；消费端预计最多跑 10 个实例，并行度下限是 10；取大值 12，留余量取 16，同时 16 正好是 8 台 broker 的整数倍。</p>
+
+<pre><code class="language-bash"># 第一步：在目标硬件上实测单分区吞吐，这是所有估算的基准
+bin/kafka-topics.sh --bootstrap-server kafka-1:9092 --create \
+  --topic probe-1p --partitions 1 --replication-factor 3
+bin/kafka-producer-perf-test.sh --topic probe-1p --num-records 2000000 \
+  --record-size 512 --throughput -1 \
+  --producer-props bootstrap.servers=kafka-1:9092 acks=all linger.ms=10
+# 记下输出里的 MB/sec，这才是你环境的单分区吞吐，与网上的数字无关
+
+# 第二步：按估算结果建主题，顺手把 min.insync.replicas 一起定下来
+bin/kafka-topics.sh --bootstrap-server kafka-1:9092 --create \
+  --topic orders --partitions 16 --replication-factor 3 \
+  --config min.insync.replicas=2
+
+# 第三步：需要扩容时只能增加，且必须在低峰且积压清零后执行
+bin/kafka-topics.sh --bootstrap-server kafka-1:9092 \
+  --alter --topic orders --partitions 24
+# 想减少会直接被拒：The number of partitions for a topic can only be increased
+
+# 查看分区分布是否均衡，Leader 分散在不同 broker 上才算正常
+bin/kafka-topics.sh --bootstrap-server kafka-1:9092 --describe --topic orders</code></pre>
+
+<h2>分区数的上限约束</h2>
+
+<p>「分区越多吞吐越高」只在拐点之前成立。下面这三条约束是拐点的来源，也是线上事故的来源。</p>
+
+<table>
+<thead><tr><th>约束</th><th>为什么会成为瓶颈</th><th>经验量级</th><th>超限后的症状</th></tr></thead>
+<tbody>
+<tr><td>文件句柄与 mmap</td><td>每个分区在所在 broker 上至少有一组段文件加索引文件，索引文件全部 mmap；副本也算</td><td>单 broker 分区副本数控制在两千到四千以内</td><td>Too many open files 或 Map failed，分区批量离线，重启也起不来</td></tr>
+<tr><td>生产端批次内存</td><td>Producer 为每个分区维护一个独立的 batch 缓冲，<code>batch.size</code> 乘以分区数是理论峰值占用，超过 <code>buffer.memory</code>（默认 32MB）就会阻塞</td><td>单个 Producer 实例写入的分区数乘以 batch.size 不要超过 buffer.memory 的一半</td><td><code>send()</code> 阻塞或抛出超时，表现为业务线程被拖住，而 broker 侧毫无压力</td></tr>
+<tr><td>故障恢复时的选举耗时</td><td>一台 broker 宕机后，它上面所有 Leader 分区都要重新选举，耗时随分区数近似线性增长</td><td>单 broker 的 Leader 分区数控制在千级，避免单点故障造成长时间不可写</td><td>宕机后客户端出现秒级到十秒级的持续报错，而不是预期的短暂重试</td></tr>
+<tr><td>端到端延迟</td><td>分区多则每个分区的写入速率低，攒满一个批次要等更久</td><td>低延迟场景宁少不多，靠加大 <code>linger.ms</code> 之外的手段提升吞吐</td><td>吞吐没提升，p99 延迟反而上涨</td></tr>
+</tbody></table>
+
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">被忽略最多的一条是生产端内存</div>
+    <p>一个 Producer 实例往 1000 个分区写、<code>batch.size</code> 保持默认 16KB，理论峰值缓冲需求是 16MB，已经占掉默认 <code>buffer.memory</code> 的一半；如果有人把 <code>batch.size</code> 调到 256KB 去「优化吞吐」，需求就变成 256MB，远超默认值，结果是 <code>send()</code> 在缓冲区满时阻塞住业务线程。这类故障的排查方向常常一开始就跑偏，因为 broker 的所有指标都正常。</p>
+</div>
+
+<h2>分区只能增不能减，而且扩分区会当场打断顺序</h2>
+
+<div class="mermaid">
+flowchart TB
+    subgraph BEFORE["扩容前 分区数 3"]
+        K1["key 为 order-1001<br/>murmur2 取模 3 等于 2"]
+        P2A["分区 P2 中残留该 key 的未消费消息<br/>创建事件 与 支付事件"]
+        K1 --> P2A
+    end
+    subgraph AFTER["扩容后 分区数 6 同一个 key"]
+        K2["同一个 key<br/>murmur2 取模 6 变成 5"]
+        P5A["分区 P5 开始接收该 key 的新消息<br/>退款事件"]
+        K2 --> P5A
+    end
+    BEFORE --> AFTER
+    P2A --> C1["消费者 X 正在处理 P2 的积压"]
+    P5A --> C2["消费者 Y 并行处理 P5 的新消息"]
+    C1 --> BAD["退款事件可能先于支付事件被处理<br/>该实体的顺序性当场失效"]
+    C2 --> BAD
+    BAD --> FIX["结论 扩分区必须在业务低峰执行<br/>并先把该主题积压清零<br/>必要时短暂停写"]
+</div>
+
+<p>Kafka <strong>不会为了修正映射而搬迁任何已有数据</strong>，老分区里的老消息原地不动。所以这个窗口期的长度就是「老分区里还有未消费消息」的时长，把积压清零就等于把窗口压到零。至于分区为什么不能减少：删掉一个分区就必须决定里面的数据怎么办，搬到别的分区会破坏 offset 连续性与分区内有序，直接丢弃是静默丢数据，两种都不可接受，于是 Kafka 干脆禁止。真的需要减少时，唯一办法是新建一个分区数正确的主题做一次迁移。</p>
+
+<h2>分区键与分区器</h2>
+
+<p>分区选择完全发生在客户端。默认分区器的行为分两种情况，而无 key 的那一种在 2.4 版本发生过一次容易被忽略的变化。</p>
+
+<ul>
+<li><strong>有 key</strong>：<code>partition = Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions</code>。注意哈希的是<strong>序列化后的字节</strong>，所以换序列化方式会改变分区归属；取模的是当前分区总数，所以扩分区会改变映射。</li>
+<li><strong>无 key，2.4 之前</strong>：轮询。每条消息进入不同分区的批次，批次很难攒满，请求数多且延迟更差。</li>
+<li><strong>无 key，2.4 及之后</strong>：粘性分区器。<strong>不再是轮询</strong>，而是粘住一个分区持续写入，直到当前批次被发出才切换下一个分区。这样批次更容易攒满，吞吐与延迟同时改善，长期看分布依然均衡。</li>
+</ul>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">粘性分区器会造成一种假倾斜</div>
+    <p>用秒级粒度观察单个分区的写入速率时，粘性分区器会让某个分区在一小段时间内明显高于其他分区，这是攒批策略的正常表现，不是数据倾斜。判断倾斜要看分钟级以上的累计量或 offset 增速，并且只有在使用了 key 的主题上才需要认真怀疑倾斜。</p>
+</div>
+
+<div class="mermaid">
+flowchart TB
+    S{"同一业务实体的消息<br/>是否必须严格按顺序处理"}
+    S -->|"不需要"| NK["不设 key<br/>交给粘性分区器攒批<br/>吞吐最高分布最均匀"]
+    S -->|"需要"| Q2{"实体 id 的流量分布<br/>是否足够均匀"}
+    Q2 -->|"均匀"| K1["用实体 id 做 key<br/>标准做法 murmur2 取模"]
+    Q2 -->|"存在明显热点"| Q3{"热点实体能否<br/>放弃严格有序"}
+    Q3 -->|"可以放弃"| K2["自定义 Partitioner<br/>对热点 key 加随机后缀打散"]
+    Q3 -->|"不能放弃"| K3["为热点实体单独建主题<br/>或换更细粒度的 key<br/>例如实体 id 拼业务类型"]
+</div>
+
+<pre><code class="language-java">// 场景：九成流量来自少数几个大商户，直接用 merchantId 做 key 会把单分区打满
+// 策略：热点 key 追加随机偏移打散，非热点 key 保持默认行为以维持有序
+public class HotKeySaltingPartitioner implements Partitioner {
+
+    // 热点清单在生产中应从配置中心动态下发，硬编码只是为了演示
+    private static final Set&lt;String&gt; HOT_KEYS = Set.of("m_10001", "m_10002");
+    // 每个热点 key 打散到多少个分区；越大越均匀，但该 key 的有序性彻底放弃
+    private static final int SALT_BUCKETS = 8;
+
+    private final Random random = new Random();
+
+    @Override
+    public int partition(String topic, Object key, byte[] keyBytes,
+                         Object value, byte[] valueBytes, Cluster cluster) {
+        int numPartitions = cluster.partitionsForTopic(topic).size();
+        if (keyBytes == null) {
+            // 无 key 时交回默认逻辑，不要在这里自己轮询，会破坏粘性攒批
+            return Utils.toPositive(random.nextInt()) % numPartitions;
+        }
+        String k = new String(keyBytes, StandardCharsets.UTF_8);
+        int base = Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
+        if (HOT_KEYS.contains(k)) {
+            // 热点 key：在基准分区之后的连续若干个分区里随机落点
+            return (base + random.nextInt(SALT_BUCKETS)) % numPartitions;
+        }
+        // 普通 key：与默认分区器完全一致，同 key 必定同分区
+        return base;
+    }
+
+    @Override
+    public void configure(Map&lt;String, ?&gt; configs) { }
+
+    @Override
+    public void close() { }
+}
+// 启用方式：
+// props.put(ProducerConfig.PARTITIONER_CLASS_CONFIG, HotKeySaltingPartitioner.class.getName());
+// 注意：打散后该热点实体的事件会被多个消费者并行处理，
+// 下游必须能容忍乱序，或者自己按版本号与时间戳做幂等与覆盖判断。</code></pre>
+
+<h2>数据倾斜：判定、原因与三种治法</h2>
+
+<pre><code class="language-bash"># 判定第一步：逐分区看 LAG，绝对不要只看总和
+bin/kafka-consumer-groups.sh --bootstrap-server kafka-1:9092 \
+  --group billing --describe
+# TOPIC   PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG
+# orders  0          812340          812350          10
+# orders  1          790112          954880          164768     &lt;-- 只有这个分区在堆
+# orders  2          805900          805912          12
+# 总 LAG 约 16 万，但均摊到 16 个分区看不出问题，逐分区才能定位
+
+# 判定第二步：算每个分区的写入增速，确认是写入倾斜而不是消费慢
+bin/kafka-run-class.sh kafka.tools.GetOffsetShell \
+  --bootstrap-server kafka-1:9092 --topic orders --time -1
+# 间隔 60 秒再跑一次，两次相减除以 60 得到每个分区的每秒写入条数
+# 若某分区增速是其他分区的数倍，是写入倾斜；若增速均匀而 LAG 只在一处堆，
+# 那是该分区的消费者变慢了，方向完全不同
+
+# 定位热点 key：把倾斜分区单独消费一段，统计 key 的出现次数
+bin/kafka-console-consumer.sh --bootstrap-server kafka-1:9092 \
+  --topic orders --partition 1 --offset latest --max-messages 20000 \
+  --property print.key=true --property print.value=false \
+  | sort | uniq -c | sort -rn | head -20</code></pre>
+
+<table>
+<thead><tr><th>判定信号</th><th>常见原因</th><th>治法</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>某分区 offset 增速是其他分区数倍，且 LAG 长期集中在它身上</td><td>热点 key：少数实体贡献了大部分流量</td><td>自定义 Partitioner 对热点 key 追加随机偏移打散</td><td>该 key 的严格有序性彻底放弃，下游必须能容忍乱序或自己做幂等</td></tr>
+<tr><td>部分分区几乎无数据，部分分区满载，分布呈明显阶梯</td><td>key 的基数太小或取值分布不均，例如用省份、渠道、状态码做 key</td><td>换一个基数更大、分布更均匀的键，例如用订单号或用户 id 替代省份</td><td>有序性粒度改变，原先「同省有序」的假设不再成立，需要确认业务是否依赖</td></tr>
+<tr><td>分区分布看起来随机但长期不均，且主题里存在大量无 key 消息</td><td>同一主题混用了有 key 与无 key 消息，两套分区策略互相叠加</td><td>拆主题，或统一为全部带 key，或确认无需有序后全部不带 key</td><td>拆主题要改上下游；统一策略需要一次协调上线</td></tr>
+<tr><td>倾斜只发生在秒级观察窗口，分钟级累计是均衡的</td><td>粘性分区器的正常攒批行为</td><td>不需要处理，改用分钟级指标观察</td><td>无</td></tr>
+<tr><td>分区数据量均衡，但某台 broker 负载明显偏高</td><td>Leader 分布不均，多个主题的 Leader 恰好堆在同一节点</td><td>执行优先副本选举，必要时用重分配调整副本落点</td><td>重分配期间有额外网络开销，必须限流</td></tr>
+</tbody></table>
+
+<h2>顺序性的四个层级与代价</h2>
+
+<table>
+<thead><tr><th>层级</th><th>怎么实现</th><th>并行度</th><th>代价与失效条件</th></tr></thead>
+<tbody>
+<tr><td>全局有序</td><td>整个主题只建 1 个分区</td><td>1</td><td>吞吐被单分区上限锁死且无法横向扩展；该分区所在 broker 故障期间全主题不可写；任何一条慢消息都会阻塞全部后续消息</td></tr>
+<tr><td>分区内有序</td><td>Kafka 默认保证，不需要额外配置</td><td>等于分区数</td><td>生产端 <code>max.in.flight.requests.per.connection</code> 大于 1 且允许重试时，重试会导致分区内乱序，必须开启幂等 Producer 才安全</td></tr>
+<tr><td>按 key 有序</td><td>用业务实体 id 做 key，让同实体落同分区</td><td>等于分区数，同时保住实体级顺序</td><td>扩分区会立刻改变映射并打断顺序；热点 key 会造成倾斜；消费端如果把同分区消息丢进线程池并发处理，顺序当场失效</td></tr>
+<tr><td>完全无序</td><td>不设 key，交给粘性分区器</td><td>等于分区数，分布最均匀</td><td>不能对任何两条消息的先后顺序做假设，下游必须自己处理乱序与幂等</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最常见的顺序性幻觉</div>
+    <p>「我用了 key，所以顺序是保证的」——这句话只在消费端也是串行处理的前提下成立。很多实现会在 <code>poll()</code> 拿到一批消息后丢给线程池加速处理，这一步直接把分区内的顺序抹掉了。如果要并发又要保序，必须在消费端按 key 的哈希把消息路由到固定的工作线程，让同一 key 始终由同一个线程串行处理。另外生产端也要注意：允许重试且 in-flight 请求大于 1 时，失败重试会让后发的消息先落盘，必须靠幂等 Producer 兜住，幂等与事务的边界详见站内 Kafka 深度原理一篇。</p>
+</div>
+
+<h2>副本数、min.insync.replicas 与机架感知</h2>
+
+<table>
+<thead><tr><th>RF 与 min.insync 组合</th><th>能容忍几台故障仍可写</th><th>能容忍几台故障不丢数据</th><th>评价</th></tr></thead>
+<tbody>
+<tr><td>RF=3, min.insync=2, acks=all</td><td>1</td><td>1</td><td>标准生产配置，写可用性与持久性平衡得最好</td></tr>
+<tr><td>RF=3, min.insync=3, acks=all</td><td>0</td><td>2</td><td>任何一台节点重启都会让写入直接失败，包括正常滚动升级，几乎不可运维</td></tr>
+<tr><td>RF=3, min.insync=1, acks=all</td><td>2</td><td>0</td><td><code>acks=all</code> 形同虚设，只要 Leader 确认就返回成功，Leader 挂掉即丢数据</td></tr>
+<tr><td>RF=2, min.insync=2, acks=all</td><td>0</td><td>1</td><td>典型误配，看起来省了一份磁盘，实际挂一台就完全不可写</td></tr>
+<tr><td>RF=2, min.insync=1</td><td>1</td><td>0</td><td>只适合可重建的日志类数据，不要放业务事件</td></tr>
+<tr><td>RF=1</td><td>0</td><td>0</td><td>仅限本地开发；磁盘损坏就是永久丢失</td></tr>
+</tbody></table>
+
+<p>机架感知靠 <code>broker.rack</code>：给每台 broker 标注机架或可用区标识，Kafka 在分配副本时会尽量让同一分区的副本分散在不同机架上，从而让整机架掉电只损失一个副本。注意两点：<strong>标注必须在建主题之前完成</strong>，已有主题的副本分布不会自动调整，需要用重分配工具手动改；<strong>跨可用区的副本同步会产生跨区流量</strong>，云上这部分费用常常被漏算，而且 RTT 增加会让 <code>acks=all</code> 的写入延迟上升，必要时配合 <code>replica.selector.class</code> 让消费者就近读副本。</p>
+
+<h2>Topic 级配置与 compact 语义</h2>
+
+<table>
+<thead><tr><th>配置项</th><th>默认值</th><th>什么时候要覆盖</th><th>覆盖错了会怎样</th></tr></thead>
+<tbody>
+<tr><td><code>retention.ms</code></td><td>7 天</td><td>需要更长回溯窗口，或数据敏感需要尽快清理</td><td>设得短于「消费者最长停机时间加故障响应时间」，重启后位点越界，直接丢数据</td></tr>
+<tr><td><code>retention.bytes</code></td><td>不限</td><td>单分区要设容量上限防止写满磁盘</td><td>与 <code>retention.ms</code> 是或的关系，任一满足即删，设小了会导致数据提前消失</td></tr>
+<tr><td><code>cleanup.policy</code></td><td><code>delete</code></td><td>主题语义是「状态快照」而非「事件流」时改成 <code>compact</code></td><td>对事件流用 compact 会让同 key 的历史事件被吃掉；对无 key 消息用 compact 则完全无效</td></tr>
+<tr><td><code>min.insync.replicas</code></td><td>1</td><td>生产环境全部覆盖为 2</td><td>留 1 会让 <code>acks=all</code> 失去意义；设成等于 RF 会让滚动重启变成不可写</td></tr>
+<tr><td><code>max.message.bytes</code></td><td>约 1MB</td><td>确实有大消息时上调，但优先考虑把大对象存对象存储只传引用</td><td>只改 broker 没改 topic 或客户端，会在另一环节被拒绝</td></tr>
+<tr><td><code>segment.bytes</code></td><td>1GB</td><td>需要更细的删除与压实粒度时调小</td><td>调太小会让段文件数量暴增，句柄和 mmap 压力上升</td></tr>
+<tr><td><code>delete.retention.ms</code></td><td>24 小时</td><td>compact 主题上，慢速消费者需要更长时间才能看到墓碑</td><td>设太短，慢消费者错过删除事件，下游本地状态留下永久幽灵数据</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> Latest
+    Latest: 该 key 的当前最新值 压实后一定保留
+    Latest --> Obsolete: 同一 key 写入了更新的值
+    Obsolete: 旧版本仍在日志里等待清理
+    Obsolete --> Removed: 清理线程压实所在段
+    Removed --> [*]
+    Latest --> Tombstone: 写入 value 为空的墓碑消息表示删除
+    Tombstone: 下游据此删除自己的本地状态
+    Tombstone --> Purged: 超过 delete.retention.ms 后彻底移除
+    Purged --> [*]
+    note right of Tombstone
+        墓碑必须保留足够久
+        否则慢速消费者永远看不到删除事件
+        下游本地状态会留下幽灵数据
+    end note
+</div>
+
+<p><code>compact</code> 与 <code>delete</code> 的语义差异可以这样记：<strong>delete 回答「最近这段时间发生了什么」，compact 回答「现在的状态是什么」</strong>。compact 主题的核心价值是可重建：一个新下游从头读完整个主题，就得到了全量状态快照，这也是 CDC 最终态、配置下发、维表同步的标准做法。三个容易踩的点：compact <strong>只保证每个 key 的最新值必定保留，不保证旧版本立刻消失</strong>（活跃段不参与压实，所以短期内仍会读到多个版本）；<strong>无 key 消息在 compact 主题里是无意义的</strong>，无法被去重；两种策略可以同时写成 <code>compact,delete</code>，语义是先按 key 压实再按时间清理，适合状态量大但历史 key 会彻底废弃的场景。</p>
+
+<h2>命名治理与分区重分配</h2>
+
+<table>
+<thead><tr><th>规范</th><th>写法示例</th><th>为什么</th></tr></thead>
+<tbody>
+<tr><td>分段式命名，域加实体加事件类型</td><td><code>trade.order.created</code></td><td>能从名字判断归属团队与数据语义，便于做 ACL 前缀授权与配额</td></tr>
+<tr><td>环境不要混在同一集群，也不要靠名字区分</td><td>集群隔离而非 <code>orders-prod</code></td><td>靠命名隔离时，一次配置失误就会让测试流量写进生产主题</td></tr>
+<tr><td>分隔符统一，全小写</td><td>统一用点号，不要点号与下划线混用</td><td>Kafka 的指标名会把点号与下划线做等价处理，混用可能造成监控指标冲突</td></tr>
+<tr><td>版本进名字而不是靠兼容硬扛</td><td><code>trade.order.created.v2</code></td><td>不兼容的结构变更用新主题双写再切换，比强行兼容旧消费者安全</td></tr>
+<tr><td>禁止自动创建</td><td><code>auto.create.topics.enable=false</code></td><td>拼错名字会静默建出一个默认配置的新主题，分区数和副本数都不对，且没人知道</td></tr>
+<tr><td>主题元信息登记</td><td>负责人、保留期、峰值量级、下游清单</td><td>没有登记时，没人敢删任何主题，集群里会长期堆积僵尸主题占用句柄与分区配额</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant OP as 运维
+    participant CT as Controller
+    participant NEW as 新副本所在 broker
+    participant OLD as 原副本所在 broker
+    participant CLI as 生产与消费客户端
+    OP->>CT: 提交 reassignment 方案并同时设置限流
+    CT->>NEW: 把新副本加入该分区的副本集合
+    NEW->>OLD: 从当前 Leader 全量拉取历史数据
+    Note over NEW,OLD: 这是整个过程唯一的重负载<br/>不限流会占满机间带宽<br/>正常复制随之滞后 Isr 被打散
+    NEW-->>CT: 追上水位后进入 Isr
+    CT->>OLD: 从副本集合中移除旧副本
+    CT-->>CLI: 推送更新后的元数据
+    CLI->>NEW: 后续请求改连新的 Leader
+    OP->>CT: verify 通过后自动清除限流配置
+</div>
+
+<pre><code class="language-bash"># 1. 生成方案，只生成不执行；Current assignment 必须先存档用于回滚
+bin/kafka-reassign-partitions.sh --bootstrap-server kafka-1:9092 \
+  --topics-to-move-json-file topics.json \
+  --broker-list "1,2,3,4,5,6" --generate
+# topics.json 内容形如 {"topics":[{"topic":"orders"}],"version":1}
+# 把 Proposed assignment 存成 reassign.json，人工检查副本落点是否跨机架
+
+# 2. 执行时必须带限流，单位是字节每秒
+#    不限流会让迁移流量把机间带宽打满，正常生产消费一起被拖死，
+#    还会因为复制滞后把 Isr 打散，配合 min.insync.replicas=2 变成不可写
+bin/kafka-reassign-partitions.sh --bootstrap-server kafka-1:9092 \
+  --reassignment-json-file reassign.json --execute \
+  --throttle 50000000
+
+# 3. 反复 verify 直到全部完成，未完成前不要手动撤限流
+bin/kafka-reassign-partitions.sh --bootstrap-server kafka-1:9092 \
+  --reassignment-json-file reassign.json --verify
+# 全部分区显示 completed successfully 后，verify 会自动移除限流配置
+# 中途放弃则要手动清理，否则限流配置会长期残留并拖慢日后的正常复制
+
+# 4. 迁移完成后把 Leader 均衡回优先副本
+bin/kafka-leader-election.sh --bootstrap-server kafka-1:9092 \
+  --election-type PREFERRED --all-topic-partitions</code></pre>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">分区设计最容易踩的坑</div>
+    <ul>
+    <li><strong>上线前随便填了分区数。</strong>它只能增不能减，填小了只能靠扩分区（打断顺序），填大了只能新建主题迁移。</li>
+    <li><strong>在业务高峰或有积压时扩分区。</strong>同一实体的新旧消息被并行处理，顺序性当场失效，而且这类乱序很难在事后发现。</li>
+    <li><strong>以为加分区就能提升消费速度。</strong>已有积压不会被重新分配到新分区，新分区只接新数据，老分区的积压还得靠老消费者慢慢啃。</li>
+    <li><strong>用低基数字段做 key。</strong>省份、渠道、状态码这类字段做 key，必然把数据压到少数几个分区上。</li>
+    <li><strong>把粘性分区器的攒批波动误判成倾斜。</strong>秒级看单分区速率一定不均，要看分钟级累计。</li>
+    <li><strong>只看总 LAG 不看分区分布。</strong>热点分区堆了十六万而其他分区为零，与十六个分区各堆一万，处置方式完全不同。</li>
+    <li><strong>RF=2 配 min.insync=2。</strong>看着省了一份磁盘，实际任何一台节点重启就完全不可写。</li>
+    <li><strong>min.insync 设成等于 RF。</strong>连正常滚动升级都做不了，每次重启都是一次写入中断。</li>
+    <li><strong>标了 broker.rack 就以为已有主题会自动跨机架。</strong>只对新建主题生效，存量主题必须手动重分配。</li>
+    <li><strong>对事件流误用 compact。</strong>同一 key 的历史事件会被吃掉，等于静默丢数据；对无 key 消息用 compact 则完全无效。</li>
+    <li><strong>compact 主题的 delete.retention.ms 设得太短。</strong>慢消费者错过墓碑消息，下游本地状态永远留着已删除的数据。</li>
+    <li><strong>重分配不加 throttle。</strong>迁移流量打满机间带宽，正常复制滞后、Isr 被打散，直接演变成写入不可用。</li>
+    <li><strong>重分配后不做优先副本选举。</strong>Leader 全堆在少数节点上，集群负载长期倾斜。</li>
+    <li><strong>消费端把同分区消息丢进线程池。</strong>生产端辛苦维持的按 key 有序，在这一行代码里全部作废。</li>
+    </ul>
+</div>
+
+                    </div>
+                </article>
+                <nav class="article-nav">
+                    <a class="nav-prev" href="../producer-consumer/"><span class="nav-label">← 上一篇</span><span class="nav-title">生产者与消费者</span></a>
+                    <a class="nav-next" href="../reliability/"><span class="nav-label">下一篇 →</span><span class="nav-title">消息可靠性</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · Kafka 消息队列</h2><ul class="related-list"><li><a class="side-post" href="../intro/">Kafka 架构原理</a></li><li><a class="side-post" href="../install/">Kafka 安装部署</a></li><li><a class="side-post" href="../producer-consumer/">生产者与消费者</a></li><li><a class="side-post" href="../reliability/">消息可靠性</a></li><li><a class="side-post" href="../performance/">消息队列对比</a></li></ul></aside>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+    <button class="back-to-top" title="回到顶部">↑</button>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "architecture";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

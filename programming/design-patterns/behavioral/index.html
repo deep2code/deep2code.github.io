@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>行为型模式的现代形态：策略传函数、事件的排障代价、表驱动状态机与中间件链 - 常用设计模式 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+    <meta name="description" content="行为型模式的现代形态：策略的当代写法就是传函数，给出条件分支、策略类、闭包注册表三种写法的对照与用表注册取代分支的收益与代价；观察者与发布订阅是解耦最强也最难排障的模式，附事件与直接调用的判断口径以及同步事件与异步事件在错误传播和事务边界上的差异；状态模式与表驱动状态机的对照，强调状态流转必须用带条件的原子更新；责任链的中间件式与审批链式两种形态，附洋葱模型执行顺序；命令、模板方法与访问者的适用边界。">
+    <meta name="keywords" content="常用设计模式,行为型模式,技术博客,资深码农">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/programming/design-patterns/behavioral/">
+    <meta property="og:title" content="行为型模式的现代形态：策略传函数、事件的排障代价、表驱动状态机与中间件链 - 常用设计模式 - 资深码农">
+    <meta property="og:description" content="行为型模式的现代形态：策略的当代写法就是传函数，给出条件分支、策略类、闭包注册表三种写法的对照与用表注册取代分支的收益与代价；观察者与发布订阅是解耦最强也最难排障的模式，附事件与直接调用的判断口径以及同步事件与异步事件在错误传播和事务边界上的差异；状态模式与表驱动状态机的对照，强调状态流转必须用带条件的原子更新；责任链的中间件式与审批链式两种形态，附洋葱模型执行顺序；命令、模板方法与访问者的适用边界。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/programming/design-patterns/behavioral/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="行为型模式的现代形态：策略传函数、事件的排障代价与表驱动状态机 - 常用设计模式">
+    <meta name="twitter:description" content="行为型模式的现代形态：策略的当代写法就是传函数，给出条件分支、策略类、闭包注册表三种写法的对照与用表注册取代分支的收益与代价；观察者与发布订阅是解耦最强也最难排障的模式，附事件与直接调用的判断口径以及同步事件与异步事件在错误传播和事务边界上的差异；状态模式与表驱动状态机的对照，强调状态流转必须用带条件的原子更新；责任链的中间件式与审批链式两种形态，附洋葱模型执行顺序；命令、模板方法与访问者的适用边界。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "把条件分支改成策略类一定更好吗？", "acceptedAnswer": {"@type": "Answer", "text": "不一定。分支数少于五个且不会频繁增删时，一屏读完的条件分支比二十个小文件更好维护，因为完整规则在一个地方，改动时不会漏。策略的真正收益出现在分支会持续增删、由不同模块提供、或需要按配置开关时。即使这时也不必先写类：策略只是一个函数，先用函数类型加注册表，直到策略自身需要持有状态或需要注入依赖，再升级为类。"}}, {"@type": "Question", "name": "用注册表取代条件分支的代价是什么？", "acceptedAnswer": {"@type": "Answer", "text": "收益是新增策略不用改主流程，代价有三个：一是逻辑分散，读懂完整规则要打开所有实现；二是调用点无法静态搜索，从策略实现反查谁调用它只能靠运行期日志；三是未注册的 key 如果静默回退到默认实现，会把配置错误变成业务错误。可行的补偿是把选中的 key 打进日志与链路追踪标签、对未知 key 显式抛错、并写一个用例断言注册表内容与配置枚举一致。"}}, {"@type": "Question", "name": "什么时候该发事件，什么时候直接调用更好？", "acceptedAnswer": {"@type": "Answer", "text": "判断口径是主流程是否依赖它的结果。如果调用方需要它的返回值、需要它成功才算业务完成、或需要它与自己同一个事务，就直接调用；如果它是可选的后续动作、失败不影响主流程、并且订阅方数量会增长，就发事件。事件最大的代价是调用关系在运行期才确定，静态分析找不到，改一个动作时无法知道它触发了什么，所以事件名与载荷必须稳定，且订阅方要能在链路追踪里被看到。"}}, {"@type": "Question", "name": "同步事件和异步事件的差别在哪里？", "acceptedAnswer": {"@type": "Answer", "text": "差别在错误传播和事务边界。同步事件本质是一次方法调用，订阅方抛异常会传回发布方，如果在同一事务里还会让主流程一起回滚，而且订阅方耗时直接算进主流程延迟。异步事件解开了这两条：订阅方失败不影响发布方，但发布方也就失去了兜底能力，必须自带重试与死信处理，并且要注意事务提交前发出的异步事件可能让订阅方读不到还未提交的数据。跨服务事件的投递语义与重复消费详见站内消息队列相关文章。"}}, {"@type": "Question", "name": "状态模式和表驱动状态机该选哪个？", "acceptedAnswer": {"@type": "Answer", "text": "状态少且每个状态行为差异很大时，一个状态一个类能把行为收在一起；状态多、流转规则需要配置化或需要给运营查看时，一张转移表明显更优，因为规则是数据而不是代码，新增流转不用发版，还能直接渲染成图或导出校验。无论选哪种实现，落库的状态流转都必须用带前置状态条件的原子更新，不能先查再改，否则并发下会出现状态回退与重复推进。"}}, {"@type": "Question", "name": "责任链和中间件是同一个东西吗？", "acceptedAnswer": {"@type": "Answer", "text": "是同一模式的两种形态。中间件式的特点是每一层都能决定是否继续往下走，并且能在下游返回后再做处理，形成洋葱结构，Web 框架的请求处理、拦截器、过滤器都是这个结构。审批链式的特点是找到第一个能处理的节点就结束，或按顺序逐级审批，链条通常来自配置或数据。两者共同的危险是某一环偷偷吞掉异常或直接返回而不记录原因，导致请求在链中被静默终止，排查时看不到任何线索。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming" class="active">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">编程语言与代码功底</a><span class="separator">/</span><a href="../index.html">设计模式的本质与代价：接缝、SOLID 取舍与现代语言内建能力</a><span class="separator">/</span><span>行为型模式</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">行为型模式的现代形态：策略传函数、事件的排障代价、表驱动状态机与中间件链</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ 行为型设计模式</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>行为型模式共享同一个动作：<strong>把「下一步由谁决定」从主流程里挪出去</strong>。挪法只有三种——查一张表（策略、状态）、发一个通知（观察者）、串一条链（责任链、中间件）。挪出去的收益是主流程不再随分支增长而膨胀，代价高度一致：<strong>控制流从静态可读变成运行期才确定</strong>，于是你在代码里搜不到调用关系，排障要靠日志而不是阅读。这篇讲每个模式在什么变化下值得付这个代价，以及现代语言里它们退化成了什么形态。</p>
+
+<div class="mermaid">
+flowchart TB
+    M["主流程：不想随分支增长而膨胀"]
+    subgraph T1["交给一张表：策略与状态"]
+        A1["按 key 查到要执行的函数或状态定义"]
+        A2["新增分支不改主流程"]
+        A1 --> A2
+    end
+    subgraph T2["交给一次通知：观察者与发布订阅"]
+        B1["发布方不知道订阅方是谁"]
+        B2["订阅方数量可以自由增长"]
+        B1 --> B2
+    end
+    subgraph T3["交给一条链：责任链与中间件"]
+        C1["每一环决定是否继续往下"]
+        C2["横切能力可增删可重排"]
+        C1 --> C2
+    end
+    M --> T1
+    M --> T2
+    M --> T3
+    T1 --> P["共同代价：控制流运行期才确定<br/>静态搜索找不到调用点，排障依赖日志与链路追踪"]
+    T2 --> P
+    T3 --> P
+    </div>
+
+<h2>策略：三种写法的真实差别</h2>
+<p>策略模式的现代形态就是<strong>传一个函数</strong>。同一个需求写三遍就能看清差别：条件分支把规则集中但主流程会膨胀；策略类把规则分散到多个文件并引入注册与装配；闭包注册表在两者之间，保留了轻量与集中。</p>
+
+<pre><code class="language-java">// 写法一：条件分支。分支少于 5 个且稳定时，这是最好的写法 —— 完整规则一屏读完
+long feeCents(String channel, long amountCents) {
+    switch (channel) {
+        case "alipay": return amountCents * 6 / 1000;              // 0.6%
+        case "wechat": return amountCents * 6 / 1000;
+        case "unionpay": return Math.max(amountCents * 5 / 1000, 100);  // 0.5% 且不低于 1 元
+        default: throw new IllegalArgumentException("unknown channel: " + channel);
+    }
+}
+
+// 写法二：策略类。只有在策略需要自己的状态或需要注入依赖时才值得
+interface FeeRule { long fee(long amountCents); }
+
+final class UnionPayFeeRule implements FeeRule {                   // 需要注入配置与汇率服务，这才是建类的理由
+    private final RateConfig config;                               // 有依赖
+    UnionPayFeeRule(RateConfig config) { this.config = config; }
+    public long fee(long amountCents) {
+        return Math.max(amountCents * config.rateBp("unionpay") / 10000, config.minFeeCents());
+    }
+}
+
+// 写法三：闭包注册表。无状态策略的默认选择，新增一行即可，不新建文件
+final class FeeRules {
+    private final java.util.Map&lt;String, java.util.function.LongUnaryOperator&gt; rules;
+
+    FeeRules(RateConfig config) {
+        this.rules = java.util.Map.of(
+            "alipay",   amt -&gt; amt * 6 / 1000,
+            "wechat",   amt -&gt; amt * 6 / 1000,
+            "unionpay", amt -&gt; Math.max(amt * config.rateBp("unionpay") / 10000, config.minFeeCents())
+        );
+    }
+
+    long fee(String channel, long amountCents) {
+        var r = rules.get(channel);
+        // 未注册必须显式失败。静默回退到默认费率是最常见的资损来源
+        if (r == null) throw new IllegalArgumentException("unknown channel: " + channel);
+        long fee = r.applyAsLong(amountCents);
+        log.info("fee calculated, channel={}, amount={}, fee={}", channel, amountCents, fee); // 补偿可搜索性
+        return fee;
+    }
+}</code></pre>
+
+<table>
+<thead><tr><th>维度</th><th>条件分支</th><th>策略类加注册</th><th>闭包注册表</th></tr></thead>
+<tbody>
+<tr><td>新增一个策略要改什么</td><td>改主流程的分支</td><td>新建一个类并注册，主流程不动</td><td>在注册表里加一行，主流程不动</td></tr>
+<tr><td>读懂完整规则的成本</td><td>低，一屏读完</td><td>高，要打开所有实现类</td><td>中，注册表本身就是目录</td></tr>
+<tr><td>可搜索性</td><td>好，搜方法名即可</td><td>差，反查调用点只能靠日志</td><td>中，注册表可搜，实现可跳转</td></tr>
+<tr><td>能否持有状态与依赖</td><td>不能，只能靠外层变量</td><td>能，构造器注入</td><td>能，闭包捕获，但捕获过多会变难读</td></tr>
+<tr><td>配置化能力</td><td>弱，改代码发版</td><td>强，可按配置装配</td><td>强，key 可来自配置</td></tr>
+<tr><td>适用分支数</td><td>2 到 5 个且稳定</td><td>持续增删，且策略有依赖</td><td>数量多但逻辑短、无状态</td></tr>
+<tr><td>主要风险</td><td>主流程膨胀，漏加分支时走 default</td><td>逻辑分散到二十个文件，装配出错难发现</td><td>未注册 key 静默回退，闭包捕获可变量</td></tr>
+</tbody>
+</table>
+
+<div class="callout callout-tip">
+<div class="callout-icon">✅</div>
+<div class="callout-title">用注册表取代分支时的三条补偿措施</div>
+<p>一、对未注册的 key 显式抛错，不要回退默认实现；二、把选中的 key 打进日志与链路追踪标签，补上丢失的可搜索性；三、写一个用例断言注册表的 key 集合与配置里的枚举完全一致，防止上线后才发现漏注册。</p>
+</div>
+
+<h2>观察者与发布订阅：解耦最强，排障最难</h2>
+<p>事件是解耦力度最大的手段，也是唯一一种<strong>让你无法通过阅读代码知道一个动作会触发什么</strong>的手段。调用关系在运行期由订阅注册决定，静态分析、全局搜索、IDE 调用层级全部失效。所以它的判断口径要比其他模式更严格。</p>
+
+<div class="mermaid">
+flowchart TB
+    Q1{"主流程需要它的<br/>返回值或成功状态吗"}
+    Q1 -->|"需要"| D1["直接调用<br/>失败要能影响主流程结果"]
+    Q1 -->|"不需要"| Q2{"它必须和主流程<br/>在同一个事务里吗"}
+    Q2 -->|"必须"| D2["同一事务内直接调用<br/>或用事务提交前的同步事件"]
+    Q2 -->|"不必须"| Q3{"订阅方数量<br/>会持续增长吗"}
+    Q3 -->|"不会，就一两个"| D3["直接调用更好<br/>省下排障成本"]
+    Q3 -->|"会，且由别的团队接入"| Q4{"允许延迟与重复投递吗"}
+    Q4 -->|"允许"| D4["异步事件<br/>订阅方自己做幂等与重试"]
+    Q4 -->|"不允许"| D5["同步事件或直接调用<br/>并明确超时预算"]
+    </div>
+
+<table>
+<thead><tr><th>对比项</th><th>同步事件（进程内）</th><th>异步事件（线程池或消息队列）</th></tr></thead>
+<tbody>
+<tr><td>本质</td><td>一次方法调用，只是调用方不知道被调者</td><td>一次投递，发布与消费解耦</td></tr>
+<tr><td>错误传播</td><td>订阅方抛异常会传回发布方，可能让主流程失败</td><td>订阅方失败发布方完全不知情，必须自带重试与死信</td></tr>
+<tr><td>事务边界</td><td>默认在发布方事务内，回滚会一起回滚</td><td>不在同一事务；提交前发出会让订阅方读不到数据</td></tr>
+<tr><td>延迟影响</td><td>订阅方耗时直接加到主流程 P99</td><td>不影响主流程，但存在处理滞后</td></tr>
+<tr><td>顺序保证</td><td>按注册顺序，可控但隐式</td><td>需要分区键才有局部有序</td></tr>
+<tr><td>重复处理</td><td>不会重复</td><td>至少一次投递是常态，订阅方必须幂等</td></tr>
+<tr><td>可观测性</td><td>在同一条链路里，堆栈可见</td><td>链路断开，必须显式透传追踪上下文</td></tr>
+<tr><td>适合什么</td><td>强一致的后置校验、同事务内的领域事件</td><td>通知、同步数据、可延迟的后续动作</td></tr>
+</tbody>
+</table>
+
+<p>两个最常见的坑：一是<strong>在事务提交前发出异步事件</strong>，消费者先到并按主键查询却查不到记录，表现为随机失败，正确做法是把发送挂到事务提交之后；二是<strong>同步事件里做远程调用</strong>，把一个可选动作变成主流程的延迟与失败来源。跨服务的投递语义、重复消费与顺序保证详见站内消息队列相关文章，这里不重复。</p>
+
+<h2>状态模式与表驱动状态机</h2>
+<p>订单、工单、支付这类对象的核心复杂度是<strong>状态流转规则</strong>。两种实现方式：每个状态一个类，或者一张转移表。先把流转画清楚，再看两种实现的差别。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> CREATED
+    CREATED --> PAID: 支付成功回调
+    CREATED --> CANCELLED: 用户取消或超时未支付
+    PAID --> SHIPPED: 仓库发货
+    PAID --> REFUNDING: 发起退款
+    SHIPPED --> COMPLETED: 确认收货或自动确认
+    SHIPPED --> REFUNDING: 拒收或售后
+    REFUNDING --> REFUNDED: 退款成功
+    REFUNDING --> PAID: 退款被驳回，回到已支付
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+    REFUNDED --> [*]
+    note right of REFUNDING
+        退款是唯一允许回退的分支
+        必须记录来源状态，否则驳回后不知道回哪里
+    end note
+    </div>
+
+<table>
+<thead><tr><th>维度</th><th>状态模式（每状态一个类）</th><th>表驱动状态机（一张转移表）</th></tr></thead>
+<tbody>
+<tr><td>规则存在哪里</td><td>散在各状态类的方法里</td><td>集中在一张表，可放代码常量也可放数据库</td></tr>
+<tr><td>新增一个流转</td><td>改相关状态类，可能要改多个</td><td>加一行数据，可不发版</td></tr>
+<tr><td>全局校验能力</td><td>难，无法一眼看出是否有孤立状态</td><td>容易，可程序化检查可达性与死状态</td></tr>
+<tr><td>行为差异大时</td><td>优势明显，每个状态的行为收在一起</td><td>要额外挂动作函数，表会变胖</td></tr>
+<tr><td>状态数量多时</td><td>类数量线性膨胀，十几个状态就难维护</td><td>优势明显，表再长也还是一张表</td></tr>
+<tr><td>给非开发看</td><td>看不了</td><td>可直接渲染成图或导出表格评审</td></tr>
+<tr><td>推荐场景</td><td>状态少于 6 个且每个状态行为迥异</td><td>状态多、规则需要配置化、需要审计与可视化</td></tr>
+</tbody>
+</table>
+
+<p>无论选哪种实现，<strong>落库的状态流转必须是带前置状态条件的原子更新，绝不能先查后改</strong>。先查后改在并发下会出现状态回退（后到的线程用旧状态覆盖新状态）和重复推进（两个线程都认为自己是第一个）。</p>
+
+<pre><code class="language-sql">-- 正确：把前置状态写进 WHERE，用受影响行数判断这次流转是否由自己完成
+UPDATE orders
+   SET status = 'PAID',
+       paid_at = NOW(3),
+       version = version + 1
+ WHERE id = ?
+   AND status = 'CREATED';     -- 关键：前置状态条件，天然防重复推进与状态回退
+-- 受影响行数为 1：本次流转成功，可以继续发事件
+-- 受影响行数为 0：说明状态已不是 CREATED，可能是重复回调或已取消，必须查一次当前状态再决定，不要直接报错
+
+-- 错误：先查后改，两个并发回调都能通过检查
+-- SELECT status FROM orders WHERE id = ?;      -- 都读到 CREATED
+-- UPDATE orders SET status = 'PAID' WHERE id = ?;  -- 都执行成功，事件被发两次
+
+-- 表驱动状态机的转移表：规则变成数据，新增流转不用发版
+CREATE TABLE order_transition (
+    from_status VARCHAR(16)  NOT NULL,
+    event       VARCHAR(32)  NOT NULL,
+    to_status   VARCHAR(16)  NOT NULL,
+    guard_expr  VARCHAR(128) NULL,      -- 可选的前置条件，例如 amount &gt; 0
+    PRIMARY KEY (from_status, event)    -- 同一状态同一事件只能有一条规则，避免歧义
+);</code></pre>
+
+<p>状态流转的并发控制、乐观锁版本号与幂等落地的完整讨论详见站内数据建模相关文章，这里只强调一条：<strong>状态判断和状态写入必须发生在同一条语句里</strong>。</p>
+
+<h2>责任链的两种形态</h2>
+<p>责任链在实践中是两种完全不同的东西。<strong>中间件式</strong>：每层都能决定是否继续，并且能在下游返回后再处理一次，形成洋葱结构，这是所有 Web 框架的核心结构。<strong>审批链式</strong>：按顺序找第一个能处理的节点，或逐级审批，链条通常来自配置或数据。</p>
+
+<table>
+<thead><tr><th>维度</th><th>中间件式</th><th>审批链式</th></tr></thead>
+<tbody>
+<tr><td>链的来源</td><td>启动时代码装配，固定</td><td>运行时按数据或配置生成，每个实例可能不同</td></tr>
+<tr><td>是否有返回阶段</td><td>有，下游返回后还能处理，形成洋葱</td><td>一般没有，处理完即结束</td></tr>
+<tr><td>终止方式</td><td>某层不调用下一层即终止</td><td>某节点声明自己能处理即终止，或走完全部节点</td></tr>
+<tr><td>典型用途</td><td>鉴权、限流、日志、恢复、超时、追踪</td><td>审批流、风控规则链、消息过滤链</td></tr>
+<tr><td>状态持久化</td><td>不需要，请求内存活</td><td>需要，每一步结果都要落库以支持断点续跑</td></tr>
+<tr><td>主要风险</td><td>顺序装配错（例如恢复中间件不在最外层），异常被中间层吞掉</td><td>链条数据错导致卡单，某节点超时无人处理</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-go">// 中间件式责任链：洋葱模型。每层可决定是否调用 next，也可在 next 返回后继续处理
+type Middleware func(http.Handler) http.Handler
+
+// 倒序包装，使 ms[0] 位于最外层，执行顺序与书写顺序一致，避免装配顺序反直觉
+func Chain(h http.Handler, ms ...Middleware) http.Handler {
+    for i := len(ms) - 1; i &gt;= 0; i-- {
+        h = ms[i](h)
+    }
+    return h
+}
+
+// 必须放在最外层：只有它在外面，才能兜住内层所有 panic
+func Recover(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        defer func() {
+            if p := recover(); p != nil {
+                log.Printf("panic recovered path=%s panic=%v stack=%s", r.URL.Path, p, debug.Stack())
+                w.WriteHeader(http.StatusInternalServerError) // 不写状态码会让客户端看到连接被直接断开
+            }
+        }()
+        next.ServeHTTP(w, r)
+    })
+}
+
+// 可以终止链条：不调用 next 就是「我处理完了，后面不用走」
+func Auth(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if !validToken(r.Header.Get("Authorization")) {
+            w.WriteHeader(http.StatusUnauthorized)
+            return // 终止，且必须有日志或指标，否则请求被静默拦下时查不到原因
+        }
+        next.ServeHTTP(w, r)
+    })
+}
+
+// 返回阶段做事：耗时统计必须在 next 之后，这就是洋葱的「出」那一半
+func Metrics(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+        next.ServeHTTP(w, r)
+        observeLatency(r.URL.Path, time.Since(start)) // 这里能拿到整个内层链路的总耗时
+    })
+}
+
+// 装配：顺序即语义。Recover 最外，其次超时，再鉴权，最后业务
+// handler := Chain(bizHandler, Recover, Timeout(2*time.Second), Auth, Metrics)</code></pre>
+
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant CL as 客户端
+    participant RC as Recover
+    participant TO as Timeout
+    participant AU as Auth
+    participant ME as Metrics
+    participant BZ as 业务处理器
+    CL->>RC: 请求进入
+    RC->>TO: 进入阶段，设置 defer recover
+    TO->>AU: 注入带超时的上下文
+    AU->>ME: token 校验通过
+    ME->>BZ: 记录开始时间
+    BZ-->>ME: 返回结果
+    ME-->>AU: 出阶段：上报耗时
+    AU-->>TO: 出阶段：无事可做
+    TO-->>RC: 出阶段：cancel 释放上下文
+    RC-->>CL: 响应返回
+    Note over RC,BZ: 进入顺序与书写顺序一致，返回顺序完全相反<br/>Recover 必须最外层，Metrics 越靠内统计到的耗时越窄<br/>Auth 若不调用下一层，链在此终止且 Metrics 完全不会执行
+    </div>
+
+<h2>命令、模板方法与访问者：适用面要看清</h2>
+<p>这三个模式在现代代码里都被更轻的手段取代了大半，只有特定形态还值得写。</p>
+
+<table>
+<thead><tr><th>模式</th><th>还值得用的形态</th><th>已被取代的形态</th><th>关键判据</th></tr></thead>
+<tbody>
+<tr><td>命令</td><td>命令要被序列化、持久化、排队、重放、撤销时；本质上就是任务队列里的一条消息</td><td>只是为了「把动作对象化」而包一层的 Command 类</td><td>这个动作需要被存起来以后再执行吗</td></tr>
+<tr><td>撤销与重做</td><td>记录反向命令或状态快照；业务系统里更常见的是「补偿操作」而非真正的撤销</td><td>指望用一个通用 undo 栈解决业务回滚</td><td>反向操作是否真的存在且可安全执行</td></tr>
+<tr><td>模板方法</td><td>钩子多且有严格调用顺序，且框架方需要强约束</td><td>只有一两个可变步骤时，传回调更轻，也避免继承</td><td>可变点超过三个且彼此有顺序依赖吗</td></tr>
+<tr><td>迭代器</td><td>遍历外部资源需要控制分页、游标与关闭时机</td><td>手写 hasNext 与 next 遍历内存集合</td><td>遍历过程是否需要管理资源生命周期</td></tr>
+<tr><td>访问者</td><td>数据结构稳定但操作频繁新增，典型是语法树处理、SQL 解析、字节码分析</td><td>业务对象上套访问者，因为业务的数据结构恰恰是最常变的</td><td>节点类型是否几年都不变</td></tr>
+<tr><td>解释器</td><td>需要用户自定义表达式（风控规则、告警条件）时，优先用成熟表达式引擎</td><td>自己从头写词法与语法分析</td><td>表达式复杂度是否值得一个引擎</td></tr>
+</tbody>
+</table>
+
+<p>访问者的适用面之所以极窄，原因是它把变化的方向定死了：<strong>新增操作很便宜，新增节点类型极贵</strong>——加一种节点要改所有访问者。业务代码里最常发生的偏偏是「新增一种业务对象」，所以在业务层用访问者通常是把成本压在了最容易变化的方向上。</p>
+
+<h2>反模式</h2>
+<table>
+<thead><tr><th>反模式</th><th>识别信号</th><th>后果</th><th>修法</th></tr></thead>
+<tbody>
+<tr><td>把所有条件分支都改成策略类</td><td>原来一屏的规则变成二十个十行文件</td><td>读完整规则要打开二十个文件，且从实现反查调用点只能靠日志</td><td>分支少于 5 且稳定就保留分支；先用函数注册表，需要状态时再建类</td></tr>
+<tr><td>事件满天飞</td><td>一个下单动作发出七个事件，没人能说清都触发了什么</td><td>改一个动作不知道影响谁，链路追踪里到处是断点，回归测试无法覆盖</td><td>建立事件清单与订阅关系文档，主流程依赖的动作改回直接调用</td></tr>
+<tr><td>状态判断散落各处</td><td>各处都写 if status equals 某个值，没有统一状态机</td><td>新增状态漏改某一处，出现不该发生的流转，且无法审计</td><td>集中成一张转移表，所有流转必须经过统一入口</td></tr>
+<tr><td>状态流转先查后改</td><td>先 SELECT 查状态再 UPDATE</td><td>并发下状态回退与重复推进，事件被发两次</td><td>把前置状态写进 WHERE，按受影响行数判断是否由自己完成</td></tr>
+<tr><td>责任链里某一环吞异常</td><td>catch 后只 return，不记日志不上报指标</td><td>请求被静默终止，客户端只看到空响应，排查时链路里毫无线索</td><td>终止必须留痕：日志、指标、追踪标签三者至少有其一</td></tr>
+<tr><td>中间件顺序装配错</td><td>恢复中间件不在最外层，或超时中间件在鉴权之后</td><td>内层 panic 无人兜住导致连接直接断开；超时保护覆盖不到鉴权的远程调用</td><td>把装配集中一处、写明顺序原因，并用集成测试固定</td></tr>
+<tr><td>在事务提交前发异步事件</td><td>发布代码紧跟在写库之后，同一事务内</td><td>消费者按主键查不到记录，表现为随机失败且难以复现</td><td>挂到事务提交之后再发送，或用本地消息表</td></tr>
+<tr><td>用继承实现模板方法却在基类调用可覆盖方法</td><td>基类构造器或初始化流程里调用了子类要覆盖的方法</td><td>子类字段还没初始化就被调用，读到默认值</td><td>改成传回调，或明确禁止在初始化流程里调用可覆盖方法</td></tr>
+</tbody>
+</table>
+
+<h2>最容易踩的坑</h2>
+
+<div class="callout callout-danger">
+<div class="callout-icon">❌</div>
+<div class="callout-title">行为型模式的高频事故清单</div>
+<ul>
+<li>策略注册表对未知 key 静默回退默认实现：配置写错一个字母就按错误费率或错误渠道跑，事后对账才发现。</li>
+<li>把二十个短分支拆成二十个策略类：逻辑分散到二十个文件，新人读一遍完整规则要跳二十次，收益为零。</li>
+<li>闭包策略捕获了可变对象：捕获的配置对象后来被别处修改，策略行为在运行中悄悄变了。</li>
+<li>同步事件里做远程调用：一个可选的后置动作变成主流程的延迟与失败来源，P99 被它拖垮。</li>
+<li>事务提交前发异步事件：消费者先到却查不到记录，表现为随机失败，压测时几乎复现不出来。</li>
+<li>事件订阅方抛异常导致发布方事务回滚：一个通知失败把整笔业务回滚，且日志里看不出是谁抛的。</li>
+<li>异步事件不做幂等：至少一次投递是常态，重复消费直接造成重复发货或重复入账。</li>
+<li>事件名与载荷随意改：订阅方在另一个仓库，改完发版才发现对方解析失败，且没有编译期检查。</li>
+<li>状态流转先查后改：并发回调下两个线程都认为自己是第一个，事件发两次、状态被旧值覆盖。</li>
+<li>状态判断散落在十几处 if 里：新增一个状态漏改一处，出现不该存在的流转，事后无法审计是谁改的。</li>
+<li>退款流程不记录来源状态：驳回后不知道该回到已支付还是已发货，只能人工判断。</li>
+<li>责任链某一环 catch 后直接返回且不留痕：请求被静默拦下，客户端只看到空响应，排查时链路毫无线索。</li>
+<li>恢复中间件没放在最外层：内层 panic 无人兜住，进程崩溃或连接被直接断开，客户端看到的是连接重置。</li>
+<li>耗时统计中间件放在最内层：统计到的只是业务处理时间，把鉴权和限流的耗时全漏掉，指标与真实延迟长期不一致。</li>
+<li>模板方法的基类在初始化流程里调用可覆盖方法：子类字段尚未赋值就被调用，读到默认值且极难定位。</li>
+<li>在业务对象上套访问者：业务节点类型恰恰是最常新增的，每加一个类型要改所有访问者，成本压在最容易变化的方向上。</li>
+</ul>
+</div>
+
+                    </div>
+                </article>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <p>© 2026 资深码农. 保留所有权利。</p>
+        </div>
+    </footer>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "programming";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>Python 并发的三条路线与选择 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="把 threading、multiprocessing、asyncio 三条路线的工程细节摊开：五种同步原语各自的场景与误用后果、线程池 max_workers 的估算方法、死锁的两种成因、threading.local 在 asyncio 下串号而必须换 contextvars、fork 与 spawn 与 forkserver 的平台差异如何造成本地正常线上崩溃、进程间通信四种方式的开销、进程池的 pickle 硬约束、数据库连接绝不能跨 fork 复用，以及 run_in_executor 选线程池还是进程池的判断依据与完整决策表。">
+    <meta name="keywords" content="Python,并发,多线程,多进程,asyncio,GIL,ThreadPoolExecutor,ProcessPoolExecutor,TaskGroup">
+    <meta name="author" content="资深码农">
+    <meta name="generator" content="deep2code generator">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/programming/python/concurrency/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="Python 并发的三条路线与选择 - 资深码农">
+    <meta property="og:description" content="把 threading、multiprocessing、asyncio 三条路线的工程细节摊开：五种同步原语各自的场景与误用后果、线程池 max_workers 的估算方法、死锁的两种成因、threading.local 在 asyncio 下串号而必须换 contextvars、fork 与 spawn 与 forkserver 的平台差异如何造成本地正常线上崩溃、进程间通信四种方式的开销、进程池的 pickle 硬约束、数据库连接绝不能跨 fork 复用，以及 run_in_executor 选线程池还是进程池的判断依据与完整决策表。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/programming/python/concurrency/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Python 并发的三条路线与选择 - 资深码农">
+    <meta name="twitter:description" content="把 threading、multiprocessing、asyncio 三条路线的工程细节摊开：五种同步原语各自的场景与误用后果、线程池 max_workers 的估算方法、死锁的两种成因、threading.local 在 asyncio 下串号而必须换 contextvars、fork 与 spawn 与 forkserver 的平台差异如何造成本地正常线上崩溃、进程间通信四种方式的开销、进程池的 pickle 硬约束、数据库连接绝不能跨 fork 复用，以及 run_in_executor 选线程池还是进程池的判断依据与完整决策表。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="编程语言与代码功底">
+    <meta property="article:tag" content="Python">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Python 并发的三条路线与选择","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"把 threading、multiprocessing、asyncio 三条路线的工程细节摊开：五种同步原语各自的场景与误用后果、线程池 max_workers 的估算方法、死锁的两种成因、threading.local 在 asyncio 下串号而必须换 contextvars、fork 与 spawn 与 forkserver 的平台差异如何造成本地正常线上崩溃、进程间通信四种方式的开销、进程池的 pickle 硬约束、数据库连接绝不能跨 fork 复用，以及 run_in_executor 选线程池还是进程池的判断依据与完整决策表。","url":"https://www.yijunjun.asia/programming/python/concurrency/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/python/concurrency/"},"articleSection":"后端与编程语言"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Python 并发编程", "item": "https://www.yijunjun.asia/programming/python/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Python 线程池的 max_workers 应该设多少？", "acceptedAnswer": {"@type": "Answer", "text": "IO 密集型可以用「目标并发数等于目标 QPS 乘以平均耗时秒数」来估：要撑 200 QPS、下游平均 150 毫秒，就约需 30 个在飞请求，池给 32 足够。CPU 密集型走进程池并按核数设置，给多了只是排队。随手填 100 是典型错误，线程栈、下游连接数、数据库连接池都会被这个数字放大，被压垮的往往不是自己而是下游。定完之后必须压测校准，看 P99 与下游错误率有没有恶化。"}}, {"@type": "Question", "name": "为什么同一份多进程代码在 macOS 正常，上 Linux 就卡死？", "acceptedAnswer": {"@type": "Answer", "text": "因为启动方式的平台默认值不同。macOS 与 Windows 默认 spawn，会起一个全新解释器并重新导入模块，只把可 pickle 的参数传过去；Linux 历史默认 fork，直接复制父进程地址空间，连锁的状态和已打开的连接一并继承。如果父进程里有后台线程，fork 出来的子进程可能复制到一把已被别的线程持有且永远不会释放的锁，第一次打日志就挂住。正确做法是用 get_context 显式指定启动方式，不要吃平台默认值。Python 3.14 起在多线程进程中也不再默认使用 fork。"}}, {"@type": "Question", "name": "fork 之后为什么不能复用父进程的数据库连接？", "acceptedAnswer": {"@type": "Answer", "text": "因为 fork 复制的是文件描述符，父子两个进程指向同一个 socket，而数据库服务端只认这条会话。两边同时读写会让请求与响应报文交错，表现为随机的 SSL error、游标状态异常、查询结果串到另一个进程，压力越大越频繁。同一条规则适用于 Redis 客户端、HTTP 连接池、gRPC channel，以及 gunicorn 的 preload_app。修法是在子进程启动时重建，例如用进程池的 initializer 调用 engine.dispose，让本进程拿到全新的连接池。"}}, {"@type": "Question", "name": "threading.local 在 asyncio 下为什么会串号？", "acceptedAnswer": {"@type": "Answer", "text": "它按线程隔离数据，而 asyncio 是同一个线程上交替运行成百上千个协程，这些协程共享同一份 thread-local。于是 A 请求写进去的 request_id 会被 B 请求读到，日志串号、权限串用都是这么发生的，而且只在并发升高时才出现。替代品是 contextvars 的 ContextVar，它按上下文隔离，create_task 时自动继承父上下文的快照，在多线程下同样正确。新代码一律用它。"}}, {"@type": "Question", "name": "asyncio 里要跑阻塞代码，该选线程池还是进程池？", "acceptedAnswer": {"@type": "Answer", "text": "判断标准只有两条：会不会释放 GIL，参数能不能 pickle。同步 HTTP 客户端、同步数据库驱动、文件读写阻塞在系统调用上会释放 GIL，选线程池；numpy、pandas、图片编解码这类底层 C 代码也主动释放了 GIL，同样用线程池就够。纯 Python 的计算循环和大 JSON 解析全程持有 GIL，必须用进程池，否则放线程池等于串行还多一层调度。参数里带连接、文件句柄或闭包时只能用线程池，因为 pickle 传不过去。"}}, {"@type": "Question", "name": "为什么进程池会报不能 pickle 局部对象？", "acceptedAnswer": {"@type": "Answer", "text": "因为提交给进程池的函数与参数都要能被 pickle 序列化，而 lambda、嵌套定义的函数、局部类、数据库连接、打开的文件对象、内部带线程锁的对象都不行。用 fork 启动时这类代码可能侥幸跑通，换成 spawn 就必然失败，这也是本地能跑线上崩溃的常见来源。修法是把任务函数提到模块顶层，需要的配置用可 pickle 的简单参数传进去，或者放进 initializer 在子进程内部自己构造。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming" class="active">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">编程语言与代码功底</a><span class="separator">/</span><a href="../index.html">Python 做后端的适用边界与运行时约束</a><span class="separator">/</span><span>Python 并发编程</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">Python 并发的三条路线与选择</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ Python</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>主干篇《Python 并发编程》已经把 GIL 的精确含义和三种并发模型的决策讲过了，这篇不重复那些结论，只做一件事：把 <code>threading</code>、<code>multiprocessing</code>、<code>asyncio</code> 这三条路线的<strong>具体 API 和工程细节</strong>摊开，包括每条路线的正确写法、平台差异，以及三者混用时那些「本地跑得好、服务器上崩」的边界。</p>
+
+<h2>三条路线的能力边界</h2>
+<p>先把三者钉在资源视角上看：线程和协程都只是在<strong>同一个进程内复用等待时间</strong>，唯一能吃满多核的是多进程。这个前提决定了后面所有选择。</p>
+
+<div class="mermaid">
+flowchart TB
+    subgraph TH["threading 同进程多线程"]
+        T1["共享内存 对象直接传递"]
+        T2["受 GIL 限制 CPU 密集无收益"]
+        T3["同步阻塞库的唯一出路"]
+    end
+    subgraph MP["multiprocessing 多进程"]
+        P1["每进程独立解释器 真并行"]
+        P2["参数与返回值必须可 pickle"]
+        P3["启动与传参有固定开销"]
+    end
+    subgraph ASY["asyncio 单线程协程"]
+        A1["上万连接时内存最省"]
+        A2["整条调用链必须是异步库"]
+    end
+    subgraph OSR["操作系统资源"]
+        CPU["多核 CPU"]
+        FD["socket 与文件描述符"]
+    end
+    TH --> FD
+    ASY --> FD
+    MP --> CPU
+    TH -.->|"run_in_executor 线程池"| ASY
+    MP -.->|"run_in_executor 进程池"| ASY
+</div>
+
+<table>
+<thead><tr><th>维度</th><th>threading</th><th>multiprocessing</th><th>asyncio</th></tr></thead>
+<tbody>
+<tr><td>能否吃满多核</td><td>不能（同一时刻只有一个线程执行字节码）</td><td>能</td><td>不能</td></tr>
+<tr><td>单个执行单元的开销</td><td>一个内核线程加默认 8MB 虚拟栈，实际常驻 KB 级</td><td>一个完整解释器，几十 MB 起</td><td>一个协程对象，几 KB</td></tr>
+<tr><td>数据共享方式</td><td>直接共享，必须加锁</td><td>pickle 传递或共享内存</td><td>同线程内共享，单点执行不需要锁</td></tr>
+<tr><td>并发量级上限</td><td>几百（线程数超过核数几十倍后切换开销显著）</td><td>约等于核数（再多只是排队）</td><td>上万</td></tr>
+<tr><td>典型失效场景</td><td>拿它做 CPU 密集，比串行还慢</td><td>任务太碎，pickle 与启动开销盖过计算本身</td><td>链路里混进一个同步驱动，整个事件循环卡住</td></tr>
+<tr><td>调试难度</td><td>竞态与死锁，难复现</td><td>子进程崩溃只剩一个 BrokenProcessPool</td><td>栈信息被 await 切断，取消语义反直觉</td></tr>
+</tbody>
+</table>
+
+<h2>threading：锁的种类与线程池的正确姿势</h2>
+<p><code>threading</code> 提供五种同步原语，多数人只用 <code>Lock</code>，结果把本该用 <code>Condition</code> 或 <code>Semaphore</code> 表达的语义写成了轮询加 sleep。</p>
+
+<table>
+<thead><tr><th>原语</th><th>语义</th><th>该用它的场景</th><th>误用的后果</th></tr></thead>
+<tbody>
+<tr><td><code>Lock</code></td><td>二元互斥，不可重入</td><td>保护一小段临界区</td><td>同一线程递归获取会立刻自锁，且没有任何提示</td></tr>
+<tr><td><code>RLock</code></td><td>可重入，记录持有线程与计数</td><td>加锁的方法内部会调用另一个也要加锁的方法</td><td>拿它掩盖糟糕的调用结构，临界区越滚越大</td></tr>
+<tr><td><code>Condition</code></td><td>等待条件成立，配合 <code>notify</code> 唤醒</td><td>生产者消费者、等待状态变更</td><td>改用 sleep 轮询检查标志位，延迟和 CPU 都白花</td></tr>
+<tr><td><code>Semaphore</code></td><td>计数信号量，限制并发数</td><td>限制同时打到下游的请求数、连接数</td><td>用锁加计数器手写，漏减一次就永久饿死</td></tr>
+<tr><td><code>Event</code></td><td>一次性广播标志</td><td>通知所有工作线程退出</td><td>用全局布尔变量加轮询，退出不及时</td></tr>
+</tbody>
+</table>
+
+<p>不管用哪种，<strong>获取锁必须走 <code>with</code> 上下文管理器</strong>。手写 <code>acquire()</code> 加 <code>release()</code> 时，只要临界区内抛了异常，<code>release</code> 就不会执行，程序会在下一次获取时永久挂住——而且挂住的位置离真正的 bug 现场很远，几乎无从排查。</p>
+
+<pre><code class="language-python">import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# 限制打到下游的并发数：用 Semaphore 表达「最多 10 个在飞」
+downstream = threading.Semaphore(10)
+stats_lock = threading.Lock()
+stats = {"ok": 0, "fail": 0}
+
+
+def fetch_one(url: str) -&gt; int:
+    with downstream:                 # 超过 10 个时在这里排队，而不是压垮下游
+        status = do_http_get(url)    # 同步阻塞调用，等待期间会释放 GIL
+    with stats_lock:                 # 必须用 with：临界区抛异常也能保证释放
+        stats["ok" if status &lt; 400 else "fail"] += 1
+    return status
+
+
+# max_workers 怎么定：IO 密集的经验公式是 目标并发数 = 目标 QPS 乘以平均耗时秒数。
+# 要撑 200 QPS、下游平均 150ms，则约需 30 个在飞请求，池给 32 足够。
+# 不要随手填 100：线程栈、下游连接数、数据库连接池都是被它放大的成本。
+with ThreadPoolExecutor(max_workers=32, thread_name_prefix="fetch") as pool:
+    futures = {pool.submit(fetch_one, u): u for u in urls}
+    for fut in as_completed(futures):
+        try:
+            fut.result()             # 关键：不取 result，异常会被静默吞掉
+        except Exception:
+            logger.exception("fetch failed url=%s", futures[fut])
+</code></pre>
+
+<p>线程池最常见的隐性 bug 是<strong>不取 <code>future.result()</code></strong>。<code>submit</code> 里抛出的异常会被存进 future，如果没人读它，异常就彻底消失，日志干干净净而数据已经错了。<code>pool.map</code> 同理：异常在迭代到那个元素时才抛出，只调用不遍历结果，等于什么都没发生。</p>
+
+<h2>死锁的两种成因与线程本地存储</h2>
+<p>死锁在实践中只有两个来源：<strong>加锁顺序不一致</strong>（线程 A 持 1 求 2，线程 B 持 2 求 1）和<strong>持锁期间做了会阻塞的外部操作</strong>（持锁发 HTTP 请求或等队列，下游一慢就全线挂住）。前者靠「全局统一的加锁顺序」规避，后者靠「临界区里只做内存操作」规避。真卡住时用 <code>py-spy dump --pid PID</code> 打出所有线程栈，谁停在 <code>acquire</code> 上一目了然。</p>
+
+<p>另一个高频坑是线程本地存储。<code>threading.local()</code> 按<strong>线程</strong>隔离数据，在传统的「一请求一线程」模型下可以用来存 request_id、当前用户；但换到 asyncio 之后它就失效了——同一个线程上交替跑着成百上千个协程，它们共享同一份 thread-local，日志串号、权限串用都是这么来的，而且只在并发升高时才出现。</p>
+
+<table>
+<thead><tr><th>对比项</th><th><code>threading.local()</code></th><th><code>contextvars.ContextVar</code></th></tr></thead>
+<tbody>
+<tr><td>隔离粒度</td><td>线程</td><td>上下文（每个 Task 自动拷一份快照）</td></tr>
+<tr><td>多线程下</td><td>正确</td><td>正确（各线程有独立上下文）</td></tr>
+<tr><td>asyncio 下</td><td><strong>串号</strong>，同线程所有协程共享一份</td><td>正确，<code>create_task</code> 时继承父上下文</td></tr>
+<tr><td>传给执行器</td><td>不传递，子线程读到空值</td><td><code>asyncio.to_thread</code> 自动带过去，裸 <code>run_in_executor</code> 需手动 <code>copy_context</code></td></tr>
+<tr><td>结论</td><td>纯同步的老代码可继续用</td><td><strong>新代码一律用它</strong>，两种模型下都对</td></tr>
+</tbody>
+</table>
+
+<h2>multiprocessing：启动方式决定了「本地好、线上崩」</h2>
+<p>这是跨平台协作里最费时间的一类问题。<code>fork</code> 直接复制父进程地址空间，速度快、子进程继承全部对象；<code>spawn</code> 从零起一个新解释器，只把可 pickle 的参数传过去；<code>forkserver</code> 先 fork 出一个干净的单线程服务进程，之后由它来 fork 工作进程，兼顾速度与安全。</p>
+
+<table>
+<thead><tr><th>启动方式</th><th>默认平台</th><th>子进程继承什么</th><th>启动耗时</th><th>危险点</th></tr></thead>
+<tbody>
+<tr><td><code>fork</code></td><td>Linux 上是历史默认；<strong>3.14 起在多线程进程中不再默认使用</strong></td><td>全部内存、已打开的描述符、锁的状态、连接</td><td>最快，毫秒级</td><td>父进程只要有第二个线程就不安全：可能复制到一把已被别的线程持有、且永远不会被释放的锁</td></tr>
+<tr><td><code>spawn</code></td><td>Windows 与 macOS 一直是默认，3.14 起 Linux 多线程场景也转向它</td><td>只有可 pickle 的参数，模块会被重新导入</td><td>最慢，百毫秒级（要重新 import）</td><td>入口漏写主模块保护会递归创建子进程；闭包、lambda、局部类全传不过去</td></tr>
+<tr><td><code>forkserver</code></td><td>需显式设置，仅 Unix</td><td>服务进程建立那一刻的干净状态</td><td>中等</td><td>服务进程的快照时机必须早于任何连接的建立</td></tr>
+</tbody>
+</table>
+
+<p>典型事故：本地 macOS 开发走 spawn，一切正常；上线 Linux 走 fork，而父进程里有个日志上报线程或指标线程，fork 出的子进程在第一次打日志时直接卡死。反方向也有：Linux 上依赖 fork 继承了全局变量，搬到 macOS 后那个全局变量在子进程里是空的。<strong>解法是显式指定启动方式，不要吃平台默认值。</strong></p>
+
+<pre><code class="language-python">import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor
+
+# 必须是模块级顶层函数：spawn 下要能靠「模块名加函数名」重新导入拿到它
+def cpu_task(chunk: list[int]) -&gt; int:
+    return sum(x * x for x in chunk)
+
+
+def init_worker() -&gt; None:
+    # 每个子进程启动时执行一次：重建那些绝对不能从父进程继承的东西
+    engine.dispose(close=False)   # close=False 表示不碰父进程那条 socket，只丢弃本进程的池
+    reset_signal_handlers()       # 子进程要自己处理 SIGTERM，否则优雅关闭形同虚设
+
+
+if __name__ == "__main__":         # spawn 下没有这行会无限递归起子进程
+    ctx = mp.get_context("spawn")  # 显式指定，不依赖平台默认值
+    with ProcessPoolExecutor(
+        max_workers=mp.cpu_count(),   # CPU 密集按核数，给再多也只是排队
+        mp_context=ctx,
+        initializer=init_worker,
+    ) as pool:
+        # chunksize 很关键：任务太碎时每个任务都要 pickle 一轮，开销会盖掉并行收益
+        total = sum(pool.map(cpu_task, chunks, chunksize=8))
+    print(total)
+</code></pre>
+
+<div class="mermaid">
+stateDiagram-v2
+    state "空闲 worker" as Idle
+    state "执行中" as Busy
+    state "回传失败" as SerFail
+    state "进程已死" as Dead
+    [*] --> Idle
+    Idle --> Busy: 从队列取到已 pickle 的任务
+    Busy --> Idle: 返回值 pickle 回传成功
+    Busy --> SerFail: 返回值里含不可 pickle 的对象
+    SerFail --> Idle: future 收到 PicklingError
+    Busy --> Dead: 被 OOM killer 杀掉或 C 扩展段错误
+    Dead --> [*]: 整个池被标记为 broken
+    note right of Dead
+        BrokenProcessPool 之后提交的所有 future 立刻失败
+        池不会自愈 必须由调用方重建
+        所以子进程内存要留余量 不能让它被 OOM 杀
+    end note
+</div>
+
+<h2>进程间通信的四种方式与 pickle 约束</h2>
+<table>
+<thead><tr><th>方式</th><th>适合的数据</th><th>开销</th><th>注意</th></tr></thead>
+<tbody>
+<tr><td><code>Queue</code> / <code>Pipe</code></td><td>中小结构化对象，任务与结果</td><td>每次一轮 pickle 加一次内存拷贝</td><td>队列满时 <code>put</code> 会阻塞；子进程没退干净会让主进程 join 挂住</td></tr>
+<tr><td><code>shared_memory</code></td><td>大块二进制、numpy 数组</td><td>零拷贝，只传名字</td><td>生命周期要自己管，漏 <code>unlink</code> 会残留；并发写仍要自己加锁</td></tr>
+<tr><td><code>Value</code> / <code>Array</code></td><td>少量定长标量与数组</td><td>很低</td><td>只支持 ctypes 类型，复杂对象放不进去</td></tr>
+<tr><td>文件或对象存储</td><td>超大中间结果</td><td>磁盘 IO，但可跨机</td><td>数据量大到 pickle 不划算时，反而是最简单可靠的方案</td></tr>
+</tbody>
+</table>
+
+<p><strong><code>ProcessPoolExecutor</code> 的所有参数和返回值都必须可 pickle</strong>，这条限制比想象中更硬：lambda 不行、嵌套函数不行、<code>functools.partial</code> 包住 lambda 也不行、数据库连接和打开的文件对象不行、内部带线程锁的对象不行。报错通常是「不能 pickle 局部对象」或「不能 pickle thread.lock 对象」。修法只有一条：把任务函数提到模块顶层，需要的配置用可 pickle 的简单参数传进去，或者放进 <code>initializer</code> 里在子进程内部自己建。</p>
+
+<p>更隐蔽的是 fork 继承连接。父进程已经建好的数据库连接，fork 后父子共用同一个 socket，而服务端只认一条会话，两边同时读写就会撞在一起。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    participant M as 父进程
+    participant DB as 数据库
+    participant C as 子进程
+    M->>DB: 建连接完成握手，socket 描述符就绪
+    M->>C: fork 复制地址空间，描述符一并继承
+    Note over M,C: 两个进程持有同一个 socket，服务端只认一条会话
+    C->>DB: 发送查询 A
+    M->>DB: 同时发送查询 B
+    DB-->>M: 响应报文交错，协议状态错乱
+    DB-->>C: 报文被对方读走，报 SSL error 或游标状态异常
+    Note over C: 修法是子进程启动后先 dispose 引擎，各自新建连接
+</div>
+
+<p>同一条规则适用于 Redis 客户端、HTTP 连接池、gRPC channel，以及 gunicorn 的 <code>preload_app</code>：<strong>任何带 socket 的东西都不能跨 fork 复用</strong>，必须在子进程里重建。</p>
+
+<h2>混用的边界：run_in_executor 与在线程里跑事件循环</h2>
+<p>asyncio 自身的阻塞判定、<code>gather</code> 与 <code>TaskGroup</code>、取消语义详见站内<a href="../fastapi-async/">《FastAPI 异步性能》</a>，这里只讲跨模型的接缝。唯一正规的接缝是 <code>loop.run_in_executor</code>（3.9+ 更推荐 <code>asyncio.to_thread</code>），把同步代码丢到池里跑。选线程池还是进程池，判断标准只有两条：会不会释放 GIL、参数能不能 pickle。</p>
+
+<table>
+<thead><tr><th>要跑的东西</th><th>选哪个池</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>同步 HTTP 客户端、同步数据库驱动、文件读写</td><td>线程池</td><td>阻塞在系统调用上会释放 GIL，线程数就是有效并发数</td></tr>
+<tr><td>numpy / pandas / 图片编解码 / 压缩</td><td>线程池</td><td>底层 C 代码主动释放了 GIL，已经是真并行，没必要付进程开销</td></tr>
+<tr><td>纯 Python 的计算循环、超大 JSON 解析</td><td>进程池</td><td>全程持有 GIL，放线程池等于串行还多一层调度</td></tr>
+<tr><td>参数里带连接、文件句柄、闭包</td><td>只能线程池</td><td>pickle 传不过去</td></tr>
+<tr><td>可能跑很久且要能强行终止</td><td>进程池</td><td>线程无法从外部杀掉，进程可以</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-python">import asyncio
+from concurrent.futures import ProcessPoolExecutor
+
+CPU_POOL = ProcessPoolExecutor(max_workers=4)   # 进程池要全局复用，别在函数里现建
+
+
+async def handle(req):
+    # 1) 同步 IO 库：线程池。to_thread 会自动带上 contextvars 上下文
+    rows = await asyncio.to_thread(legacy_sync_query, req.user_id)
+
+    # 2) 纯 Python 的 CPU 计算：必须进程池，否则整个事件循环被 GIL 拖住
+    loop = asyncio.get_running_loop()
+    report = await loop.run_in_executor(CPU_POOL, build_report, rows)
+
+    # 3) 给阻塞调用套超时：注意 wait_for 只能让 await 处提前返回，
+    #    池里那个线程仍会跑到底，所以必须同时给底层库自己的 timeout 参数
+    try:
+        extra = await asyncio.wait_for(asyncio.to_thread(slow_call), timeout=2.0)
+    except TimeoutError:
+        extra = None
+    return report, extra
+</code></pre>
+
+<p>反方向——在线程里跑 asyncio——几乎总是坑。<code>asyncio.run()</code> 会为当前线程新建一个事件循环，于是每个线程一个循环，循环之间不能互相 await，共享的 client 和连接池跨循环使用会报「绑定到了另一个事件循环」。跨线程往循环里投递任务只有一个正确入口：<code>asyncio.run_coroutine_threadsafe(coro, loop)</code>，它返回的是 <code>concurrent.futures.Future</code> 而不是 asyncio 的 Future，不能 await，只能用 <code>result(timeout=...)</code> 取。</p>
+
+<h2>选择决策：先问单线程够不够</h2>
+<p>最该纠正的观念是「并发等于更快」。引入并发的代价是可观测性骤降、错误处理复杂度上升、部署形态变复杂。很多所谓的并发需求，用一条批量 SQL 替掉 N 次单条查询、加一层缓存、或者把循环里不变的属性查找提到循环外就解决了——<strong>先量出瓶颈在哪，再决定要不要并发</strong>。</p>
+
+<div class="mermaid">
+flowchart TB
+    S["有一批任务要加速"] --> Q0{"单线程串行真的不够吗"}
+    Q0 -->|"够用"| DONE["不要引入并发，省下所有复杂度"]
+    Q0 -->|"已量出是瓶颈"| Q1{"瓶颈在计算还是在等待"}
+    Q1 -->|"CPU 密集"| Q2{"能否换成向量化或 C 扩展"}
+    Q2 -->|"能"| NP["numpy 或 Rust 扩展，直接绕开解释器开销"]
+    Q2 -->|"不能"| PP["ProcessPoolExecutor 按核数"]
+    Q1 -->|"等待 IO"| Q3{"整条链路都有异步库吗"}
+    Q3 -->|"有"| ASY2["asyncio"]
+    Q3 -->|"只有同步驱动"| Q4{"并发量级多大"}
+    Q4 -->|"几十到几百"| TP["ThreadPoolExecutor"]
+    Q4 -->|"上千连接"| MIX["asyncio 主链路加线程池兜底"]
+    Q1 -->|"两者都有"| SPLIT["拆两段：IO 段走异步，计算段丢进程池"]
+</div>
+
+<table>
+<thead><tr><th>任务类型</th><th>有异步库</th><th>需要共享可变状态</th><th>选择</th></tr></thead>
+<tbody>
+<tr><td>IO 密集</td><td>是</td><td>否</td><td>asyncio，单进程即可撑上万连接</td></tr>
+<tr><td>IO 密集</td><td>否</td><td>是</td><td>ThreadPoolExecutor，共享状态加锁</td></tr>
+<tr><td>IO 密集</td><td>部分有</td><td>否</td><td>asyncio 主链路加 <code>to_thread</code> 包住同步部分</td></tr>
+<tr><td>CPU 密集</td><td>不相关</td><td>否</td><td>ProcessPoolExecutor，或先试向量化</td></tr>
+<tr><td>CPU 密集</td><td>不相关</td><td>是</td><td>改设计：状态收敛到主进程汇总，或用 <code>shared_memory</code></td></tr>
+<tr><td>混合型（下载后解析）</td><td>是</td><td>否</td><td>异步下载加进程池解析，两段分离</td></tr>
+</tbody>
+</table>
+
+<h2>反模式速查</h2>
+<table>
+<thead><tr><th>反模式</th><th>会发生什么</th><th>正确做法</th></tr></thead>
+<tbody>
+<tr><td>用多线程解决 CPU 密集</td><td>比串行更慢：并行度为零，还多了 GIL 争用与切换</td><td>进程池，或先看能不能向量化</td></tr>
+<tr><td>fork 后复用父进程的数据库连接</td><td>随机报 SSL error、游标状态异常，压力越大越频繁</td><td><code>initializer</code> 里 <code>engine.dispose()</code> 重建</td></tr>
+<tr><td>进程池传 lambda 或闭包</td><td>pickle 直接失败；本地 fork 侥幸能过，线上 spawn 必崩</td><td>任务函数提到模块顶层</td></tr>
+<tr><td>asyncio 里用 <code>threading.local</code> 存上下文</td><td>日志 request_id 串号，偶发的权限串用</td><td>换 <code>contextvars.ContextVar</code></td></tr>
+<tr><td>线程池大小随手填 100</td><td>放大下游压力，数据库连接被打满，内存和切换成本白付</td><td>按「目标 QPS 乘平均耗时」估算，再压测校准</td></tr>
+<tr><td><code>submit</code> 后不取 <code>result()</code></td><td>异常被吞，日志干净而数据已错</td><td>用 <code>as_completed</code> 逐个取结果并记日志</td></tr>
+<tr><td>手写 <code>acquire()</code> 与 <code>release()</code></td><td>临界区抛异常后锁永久不释放</td><td>一律 <code>with lock</code></td></tr>
+<tr><td>持锁期间发 HTTP 请求</td><td>下游一慢，所有线程堵在同一把锁上</td><td>临界区只做内存操作，IO 挪到锁外</td></tr>
+</tbody>
+</table>
+
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+        <li>不显式设置启动方式，吃平台默认值：macOS 是 spawn、Linux 历史是 fork，同一份代码两种行为，本地测不出来。</li>
+        <li>父进程里有后台线程（日志上报、指标、健康检查）还用 fork：子进程可能复制到一把永远不会被释放的锁，第一次打日志就卡死。</li>
+        <li>多进程入口漏写主模块保护：spawn 会重新导入模块，于是无限递归创建子进程，几秒内打满机器。</li>
+        <li>把进程池建在请求处理函数里：每个请求起一批进程，启动开销远大于计算本身。池必须全局复用。</li>
+        <li>子进程内存不留余量：被 OOM killer 杀掉后整个池变 broken，之后所有提交立刻失败，而池不会自愈。</li>
+        <li><code>pool.map</code> 只调用不遍历结果：任务里的异常永远不会抛出来，等于静默失败。</li>
+        <li><code>chunksize</code> 用默认值处理几十万个小任务：pickle 往返次数把并行收益全吃掉，甚至比串行慢。</li>
+        <li>用 sleep 轮询等待条件成立：该用 <code>Condition</code> 或 <code>Event</code>，轮询的延迟和空转都是白付的。</li>
+        <li>加锁顺序不统一：两个线程各持一把锁求对方的锁，死锁且几乎不可复现，只能靠 <code>py-spy dump</code> 打栈才看得见。</li>
+        <li><code>shared_memory</code> 用完不 <code>unlink</code>：进程退出后共享段还留在共享内存里，攒多了把内存吃光。</li>
+        <li>在多个线程里各自 <code>asyncio.run()</code> 却共享同一个 HTTP client：报「绑定到另一个事件循环」，跨线程投递只能用 <code>run_coroutine_threadsafe</code>。</li>
+        <li>给 <code>to_thread</code> 套 <code>wait_for</code> 就以为超时生效：超时只让 await 处返回，池里那个线程照样跑到底，线程会被慢慢耗尽。</li>
+    </ul>
+</div>
+                    </div>
+                </article>
+                <nav class="article-nav">
+                    <a class="nav-prev" href="../internals/"><span class="nav-label">← 上一篇</span><span class="nav-title">CPython 内部原理与性能优化</span></a>
+                    <a class="nav-next" href="../tooling/"><span class="nav-label">下一篇 →</span><span class="nav-title">Python 包管理与工程化</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · Python</h2><ul class="related-list"><li><a class="side-post" href="../core/">Python 语言核心</a></li><li><a class="side-post" href="../internals/">CPython 内部原理与性能优化</a></li><li><a class="side-post" href="../tooling/">Python 包管理与工程化</a></li><li><a class="side-post" href="../web/">Python Web 开发</a></li><li><a class="side-post" href="../pitfalls/">Python 常见陷阱</a></li><li><a class="side-post" href="../ecosystem/">Python 2026 选型</a></li></ul></aside>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+    <button class="back-to-top" title="回到顶部">↑</button>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "programming";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

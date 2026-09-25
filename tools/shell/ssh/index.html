@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>SSH 的工作机制与工程化配置 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="讲清 SSH 三层协议的分层排查思路：密钥交换与主机指纹校验的真实作用、关闭 StrictHostKeyChecking 放弃了什么、公钥认证两阶段流程与私钥为何从不外传、ssh_config「先出现先生效且不可覆盖」的匹配语义、ControlMaster 连接复用与 ProxyJump 跳板的边界、三种端口转发的方向与默认绑定、agent forwarding 的攻击面与更安全的替代、ServerAliveInterval 与连接假死、权限位导致的静默失败、known_hosts 哈希化与主机密钥平滑轮换。">
+    <meta name="keywords" content="SSH,ssh-keygen,ssh config,端口转发,ssh-agent,sshd安全,ProxyJump,mosh,tailscale">
+    <meta name="author" content="资深码农">
+    <meta name="generator" content="deep2code generator">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/tools/shell/ssh/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="SSH 的工作机制与工程化配置 - 资深码农">
+    <meta property="og:description" content="讲清 SSH 三层协议的分层排查思路：密钥交换与主机指纹校验的真实作用、关闭 StrictHostKeyChecking 放弃了什么、公钥认证两阶段流程与私钥为何从不外传、ssh_config「先出现先生效且不可覆盖」的匹配语义、ControlMaster 连接复用与 ProxyJump 跳板的边界、三种端口转发的方向与默认绑定、agent forwarding 的攻击面与更安全的替代、ServerAliveInterval 与连接假死、权限位导致的静默失败、known_hosts 哈希化与主机密钥平滑轮换。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/tools/shell/ssh/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="SSH 的工作机制与工程化配置 - 资深码农">
+    <meta name="twitter:description" content="讲清 SSH 三层协议的分层排查思路：密钥交换与主机指纹校验的真实作用、关闭 StrictHostKeyChecking 放弃了什么、公钥认证两阶段流程与私钥为何从不外传、ssh_config「先出现先生效且不可覆盖」的匹配语义、ControlMaster 连接复用与 ProxyJump 跳板的边界、三种端口转发的方向与默认绑定、agent forwarding 的攻击面与更安全的替代、ServerAliveInterval 与连接假死、权限位导致的静默失败、known_hosts 哈希化与主机密钥平滑轮换。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:author" content="资深码农">
+    <meta property="article:section" content="开发工具与工程效率">
+    <meta property="article:tag" content="SSH,远程管理">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"SSH 的工作机制与工程化配置","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"讲清 SSH 三层协议的分层排查思路：密钥交换与主机指纹校验的真实作用、关闭 StrictHostKeyChecking 放弃了什么、公钥认证两阶段流程与私钥为何从不外传、ssh_config「先出现先生效且不可覆盖」的匹配语义、ControlMaster 连接复用与 ProxyJump 跳板的边界、三种端口转发的方向与默认绑定、agent forwarding 的攻击面与更安全的替代、ServerAliveInterval 与连接假死、权限位导致的静默失败、known_hosts 哈希化与主机密钥平滑轮换。","url":"https://www.yijunjun.asia/tools/shell/ssh/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/shell/ssh/"},"articleSection":"后端与编程语言"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "开发工具与工程效率", "item": "https://www.yijunjun.asia/tools/"}, {"position": 3, "name": "SSH 远程管理", "item": "https://www.yijunjun.asia/tools/shell/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "SSH 里把 StrictHostKeyChecking 设成 no 到底放弃了什么？", "acceptedAnswer": {"@type": "Answer", "text": "放弃的是 SSH 唯一的身份锚点。密钥交换只能证明对面持有某把主机私钥，把这把公钥和主机名绑起来的只有 known_hosts 或证书里的 cert-authority 条目。关掉校验后你只剩下对被动监听的保密性，主动中间人可以接管整条会话，看到你敲的所有命令、本地转发隧道里的数据库流量，如果还在用密码认证，密码会直接落到它手里。正确替代是用 ssh-keyscan 预置并带外核对指纹、用 SSH 证书让客户端只信一行 CA，或者只在一次性容器里用 accept-new。"}}, {"@type": "Question", "name": "SSH 公钥认证会把私钥发送给服务器吗？", "acceptedAnswer": {"@type": "Answer", "text": "不会。服务器上的 authorized_keys 存的是公钥，认证分两个阶段：客户端先只发算法名和公钥数据问服务端认不认这把钥匙，服务端查到后回 PK_OK，客户端才用私钥对 session id 与本次请求字段做签名，服务端用同一把公钥验签。签名内容绑定了 session id，所以中间人拿到签名也无法转发去冒充你登录真正的服务器。私钥全程只在本地或 agent 内部参与运算。"}}, {"@type": "Question", "name": "ssh 报 Too many authentication failures 是什么原因？", "acceptedAnswer": {"@type": "Answer", "text": "它不是密码输错太多，而是客户端把 ssh-agent 里的钥匙逐把送上去探测，在轮到正确那把之前就把服务端 MaxAuthTries（默认 6）用光了。修法在客户端而不是服务端：给对应的 Host 配置明确的 IdentityFile 并加上 IdentitiesOnly yes，让它只试指定那一把。另外要注意 IdentityFile 是累加型指令，写了新的不会替换旧的。"}}, {"@type": "Question", "name": "为什么 ~/.ssh/config 里改了参数却不生效？", "acceptedAnswer": {"@type": "Answer", "text": "因为 ssh_config 的规则是每个参数取第一次获得的值，不是后面覆盖前面。如果把 Host 星号这一段通用默认写在文件开头，后面所有具体 Host 的同名参数都会被锁死，而且不会有任何报错。Include 指令同理，它在所在行的位置展开，放在通用段之后就等于没生效。排查时不要靠肉眼推演，直接跑 ssh -G 主机名，它会打印最终生效的全部参数。"}}, {"@type": "Question", "name": "agent forwarding 有哪些更安全的替代方案？", "acceptedAnswer": {"@type": "Answer", "text": "agent 转发会在远端建立一个 socket，连接存续期间任何能读到它的主体都能让你的 agent 对任意挑战签名，等于临时借走你的身份做横向移动。多数场景其实只需要 ProxyJump，认证在本地完成，跳板机上根本不落 socket。必须转发时应按 Host 粒度开启而不是写在通用段里，配合 ssh-add 的生存期限制和每次使用需确认，条件允许时用 OpenSSH 8.9 起的目的地约束，或改用短有效期的 SSH 证书。"}}, {"@type": "Question", "name": "SSH 连接看着还在但一敲就没反应，该怎么配？", "acceptedAnswer": {"@type": "Answer", "text": "这是中间设备回收了 NAT 或会话表项造成的假死，两端 TCP 都以为连接还在。TCPKeepAlive 走内核探测，第一次探测往往要等两小时，远大于 NAT 表项常见的五到三十分钟空闲上限，救不了场。有效的是客户端的 ServerAliveInterval，默认 0 即关闭，建议设 30，配合默认为 3 的 ServerAliveCountMax，九十秒无响应就主动断开。把 CountMax 设成 100 等于永不判死，和没配一样。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools" class="active">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">开发工具与工程效率</a><span class="separator">/</span><a href="../index.html">Shell 脚本的工程化：可靠性优先</a><span class="separator">/</span><span>SSH 远程管理</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">SSH 的工作机制与工程化配置</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ SSH,远程管理</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<h2 id="layers">SSH 是三层协议，报错落在哪一层决定了排查方向</h2>
+<p>SSH-2 不是一个协议，而是三层叠起来的：<strong>传输层</strong>（RFC 4253）负责算法协商、密钥交换、加密与完整性校验，以及最关键的主机身份验证；<strong>认证层</strong>（RFC 4252）负责证明「你是你」；<strong>连接层</strong>（RFC 4254）把这一条加密连接切成多路复用的 channel，shell、exec、端口转发、agent 转发都是 channel。</p>
+<p>大部分排查困难来自把三层混着看。<code>no matching host key type found</code> 是传输层的事，去改 <code>authorized_keys</code> 一点用都没有；<code>Permission denied (publickey)</code> 是认证层的事，和加密算法无关；<code>administratively prohibited: open failed</code> 是连接层的事，说明认证早就成功了，是服务端不允许开这个转发 channel。先判层，再动配置，能省掉一大半时间。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph T["传输层 RFC 4253"]
+        T1["版本串交换"]
+        T2["算法协商 KEXINIT"]
+        T3["密钥交换 得到会话密钥与交换哈希"]
+        T4["服务端对交换哈希签名 客户端比对 known_hosts"]
+        T5["NEWKEYS 之后全程加密"]
+    end
+    subgraph A["认证层 RFC 4252"]
+        A1["publickey 探测 这把钥匙你认不认"]
+        A2["用私钥对 session id 与请求字段签名"]
+        A3["服务端用 authorized_keys 验签"]
+    end
+    subgraph C["连接层 RFC 4254"]
+        C1["session channel 即 shell 与 exec"]
+        C2["direct-tcpip 即 -L 与 -D"]
+        C3["forwarded-tcpip 即 -R"]
+        C4["auth-agent 即 -A"]
+    end
+    T1 --> T2
+    T2 --> T3
+    T3 --> T4
+    T4 --> T5
+    T5 --> A1
+    A1 --> A2
+    A2 --> A3
+    A3 --> C1
+    A3 --> C2
+    A3 --> C3
+    A3 --> C4
+</div>
+<table>
+<thead><tr><th>典型报错</th><th>所在层</th><th>真实原因</th><th>该动什么</th></tr></thead>
+<tbody>
+<tr><td><code>Connection closed by ... [preauth]</code></td><td>传输层</td><td>算法不兼容、被 fail2ban 拦、LoginGraceTime 超时</td><td>服务端 <code>KexAlgorithms</code>/<code>HostKeyAlgorithms</code>、封禁列表</td></tr>
+<tr><td><code>no mutually supported host key algorithms</code></td><td>传输层</td><td>OpenSSH 8.8 起默认不再接受 <code>ssh-rsa</code>（SHA-1 签名）</td><td>服务端换 ed25519 主机密钥或启用 <code>rsa-sha2-256</code></td></tr>
+<tr><td><code>Host key verification failed</code></td><td>传输层</td><td>known_hosts 里的主机密钥与服务端出示的不一致</td><td>带外核对指纹后 <code>ssh-keygen -R</code></td></tr>
+<tr><td><code>Permission denied (publickey)</code></td><td>认证层</td><td>公钥没进 authorized_keys，或权限位不对被 StrictModes 拒绝</td><td>服务端日志 + <code>chmod</code></td></tr>
+<tr><td><code>Too many authentication failures</code></td><td>认证层</td><td>客户端把 agent 里所有钥匙逐把试，撞上 <code>MaxAuthTries</code>（默认 6）</td><td>客户端 <code>IdentitiesOnly yes</code></td></tr>
+<tr><td><code>administratively prohibited: open failed</code></td><td>连接层</td><td>服务端 <code>AllowTcpForwarding no</code> 或 <code>PermitOpen</code> 不匹配</td><td>服务端转发策略</td></tr>
+<tr><td>登录成功但 <code>-R</code> 端口只在 loopback</td><td>连接层</td><td>服务端 <code>GatewayPorts</code> 默认 <code>no</code></td><td>服务端 <code>GatewayPorts</code> 或改用反向代理</td></tr>
+</tbody>
+</table>
+
+<h2 id="hostkey">主机指纹校验：关掉 StrictHostKeyChecking 到底放弃了什么</h2>
+<p>密钥交换的产物有两个：会话密钥，以及一个把双方版本串、算法列表、DH 公开值都摘进去的<strong>交换哈希</strong>。服务端用自己的主机私钥对这个哈希签名，客户端用服务端出示的主机公钥验签——这一步只能证明「对面持有那把主机私钥」，<strong>不能证明那把主机私钥是你想连的那台机器的</strong>。把公钥和主机名绑起来的，只有 <code>known_hosts</code> 这个首次信任（TOFU）数据库，或者 SSH 证书里的 <code>@cert-authority</code> 条目。</p>
+<p>所以 <code>StrictHostKeyChecking no</code> 放弃的不是「一点提示」，而是 SSH 里<strong>唯一的身份锚点</strong>。剩下的只有「对被动监听保密」，对主动中间人完全裸奔：攻击者接管这条会话，你敲的每条命令、看到的每个文件内容、<code>-L</code> 隧道里的数据库流量、以及 <code>-A</code> 转发进去的签名能力，全归它；如果你还在用密码认证，密码直接送到它手上。</p>
+<p>要纠正一个很常见的说法：「我用的是公钥认证，私钥不外传，所以指纹无所谓」。前半句对——私钥确实不离开本地，而且签名内容里绑定了 session id，中间人拿到这个签名<strong>没法转发去骗真正的服务器</strong>，这是 SSH 设计上的一个正确决策。但指纹校验保护的是<strong>会话</strong>而不是<strong>私钥</strong>：中间人无法冒充你登录真机，却可以让你登进一台假机器，看假数据、把生产配置敲进它的 shell。这两件事的危害完全不在一个量级上被抵消。</p>
+<table>
+<thead><tr><th><code>StrictHostKeyChecking</code> 取值</th><th>遇到未知主机</th><th>遇到主机密钥变更</th><th>是否自动写 known_hosts</th><th>适用场景</th></tr></thead>
+<tbody>
+<tr><td><code>ask</code>（默认）</td><td>提示指纹让你确认</td><td>拒绝连接并告警</td><td>确认后写入</td><td>交互式日常使用</td></tr>
+<tr><td><code>accept-new</code>（7.6+）</td><td>静默接受</td><td>拒绝连接</td><td>写入</td><td>一次性容器、临时 CI runner</td></tr>
+<tr><td><code>yes</code></td><td>直接拒绝</td><td>拒绝连接</td><td>不写</td><td>known_hosts 由配置管理统一下发的机器</td></tr>
+<tr><td><code>no</code> / <code>off</code></td><td>静默接受</td><td>仍然放行，只打印告警</td><td>写入</td><td>没有安全要求的一次性实验环境</td></tr>
+</tbody>
+</table>
+<p><code>no</code> 这一档还有个容易被忽略的细节：当主机密钥确实变了而检查被关掉时，OpenSSH 会保留连接，但同时禁掉一批依赖「服务端可信」的功能（密码与键盘交互认证、agent 转发、X11 与端口转发），于是你会看到一个「能连上但什么都不好使」的诡异状态。这不是 bug，是它在替你兜底。</p>
+<p>正确的工程化做法有三条路：<strong>预置</strong>（用 <code>ssh-keyscan</code> 抓指纹，和服务器上 <code>ssh-keygen -lf</code> 的输出带外核对后，把 <code>known_hosts</code> 当配置文件下发）、<strong>证书化</strong>（服务端配 <code>HostCertificate</code>，客户端 <code>known_hosts</code> 里只放一行 <code>@cert-authority *.example.com</code>，此后扩容再多机器都不需要改客户端）、<strong>只在真正一次性的环境用 <code>accept-new</code></strong>。三条路都不需要 <code>no</code>。</p>
+
+<h2 id="pubkey">公钥认证的完整流程：服务端只做验签</h2>
+<p><code>authorized_keys</code> 里放的是公钥，服务端从头到尾不需要、也拿不到你的私钥。流程是两阶段的：客户端先发一个<strong>不带签名</strong>的 publickey 请求，只有算法名和公钥 blob，问「这把钥匙你认不认」；服务端在 <code>authorized_keys</code> 里查到才回 <code>PK_OK</code>；客户端这才用私钥对「session id + 本次请求的各个字段」签名，服务端用同一把公钥验签。</p>
+<div class="mermaid">
+sequenceDiagram
+    participant A as ssh-agent
+    participant C as ssh 客户端
+    participant S as sshd
+    C->>S: 传输层握手完成 请求 ssh-userauth 服务
+    S-->>C: 可继续的认证方法列表
+    C->>A: 列出 agent 中可用的公钥
+    A-->>C: 返回公钥列表
+    C->>S: publickey 探测 只发算法名与公钥 blob
+    S->>S: 在 authorized_keys 中查找并检查权限位
+    S-->>C: PK_OK 表示这把钥匙可以试
+    C->>A: 请求对 session id 与请求字段签名
+    A-->>C: 返回签名 私钥不离开 agent
+    C->>S: 带签名的 publickey 请求
+    S->>S: 用 authorized_keys 里的公钥验签
+    S-->>C: USERAUTH_SUCCESS
+    Note over C,S: 每次探测失败都消耗一次 MaxAuthTries 服务端默认 6
+</div>
+<p>这个两阶段设计解释了两个高频现象。第一，<code>Too many authentication failures</code> 不是「密码错太多次」，而是 agent 里钥匙太多、在轮到正确那把之前就把 <code>MaxAuthTries</code> 用光了；修法在客户端：<code>IdentitiesOnly yes</code> 配合明确的 <code>IdentityFile</code>，让它只试指定的那一把。第二，签名内容绑定了 session id，所以中间人不能把你的签名转发给真服务器——这是前一节结论的技术依据。</p>
+<table>
+<thead><tr><th>客户端看到的</th><th>服务端日志里的</th><th>真实原因</th><th>修法</th></tr></thead>
+<tbody>
+<tr><td><code>Permission denied (publickey)</code></td><td><code>Authentication refused: bad ownership or modes for ...</code></td><td>家目录、<code>~/.ssh</code> 或 <code>authorized_keys</code> 权限过宽，StrictModes 拒绝读取</td><td><code>chmod 700 ~/.ssh</code>、<code>chmod 600 authorized_keys</code>、家目录去掉组写</td></tr>
+<tr><td><code>Permission denied (publickey)</code></td><td><code>Invalid user</code> / 无任何 refused 记录</td><td>用户名错，或公钥根本没进那个用户的 authorized_keys</td><td><code>ssh -G host</code> 确认 User，核对公钥指纹</td></tr>
+<tr><td>反复 <code>Offering public key</code> 后失败</td><td><code>Too many authentication failures</code></td><td>agent 里钥匙数量超过 <code>MaxAuthTries</code></td><td>客户端 <code>IdentitiesOnly yes</code></td></tr>
+<tr><td><code>sign_and_send_pubkey: signing failed</code></td><td>—</td><td>agent 里的 key 已失效（<code>-t</code> 到期）或被智能卡拔出</td><td>重新 <code>ssh-add</code></td></tr>
+<tr><td><code>Load key ...: bad permissions</code></td><td>—</td><td>本地私钥 0644，客户端自己拒绝使用</td><td><code>chmod 600</code> 私钥</td></tr>
+<tr><td>登录成功但落到错误的 GitHub 账号</td><td>—</td><td>多把钥匙按顺序试，先命中的那把决定身份</td><td>按 Host 别名区分 + <code>IdentitiesOnly yes</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="config">~/.ssh/config 的匹配语义：先出现先生效，不可覆盖</h2>
+<p>这是最容易被误解的一处。<code>ssh_config</code> 的规则是「<strong>每个参数取第一次获得的值</strong>」，不是像大多数配置系统那样后面覆盖前面。一个 Host 块能匹配多次，参数却只认最早那一次赋值。直接后果：<code>Host *</code> 这种通用默认<strong>必须写在文件最后</strong>，写在开头会把后面所有具体 Host 的同名参数全部锁死，而且没有任何报错，表现就是「我明明配了，它就是不生效」。</p>
+<p>例外是少数多值指令：<code>IdentityFile</code>、<code>CertificateFile</code>、<code>SendEnv</code>、<code>LocalForward</code>/<code>RemoteForward</code> 这类是<strong>累加</strong>的，多处出现会按顺序全部生效——这也正是「agent 里钥匙太多」问题的另一个来源。优先级链是：命令行 <code>-o</code> &gt; <code>~/.ssh/config</code> &gt; <code>/etc/ssh/ssh_config</code>。</p>
+<p>不要靠肉眼推演匹配结果，用 <code>ssh -G prod</code>，它会把最终生效的全部参数打印出来，包括你以为改掉了其实没改掉的那些。</p>
+<table>
+<thead><tr><th>指令 / 语法</th><th>语义</th><th>多次出现时</th><th>典型误用</th></tr></thead>
+<tbody>
+<tr><td><code>Host prod-*</code></td><td>按命令行里写的名字（原始名）做通配匹配</td><td>都参与匹配，参数取最早赋值</td><td>把 <code>Host *</code> 放在文件开头</td></tr>
+<tr><td><code>HostName</code></td><td>真实连接地址，支持 <code>%h</code> 占位</td><td>第一次胜出</td><td>误以为改 <code>Host</code> 就能改连接目标</td></tr>
+<tr><td><code>IdentityFile</code></td><td>候选私钥</td><td><strong>累加</strong>，按顺序逐把试</td><td>以为写了新的就会替换掉旧的</td></tr>
+<tr><td><code>IdentitiesOnly yes</code></td><td>只用 config 里列出的 key，忽略 agent 里其余的</td><td>第一次胜出</td><td>不配它，导致 Host 别名形同虚设</td></tr>
+<tr><td><code>Match host A,B</code></td><td>按最终主机名匹配，支持 <code>user</code>/<code>localuser</code>/<code>exec</code>/<code>final</code>/<code>canonical</code></td><td>同上</td><td><code>Match exec</code> 里跑慢命令，每次连接都被拖慢</td></tr>
+<tr><td><code>Match final</code></td><td>在主机名规范化之后再匹配一轮</td><td>同上</td><td>与 <code>CanonicalizeHostname</code> 配合时顺序搞反</td></tr>
+<tr><td><code>Include ~/.ssh/conf.d/*</code></td><td>在该行位置展开被包含文件</td><td>展开位置决定优先级</td><td>把 <code>Include</code> 放在 <code>Host *</code> 之后，包含的配置全部失效</td></tr>
+</tbody>
+</table>
+<pre><code class="language-properties"># ~/.ssh/config —— 顺序即优先级：具体的放前面，通用默认放最后
+
+Host bastion
+    HostName 203.0.113.10
+    Port 2222
+    User ops
+    IdentityFile ~/.ssh/id_ed25519_ops
+    IdentitiesOnly yes          # 只用上面这把，别把 agent 里的钥匙全试一遍
+
+Host prod-web prod-db
+    User deploy
+    ProxyJump bastion           # OpenSSH 7.3+，等价于 ProxyCommand ssh -W %h:%p bastion
+    IdentityFile ~/.ssh/id_ed25519_deploy
+    IdentitiesOnly yes
+    ForwardAgent no             # 显式关掉，不要指望「默认是关的」这种记忆
+
+# 按最终主机名匹配，适合整片网段共用一个跳板
+Match host *.internal.example.com,*.db.example.com
+    ProxyJump bastion
+    ForwardAgent no
+
+# 通用默认必须放在最后一段：放最前面会锁死上面所有 Host 的同名参数
+Host *
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%C    # %C 是一串哈希，避免 socket 路径超过约 104 字节上限
+    ControlPersist 10m
+    ServerAliveInterval 30      # 默认 0，即不发应用层保活
+    ServerAliveCountMax 3       # 30s × 3 = 90s 无响应就断开，不再假死
+    AddKeysToAgent yes
+    StrictHostKeyChecking ask   # 保持默认，不要改成 no
+</code></pre>
+
+<h2 id="mux">ControlMaster 连接复用与 ProxyJump 跳板</h2>
+<p>一次完整的 SSH 连接要做密钥交换和公钥认证，跨洲链路上 300ms 以上很常见。<code>ControlMaster auto</code> 让第一条连接成为 master 并在本地留一个 unix socket，后续连接直接走这个 socket 复用已有的加密通道，跳过握手与认证——对 <code>git</code> 这种一次操作起好几条 SSH 连接的场景，提速是量级上的。</p>
+<div class="mermaid">
+stateDiagram-v2
+    state "尚无 control socket" as S0
+    state "首条连接正在建立 master" as S1
+    state "master 就绪" as S2
+    state "有子会话在复用" as S3
+    state "ControlPersist 保持期" as S4
+    [*] --> S0
+    S0 --> S1: 首条连接做完整握手与认证
+    S1 --> S2
+    S2 --> S3: 后续连接走 socket 跳过握手
+    S3 --> S2: 子会话退出
+    S2 --> S4: 最后一个会话退出 开始计时
+    S4 --> S3: 计时内又有新连接进来
+    S4 --> [*]: ControlPersist 到期 master 自行退出
+    S2 --> [*]: ssh -O exit 或 master 进程被杀
+    note right of S3
+        master 断线时所有复用的子会话会同时断开
+        子会话命令行上新加的转发参数会被静默忽略
+    end note
+</div>
+<p>复用带来三个必须知道的边界。一是<strong>共命运</strong>：master 掉了，所有复用它的会话一起死，所以做危险操作时最好用 <code>-S none</code> 或 <code>-o ControlMaster=no</code> 起一条独立连接。二是<strong>转发参数被忽略</strong>：子会话上写 <code>-L</code> 不会生效，要用 <code>ssh -O forward -L ...</code> 向已有 master 追加。三是<strong>socket 路径与权限</strong>：unix socket 路径有约 104 字节的上限，用 <code>%r@%h:%p</code> 拼长主机名很容易超；换 <code>%C</code>（哈希）解决。socket 必须落在只有自己可写的目录，能读它的进程就能免认证复用你的连接。</p>
+<p>跳板方面，<code>ProxyJump</code>（<code>-J</code>，OpenSSH 7.3 起）取代了 <code>ProxyCommand ssh bastion nc %h %p</code> 这类写法。要点是：客户端会<strong>分别</strong>对跳板机和目标机各做一次完整的握手、指纹校验和认证，内层会话对跳板机是端到端加密的。这也解释了一个常被误解的运维问题——<strong>堡垒机抓不到 <code>ssh -J</code> 内层敲了什么命令</strong>，想审计就必须在目标机上做，或者让堡垒机以「终止会话并录制」的方式代理，而不是简单转发 TCP。</p>
+<table>
+<thead><tr><th>维度</th><th><code>ProxyJump</code> / <code>ssh -W</code></th><th><code>ProxyCommand ... nc</code>（已过时）</th></tr></thead>
+<tbody>
+<tr><td>跳板机依赖</td><td>只需要 sshd</td><td>还得装 <code>nc</code>，且账号得能执行命令</td></tr>
+<tr><td>跳板账号可收紧到</td><td><code>no-pty,restrict,permitopen=...</code>，不给 shell</td><td>必须允许执行远程命令</td></tr>
+<tr><td>多跳</td><td>逗号分隔链式书写</td><td>手工嵌套，极易写错</td></tr>
+<tr><td>目标机指纹校验</td><td>客户端直接校验，失败信息清晰</td><td>同样端到端，但错误常被 <code>nc</code> 吞掉变成「连接被关闭」</td></tr>
+<tr><td>失败诊断</td><td><code>-vv</code> 能分清哪一跳失败</td><td>只能看到最外层报错</td></tr>
+<tr><td>与 ControlMaster 配合</td><td>跳板连接本身也能复用</td><td>每跳都重新建连</td></tr>
+</tbody>
+</table>
+
+<h2 id="forward">三种端口转发的方向、默认绑定与风险边界</h2>
+<p><code>-L</code> 和 <code>-R</code> 记反是常事，记住判断依据：<strong>看端口监听在哪一端</strong>。<code>-L</code> 在本地监听，连接由服务端向目标发起；<code>-R</code> 在服务端监听，连接由客户端向目标发起；<code>-D</code> 在本地监听并提供 SOCKS，目标由每个请求自己决定。</p>
+<div class="mermaid">
+flowchart TB
+    Q1{"流量最终要打到哪一侧"}
+    Q1 -->|"我要访问对面的内网服务"| Q2{"目标是固定的一个还是任意的"}
+    Q2 -->|"固定 host 与 port"| L["用 -L 本地转发"]
+    Q2 -->|"任意目标 整个浏览器都走"| D["用 -D 动态转发 SOCKS"]
+    Q1 -->|"要把本机服务给对面用"| R["用 -R 远程转发"]
+    L --> LG{"要让同网段同事也能连吗"}
+    LG -->|"不要 这是默认"| L1["只绑 127.0.0.1 最安全"]
+    LG -->|"要"| L2["加 -g 或 GatewayPorts 并配防火墙"]
+    R --> RG{"远端要绑 0.0.0.0 吗"}
+    RG -->|"不需要"| R1["默认只绑远端 loopback"]
+    RG -->|"需要"| R2["服务端 GatewayPorts yes 默认是 no"]
+    D --> DG{"这是长期通道还是临时调试"}
+    DG -->|"长期"| D1["改用 VPN 或零信任网关 别用 SSH 兜底"]
+    DG -->|"临时"| D2["用完就关 避免忘在后台"]
+</div>
+<table>
+<thead><tr><th>方向</th><th>监听在</th><th>连接由谁发起</th><th>默认绑定地址</th><th>放开到全网卡需要</th><th>主要风险</th></tr></thead>
+<tbody>
+<tr><td><code>-L</code> 本地转发</td><td>客户端</td><td>服务端 → 目标</td><td><code>127.0.0.1</code></td><td>客户端 <code>-g</code> 或 <code>GatewayPorts yes</code></td><td>本机其他用户蹭这个口直连生产库</td></tr>
+<tr><td><code>-R</code> 远程转发</td><td>服务端</td><td>客户端 → 目标</td><td>服务端 loopback</td><td>服务端 <code>GatewayPorts yes</code>（默认 <code>no</code>）</td><td>把内网服务暴露到公网机器上，忘关就是长期后门</td></tr>
+<tr><td><code>-D</code> 动态转发</td><td>客户端</td><td>服务端 → 任意目标</td><td><code>127.0.0.1</code></td><td>同 <code>-L</code></td><td>目标不受限，等于给服务端开了一条任意出网通道</td></tr>
+<tr><td><code>-R 0:...</code></td><td>服务端</td><td>客户端 → 目标</td><td>服务端动态分配端口</td><td>—</td><td>端口号每次不同，容易残留</td></tr>
+</tbody>
+</table>
+<p>服务端侧的收紧要点，以及一个必须说清的边界：<strong>关掉转发并不能给「有 shell 的用户」增加多少安全性</strong>——他完全可以自己上传一个转发程序。<code>AllowTcpForwarding no</code> 的价值在于限制那些<strong>只应该做单一用途</strong>的账号（跳板账号、Git 账号、备份账号），真正的隔离要靠 <code>no-pty</code> + <code>ForceCommand</code> + 网络策略三件一起上。</p>
+<pre><code class="language-properties"># /etc/ssh/sshd_config —— 改完先 sshd -t 验证语法，再 reload，不要直接 restart 把自己踢下线
+PermitRootLogin no
+PasswordAuthentication no          # 只走公钥或证书
+KbdInteractiveAuthentication no    # 旧名 ChallengeResponseAuthentication；不关它，密码可能从这条路进来
+PubkeyAuthentication yes
+AuthenticationMethods publickey    # 显式声明，避免被其他方法绕开
+MaxAuthTries 3                     # 默认 6
+LoginGraceTime 20                  # 默认 120 秒，缩短未认证连接占用窗口
+StrictModes yes                    # 默认 yes：权限位不对就拒绝读 authorized_keys
+
+# 单一用途账号 / 跳板机上收紧连接层
+AllowTcpForwarding no              # 默认 yes
+AllowAgentForwarding no            # 默认 yes
+AllowStreamLocalForwarding no
+GatewayPorts no                    # 默认 no，-R 只能绑远端 loopback
+X11Forwarding no
+PermitTunnel no
+
+ClientAliveInterval 30
+ClientAliveCountMax 3              # 设成 0 则变成强制空闲断开
+UseDNS no                          # 6.8 起默认就是 no；老系统上仍可能是 yes，会造成登录卡几十秒
+</code></pre>
+
+<h2 id="agent">agent forwarding 的攻击面与更安全的替代</h2>
+<p><code>ForwardAgent yes</code>（<code>-A</code>）会在远端机器上创建一个 unix socket，并把 <code>SSH_AUTH_SOCK</code> 指过去。远端进程通过它请求签名，请求被送回你本地的 agent 完成——私钥确实没有离开本地。问题在于：<strong>「使用私钥的能力」被交出去了</strong>。在连接存续期间，任何能读到这个 socket 的主体（远端 root、同 uid 的其他进程、被入侵的进程）都能让你的 agent 对任意挑战签名，等于临时借走你的身份，横向登录所有信任这把公钥的机器。私钥不泄漏，但横向移动照样成立。</p>
+<p>更要紧的是，绝大多数「我需要 <code>-A</code>」的场景其实不需要它：过跳板机去 <code>git clone</code>、过跳板机连内网机器，用 <code>ProxyJump</code> 就够了，因为认证全在本地完成，跳板机上根本不落 socket。</p>
+<table>
+<thead><tr><th>方案</th><th>远端是否暴露签名能力</th><th>版本要求</th><th>适用场景</th><th>残余风险</th></tr></thead>
+<tbody>
+<tr><td><code>ProxyJump</code> / <code>-W</code></td><td>否</td><td>7.3+</td><td>过跳板机连内网、过跳板机拉代码</td><td>跳板机可见连接元数据（谁连了哪台）</td></tr>
+<tr><td>按 Host 粒度开 <code>ForwardAgent</code></td><td>是，范围收窄</td><td>任意</td><td>确实要在远端用你的身份操作</td><td>该主机被入侵期间身份可被借用</td></tr>
+<tr><td><code>ssh-add -c</code>（每次使用需确认）</td><td>是，但每次要人点头</td><td>任意，需 SSH_ASKPASS</td><td>偶发、低频的远端签名需求</td><td>确认疲劳，点多了等于没开</td></tr>
+<tr><td><code>ssh-add -t 1h</code>（key 生存期）</td><td>是，时间窗口收窄</td><td>任意</td><td>所有场景都该默认加上</td><td>窗口内仍可被借用</td></tr>
+<tr><td>destination constraints（<code>ssh-add -h</code>）</td><td>是，但只能对指定主机路径签名</td><td><strong>两端都需 8.9+</strong></td><td>必须转发 agent 的固定链路</td><td>版本要求高，链路变更要重加</td></tr>
+<tr><td>SSH 证书 + 短 TTL</td><td>是，但凭据几分钟就过期</td><td>需自建 CA</td><td>有规模的团队，统一签发</td><td>CA 本身成为最高价值目标</td></tr>
+</tbody>
+</table>
+
+<h2 id="keepalive">连接假死、权限位与主机密钥轮换</h2>
+<p>「窗口还在，一敲就没反应，过很久才断」的典型原因是<strong>中间设备回收了 NAT/会话表项</strong>：两端的 TCP 都认为连接还在，中间已经没人转发了。<code>TCPKeepAlive</code>（默认 <code>yes</code>）走的是内核探测，第一次探测往往要等两小时，远大于 NAT 表项常见的 5–30 分钟空闲上限，救不了场。真正有用的是应用层保活 <code>ServerAliveInterval</code>：它走加密通道，会被中间设备记为活动流量，而且在 <code>ServerAliveCountMax</code> 次无响应后客户端会<strong>主动断开</strong>，让你立刻知道连接没了，而不是无限挂着。</p>
+<table>
+<thead><tr><th>参数</th><th>位置</th><th>默认值</th><th>作用层</th><th>调错的后果</th></tr></thead>
+<tbody>
+<tr><td><code>ServerAliveInterval</code></td><td>客户端</td><td><code>0</code>（关闭）</td><td>SSH 应用层</td><td>不配就会遇到假死；配太小（如 5）在弱网下容易误断</td></tr>
+<tr><td><code>ServerAliveCountMax</code></td><td>客户端</td><td><code>3</code></td><td>SSH 应用层</td><td>配成 100 等于永不判死，等同没配</td></tr>
+<tr><td><code>TCPKeepAlive</code></td><td>两端</td><td><code>yes</code></td><td>TCP</td><td>指望它救假死会失望，探测间隔由内核决定</td></tr>
+<tr><td><code>ClientAliveInterval</code></td><td>服务端</td><td><code>0</code></td><td>SSH 应用层</td><td>兼作空闲超时手段，配小了会踢掉长时间跑任务的会话</td></tr>
+<tr><td><code>ClientAliveCountMax</code></td><td>服务端</td><td><code>3</code></td><td>SSH 应用层</td><td>设 <code>0</code> 变成到点强制断开，容易被误当成 bug</td></tr>
+<tr><td><code>IPQoS</code></td><td>客户端</td><td>交互 <code>af21</code>，批量 <code>cs1</code></td><td>IP 头 DSCP</td><td>某些老网络设备丢弃带 DSCP 的包，表现为握手后立刻卡死，需显式设 <code>IPQoS throughput</code></td></tr>
+</tbody>
+</table>
+<p>权限位问题的特点是<strong>静默</strong>：客户端只看到 <code>Permission denied (publickey)</code>，真正的原因只在服务端日志里。<code>StrictModes yes</code>（默认）要求<strong>家目录本身</strong>不能被组或其他人写，<code>~/.ssh</code> 700，<code>authorized_keys</code> 不能组/其他可写。很多「按教程配了一模一样却登不上」都倒在家目录上——常见于用 <code>usermod</code> 改过 umask、或从备份恢复时带回了 775 的家目录。</p>
+<p><code>known_hosts</code> 的哈希化也值得说清：上游 OpenSSH 的 <code>HashKnownHosts</code> 默认是 <code>no</code>，但 Debian/Ubuntu 在 <code>/etc/ssh/ssh_config</code> 里把它打开了，所以这些系统上的条目是 <code>|1|盐|哈希</code> 形式，用 <code>grep 主机名</code> 永远找不到。对应的正确工具是 <code>ssh-keygen -F host</code> 查询、<code>ssh-keygen -R host</code> 删除。</p>
+<p>主机密钥轮换有一个很多人不知道的机制：OpenSSH 8.5 起 <code>UpdateHostKeys</code> 默认为 <code>yes</code>，服务端会在认证后通过扩展把自己<strong>所有</strong>主机公钥推给客户端，客户端在本次验证成功的前提下静默更新 <code>known_hosts</code>。这让「先给服务器加一把 ed25519 主机密钥，跑一段时间再淘汰旧的 RSA」这种平滑轮换不会引发全员 WARNING，前提是 <code>known_hosts</code> 可写、且本次连接是靠 <code>known_hosts</code>（不是新主机、不是证书）验证通过的。而机器<strong>重装</strong>导致的指纹变化是另一回事，那必须带外核对新指纹再 <code>ssh-keygen -R</code>，不能用 <code>-o StrictHostKeyChecking=no</code> 糊过去。</p>
+<pre><code class="language-bash"># 1) 先看客户端最终生效的配置，直接验证「第一次出现胜出」的结果
+ssh -G prod
+ssh -G prod | grep -Ei 'identityfile|proxyjump|controlpath|serveralive|forwardagent'
+
+# 2) 分层定位：卡在哪一层
+ssh -vv prod 2&gt;&amp;1 | grep -E 'Local version|kex|Host key|Offering|Authentications that can continue'
+#   停在 kex 相关行之前  -&gt; 传输层（算法不匹配 / 网络 / MTU）
+#   反复 Offering 后 denied -&gt; 认证层（authorized_keys 内容或权限位）
+#   登录成功但 open failed  -&gt; 连接层（服务端禁了转发）
+
+# 3) 主机指纹：带外核对，而不是关掉校验
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub   # 在服务器上算出指纹
+ssh-keyscan -t ed25519 prod.example.com            # 在客户端取指纹，人工比对上一行
+ssh-keygen -F prod.example.com                     # 哈希化后用它查 known_hosts，grep 查不到
+ssh-keygen -R prod.example.com                     # 确认是重装之后再删旧条目
+
+# 4) 权限位导致的静默失败
+chmod 700 ~/.ssh &amp;&amp; chmod 600 ~/.ssh/id_ed25519 &amp;&amp; chmod 600 ~/.ssh/authorized_keys
+chmod g-w,o-w ~                                    # StrictModes 还会检查家目录本身
+sudo journalctl -u sshd --since '-10min' | grep -E 'Authentication refused|bad ownership'
+
+# 5) 复用连接的运维动作
+ssh -O check prod                            # master 还活着吗
+ssh -O forward -L 15432:10.0.0.5:5432 prod   # 给已有 master 追加转发（子会话直接写 -L 会被忽略）
+ssh -O exit prod                             # 只关这一个 master
+</code></pre>
+
+<h2 id="pitfalls">最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">这些坑每一条都能复现</div>
+    <ul>
+    <li><code>Host *</code> 写在 <code>~/.ssh/config</code> 开头：后面所有具体 Host 的同名参数全部被锁死，没有报错。<code>Include</code> 同理，放在 <code>Host *</code> 之后等于没包含。</li>
+    <li>以为 <code>IdentityFile</code> 写新的会替换旧的：它是累加的，旧的还会被拿去试，撞 <code>MaxAuthTries</code>。</li>
+    <li>用 <code>StrictHostKeyChecking=no</code> 解决 <code>Host key verification failed</code>：换来一个「能连但端口转发和密码认证都不好使」的怪状态，且中间人防线全部作废。</li>
+    <li><code>ServerAliveCountMax</code> 配成 100 来「防掉线」：等于永不判死，假死时会挂到天荒地老。</li>
+    <li>家目录 775：<code>~/.ssh</code> 和 <code>authorized_keys</code> 权限全对也登不上，客户端只报 publickey denied，线索只在服务端日志。</li>
+    <li>用 <code>grep</code> 在 <code>known_hosts</code> 里找主机名：Debian/Ubuntu 默认哈希化，必须用 <code>ssh-keygen -F</code>。</li>
+    <li><code>ControlPath</code> 用 <code>%r@%h:%p</code> 撞上 unix socket 约 104 字节路径上限，长域名直接失败；换 <code>%C</code>。</li>
+    <li>在复用的子会话上写 <code>-L</code>：静默忽略，必须 <code>ssh -O forward</code>。master 一断，所有复用会话同时死。</li>
+    <li>把 <code>ForwardAgent yes</code> 放在 <code>Host *</code> 下：每台机器的 root 都能在你连着的时候借用你的身份。</li>
+    <li><code>-R</code> 转发以为默认就能对外提供服务：服务端 <code>GatewayPorts</code> 默认 <code>no</code>，只绑 loopback；反过来一旦开了又忘关，就是长期后门。</li>
+    <li>直接 <code>systemctl restart sshd</code> 改配置：语法错会把自己关在门外。先 <code>sshd -t</code>，再 <code>reload</code>，并留一个已连接的会话兜底。</li>
+    <li>老服务器只有 <code>ssh-rsa</code> 主机密钥，OpenSSH 8.8+ 客户端连不上就临时加 <code>-o HostKeyAlgorithms=+ssh-rsa</code> 并写进配置：这是把 SHA-1 签名长期留在信任链里，正确做法是给服务端加 ed25519 主机密钥。</li>
+    </ul>
+</div>
+                    </div>
+                </article>
+                <nav class="article-nav">
+                    <a class="nav-prev" href="../modern-unix/"><span class="nav-label">← 上一篇</span><span class="nav-title">Unix 工具链</span></a>
+                    <a class="nav-next" href="../text-processing/"><span class="nav-label">下一篇 →</span><span class="nav-title">文本处理</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · Shell</h2><ul class="related-list"><li><a class="side-post" href="../core/">Shell 脚本编程</a></li><li><a class="side-post" href="../internals/">Shell 底层原理</a></li><li><a class="side-post" href="../modern-unix/">Unix 工具链</a></li><li><a class="side-post" href="./">SSH 远程管理</a></li><li><a class="side-post" href="../text-processing/">文本处理</a></li><li><a class="side-post" href="../system-troubleshooting/">Linux 系统管理</a></li></ul></aside>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+    <button class="back-to-top" title="回到顶部">↑</button>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "tools";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

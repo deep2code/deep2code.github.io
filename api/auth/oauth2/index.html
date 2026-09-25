@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>OAuth 2.0 与 OIDC 的协议细节 - 认证授权 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+    <meta name="description" content="OAuth 2.0 解决的是授权而非认证，用它做登录必须由 OIDC 补上身份层。逐参数讲透授权码模式的报文往返、其余三种授权模式的适用边界、隐式与密码模式为何被废弃、PKCE 的哈希绑定机理、访问令牌与刷新令牌与内省撤销端点的分工、JWT 令牌与不透明令牌的对照、scope 与权限的区别，以及 OIDC 的 id_token、userinfo、discovery 与 nonce。">
+    <meta name="keywords" content="认证授权,OAuth2 与 OIDC,技术博客,资深码农">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/api/auth/oauth2/">
+    <meta property="og:title" content="OAuth 2.0 与 OIDC 的协议细节 - 认证授权 - 资深码农">
+    <meta property="og:description" content="OAuth 2.0 解决的是授权而非认证，用它做登录必须由 OIDC 补上身份层。逐参数讲透授权码模式的报文往返、其余三种授权模式的适用边界、隐式与密码模式为何被废弃、PKCE 的哈希绑定机理、访问令牌与刷新令牌与内省撤销端点的分工、JWT 令牌与不透明令牌的对照、scope 与权限的区别，以及 OIDC 的 id_token、userinfo、discovery 与 nonce。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/api/auth/oauth2/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="OAuth 2.0 与 OIDC 的协议细节 - 认证授权">
+    <meta name="twitter:description" content="OAuth 2.0 解决的是授权而非认证，用它做登录必须由 OIDC 补上身份层。逐参数讲透授权码模式的报文往返、其余三种授权模式的适用边界、隐式与密码模式为何被废弃、PKCE 的哈希绑定机理、访问令牌与刷新令牌与内省撤销端点的分工、JWT 令牌与不透明令牌的对照、scope 与权限的区别，以及 OIDC 的 id_token、userinfo、discovery 与 nonce。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "OAuth2 和 OIDC 到底什么关系，做登录该用哪个？", "acceptedAnswer": {"@type": "Answer", "text": "OAuth 2.0 是授权框架，它回答的是这个应用能不能访问这些资源，从来没有规定如何表达用户是谁。OIDC 建立在 OAuth 2.0 之上，补了一个身份层：多了 id_token 这个身份断言、userinfo 端点、标准化的用户信息字段、发现文档和防重放的 nonce。做登录必须用 OIDC。只用 OAuth2 做登录的典型错误是拿访问令牌当身份凭证，而访问令牌的受众是资源服务器而不是你的应用，别处签发的令牌拿过来也能通过，等于任何人都能冒充登录。"}}, {"@type": "Question", "name": "隐式模式为什么被废弃了？", "acceptedAnswer": {"@type": "Answer", "text": "隐式模式让授权服务器直接把访问令牌放在重定向地址的片段里返回给浏览器。这意味着令牌会进入浏览器历史、可能被脚本读取、也可能随 Referer 泄露，而且它没有后端参与，无法安全携带客户端密钥，也拿不到刷新令牌。当前的规范指引是所有客户端都使用授权码模式，公开客户端配合 PKCE，这样令牌只在后端到授权服务器的通道里传输，浏览器只接触一次性的授权码。老项目还在用隐式模式的，迁移成本主要是回调处理逻辑，值得尽快做。"}}, {"@type": "Question", "name": "PKCE 是只有移动端才需要吗？", "acceptedAnswer": {"@type": "Answer", "text": "不是，现在对所有客户端都推荐，包括有后端的 Web 应用。PKCE 的机制是客户端先生成一个随机串 code_verifier，把它的哈希作为 code_challenge 发给授权端点，换令牌时再提交原始的 code_verifier，授权服务器比对哈希是否匹配。这样即便授权码在重定向链路上被截获，截获者没有 code_verifier 也换不到令牌。它带来的实现成本只有几行代码，而收益是把授权码从谁拿到谁能用变成只有发起这次流程的客户端能用。"}}, {"@type": "Question", "name": "state 参数可以省掉吗？", "acceptedAnswer": {"@type": "Answer", "text": "不能。state 是客户端生成并绑定在会话上的随机值，授权服务器会原样回传，客户端必须比对一致才继续。它防的是攻击者构造一次自己的授权流程、把回调地址塞给受害者从而把受害者账号绑到攻击者身份上的问题，同时也用来承载登录前的目标页面。要点是 state 必须存在服务端会话或带签名的临时存储里，并且用完即删，不能只做有就通过的形式校验。攻击细节与危害范围见站内越权与鉴权安全一文。"}}, {"@type": "Question", "name": "访问令牌用 JWT 还是用不透明字符串？", "acceptedAnswer": {"@type": "Answer", "text": "取决于资源服务器要不要即时判断令牌状态。JWT 形态可以本地验签，零网络调用，适合高频调用和多服务架构，代价是签发出去就无法撤销，只能靠短有效期。不透明令牌是一个随机串，资源服务器必须调授权服务器的内省端点才能知道它是否有效，因此天然支持即时撤销，代价是每次校验多一次网络往返，通常要配合短时缓存。混合做法也常见：对外开放平台用不透明令牌换取可控性，内部服务用 JWT 换取性能。"}}, {"@type": "Question", "name": "第三方登录时能不能用对方返回的邮箱来合并账号？", "acceptedAnswer": {"@type": "Answer", "text": "不能无条件合并。只有当身份提供方明确标注该邮箱已验证、并且你信任这家提供方的验证流程时才可以考虑，否则攻击者在一个允许任意填写邮箱的小型提供方注册一个和受害者同邮箱的账号，就能直接接管受害者在你系统里的账号。稳妥做法是以提供方标识加提供方内用户 ID 作为唯一外部身份键，邮箱相同时不自动合并，而是要求用户先用原有方式登录再主动绑定，或者走邮箱验证链路确认所有权。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api" class="active">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">接口、协议与安全</a><span class="separator">/</span><a href="../index.html">认证与授权的协议全景：从 Cookie Session 到 Token 与联邦</a><span class="separator">/</span><span>OAuth2 与 OIDC</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">OAuth 2.0 与 OIDC 的协议细节</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ OAuth2</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>OAuth 2.0 的接入门槛很低，跟着一份 SDK 文档抄二十行代码就能跑通第三方登录，这导致绝大多数人从没真正看过它的报文。而这个协议的所有坑都在参数层面：<code>redirect_uri</code> 怎么匹配、<code>state</code> 校验放在哪一步、<code>code_verifier</code> 和 <code>code_challenge</code> 是怎么绑定的、<code>id_token</code> 和 <code>access_token</code> 的受众为什么不同。这篇按报文把流程拆开讲，并把 OIDC 相对 OAuth2 增加的部分单独讲清。攻击面与危害范围（<code>state</code> 缺失、PKCE 绕过的具体利用）见站内 <a href="../../security/auth-security/">越权与鉴权安全</a>，令牌格式与验签细节见站内 <a href="../jwt/">JWT 的结构与验签机制</a>。</p>
+
+<h2>先纠正最根本的误解：OAuth2 是授权协议</h2>
+<p>OAuth 2.0 要解决的原始问题是：<strong>让第三方应用在不知道用户密码的前提下，代表用户访问用户在另一个服务上的资源</strong>。它的输出是一个访问令牌，语义是「某应用被允许在某范围内访问某资源」。它<strong>没有</strong>规定如何表达「用户是谁」，也没有规定应用如何确认用户已经完成认证。</p>
+<p>于是把 OAuth2 当认证协议用会踩一个很隐蔽的陷阱：访问令牌的受众是<strong>资源服务器</strong>，不是你的应用。如果你的登录逻辑是「拿到 access_token，调一下接口能取到用户信息就认为登录成功」，那么一个在别处（比如另一个恶意应用）签发给同一个资源服务器的令牌也能通过这套逻辑，攻击者由此可以冒充任意用户登录。这正是 OIDC 存在的原因：<code>id_token</code> 的受众是<strong>你的客户端</strong>，并且带 <code>nonce</code> 与签名，专门用来回答「用户是谁」。</p>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">把访问令牌当身份凭证是高危错误</div>
+    <p>判断方法很简单：如果你的登录流程里没有任何一步在校验「这份断言是签给我这个 client_id 的」，那么它就是可被令牌替换攻击的。OIDC 的做法是校验 <code>id_token</code> 的 <code>aud</code> 等于自己的 <code>client_id</code>、<code>iss</code> 等于预期签发方、<code>nonce</code> 等于本次流程存下的值。</p>
+</div>
+
+<h2>四个角色与它们之间的信任关系</h2>
+<p>协议里有四个角色，把它们的信任方向理清，后面所有参数的作用都会变得自然：资源拥有者（用户）只信任授权服务器，因此认证必须发生在授权服务器的页面上而不是客户端的表单里；客户端不被信任，所以它拿到的是有范围限制的令牌而不是密码；资源服务器只信任授权服务器的签名或内省结果，不信任客户端的任何说法。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph U["用户侧"]
+        RO["资源拥有者<br/>用户 只在授权服务器上输入凭证"]
+        UA["浏览器或 App<br/>承载重定向"]
+    end
+    subgraph APP["客户端侧"]
+        CC["机密客户端<br/>有后端 能保存 client_secret"]
+        PC["公开客户端<br/>SPA 与原生 App 无法保密"]
+    end
+    subgraph AS["授权服务器"]
+        AEP["授权端点<br/>用户交互与同意"]
+        TEP["令牌端点<br/>换取与刷新令牌"]
+        JW["公钥与内省撤销端点"]
+    end
+    RS["资源服务器<br/>只信授权服务器的签名或内省结果"]
+    RO --> UA --> AEP
+    CC --> TEP
+    PC --> TEP
+    AEP -->|"一次性授权码"| CC
+    TEP -->|"访问令牌与刷新令牌"| CC
+    CC -->|"携带访问令牌调用"| RS
+    JW --> RS
+</div>
+<table>
+    <thead>
+        <tr>
+            <th>角色</th>
+            <th>它是谁</th>
+            <th>它被信任做什么</th>
+            <th>常见实现错误</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>资源拥有者</td>
+            <td>用户</td>
+            <td>在授权服务器上认证并对授权范围表示同意</td>
+            <td>在客户端页面上收集用户在授权服务器的密码</td>
+        </tr>
+        <tr>
+            <td>客户端</td>
+            <td>你的应用</td>
+            <td>发起流程、保管密钥（仅机密客户端）、持有令牌</td>
+            <td>SPA 里硬编码 <code>client_secret</code>，等于公开</td>
+        </tr>
+        <tr>
+            <td>授权服务器</td>
+            <td>自建 IdP 或微信、Google 等</td>
+            <td>认证用户、签发与撤销令牌、发布公钥</td>
+            <td>把它和资源服务器混在一个服务里却不区分令牌受众</td>
+        </tr>
+        <tr>
+            <td>资源服务器</td>
+            <td>业务 API</td>
+            <td>校验令牌、按 scope 与自身权限模型放行</td>
+            <td>只看 scope 就放行，不判断资源归属，形成越权</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>授权码模式：逐参数看报文</h2>
+<p>授权码模式是当前唯一推荐给用户登录场景的模式。它的核心设计是<strong>把浏览器能看到的东西和能换令牌的东西分开</strong>：浏览器只经手一个短命的、一次性的授权码，真正的令牌在客户端后端与令牌端点之间直接传输，浏览器完全接触不到。</p>
+<div class="mermaid">
+sequenceDiagram
+    participant B as 浏览器
+    participant C as 客户端后端
+    participant A as 授权服务器
+    participant R as 资源服务器
+    C->>C: 生成 state 与 code_verifier 存入会话
+    C-->>B: 302 跳转授权端点 带 client_id redirect_uri scope state code_challenge
+    B->>A: 打开授权页
+    A->>B: 要求登录并展示同意页
+    B->>A: 用户完成认证并同意授权
+    A-->>B: 302 回调 带 code 与原样回传的 state
+    B->>C: 访问回调地址
+    C->>C: 比对 state 一致 否则直接拒绝
+    C->>A: POST 令牌端点 code client_secret code_verifier redirect_uri
+    A->>A: 校验码未使用未过期 且 code_verifier 哈希匹配
+    A-->>C: 返回 access_token refresh_token 与 id_token
+    C->>R: 调用业务接口 携带 access_token
+    R-->>C: 返回资源
+    Note over B,A: 浏览器只经手一次性授权码<br/>令牌始终不进入浏览器地址栏
+</div>
+<table>
+    <thead>
+        <tr>
+            <th>授权端点参数</th>
+            <th>作用</th>
+            <th>写错的后果</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>response_type</code></td>
+            <td>固定为 code，声明走授权码模式</td>
+            <td>写成 token 就退化成已废弃的隐式模式</td>
+        </tr>
+        <tr>
+            <td><code>client_id</code></td>
+            <td>客户端标识，公开信息</td>
+            <td>与注册信息不符直接报错，不构成安全问题</td>
+        </tr>
+        <tr>
+            <td><code>redirect_uri</code></td>
+            <td>回调地址，授权服务器按注册值精确匹配</td>
+            <td>允许通配或开放重定向会让授权码被送到攻击者服务器</td>
+        </tr>
+        <tr>
+            <td><code>scope</code></td>
+            <td>申请的授权范围，多个用空格分隔</td>
+            <td>一次要过多范围会降低用户同意率，也放大泄露影响</td>
+        </tr>
+        <tr>
+            <td><code>state</code></td>
+            <td>与用户会话绑定的随机值，原样回传用于校验</td>
+            <td>不校验会被诱导完成攻击者发起的授权流程</td>
+        </tr>
+        <tr>
+            <td><code>code_challenge</code> 与 <code>code_challenge_method</code></td>
+            <td>PKCE 的挑战值与哈希方法，方法用 S256</td>
+            <td>用 plain 等于没做 PKCE；缺失则授权码谁截获谁能用</td>
+        </tr>
+        <tr>
+            <td><code>nonce</code></td>
+            <td>OIDC 专用，会写进 id_token 用于防重放</td>
+            <td>不校验则旧的 id_token 可被重放完成登录</td>
+        </tr>
+        <tr>
+            <td><code>prompt</code> 与 <code>max_age</code></td>
+            <td>控制是否强制重新认证、可接受的认证时效</td>
+            <td>敏感操作不加 prompt 会直接用旧会话静默通过</td>
+        </tr>
+    </tbody>
+</table>
+<pre><code class="language-bash"># 1) 生成 PKCE 材料（code_verifier 43-128 字符，challenge 是它的 SHA-256）
+VERIFIER=$(openssl rand -base64 60 | tr -d '\n=+/' | cut -c1-64)
+CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -binary -sha256 | openssl base64 \
+  | tr '+/' '-_' | tr -d '=\n')
+STATE=$(openssl rand -hex 16)
+# VERIFIER 与 STATE 必须存进服务端会话，不能只放在前端内存或 localStorage
+
+# 2) 把用户重定向到授权端点（这一步由浏览器完成，这里只是把 URL 拼出来看）
+echo "https://idp.example.com/authorize?response_type=code&amp;client_id=web-app\
+&amp;redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&amp;scope=openid%20profile%20email\
+&amp;state=$STATE&amp;code_challenge=$CHALLENGE&amp;code_challenge_method=S256&amp;nonce=$(openssl rand -hex 16)"
+
+# 3) 回调拿到 code 后，在后端用 code 换令牌；redirect_uri 必须与上一步完全一致
+curl -s -X POST https://idp.example.com/oauth2/token \
+  -u "web-app:$CLIENT_SECRET" \
+  -d grant_type=authorization_code \
+  -d "code=$CODE" \
+  -d "code_verifier=$VERIFIER" \
+  -d 'redirect_uri=https://app.example.com/callback' \
+  | jq '{token_type, expires_in, scope, has_id_token: (.id_token != null)}'
+# 判读要点：
+#   expires_in 一般 300-3600；拿不到 id_token 说明 scope 里漏了 openid，
+#   此时你手上只有授权凭证没有身份断言，不能用于登录判断。
+#   用同一个 code 再请求一次必须返回 invalid_grant，这是授权码一次性的验证方法。</code></pre>
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> 授权码已签发
+    授权码已签发 --> 已兑换: 令牌端点校验通过 一次性作废
+    授权码已签发 --> 码已过期: 通常 30 到 600 秒未使用
+    授权码已签发 --> 兑换被拒: code_verifier 不匹配 或 redirect_uri 不一致
+    已兑换 --> 访问令牌有效
+    访问令牌有效 --> 访问令牌过期: expires_in 到期
+    访问令牌过期 --> 访问令牌有效: 用刷新令牌换新 并轮换刷新令牌
+    访问令牌有效 --> 已撤销: 调用撤销端点 或 用户解除授权
+    码已过期 --> [*]
+    兑换被拒 --> [*]
+    已撤销 --> [*]
+    note right of 授权码已签发
+        重复兑换必须失败并使整条令牌链失效
+        这是检测授权码被截获的关键信号
+    end note
+</div>
+
+<h2>其余授权模式与两个已废弃的模式</h2>
+<table>
+    <thead>
+        <tr>
+            <th>模式</th>
+            <th>流程特征</th>
+            <th>适用场景</th>
+            <th>状态</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>授权码 + PKCE</td>
+            <td>浏览器拿码，后端换令牌</td>
+            <td>Web 应用、SPA、原生 App，一切有用户参与的场景</td>
+            <td>唯一推荐</td>
+        </tr>
+        <tr>
+            <td>客户端凭证</td>
+            <td>客户端直接用自己的凭证换令牌，无用户参与</td>
+            <td>服务间调用、定时任务、后台数据同步</td>
+            <td>推荐（仅限机密客户端）</td>
+        </tr>
+        <tr>
+            <td>设备码</td>
+            <td>设备显示短码，用户在手机或电脑上输入并授权，设备轮询令牌端点</td>
+            <td>电视、机顶盒、CLI 工具、无浏览器设备</td>
+            <td>推荐用于输入受限设备</td>
+        </tr>
+        <tr>
+            <td>刷新令牌</td>
+            <td>用刷新令牌换新的访问令牌</td>
+            <td>延长登录态，配合轮换使用</td>
+            <td>推荐，但必须轮换</td>
+        </tr>
+        <tr>
+            <td>隐式模式</td>
+            <td>授权服务器直接在重定向片段里返回访问令牌</td>
+            <td>历史上给无后端的 SPA 用</td>
+            <td><strong>已废弃</strong>，改用授权码加 PKCE</td>
+        </tr>
+        <tr>
+            <td>密码模式</td>
+            <td>客户端收集用户名密码，直接换令牌</td>
+            <td>历史上给自家一方应用用</td>
+            <td><strong>已废弃</strong></td>
+        </tr>
+    </tbody>
+</table>
+<p>废弃的理由值得记住，因为它们解释了整个协议的设计意图。<strong>隐式模式</strong>把访问令牌放进重定向地址，令牌于是出现在浏览器历史里、可能被页面脚本读到、也可能通过 Referer 外泄；同时它没有后端参与，既无法安全使用客户端密钥，也拿不到刷新令牌，只能靠不断跳转续期。<strong>密码模式</strong>的问题更根本：它让客户端直接接触用户在授权服务器的凭证，这恰恰是 OAuth2 诞生要消灭的事情，一旦客户端被攻破，泄露的是密码本身而不只是令牌，而且它天然无法支持多因素与验证码这类交互式认证步骤。</p>
+
+<h2>PKCE：把授权码绑定到发起它的客户端</h2>
+<p>公开客户端（SPA、原生 App）无法保存 <code>client_secret</code>——代码可以被反编译、可以被查看源码，所以「用 code 加 secret 换令牌」这一层保护对它们不成立。此时如果授权码在回调链路上被截获（自定义 URL scheme 被同设备恶意应用抢注、日志或 Referer 泄露、中间人），截获者就能直接换到令牌。</p>
+<p>PKCE 的机理是把一次性授权码和<strong>发起这次流程的那个客户端实例</strong>绑定：客户端先生成高熵随机串 <code>code_verifier</code>，把它的 SHA-256 摘要经 base64url 编码后作为 <code>code_challenge</code> 发到授权端点；授权服务器把 challenge 与授权码存在一起；换令牌时客户端必须提交原始 <code>code_verifier</code>，服务端重算哈希比对。截获授权码的人没有 verifier，而从 challenge 反推 verifier 在计算上不可行，所以码变成了废纸。</p>
+<div class="callout callout-tip">
+    <div class="callout-icon">✅</div>
+    <div class="callout-title">PKCE 现在对所有客户端都推荐</div>
+    <p>包括有后端、能保管 <code>client_secret</code> 的机密客户端。理由是它防的不只是「secret 缺失」，还包括授权码被注入到另一个用户会话中的一类问题。实现成本是几行哈希代码，<code>code_challenge_method</code> 必须用 S256，<code>plain</code> 等于没做。</p>
+</div>
+
+<h2>令牌类型、端点分工与 scope 设计</h2>
+<table>
+    <thead>
+        <tr>
+            <th>端点</th>
+            <th>谁来调</th>
+            <th>作用</th>
+            <th>注意</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>授权端点</td>
+            <td>浏览器（重定向）</td>
+            <td>用户认证与同意，返回授权码</td>
+            <td>必须走 HTTPS，且 <code>redirect_uri</code> 精确匹配</td>
+        </tr>
+        <tr>
+            <td>令牌端点</td>
+            <td>客户端后端</td>
+            <td>换取与刷新令牌</td>
+            <td>要做客户端认证与限流，是被爆破的主要目标</td>
+        </tr>
+        <tr>
+            <td>内省端点</td>
+            <td>资源服务器</td>
+            <td>查询不透明令牌是否有效及其元数据</td>
+            <td>必须加缓存，否则每请求多一次往返</td>
+        </tr>
+        <tr>
+            <td>撤销端点</td>
+            <td>客户端后端</td>
+            <td>登出时主动作废刷新令牌与访问令牌</td>
+            <td>登出只清本地会话不调它，等于令牌还活着</td>
+        </tr>
+        <tr>
+            <td>公钥端点</td>
+            <td>资源服务器与网关</td>
+            <td>发布验签公钥集合</td>
+            <td>缓存并设 TTL，配合密钥轮换</td>
+        </tr>
+        <tr>
+            <td>发现文档</td>
+            <td>客户端与资源服务器</td>
+            <td>一次性获取以上所有端点地址与支持的算法</td>
+            <td>启动时拉取并缓存，不要硬编码端点</td>
+        </tr>
+    </tbody>
+</table>
+<table>
+    <thead>
+        <tr>
+            <th>维度</th>
+            <th>JWT 形态的访问令牌</th>
+            <th>不透明访问令牌</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>资源服务器校验方式</td>
+            <td>本地验签，零网络调用</td>
+            <td>调内省端点，一次网络往返</td>
+        </tr>
+        <tr>
+            <td>即时撤销</td>
+            <td>做不到，只能靠短有效期</td>
+            <td>天然支持，撤销后下次内省即失效</td>
+        </tr>
+        <tr>
+            <td>体积</td>
+            <td>数百字节到数 KB，每请求重传</td>
+            <td>几十字节</td>
+        </tr>
+        <tr>
+            <td>信息泄露面</td>
+            <td>payload 可被任何持有者解码</td>
+            <td>本身不含信息</td>
+        </tr>
+        <tr>
+            <td>对授权服务器的压力</td>
+            <td>仅公钥拉取</td>
+            <td>与业务调用量同阶，必须缓存</td>
+        </tr>
+        <tr>
+            <td>适用</td>
+            <td>内部微服务、高频接口</td>
+            <td>对外开放平台、需要随时断掉授权</td>
+        </tr>
+    </tbody>
+</table>
+<pre><code class="language-bash"># 发现文档：一次拿到全部端点，避免把地址硬编码在各个服务里
+curl -s https://idp.example.com/.well-known/openid-configuration \
+  | jq '{issuer, authorization_endpoint, token_endpoint, introspection_endpoint,
+         revocation_endpoint, jwks_uri, id_token_signing_alg_values_supported,
+         code_challenge_methods_supported}'
+# 判读要点：
+#   code_challenge_methods_supported 里必须有 S256，没有就说明这家 IdP 不支持 PKCE；
+#   issuer 的值要和你校验 id_token 时配置的 iss 完全一致，含尾部斜杠差异也不行。
+
+# 不透明令牌的内省：资源服务器侧校验
+curl -s -X POST https://idp.example.com/oauth2/introspect \
+  -u "resource-server:$RS_SECRET" \
+  -d "token=$ACCESS_TOKEN" | jq '{active, sub, scope, exp, client_id}'
+# active 为 false 就必须拒绝；不要只看 HTTP 200 就放行，这是常见实现疏漏。
+# 内省结果建议缓存 30-60 秒，兼顾撤销及时性与授权服务器负载。
+
+# 登出时撤销刷新令牌，否则它在有效期内仍可继续换新令牌
+curl -s -X POST https://idp.example.com/oauth2/revoke \
+  -u "web-app:$CLIENT_SECRET" \
+  -d "token=$REFRESH_TOKEN" -d 'token_type_hint=refresh_token' -o /dev/null -w '%{http_code}\n'
+# 规范要求即使令牌不存在也返回 200，所以 200 不代表「刚才那个令牌确实存在过」。</code></pre>
+
+<p><strong>scope 不等于权限。</strong><code>scope</code> 表达的是<strong>「用户授予这个应用的能力范围」</strong>，而不是「这个用户有什么权限」。这两件事的区别在资源服务器上体现得最清楚：令牌带着 <code>orders.read</code> 只说明这个应用被允许读订单接口，它<strong>不说明</strong>可以读哪些订单。具体某条订单是否属于当前用户、当前用户在其所属租户里是否有查看权限，仍然必须由资源服务器自己判断。把 scope 当权限用的直接后果就是水平越权：换个订单 ID 就能读别人的数据，而令牌校验全程通过。越权的完整分类与防护见站内 <a href="../../security/auth-security/">越权与鉴权安全</a>。</p>
+<table>
+    <thead>
+        <tr>
+            <th>scope 粒度</th>
+            <th>示例</th>
+            <th>好处</th>
+            <th>代价</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>按资源加动作</td>
+            <td><code>orders.read</code> 与 <code>orders.write</code></td>
+            <td>语义清晰，最小授权好落地</td>
+            <td>数量随业务线性增长，同意页会很长</td>
+        </tr>
+        <tr>
+            <td>按业务域</td>
+            <td><code>orders</code> 与 <code>billing</code></td>
+            <td>同意页简洁，易于对外沟通</td>
+            <td>粒度粗，读写不分导致过度授权</td>
+        </tr>
+        <tr>
+            <td>按角色打包</td>
+            <td><code>merchant.basic</code></td>
+            <td>接入方省事</td>
+            <td>包内容一变所有接入方的实际权限都变，难以审计</td>
+        </tr>
+        <tr>
+            <td>OIDC 标准 scope</td>
+            <td><code>openid</code> 与 <code>profile</code> 与 <code>email</code></td>
+            <td>跨 IdP 通用，字段语义标准化</td>
+            <td>只覆盖身份信息，业务范围仍需自定义</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>OIDC 在 OAuth2 上加了什么</h2>
+<table>
+    <thead>
+        <tr>
+            <th>能力</th>
+            <th>纯 OAuth 2.0</th>
+            <th>OIDC 增加的部分</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>身份断言</td>
+            <td>没有，只有访问令牌</td>
+            <td><code>id_token</code>：JWT 格式，<code>aud</code> 是客户端自己，<code>sub</code> 是用户标识</td>
+        </tr>
+        <tr>
+            <td>用户信息</td>
+            <td>各家自定义接口，字段名五花八门</td>
+            <td><code>/userinfo</code> 端点与标准化 claims（<code>name</code>、<code>email</code>、<code>email_verified</code> 等）</td>
+        </tr>
+        <tr>
+            <td>防重放</td>
+            <td><code>state</code> 只防流程绑定</td>
+            <td><code>nonce</code> 写入 <code>id_token</code>，客户端比对本次流程的值</td>
+        </tr>
+        <tr>
+            <td>端点发现</td>
+            <td>靠文档与人工配置</td>
+            <td><code>.well-known/openid-configuration</code> 自动发现</td>
+        </tr>
+        <tr>
+            <td>认证上下文</td>
+            <td>无</td>
+            <td><code>auth_time</code>、<code>acr</code>、<code>amr</code>：何时认证、认证强度、用了哪些因素</td>
+        </tr>
+        <tr>
+            <td>会话与登出</td>
+            <td>无</td>
+            <td>前端通道与后端通道登出规范（可靠性仍有限，见工程实践篇）</td>
+        </tr>
+    </tbody>
+</table>
+<p>实践中最容易漏的是 <code>amr</code> 与 <code>auth_time</code>：做敏感操作二次确认时，你需要知道用户是多久以前认证的、有没有用第二因素，而不是简单地看「有没有登录」。<code>email_verified</code> 同理，见下一节。</p>
+
+<h2>接入第三方登录的实操清单</h2>
+<table>
+    <thead>
+        <tr>
+            <th>事项</th>
+            <th>具体做法</th>
+            <th>不做会怎样</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>回调地址注册</td>
+            <td>每个环境单独注册完整地址，精确匹配，不用通配也不带动态参数</td>
+            <td>配合开放重定向可导致授权码外泄</td>
+        </tr>
+        <tr>
+            <td>外部身份唯一键</td>
+            <td>用「提供方标识 + 提供方内用户 ID」做唯一键，与内部用户表一对多关联</td>
+            <td>用邮箱做键，用户换邮箱即身份错乱</td>
+        </tr>
+        <tr>
+            <td>账号合并策略</td>
+            <td>邮箱相同也不自动合并；要求先用原方式登录再绑定，或走邮箱验证</td>
+            <td>在弱验证的提供方注册同邮箱账号即可接管他人账号</td>
+        </tr>
+        <tr>
+            <td>首次登录信息补全</td>
+            <td>缺昵称、头像、手机号时走一次补全流程，并允许跳过</td>
+            <td>数据不完整导致后续业务分支到处判空</td>
+        </tr>
+        <tr>
+            <td>解绑保护</td>
+            <td>至少保留一种可登录方式，解绑最后一个身份源时强制先设置密码或绑手机</td>
+            <td>用户解绑后再也登不进来，只能走人工找回</td>
+        </tr>
+        <tr>
+            <td>提供方不可用降级</td>
+            <td>登录页明确提示某入口暂不可用，并保留其他入口</td>
+            <td>单一提供方故障导致全站无法登录</td>
+        </tr>
+        <tr>
+            <td>撤销通知处理</td>
+            <td>处理用户在提供方侧解除授权的回调或定期校验</td>
+            <td>用户以为已断开，你这边的绑定仍然有效</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>反模式与最容易踩的坑</h2>
+<table>
+    <thead>
+        <tr>
+            <th>反模式</th>
+            <th>后果</th>
+            <th>正确做法</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>用 OAuth2 当认证协议，不引入 OIDC</td>
+            <td>访问令牌被当身份凭证，可被令牌替换攻击冒充登录</td>
+            <td>用 <code>id_token</code> 并校验 <code>iss</code>、<code>aud</code>、<code>nonce</code>、签名</td>
+        </tr>
+        <tr>
+            <td><code>redirect_uri</code> 用通配或前缀匹配</td>
+            <td>结合开放重定向把授权码送到攻击者手上</td>
+            <td>逐个精确注册，代码里也再校验一次</td>
+        </tr>
+        <tr>
+            <td>不校验 <code>state</code>，或只判断非空</td>
+            <td>用户被诱导完成攻击者发起的授权，账号被绑定到攻击者身份</td>
+            <td>与会话绑定存储、一次性使用、用完即删</td>
+        </tr>
+        <tr>
+            <td><code>client_secret</code> 放在前端或移动端包里</td>
+            <td>等于公开，任何人都能冒充你的客户端换令牌</td>
+            <td>公开客户端不用 secret，改用 PKCE</td>
+        </tr>
+        <tr>
+            <td>访问令牌有效期设成数天</td>
+            <td>撤销无从生效，一次泄露长期可用</td>
+            <td>访问令牌分钟级，长期性交给刷新令牌</td>
+        </tr>
+        <tr>
+            <td>刷新令牌不轮换</td>
+            <td>泄露后可长期反复换新令牌且无从察觉</td>
+            <td>每次刷新换新，检测到旧令牌复用即作废整个令牌家族</td>
+        </tr>
+        <tr>
+            <td>直接信任第三方返回的邮箱做账号合并</td>
+            <td>在弱验证提供方注册同邮箱即可接管账号</td>
+            <td>检查 <code>email_verified</code>，并要求显式绑定确认</td>
+        </tr>
+        <tr>
+            <td>登出只清本地会话，不调撤销端点</td>
+            <td>刷新令牌仍然有效，别处仍可继续获取新访问令牌</td>
+            <td>登出时撤销刷新令牌，并清理服务端会话记录</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+        <li>scope 里忘了 <code>openid</code>：整个流程照样成功，但不会返回 <code>id_token</code>，你手上只有授权凭证而没有身份断言。</li>
+        <li>换令牌时的 <code>redirect_uri</code> 与授权请求那次不完全一致：包括尾部斜杠和端口，差一个字符就 <code>invalid_grant</code>。</li>
+        <li><code>iss</code> 校验按包含或前缀写：尾部斜杠的差异是这类实现最常见的失败点，必须精确相等比较。</li>
+        <li>把 <code>state</code> 存在浏览器 <code>localStorage</code> 里校验：攻击者能控制的存储没有校验价值，必须放服务端会话或用带签名的 Cookie。</li>
+        <li><code>code_challenge_method</code> 用了 <code>plain</code>：等于把 verifier 明文发出去，PKCE 形同虚设。</li>
+        <li>授权码重复兑换时没有作废已签发的令牌：这是识别授权码被截获的关键信号，白白丢掉。</li>
+        <li>内省接口不缓存：业务量一上来，授权服务器先被自家资源服务器打挂。</li>
+        <li>把 <code>id_token</code> 当访问令牌去调业务接口：它的受众是客户端，资源服务器正确实现时会拒绝，错误实现时会造成权限判断失据。</li>
+        <li>设备码模式按固定间隔疯狂轮询：规范要求遵守 <code>interval</code> 并处理 <code>slow_down</code>，否则会被限流或封禁。</li>
+        <li>同意页面的 scope 一次全要：用户同意率下降，且一旦令牌泄露影响面覆盖全部能力，应按需增量授权。</li>
+        <li>回调处理函数没做失败分支：用户在授权页点了拒绝会带 <code>error=access_denied</code> 回来，不处理就白屏。</li>
+        <li>多个环境共用一个 <code>client_id</code> 与回调地址：测试环境的一个配置失误会把生产的授权码引到测试域名上。</li>
+    </ul>
+</div>
+
+                    </div>
+                </article>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <p>© 2026 资深码农. 保留所有权利。</p>
+        </div>
+    </footer>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "api";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

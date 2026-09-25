@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>Protobuf 的编码与模式演进 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+    <meta name="description" content="Protobuf 的兼容性不是「加字段就没事」这么简单，它由 wire format 决定：每个字段以 varint tag 开头，低 3 位是 wire type，字段号是唯一不可回收的资源。本文拆解 varint 与 ZigZag 的编码代价、长度前缀承载的四种结构、proto3 隐式存在性造成的零值歧义与 optional、wrapper、FieldMask 的取舍、oneof 与 map 的真实表示、新增删除改名改类型的兼容性矩阵、未知字段在 JSON 中转时的丢失、跨语言 JSON 映射差异，以及用 buf breaking 在 CI 里拦住破坏性变更。">
+    <meta name="keywords" content="Protocol Buffers, Protobuf, gRPC, 序列化, Editions, Edition 2026, proto3, 微服务, IDL">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/api/rpc/protobuf/">
+    <meta property="og:title" content="Protobuf 的编码与模式演进">
+    <meta property="og:description" content="Protobuf 的兼容性不是「加字段就没事」这么简单，它由 wire format 决定：每个字段以 varint tag 开头，低 3 位是 wire type，字段号是唯一不可回收的资源。本文拆解 varint 与 ZigZag 的编码代价、长度前缀承载的四种结构、proto3 隐式存在性造成的零值歧义与 optional、wrapper、FieldMask 的取舍、oneof 与 map 的真实表示、新增删除改名改类型的兼容性矩阵、未知字段在 JSON 中转时的丢失、跨语言 JSON 映射差异，以及用 buf breaking 在 CI 里拦住破坏性变更。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/api/rpc/protobuf/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Protobuf 的编码与模式演进","description":"Protobuf 的兼容性不是「加字段就没事」这么简单，它由 wire format 决定：每个字段以 varint tag 开头，低 3 位是 wire type，字段号是唯一不可回收的资源。本文拆解 varint 与 ZigZag 的编码代价、长度前缀承载的四种结构、proto3 隐式存在性造成的零值歧义与 optional、wrapper、FieldMask 的取舍、oneof 与 map 的真实表示、新增删除改名改类型的兼容性矩阵、未知字段在 JSON 中转时的丢失、跨语言 JSON 映射差异，以及用 buf breaking 在 CI 里拦住破坏性变更。","author":{"@type":"Person","name":"资深码农"},"datePublished":"2026-09-17","dateModified":"2026-09-17","mainEntityOfPage":"https://www.yijunjun.asia/api/rpc/protobuf/","publisher":{"@type":"Organization","name":"资深码农"}}</script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"首页","item":"https://www.yijunjun.asia/"},{"@type":"ListItem","position":2,"name":"后端与编程语言","item":"https://www.yijunjun.asia/programming/"},{"@type":"ListItem","position":3,"name":"Protocol Buffers","item":"https://www.yijunjun.asia/api/rpc/protobuf/"}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "proto3 怎么区分字段没传和传了零值？", "acceptedAnswer": {"@type": "Answer", "text": "默认区分不了。proto3 的标量字段是隐式存在性，等于默认值时根本不写进字节流，解析端拿到的零值和对方没传是同一种结果。想区分有三条路：给字段加 optional，它带显式存在性，生成代码会有 Has 方法或指针；用 Int32Value 这类 wrapper 类型，代价是多一层嵌套，好处是能对上 JSON 的 null；部分更新接口则应该配 FieldMask，把「未提供」和「要清空」这两种意图彻底分开。"}}, {"@type": "Question", "name": "Protobuf 字段号能复用吗？", "acceptedAnswer": {"@type": "Answer", "text": "绝对不能。字段号是消息里唯一不可回收的资源，解析端只认号不认名。旧数据里残留的旧字段会被当成新字段解析，如果两者 wire type 恰好相同，不会报任何错，只是静默写入脏数据，这类事故往往几周后才从业务数据异常里暴露出来。删字段的正确姿势是同时写 reserved 号和 reserved 名，让编译器替你把门守住。"}}, {"@type": "Question", "name": "改 Protobuf 字段名会破坏兼容性吗？", "acceptedAnswer": {"@type": "Answer", "text": "二进制层面不会，因为 wire format 里只有字段号，没有名字。但三个地方会断：JSON 和 text format 是按名字映射的，改名等于换了一个 JSON 字段；各语言生成代码里的访问器会改名，调用方必须同步改；按名字做映射的网关、日志采集和数据仓库任务都会静默少一列。所以改名要当成一次对外 API 变更来安排，而不是无害重构。"}}, {"@type": "Question", "name": "未知字段会不会被丢掉？", "acceptedAnswer": {"@type": "Answer", "text": "proto2 一直保留未知字段，proto3 在 3.5 版本之前会直接丢弃，3.5 及之后恢复为保留。所以现代版本里做纯二进制转发的网关不会丢字段。真正的丢失点是 JSON：把消息转成 JSON 再转回来，未知字段必然消失，而且不会有任何报错，表现为新版本客户端的新字段在中转后凭空不见。另外 JSON 解析默认对未知字段直接报错，需要显式打开忽略选项。"}}, {"@type": "Question", "name": "int32 改成 int64 安全吗？", "acceptedAnswer": {"@type": "Answer", "text": "int32、int64、uint32、uint64、bool、enum 都是 varint，wire type 相同，改了不会解析失败，但语义要小心：旧代码用 int32 读一个超出范围的 int64 值会发生截断，signed 和 unsigned 互换会把负数读成巨大的正数。真正不兼容的是 sint32 与 int32，因为前者用 ZigZag 编码；fixed32 与 int32 也不兼容，wire type 根本不同。"}}, {"@type": "Question", "name": "能用 Protobuf 的序列化结果当签名或缓存 key 吗？", "acceptedAnswer": {"@type": "Answer", "text": "不能。Protobuf 没有规范的唯一编码：map 字段的写出顺序不保证，未知字段的位置不保证，不同语言实现和不同库版本对字段顺序与默认值的处理也可能变化。Go 里的 Deterministic 选项只保证同一进程内 map 有序，不是跨语言跨版本的 canonical form。需要指纹就自己定义一套显式的规范化序列化规则。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../" class="header-brand"><span class="logo-mark">~$</span><span class="blog-title">资深码农</span></a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false"><span></span><span></span><span></span></button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api" class="active">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+
+    <div id="main-area">
+        <div id="content-wrapper">
+            <main id="body-content">
+                <nav class="breadcrumb" aria-label="面包屑导航">
+                    <a href="../../../">首页</a><span class="sep">/</span>
+                    <a href="../../../programming/">后端与编程语言</a><span class="sep">/</span>
+                    <span class="current">Protocol Buffers</span>
+                </nav>
+
+                <article class="post-content">
+                    <header class="post-header">
+                        <h1 class="post-title">Protobuf 的编码与模式演进</h1>
+                        <div class="post-meta">
+                            <span class="post-date">2026-09-17</span>
+                            <span class="post-category">后端 / 序列化</span>
+                            <span class="post-read-time">约 18 分钟</span>
+                        </div>
+                    </header>
+
+                    <div class="post-body">
+<p>Protobuf 真正需要吃透的只有两件事：<strong>字节层面的编码规则</strong>和<strong>模式演进的兼容性边界</strong>。前者决定了为什么一个 <code>int32</code> 存 -1 要占 10 字节，后者决定了哪些改动可以随手提交、哪些改动会在几周后变成一起数据事故。传输层的多路复用、流控与错误模型不在这篇，见站内 <a href="../grpc/">gRPC 的传输机制与工程落地</a>；框架抽象与选型见站内 <a href="../">RPC 框架的抽象层次与选型</a>。</p>
+
+<h2>wire format：一条消息在字节层是什么样</h2>
+<p>Protobuf 的编码模型简单到可以背下来：消息就是<strong>一串「tag + payload」的重复</strong>，没有消息头，没有字段总数，没有 schema 信息。tag 本身是一个 varint，<strong>低 3 位是 wire type，其余位是字段号</strong>（<code>tag = 字段号 &lt;&lt; 3 | wire type</code>）。解析器靠 wire type 知道后面该读几个字节，靠字段号知道这是哪个字段——所以字段名从头到尾没进过字节流。</p>
+<p>举个能手算的例子：<code>int32 age = 4;</code> 赋值 150，编码结果是 <code>20 96 01</code> 三个字节。<code>0x20</code> 是 tag（字段号 4 左移 3 位，wire type 0），<code>96 01</code> 是 150 的 varint。<code>string id = 1;</code> 赋值 "ab" 则是 <code>0A 02 61 62</code>：tag、长度 2、两个字符。</p>
+
+<div class="mermaid">
+flowchart TB
+    subgraph T["每个字段都以一个 varint tag 开头"]
+        TAG["tag = 字段号左移 3 位，再或上 wire type"]
+        N1["字段号 1-15：tag 只占 1 字节"]
+        N2["字段号 16-2047：tag 占 2 字节"]
+    end
+    subgraph W["低 3 位决定后面怎么读"]
+        W0["0 VARINT：int32 / int64 / uint / bool / enum / sint"]
+        W2["2 LEN：先读长度，再读内容"]
+        W5["5 I32：定长 4 字节（fixed32 / float）"]
+        W1["1 I64：定长 8 字节（fixed64 / double）"]
+    end
+    subgraph L["LEN 一种 wire type 承载四类结构"]
+        S["string 与 bytes"]
+        M["嵌套 message"]
+        P["packed repeated 数值"]
+        MP["map entry：键为 1、值为 2 的小 message"]
+    end
+    TAG --> N1
+    TAG --> N2
+    TAG --> W0
+    TAG --> W2
+    TAG --> W5
+    TAG --> W1
+    W2 --> S
+    W2 --> M
+    W2 --> P
+    W2 --> MP
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>wire type</th>
+            <th>对应类型</th>
+            <th>读法</th>
+            <th>工程含义</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>0 VARINT</td>
+            <td>int32 / int64 / uint32 / uint64 / sint32 / sint64 / bool / enum</td>
+            <td>每字节 7 位有效，最高位是延续标志</td>
+            <td>小数值极省，负数和大数值反而更费</td>
+        </tr>
+        <tr>
+            <td>1 I64</td>
+            <td>fixed64 / sfixed64 / double</td>
+            <td>固定 8 字节小端</td>
+            <td>数值普遍很大时比 varint 省，且解析无分支</td>
+        </tr>
+        <tr>
+            <td>2 LEN</td>
+            <td>string / bytes / 嵌套 message / packed repeated / map</td>
+            <td>varint 长度 + 内容</td>
+            <td>嵌套 message 与 bytes 在字节层无法区分，这是二者可互换的原因</td>
+        </tr>
+        <tr>
+            <td>3 / 4 SGROUP / EGROUP</td>
+            <td>已废弃的 group</td>
+            <td>成对的起止标记</td>
+            <td>新代码不会用到，但解析器仍需识别，遇到就是老 proto2 遗产</td>
+        </tr>
+        <tr>
+            <td>5 I32</td>
+            <td>fixed32 / sfixed32 / float</td>
+            <td>固定 4 字节小端</td>
+            <td>哈希值、定长 ID 用它比 varint 稳定</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>varint 与 ZigZag：负数的代价</h3>
+<p>varint 每字节只用 7 位存数据，所以 0-127 占 1 字节，128-16383 占 2 字节。问题出在负数：<strong><code>int32</code> 的负值会先按二进制补码扩展成 64 位再编码，固定占 10 字节</strong>。这是「<code>int32</code> 比 <code>int64</code> 省空间」这一常见误解的翻车点——存负数时两者一样费，而且都比 <code>sint32</code> 差一个数量级。</p>
+<p><code>sint32</code> / <code>sint64</code> 用 ZigZag 把符号折进低位：<code>(n &lt;&lt; 1) ^ (n &gt;&gt; 31)</code>，把 -1 映射成 1、1 映射成 2、-2 映射成 3。于是 -1 只占 1 字节。凡是「差值、偏移量、经纬度增量、正负都可能出现」的字段，都该用 sint。</p>
+
+<table>
+    <thead>
+            <tr>
+            <th>取值特征</th>
+            <th>推荐类型</th>
+            <th>为什么</th>
+            <th>选错的后果</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>非负且多数很小（计数、状态）</td>
+            <td>uint32 / int32</td>
+            <td>1-2 字节即可编码</td>
+            <td>用 fixed32 固定 4 字节，高频字段整体膨胀</td>
+        </tr>
+        <tr>
+            <td>正负都有且绝对值不大（差值、增量）</td>
+            <td>sint32 / sint64</td>
+            <td>ZigZag 让负数与同绝对值正数等价</td>
+            <td>用 int32 时每个负值 10 字节</td>
+        </tr>
+        <tr>
+            <td>数值普遍接近上限（哈希、雪花 ID）</td>
+            <td>fixed64 / sfixed64</td>
+            <td>定长 8 字节，比 varint 的 9-10 字节更省</td>
+            <td>用 int64 时几乎每个值都要 9 字节以上</td>
+        </tr>
+        <tr>
+            <td>金额、计量</td>
+            <td>int64 存最小单位</td>
+            <td>避免浮点误差，跨语言一致</td>
+            <td>用 double 存金额，对账时必然出现分位误差</td>
+        </tr>
+        <tr>
+            <td>枚举</td>
+            <td>enum（proto3 开放枚举）</td>
+            <td>varint 编码，未知值会被保留</td>
+            <td>用字符串存状态，体积和校验都亏</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>字段号：唯一不可回收的资源</h2>
+<p>字段号的合法范围是 1 到 536870911，其中 19000-19999 被实现自身保留。真正的工程约束是两条：<strong>1-15 的 tag 只占一个字节</strong>，所以高频字段要优先占这段；<strong>任何字段号一旦发布就永久作废</strong>，删除后必须 <code>reserved</code>。</p>
+<p>为什么复用如此致命？因为解析端只认号。旧版本写出的字节里还留着旧字段，新版本把这个号解释成新字段——<strong>如果两者 wire type 恰好相同（比如都是 varint），一个错误都不会报</strong>，只是静默写入脏数据。这类事故通常在几周后从对账差异或诡异的业务分支里才浮出水面。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    state "未分配" as FREE
+    state "在用" as USED
+    state "标记 deprecated 过渡" as DEP
+    state "定义已删除" as DEL
+    state "reserved 永久占位" as RES
+    state "复用引发的脏数据事故" as BAD
+    [*] --> FREE
+    FREE --> USED: 新增字段占号
+    USED --> DEP: 双写双读过渡期
+    DEP --> DEL: 删除字段定义
+    DEL --> RES: 同时写 reserved 号与 reserved 名
+    RES --> [*]
+    DEL --> BAD: 号被新字段复用
+    BAD --> [*]
+    note right of BAD
+        旧数据里的旧值会被当成新字段解析
+        wire type 相同时不报错，只静默写入脏数据
+    end note
+</div>
+
+<pre><code class="language-protobuf">syntax = "proto3";
+
+package order.v1;   // 包名带版本，破坏性变更时新开 v2，不在原地改
+
+message Order {
+  // 1-15 的 tag 只占 1 字节，留给高频字段
+  string id = 1;
+  int64  amount_cents = 2;     // 金额用最小单位的整数，不用 double
+  sint64 balance_delta = 3;    // 会出现负数，用 sint 才不会每次 10 字节
+
+  reserved 4, 7 to 9;          // 删掉的字段号永久占位
+  reserved "legacy_status";    // 名字也要占位，防止在 JSON 侧复活
+
+  optional bool notify = 5;    // 显式存在性：能区分「没传」和「传了 false」
+
+  map&lt;string, string&gt; labels = 6;  // 等价于 repeated LabelsEntry，顺序不保证
+
+  oneof payment {              // 互斥字段放 oneof，字节层只是普通字段，最后写入的生效
+    CardPayment card = 10;
+    WalletPayment wallet = 11;
+  }
+
+  // proto3 数值 repeated 默认 packed（wire type 2），改回 singular 会读不到
+  repeated int64 item_ids = 12;
+}</code></pre>
+
+<h2>存在性语义：proto3 的零值歧义</h2>
+<p>这是 Protobuf 最容易埋雷的地方。proto3 的标量字段是<strong>隐式存在性</strong>：等于默认值时压根不写进字节流。于是「用户把开关关成 false」和「用户没传这个字段」在解析端是同一个结果。批量更新接口如果照着这个语义写，就会出现「想关闭却关不掉」的经典缺陷。</p>
+<p>三点需要澄清：message 类型字段<strong>永远</strong>有显式存在性（nil 与空消息可区分）；<code>repeated</code> 和 <code>map</code> 从来没有存在性概念，空就是空；proto3 的 <code>optional</code> 不是 proto2 的复活，它在实现上是一个合成 oneof，只是给字段加回了显式存在性。另外，2023 年起 protobuf 引入 Editions 取代 <code>syntax</code> 二分法，把 proto2/proto3 的行为差异拆成 <code>field_presence</code>、<code>enum_type</code>、<code>repeated_field_encoding</code> 这类可逐项设置的 feature，<strong>wire format 完全没变</strong>，所以它是编译期与语义层的演进，不是数据格式升级。</p>
+
+<div class="mermaid">
+flowchart TB
+    Q1{"需要区分「没传」和「传了零值」吗"}
+    Q1 -->|"不需要"| A1["proto3 隐式存在性，字段最省"]
+    Q1 -->|"需要"| Q2{"要不要与 JSON 的 null 语义对齐"}
+    Q2 -->|"只在 protobuf 内部流转"| A2["proto3 optional，生成 Has 方法或指针"]
+    Q2 -->|"要和 JSON null 一一对应"| A3["wrapper 类型，多一层嵌套换 null"]
+    A2 --> Q3{"这是部分更新接口吗"}
+    A3 --> Q3
+    Q3 -->|"是"| A4["加 FieldMask，区分「未提供」与「要清空」"]
+    Q3 -->|"否"| A5["不要拿魔法值当 unset"]
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>方案</th>
+            <th>能否区分零值</th>
+            <th>字节与代码开销</th>
+            <th>JSON 表现</th>
+            <th>适用</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>proto3 隐式存在性</td>
+            <td>不能</td>
+            <td>零值不编码，最省</td>
+            <td>零值字段默认被省略</td>
+            <td>只读查询结果、指标上报</td>
+        </tr>
+        <tr>
+            <td>proto3 optional</td>
+            <td>能</td>
+            <td>合成 oneof，生成指针或 Has 方法</td>
+            <td>设为零值时也会输出</td>
+            <td>大多数需要区分的场景，首选</td>
+        </tr>
+        <tr>
+            <td>wrapper 类型（Int32Value 等）</td>
+            <td>能</td>
+            <td>多一层嵌套 message，每个值多几字节</td>
+            <td>支持 null</td>
+            <td>要和 JSON null 或数据库 NULL 严格对齐</td>
+        </tr>
+        <tr>
+            <td>FieldMask</td>
+            <td>能，且能表达「要清空」</td>
+            <td>多一个路径列表字段</td>
+            <td>路径数组</td>
+            <td>PATCH 语义的部分更新接口</td>
+        </tr>
+        <tr>
+            <td>魔法值（-1 表示未设置）</td>
+            <td>看起来能</td>
+            <td>零成本</td>
+            <td>无区别</td>
+            <td>不要用：约定无法进 schema，新同事必然踩</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>oneof 与 map 的底层表示</h2>
+<p>两个语法糖，理解了底层表示就知道它们的兼容性边界在哪。</p>
+<p><strong>oneof 在字节层不存在。</strong>它的成员就是普通字段，各自有自己的号。互斥是解析器的行为：解码时后出现的成员覆盖前面的，所以两个成员同时出现在字节流里不会报错，只是「最后一个赢」。这意味着把<strong>单个</strong>已有字段移进一个新建 oneof 是 wire 兼容的，而把<strong>多个</strong>已有字段合并进同一个 oneof 是不兼容的——老客户端会同时设置它们，新代码只能看到一个。</p>
+<p><strong>map 是 repeated message 的糖。</strong><code>map&lt;K, V&gt;</code> 等价于 <code>repeated MapFieldEntry</code>，entry 里键是字段 1、值是字段 2，不 packed。推论有三条：键重复时后者覆盖前者，不会报错；<strong>顺序不保证</strong>，因此序列化结果不能当指纹或缓存 key；map 与对应的 repeated entry message 之间可以互相改写，wire 层完全兼容，这是给 map 加第三个属性时的正规迁移路径。</p>
+
+<h2>模式演进的兼容性矩阵</h2>
+<p>把常见改动按「旧代码读新数据」和「新代码读旧数据」两个方向拆开看，结论就很清晰了。</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>改动</th>
+            <th>旧代码读新数据</th>
+            <th>新代码读旧数据</th>
+            <th>结论</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>新增字段（新号）</td>
+            <td>忽略并作为未知字段保留</td>
+            <td>字段缺失，取默认值或 unset</td>
+            <td>安全，唯一推荐的加字段方式</td>
+        </tr>
+        <tr>
+            <td>删除字段并 reserved 号与名</td>
+            <td>正常</td>
+            <td>忽略残留的旧字段</td>
+            <td>安全</td>
+        </tr>
+        <tr>
+            <td>删除字段但不 reserved</td>
+            <td>正常</td>
+            <td>正常</td>
+            <td>当下无事，未来被复用时变成事故，等于埋雷</td>
+        </tr>
+        <tr>
+            <td>复用旧字段号 / 改字段号</td>
+            <td>解释成另一个字段</td>
+            <td>解释成另一个字段</td>
+            <td>禁止。wire type 相同时静默污染数据</td>
+        </tr>
+        <tr>
+            <td>改字段名</td>
+            <td>二进制不受影响</td>
+            <td>二进制不受影响</td>
+            <td>wire 安全，但 JSON、text format、生成代码、按名映射的下游全断</td>
+        </tr>
+        <tr>
+            <td>int32 与 int64 / uint / bool 互换</td>
+            <td>可解析，可能截断</td>
+            <td>可解析，符号可能翻转</td>
+            <td>有条件安全，必须确认取值范围</td>
+        </tr>
+        <tr>
+            <td>int32 与 sint32 互换</td>
+            <td>数值错乱</td>
+            <td>数值错乱</td>
+            <td>禁止，ZigZag 编码不同</td>
+        </tr>
+        <tr>
+            <td>int32 与 fixed32 互换</td>
+            <td>wire type 不符，落入未知字段</td>
+            <td>同上</td>
+            <td>禁止</td>
+        </tr>
+        <tr>
+            <td>string 与 bytes 互换</td>
+            <td>可解析</td>
+            <td>可解析</td>
+            <td>安全，前提是内容为合法 UTF-8</td>
+        </tr>
+        <tr>
+            <td>嵌套 message 与 bytes 互换</td>
+            <td>可解析</td>
+            <td>可解析</td>
+            <td>安全，二者都是 LEN，常用于延迟解析</td>
+        </tr>
+        <tr>
+            <td>singular 数值改 repeated</td>
+            <td>只取最后一个值</td>
+            <td>proto3 默认 packed，wire type 变 2，旧 singular 读不到</td>
+            <td>不安全，要走新字段号迁移</td>
+        </tr>
+        <tr>
+            <td>单个字段移入新建 oneof</td>
+            <td>正常</td>
+            <td>正常</td>
+            <td>安全；多个已有字段合并进一个 oneof 则不安全</td>
+        </tr>
+        <tr>
+            <td>enum 新增值</td>
+            <td>proto3 开放枚举保留未知值；proto2 闭合枚举把它丢进未知字段</td>
+            <td>正常</td>
+            <td>下发新枚举值前，先确认所有读侧都升级完</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>未知字段：保留还是丢弃</h2>
+<p>未知字段就是解析器「不认识但原样收着」的字节。它是灰度发布能成立的基础：中间层用旧 proto 转发新版本消息时，字段不会丢。<strong>但这件事在 proto3 上有过一次反转</strong>——proto3 早期版本会直接丢弃未知字段，3.5 起恢复保留。至今仍有人按「proto3 不保留未知字段」的旧结论做设计。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant N as 新版客户端，带字段 12
+    participant G as 中间网关，proto 是旧版
+    participant S as 新版服务端
+    N->>G: 二进制消息，含网关不认识的字段 12
+    G->>G: Unmarshal 后字段 12 进入未知字段集合
+    G->>S: 原样转发二进制，字段 12 完好
+    S-->>N: 新逻辑正常生效
+    Note over G: 换成 JSON 中转之后情况完全不同
+    G->>G: 二进制转 JSON，未知字段被丢掉
+    G->>S: 缺少字段 12 的消息
+    S-->>N: 行为静默退化，没有任何报错
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>场景</th>
+            <th>未知字段行为</th>
+            <th>工程后果</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>proto2 各语言</td>
+            <td>保留</td>
+            <td>转发型服务天然安全</td>
+        </tr>
+        <tr>
+            <td>proto3，3.5 之前</td>
+            <td>解析即丢弃</td>
+            <td>老版本库做网关会静默吃字段</td>
+        </tr>
+        <tr>
+            <td>proto3，3.5 及以后</td>
+            <td>保留</td>
+            <td>与 proto2 行为一致</td>
+        </tr>
+        <tr>
+            <td>JSON 解析</td>
+            <td>默认报错，开启忽略选项后丢弃，永不保留</td>
+            <td>proto 转 JSON 再转回来必然掉字段</td>
+        </tr>
+        <tr>
+            <td>text format</td>
+            <td>默认不接受未知字段</td>
+            <td>配置类场景升级顺序要卡死</td>
+        </tr>
+        <tr>
+            <td>Any</td>
+            <td>字节原样保留，但缺描述符无法解包</td>
+            <td>中转安全，消费方必须能拿到对应 schema</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>JSON 映射与跨语言差异</h2>
+<p>Protobuf 有一套标准 JSON 映射，但它和「把结构体直接 JSON 序列化」差别很大，跨语言联调时一半的问题出在这里。</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>关注点</th>
+            <th>标准 JSON 映射规则</th>
+            <th>容易踩的地方</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>字段名</td>
+            <td>默认输出 lowerCamelCase，解析时同时接受原始 snake_case</td>
+            <td>前端按 snake_case 取值，换库或换语言后取不到</td>
+        </tr>
+        <tr>
+            <td>64 位整数</td>
+            <td>int64 / uint64 / fixed64 输出为字符串</td>
+            <td>前端当数字处理，超过 2 的 53 次方后精度丢失</td>
+        </tr>
+        <tr>
+            <td>bytes</td>
+            <td>标准 base64</td>
+            <td>与 URL-safe base64 混用会解码失败</td>
+        </tr>
+        <tr>
+            <td>enum</td>
+            <td>输出名字字符串，解析接受名字与数字</td>
+            <td>未知数字值的处理各实现不一致</td>
+        </tr>
+        <tr>
+            <td>默认值字段</td>
+            <td>隐式存在性且为零值时被省略</td>
+            <td>下游按「字段一定存在」写代码；需要时打开输出默认值的选项</td>
+        </tr>
+        <tr>
+            <td>Duration / Timestamp</td>
+            <td>字符串，如 3.5s 与 RFC 3339 的 Z 时间</td>
+            <td>当成数字秒或本地时间处理</td>
+        </tr>
+        <tr>
+            <td>NaN 与 Infinity</td>
+            <td>输出为字符串形式</td>
+            <td>标准 JSON 无法表达，严格解析器会直接失败</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>schema 治理与破坏性变更的 CI 拦截</h2>
+<p>兼容性规则再清楚也挡不住手滑，唯一可靠的办法是让 CI 来判。<code>buf breaking</code> 把检查分成几档，选档位就是选你的接口边界。</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>检查档位</th>
+            <th>拦住什么</th>
+            <th>适用边界</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>WIRE</td>
+            <td>只拦二进制不兼容（改号、改 wire type 等）</td>
+            <td>纯内部二进制通信，改名自由</td>
+        </tr>
+        <tr>
+            <td>WIRE_JSON</td>
+            <td>二进制加 JSON 名称兼容，改字段名会被拦</td>
+            <td>有 JSON 网关或前端直连</td>
+        </tr>
+        <tr>
+            <td>PACKAGE</td>
+            <td>包级 API 兼容，删除与改名都拦</td>
+            <td>proto 作为公共库被多仓引用</td>
+        </tr>
+        <tr>
+            <td>FILE</td>
+            <td>最严格，文件与符号位置变化也拦</td>
+            <td>同仓统一发布、要求生成代码稳定</td>
+        </tr>
+    </tbody>
+</table>
+
+<pre><code class="language-bash"># 1) 手上只有一段字节流：不需要 .proto，直接看 tag 与 wire type
+protoc --decode_raw &lt; payload.bin
+
+# 2) 有 .proto 时按 schema 解码，字段名与嵌套结构都能看到
+protoc --decode=order.v1.Order order/v1/order.proto &lt; payload.bin
+
+# 3) protoscope 展示最原始的 tag / 长度 / 字节，排查长度前缀错位最好用
+protoscope payload.bin
+
+# 4) CI 里拦破坏性变更：与主干比对，档位在 buf.yaml 的 breaking.use 里选
+buf breaking --against 'https://github.com/org/repo.git#branch=main'
+buf lint</code></pre>
+
+<pre><code class="language-go">// 1) 显式存在性：proto3 的 optional 在 Go 里生成指针，nil 才是「没传」
+switch {
+case o.Notify == nil:
+    // 客户端没提这个字段，沿用服务端默认策略
+case !*o.Notify:
+    // 客户端明确传了 false，要真的关掉通知
+}
+
+// 2) 未知字段在 Go 里默认保留，代理型服务转发时不会吃掉新版本字段
+raw, _ := proto.Marshal(msg)                  // 未知字段原样带出
+unknown := msg.ProtoReflect().GetUnknown()    // 需要时可以直接检查这段字节
+
+// 3) 不要把序列化结果当稳定指纹：map 顺序、未知字段位置、库版本都会影响字节
+canonical, _ := proto.MarshalOptions{Deterministic: true}.Marshal(msg)
+// Deterministic 只保证同一进程内 map 有序，不是跨语言跨版本的 canonical form
+_, _, _ = raw, unknown, canonical</code></pre>
+
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+        <li>删字段只删定义，不写 <code>reserved</code>。当下毫无异常，等到某次迭代复用了这个号，旧数据就被解释成新字段，且 wire type 相同时一个错都不报。</li>
+        <li>以为 <code>int32</code> 一定比 <code>int64</code> 省。存负数时两者都是 10 字节，该用的是 <code>sint32</code> / <code>sint64</code>。</li>
+        <li>把 ID 或哈希这类接近上限的大整数存成 <code>int64</code>，几乎每个值都要 9 字节以上，<code>fixed64</code> 只要 8 字节且解析更快。</li>
+        <li>在 proto3 里用零值表达「没传」。开关关不掉、数量改不成 0，这是最高频的业务缺陷来源。</li>
+        <li>用 -1 或空字符串当 unset 的约定。约定进不了 schema，跨团队协作必然失传。</li>
+        <li>为了「更规范」批量改字段名。二进制没事，但 JSON 网关、前端、日志采集、数仓任务会同时静默少一列。</li>
+        <li>把多个已有字段合并进一个新 oneof。老客户端会同时设置它们，新代码只能看到最后一个。</li>
+        <li>把 singular 数值字段改成 repeated。proto3 的数值 repeated 默认 packed，wire type 从 0 变 2，旧代码直接读不到。</li>
+        <li>用 map 的序列化结果做签名、去重 key 或幂等键。map 顺序不保证，同一份数据可能产出不同字节。</li>
+        <li>在链路里插一段 JSON 中转（比如落库或走消息体转换）。未知字段全部消失，灰度期的新字段莫名不生效。</li>
+        <li>下发新枚举值时没确认读侧版本。proto2 的闭合枚举会把未知值丢进未知字段，业务分支直接走错。</li>
+        <li>只靠 code review 保证兼容性，不在 CI 里跑 <code>buf breaking</code>。这类错误的特征就是评审时看不出来、上线后很久才爆。</li>
+    </ul>
+</div>
+</div>
+                </article>
+
+                <nav class="page-nav" aria-label="文章导航">
+                    <a class="nav-prev" href="../../../architecture/microservices/">
+                        <span class="nav-label">← 上一篇</span>
+                        <span class="nav-title">微服务架构</span>
+                    </a>
+                    <a class="nav-next" href="../../../architecture/kafka/">
+                        <span class="nav-label">下一篇 →</span>
+                        <span class="nav-title">Kafka 消息队列</span>
+                    </a>
+                </nav>
+            </main>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+
+    <button class="back-to-top" title="回到顶部">↑</button>
+
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "api";</script>
+        <script defer src="../../../vendor/highlight.min.js"></script>
+    <script src="../../../js/main.js?v=2" defer></script>
+</body>
+</html>

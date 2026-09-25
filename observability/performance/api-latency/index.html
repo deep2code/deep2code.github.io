@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>接口性能优化：从耗时拆解到并发模型 - 性能优化实战 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+    <meta name="description" content="一个接口的耗时由客户端网络、网关、应用排队、业务 CPU、下游调用、序列化回传六段构成，其中八成以上通常在等下游 IO。本篇讲清怎么按占比拆解耗时，串行改并行为什么是收益最大的单项改动以及它的三个代价，N+1 调用的识别与三种修法，超时重试对资源占用的影响，字段裁剪、压缩、分页上限、流式返回、序列化协议选型、异步化边界、连接复用与攒批取舍，以及接口性能的回归防护。">
+    <meta name="keywords" content="性能优化实战,接口性能优化,技术博客,资深码农">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/observability/performance/api-latency/">
+    <meta property="og:title" content="接口性能优化：从耗时拆解到并发模型 - 性能优化实战 - 资深码农">
+    <meta property="og:description" content="一个接口的耗时由客户端网络、网关、应用排队、业务 CPU、下游调用、序列化回传六段构成，其中八成以上通常在等下游 IO。本篇讲清怎么按占比拆解耗时，串行改并行为什么是收益最大的单项改动以及它的三个代价，N+1 调用的识别与三种修法，超时重试对资源占用的影响，字段裁剪、压缩、分页上限、流式返回、序列化协议选型、异步化边界、连接复用与攒批取舍，以及接口性能的回归防护。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/observability/performance/api-latency/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="接口性能优化：从耗时拆解到并发模型 - 性能优化实战">
+    <meta name="twitter:description" content="一个接口的耗时由客户端网络、网关、应用排队、业务 CPU、下游调用、序列化回传六段构成，其中八成以上通常在等下游 IO。本篇讲清怎么按占比拆解耗时，串行改并行为什么是收益最大的单项改动以及它的三个代价，N+1 调用的识别与三种修法，超时重试对资源占用的影响，字段裁剪、压缩、分页上限、流式返回、序列化协议选型、异步化边界、连接复用与攒批取舍，以及接口性能的回归防护。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "接口耗时应该怎么拆解，先从哪里下手？", "acceptedAnswer": {"@type": "Answer", "text": "把一次请求切成六段：客户端到入口的网络与握手、网关处理、应用内排队等线程或连接、业务逻辑的纯 CPU、下游调用、序列化与响应回传。用链路追踪把每段耗时和占比列出来，然后只动占比最大的那一段。绝大多数业务接口有八成以上的耗时在等下游 IO，纯业务 CPU 通常只占百分之几，这就是为什么优化算法和循环几乎没有收益。一个可靠的判据是：如果接口总耗时接近各下游调用耗时之和，说明调用全是串行的，这时并行化的收益远大于其它任何手段。"}}, {"@type": "Question", "name": "串行改并行能带来多大收益，有什么代价？", "acceptedAnswer": {"@type": "Answer", "text": "串行时总耗时是各次调用耗时之和，并行后变成最慢那次的耗时。四个各 50 毫秒的无依赖调用，串行 200 毫秒，并行约 55 毫秒，这是单项改动里收益最大的。代价有三个：一是下游瞬时压力变成原来的若干倍，原本被串行天然平滑掉的流量会同时打到下游，容易把下游连接池打满；二是线程或协程有开销，还要控制并发上限，Java 里尤其要注意不能用默认的公共线程池，它的并行度是核数减一，放 IO 任务会互相排队；三是错误处理和超时控制变复杂，必须用统一的总预算超时，并明确哪些依赖失败可以降级、哪些必须整体失败。"}}, {"@type": "Question", "name": "怎么发现代码里的 N+1 调用？", "acceptedAnswer": {"@type": "Answer", "text": "三种办法。第一看链路追踪，同一个接口的 span 里出现几十上百个名字完全相同的子调用，就是 N+1。第二看代码，任何在 for 循环体内出现的远程调用、数据库查询、缓存读取都要当成嫌疑对象，尤其是 ORM 懒加载，代码上只是访问一个属性，实际会发一条 SQL。第三看数据库或下游的请求计数与接口 QPS 的比例，正常应该在个位数，出现几十倍说明有放大。修法有三种：下游提供批量接口一次查回、在入口处一次性预加载再在内存里组装、对低频变更数据加本地缓存。收益是把 N 次网络往返变成 1 到 2 次，1 加 100 次调用乘以 2 毫秒等于 202 毫秒，批量后是 2 加 5 等于 7 毫秒。"}}, {"@type": "Question", "name": "分页接口的 limit 参数为什么必须设硬上限？", "acceptedAnswer": {"@type": "Answer", "text": "因为不设上限的 limit 是一个可以被任意人触发的放大器。只要有人传一个很大的值，单次请求就会在数据库上扫出巨量行、在应用里构造出巨量对象、序列化出巨大响应体，轻则触发一次长时间的垃圾回收停顿，重则直接内存溢出，而且这条请求还会把连接池占住很久，把整个实例拖垮。正确做法是服务端统一做参数规范化：没传用默认值，超过硬上限就截断到上限而不是报错，并且把上限写进接口文档。需要导出全量数据时走专门的异步导出或流式接口，不要靠调大分页参数。"}}, {"@type": "Question", "name": "哪些操作可以异步化，哪些不能？", "acceptedAnswer": {"@type": "Answer", "text": "判断标准只有一个：调用方的本次响应是否依赖这个操作的结果或它的成功。发通知、发短信、写审计日志、更新统计计数、同步搜索索引、发数据变更消息都可以移出请求主路径，把主接口耗时压到只剩核心写入。不能异步的是：本次响应要返回的数据、决定接口成败的关键校验、必须与主数据在同一事务里保证原子性的写入、以及有严格顺序要求的操作。异步化有三条硬要求：任务必须可靠投递或可重建，不能只丢进内存队列后进程重启就丢了；消费端必须幂等；必须有积压监控，否则异步只是把故障延后并转移到别处。"}}, {"@type": "Question", "name": "为什么接口性能会随着迭代慢慢变差？", "acceptedAnswer": {"@type": "Answer", "text": "因为每次迭代都只加一点点：多一个字段、多一次下游查询、多一层校验，单次改动的影响小到在评审时无法察觉，但半年几十次叠加下来 P99 就翻倍了。这类退化没有明确的责任人，也很难在事后定位到某次提交。防护办法是把性能变成有门禁的指标：核心接口固化压测脚本并定期跑，把 P99 与基线的偏差纳入报警；在代码评审里把「本次改动新增了几次下游调用」当成必答项；对关键接口设置下游调用次数的上限断言，超过就在测试环境直接失败。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="../../../index.html" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability" class="active">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">可观测性与性能</a><span class="separator">/</span><a href="../index.html">后端性能优化的度量与方法论</a><span class="separator">/</span><span>接口性能优化</span>
+</div>
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">接口性能优化：从耗时拆解到并发模型</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ API 优化</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>这篇只讲<strong>单个接口的耗时是怎么构成的、以及每一段能用什么手段压下去</strong>。度量方法、压测流程、分位数怎么看在<a href="../">后端性能优化的度量与方法论</a>；连接池与 ORM 层面的问题在<a href="../db-access/">应用侧的数据库访问优化</a>；SQL 与索引见站内<a href="../../../database/optimization/">数据库优化</a>；缓存的收益模型与一致性见站内<a href="../../../database/cache/">缓存设计</a>；接口的语义、版本、分页规范见站内<a href="../../../api/">API 设计</a>；超时之上的熔断与降级见站内<a href="../../../architecture/governance/circuit-breaker/">限流熔断降级</a>。</p>
+
+<h2>先把一次接口耗时拆开</h2>
+<p>优化接口的第一步不是改代码，是<strong>拿到一张按占比排序的耗时构成表</strong>。没有这张表就动手，大概率是在优化占总耗时 3% 的那一段。下面是一次典型业务接口的六段构成，百分比是我在多个中等规模系统上看到的常见区间。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph S1["1 客户端到入口 占比 5% 到 30%"]
+        A1["DNS 解析 TCP 握手 TLS 握手"]
+        A2["请求体上传 弱网重传"]
+    end
+    subgraph S2["2 网关与入口层 占比 1% 到 5%"]
+        B1["路由 鉴权 限流判定 日志"]
+    end
+    subgraph S3["3 应用内排队 占比 0% 到 60% 取决于水位"]
+        C1["等线程或协程 等连接池 等锁"]
+    end
+    subgraph S4["4 业务逻辑纯 CPU 占比 2% 到 10%"]
+        D1["参数校验 规则计算 结果组装"]
+    end
+    subgraph S5["5 下游调用 占比 50% 到 90%"]
+        E1["RPC 串行则耗时相加"]
+        E2["数据库 缓存 第三方接口"]
+    end
+    subgraph S6["6 序列化与回传 占比 5% 到 20%"]
+        F1["编码 压缩 响应体下行"]
+    end
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6
+</div>
+<table>
+    <thead>
+        <tr>
+            <th>段</th>
+            <th>典型占比</th>
+            <th>怎么测出这一段</th>
+            <th>能用的手段</th>
+            <th>常见误判</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>客户端与网络</td>
+            <td>5% 到 30%，跨地域时更高</td>
+            <td><code>curl -w</code> 的分段计时，与服务端日志的处理时长对比</td>
+            <td>就近接入、CDN、连接复用、减少往返次数</td>
+            <td>服务端日志 20ms 就认为接口很快，用户实际等 300ms</td>
+        </tr>
+        <tr>
+            <td>网关与入口层</td>
+            <td>1% 到 5%</td>
+            <td>网关记录的总耗时减去上游响应耗时</td>
+            <td>精简插件链、鉴权结果缓存、关掉不必要的响应缓冲</td>
+            <td>把网关当黑盒，鉴权里藏了一次远程调用没人知道</td>
+        </tr>
+        <tr>
+            <td>应用内排队</td>
+            <td>健康时接近 0，高水位时能到 60%</td>
+            <td>线程池队列长度、连接池等待时间直方图</td>
+            <td>扩容、缩短服务时间、降低并发度需求</td>
+            <td>误判成「业务逻辑慢」，其实请求根本还没开始执行</td>
+        </tr>
+        <tr>
+            <td>业务逻辑 CPU</td>
+            <td>2% 到 10%</td>
+            <td>CPU profile 的火焰图</td>
+            <td>按 profile 优化热点函数，减少对象分配</td>
+            <td>凭直觉优化循环与算法，收益通常不到 1%</td>
+        </tr>
+        <tr>
+            <td>下游调用</td>
+            <td>50% 到 90%</td>
+            <td>链路追踪的 span 数量、串并行结构、总和</td>
+            <td>串行改并行、消掉 N+1、加缓存、合并接口</td>
+            <td>只看单次调用耗时，没数「一共调了几次」</td>
+        </tr>
+        <tr>
+            <td>序列化与回传</td>
+            <td>5% 到 20%，大响应体更高</td>
+            <td>响应体大小、编码耗时埋点、压缩耗时</td>
+            <td>裁字段、换协议、预压缩、分页设上限、流式输出</td>
+            <td>响应 2MB 还在纠结数据库索引</td>
+        </tr>
+    </tbody>
+</table>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">一个能立刻用的判据</div>
+    <p>如果接口总耗时 ≈ 各下游调用耗时之和，说明调用全是串行的，并行化是第一优先级。如果总耗时 ≈ 最慢的那次下游调用，说明已经并行了，接下来要减少的是「调用次数」或让最慢的那个变快。如果总耗时明显大于所有下游耗时之和，中间那部分不是业务逻辑，几乎一定是排队（线程池、连接池或锁）。</p>
+</div>
+
+<h2>串行改并行：收益最大的单项改动</h2>
+<p>四个互相没有依赖的下游调用，各 50ms。串行是 <code>50 + 50 + 50 + 50 = 200ms</code>，并行是 <code>max(50, 50, 50, 50) + 调度开销 ≈ 55ms</code>。<strong>这是所有优化手段里投入产出比最高的一项</strong>，因为它不需要改下游、不需要加缓存、不影响正确性，唯一前提是调用之间真的没有数据依赖。</p>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as 调用方
+    participant S as 订单详情接口
+    participant O as 订单服务
+    participant U as 用户服务
+    participant P as 商品服务
+    participant M as 营销服务
+    Note over C,M: 改造前 串行 总耗时等于四段相加
+    C->>S: GET 订单详情
+    S->>O: 查订单 50ms
+    O-->>S: 返回
+    S->>U: 查用户 50ms
+    U-->>S: 返回
+    S->>P: 查商品 50ms
+    P-->>S: 返回
+    S->>M: 查优惠 50ms
+    M-->>S: 返回
+    S-->>C: 响应 约 200ms
+    Note over C,M: 改造后 并行 总耗时等于最慢的一段
+    C->>S: GET 订单详情
+    par 并发发起 四个调用无数据依赖
+        S->>O: 查订单 50ms
+    and
+        S->>U: 查用户 50ms
+    and
+        S->>P: 查商品 50ms
+    and
+        S->>M: 查优惠 30ms
+    end
+    S-->>C: 响应 约 55ms
+    Note over S,M: 代价 同一瞬间下游承受的并发变成 4 倍<br/>原本被串行天然平滑的流量现在同时到达
+</div>
+<pre><code class="language-go">// Go：用 errgroup 做并行下游调用。三个关键点都在注释里。
+func (s *OrderService) Detail(ctx context.Context, id int64) (*OrderDetail, error) {
+    // 关键点 1：超时预算给的是「整个接口」，不是每次调用。
+    // 常见错误是给每个下游各设 300ms，四个串行下来最坏 1.2s，上游早就断开了。
+    ctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+    defer cancel()
+
+    var (
+        order   *Order
+        user    *User
+        items   []*Item
+        coupons []*Coupon
+    )
+
+    // 关键点 2：WithContext 让任一调用返回错误时自动取消其余调用，避免白等。
+    g, gctx := errgroup.WithContext(ctx)
+    // SetLimit 限制同时在飞的调用数，防止某个请求把下游连接池吃光。
+    g.SetLimit(8)
+
+    g.Go(func() error {
+        var err error
+        order, err = s.orderRepo.Get(gctx, id)
+        return err // 核心数据，失败就整体失败
+    })
+    g.Go(func() error {
+        var err error
+        user, err = s.userCli.Get(gctx, id)
+        return err
+    })
+    g.Go(func() error {
+        var err error
+        items, err = s.itemCli.ListByOrder(gctx, id)
+        return err
+    })
+    g.Go(func() error {
+        // 关键点 3：非核心依赖显式降级，不要让优惠信息挂掉就返回 500。
+        c, err := s.couponCli.ListByOrder(gctx, id)
+        if err != nil {
+            metrics.DegradeCounter.WithLabelValues("coupon").Inc()
+            return nil
+        }
+        coupons = c
+        return nil
+    })
+
+    if err := g.Wait(); err != nil {
+        return nil, err
+    }
+    // 每个 goroutine 只写自己的那个变量，不并发写同一个 map 或 slice，所以不需要锁。
+    return assemble(order, user, items, coupons), nil
+}</code></pre>
+<pre><code class="language-java">// Java：CompletableFuture 并行调用。最大的坑是线程池。
+public class OrderDetailAssembler {
+
+    // 不要用默认的 ForkJoinPool.commonPool()：它的并行度是 CPU 核数减一，
+    // 把阻塞 IO 任务丢进去会互相排队，表现为「代码改并行了但耗时没变」。
+    private static final ExecutorService IO_POOL = new ThreadPoolExecutor(
+            32, 64, 60L, TimeUnit.SECONDS,
+            new ArrayBlockingQueue&lt;&gt;(200),   // 有界队列：满了立刻拒绝，好过无限堆积后 OOM
+            new ThreadFactoryBuilder().setNameFormat("order-detail-%d").build(),
+            new ThreadPoolExecutor.AbortPolicy());
+
+    public OrderDetail detail(long id) throws Exception {
+        CompletableFuture&lt;Order&gt; orderF =
+                CompletableFuture.supplyAsync(() -&gt; orderRepo.get(id), IO_POOL);
+        CompletableFuture&lt;User&gt; userF =
+                CompletableFuture.supplyAsync(() -&gt; userClient.get(id), IO_POOL);
+        // 非核心依赖：用 exceptionally 兜底，失败返回空列表而不是让整个 allOf 失败
+        CompletableFuture&lt;List&lt;Coupon&gt;&gt; couponF =
+                CompletableFuture.supplyAsync(() -&gt; couponClient.list(id), IO_POOL)
+                                 .exceptionally(e -&gt; Collections.emptyList());
+
+        // 统一的总预算超时。注意 allOf 本身不带超时，必须在 get 上设。
+        CompletableFuture.allOf(orderF, userF, couponF)
+                         .get(300, TimeUnit.MILLISECONDS);
+
+        return new OrderDetail(orderF.join(), userF.join(), couponF.join());
+    }
+}</code></pre>
+<table>
+    <thead>
+        <tr>
+            <th>并行的代价</th>
+            <th>具体表现</th>
+            <th>怎么控制</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>下游瞬时压力放大 N 倍</td>
+            <td>串行时下游看到的是均匀流量，并行后同一毫秒内 N 个请求同时到达，下游连接池与线程池先被打满</td>
+            <td>用 SetLimit 或有界线程池限制在飞数量；改造前先和下游确认容量；灰度放量观察下游 P99</td>
+        </tr>
+        <tr>
+            <td>线程或协程开销</td>
+            <td>Java 每个平台线程约 1MB 栈，几千个就吃掉几 GB；Go 协程便宜但无上限地开会压垮调度与下游</td>
+            <td>Java 用有界池或虚拟线程；Go 用 errgroup 的并发上限，不要裸开 goroutine</td>
+        </tr>
+        <tr>
+            <td>错误与超时语义变复杂</td>
+            <td>一个失败其余要不要取消、部分成功怎么返回、超时是单次还是总预算</td>
+            <td>统一总预算超时；显式区分核心与非核心依赖；非核心失败降级并打点</td>
+        </tr>
+    </tbody>
+</table>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">并行化最常见的两个事故</div>
+    <p>第一，把有依赖关系的调用「并行」了：查订单和查订单明细之间需要订单 ID，强行并行会读到空值，而且只在慢的时候才复现。第二，并行后忘了改超时：四个调用各设 300ms 且没有总预算，最坏情况仍然是 300ms，但请求在池里占了 4 个槽位，高并发下线程或连接池的耗尽速度是原来的 4 倍。</p>
+</div>
+
+<h2>N+1 调用：最常见的性能杀手</h2>
+<p>N+1 的形态永远一样：<strong>先查一个列表，再在循环里对每个元素调一次下游</strong>。它之所以杀伤力大，是因为它在最贵的那一层（网络往返）做乘法。100 个元素、每次往返 2ms，光往返就是 200ms，而这 200ms 里 CPU 完全是空转的。</p>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant A as 应用
+    participant D as 用户服务或数据库
+    Note over A,D: 改造前 N+1 一次列表查询加 100 次单点查询
+    A->>D: 查订单列表 返回 100 条
+    D-->>A: 100 条订单
+    loop 循环 100 次 每次一个网络往返
+        A->>D: 查第 i 条订单的用户信息 2ms
+        D-->>A: 单个用户
+    end
+    Note over A,D: 总计 101 次往返 约 202ms 其中 CPU 全程空转
+    Note over A,D: 改造后 批量 两次往返
+    A->>D: 查订单列表 返回 100 条
+    D-->>A: 100 条订单
+    A->>D: 批量查 100 个用户 一次请求 5ms
+    D-->>A: 100 个用户 应用内用哈希表组装
+    Note over A,D: 总计 2 次往返 约 7ms 快约 29 倍
+</div>
+<table>
+    <thead>
+        <tr>
+            <th>修法</th>
+            <th>适用场景</th>
+            <th>改造后耗时</th>
+            <th>注意事项</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>批量接口</td>
+            <td>下游能提供或愿意提供批量查询</td>
+            <td>2 次往返，约 7ms</td>
+            <td>批量参数必须有上限（比如一次最多 200 个 ID），否则把 N+1 换成了一个超大请求；下游批量实现里如果还是循环单查，等于没改</td>
+        </tr>
+        <tr>
+            <td>预加载后内存组装</td>
+            <td>关联数据集合可枚举，比如把本页所有用户 ID 去重后一次查回</td>
+            <td>2 次往返</td>
+            <td>去重是关键，100 条订单可能只对应 20 个用户；组装用哈希表，不要在内存里再写一遍双层循环</td>
+        </tr>
+        <tr>
+            <td>本地缓存</td>
+            <td>数据变更频率低、基数小，比如配置、类目、地区</td>
+            <td>首次 2 次往返，之后 0 次</td>
+            <td>必须设最大容量与过期时间；多实例下缓存不一致要能接受；不要缓存用户维度数据，基数太大</td>
+        </tr>
+    </tbody>
+</table>
+<p>识别 N+1 有三条路子：链路追踪里同一个接口出现几十上百个同名 span；代码评审时把「循环体内出现远程调用或查询」当成红线；监控下游请求数与本接口 QPS 的比值，正常是个位数，出现几十倍就是有放大。ORM 懒加载造成的 N+1 最隐蔽，因为代码上只是访问了一个属性，详见<a href="../db-access/">应用侧的数据库访问优化</a>。</p>
+
+<h2>超时与重试：设长了等于没设</h2>
+<p>超时不只是可用性问题，它直接决定<strong>失败请求要占用多久的资源</strong>。一个下游卡死时，10 秒超时意味着每个请求占住一个线程和一个连接 10 秒，上游线程池在几秒内就会被填满，然后整个服务对所有接口都不可用——包括那些根本不依赖这个下游的接口。</p>
+<table>
+    <thead>
+        <tr>
+            <th>配置</th>
+            <th>推荐取值思路</th>
+            <th>配错的后果</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>连接超时</td>
+            <td>同机房 200 到 500ms，跨地域按往返时间的 3 到 5 倍</td>
+            <td>设成几秒时，下游整机宕机会让请求全部挂在建连上</td>
+        </tr>
+        <tr>
+            <td>读超时</td>
+            <td>取该下游 P999 的 1.5 到 2 倍，而不是拍一个 3 秒</td>
+            <td>大于上游总预算时，超时形同虚设，上游先断开而资源仍被占住</td>
+        </tr>
+        <tr>
+            <td>总预算超时</td>
+            <td>由入口定义，逐层递减向下传递，每层扣掉自己已花的时间</td>
+            <td>不传递总预算时，下游可能在上游已放弃后还在慢慢干活，纯浪费容量</td>
+        </tr>
+        <tr>
+            <td>重试次数</td>
+            <td>只对连接失败与明确的幂等读重试，最多 1 次，且要有重试预算总量控制</td>
+            <td>每层各重试 2 次，三层叠加就是 8 倍放大，故障时下游永远起不来</td>
+        </tr>
+    </tbody>
+</table>
+<p>两条容易被忽略的规则：<strong>超时必须小于上游留给你的时间</strong>，否则你的超时没有任何意义；<strong>重试必须只在有剩余预算时才发起</strong>，剩 20ms 还去重试一个平均 50ms 的调用，只是浪费下游容量。熔断、隔离、降级这一层的完整机制见站内<a href="../../../architecture/governance/circuit-breaker/">限流熔断降级</a>。</p>
+
+<h2>减少数据传输：响应体是被低估的一段</h2>
+<p>很多接口慢在「传得太多」而不是「算得太慢」。响应体从 20KB 变成 2MB，序列化 CPU、下行带宽、客户端解析三处一起变差，而且在移动网络下放大得更明显。</p>
+<table>
+    <thead>
+        <tr>
+            <th>手段</th>
+            <th>收益量级</th>
+            <th>代价</th>
+            <th>适用判据</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>只返回需要的字段</td>
+            <td>响应体常能降 50% 到 90%</td>
+            <td>接口会分化出多个视图，要有约定避免膨胀</td>
+            <td>列表接口返回了详情页才用的大字段（描述、扩展 JSON、富文本）</td>
+        </tr>
+        <tr>
+            <td>响应压缩</td>
+            <td>文本类资源体积降到 20% 到 30%</td>
+            <td>压缩消耗 CPU，小响应体上压缩成本大于收益</td>
+            <td>响应体大于 1KB 的文本才压；已压缩的图片、视频、压缩包不要再压</td>
+        </tr>
+        <tr>
+            <td>分页设硬上限</td>
+            <td>把最坏情况从「不可控」变成「可控」</td>
+            <td>需要导出全量的场景要另外提供接口</td>
+            <td>所有列表接口，无例外</td>
+        </tr>
+        <tr>
+            <td>流式或分块返回</td>
+            <td>首字节时间从「等全部算完」变成「算多少发多少」</td>
+            <td>错误处理变难，已经发出的部分无法撤回；中间层缓冲会抵消收益</td>
+            <td>大导出、日志拉取、AI 流式输出</td>
+        </tr>
+        <tr>
+            <td>字段裁剪下沉到下游</td>
+            <td>省的是「跨服务传输」这一段，收益常被忽略</td>
+            <td>下游要支持字段选择</td>
+            <td>从下游取回 50 个字段却只用 3 个</td>
+        </tr>
+    </tbody>
+</table>
+<pre><code class="language-go">// 分页参数规范化：不设上限的 limit 是一个人人都能触发的事故开关。
+const (
+    defaultPageSize = 20
+    maxPageSize     = 200 // 硬上限，需要全量导出走专门的异步导出接口
+)
+
+func normalizePageSize(v int) int {
+    if v &lt;= 0 {
+        return defaultPageSize
+    }
+    if v &gt; maxPageSize {
+        return maxPageSize // 截断而不是报错：老客户端传 1000 时仍能工作
+    }
+    return v
+}
+
+// 大结果集用流式输出：边扫边写，内存占用与结果集大小无关。
+func (h *ExportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/x-ndjson")
+    // 显式声明不缓冲，否则反向代理可能把整个响应攒完再发，流式就白做了
+    w.Header().Set("X-Accel-Buffering", "no")
+
+    rows, err := h.db.QueryContext(r.Context(), "SELECT id, name, amount FROM orders WHERE created_at &gt;= ?", h.since)
+    if err != nil {
+        http.Error(w, "query failed", http.StatusInternalServerError)
+        return
+    }
+    defer rows.Close()
+
+    enc := json.NewEncoder(w)
+    flusher, canFlush := w.(http.Flusher)
+    n := 0
+    for rows.Next() {
+        var o Order
+        if err := rows.Scan(&amp;o.ID, &amp;o.Name, &amp;o.Amount); err != nil {
+            return // 已经发出的部分无法撤回，只能中断并靠客户端按行数校验
+        }
+        if err := enc.Encode(&amp;o); err != nil {
+            return // 客户端断开，及早退出，别继续扫库浪费资源
+        }
+        n++
+        if n%500 == 0 &amp;&amp; canFlush {
+            flusher.Flush() // 每 500 行刷一次：太频繁会产生大量小包
+        }
+    }
+}</code></pre>
+
+<h2>序列化开销：大响应下它不是零</h2>
+<p>「序列化能有多慢」是个常见的错觉。在小响应体上它确实可以忽略，但响应体到几百 KB 以上时，JSON 编码在单请求 CPU 里占到相当比例是很常见的，而且它产生大量临时对象，会推高 GC 频率，间接抬高所有接口的 P99。</p>
+<table>
+    <thead>
+        <tr>
+            <th>格式</th>
+            <th>相对体积</th>
+            <th>编解码 CPU</th>
+            <th>是否需要 schema</th>
+            <th>什么时候选它</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>JSON（标准库）</td>
+            <td>基准 100%</td>
+            <td>基准</td>
+            <td>否</td>
+            <td>对外开放接口、需要人类可读与调试便利</td>
+        </tr>
+        <tr>
+            <td>JSON（高性能库）</td>
+            <td>100%</td>
+            <td>通常快 2 到 5 倍</td>
+            <td>否</td>
+            <td>不想改协议只想降 CPU，换库是最省事的一步</td>
+        </tr>
+        <tr>
+            <td>MessagePack</td>
+            <td>约 60% 到 80%</td>
+            <td>略快于 JSON</td>
+            <td>否</td>
+            <td>想省体积又不想引入 schema 管理</td>
+        </tr>
+        <tr>
+            <td>Protobuf</td>
+            <td>约 30% 到 50%</td>
+            <td>明显更低</td>
+            <td>是</td>
+            <td>内部服务间高频调用，尤其是大对象与高 QPS</td>
+        </tr>
+    </tbody>
+</table>
+<p>两个实践结论。第一，<strong>换序列化库通常比换协议划算</strong>：不需要改接口契约，收益却能立刻拿到。第二，序列化优化的真正大头往往不是编码算法，而是<strong>少编码点东西</strong>：把 50 个字段裁到 8 个，比任何库都有效。Protobuf 的编码细节与兼容规则见站内<a href="../../../api/rpc/protobuf/">Protobuf</a>。</p>
+
+<h2>缓存与异步化：把工作移出主路径</h2>
+<p>缓存是最有效的手段，但它的收益完全取决于<strong>放在哪一层</strong>。放在下游响应这一层，省的是网络往返；放在结果这一层，省的是整段计算；放在片段这一层，省的是可复用的公共部分。命中率模型、多级缓存、一致性策略见站内<a href="../../../database/cache/">缓存设计</a>，这里只强调一条容易被忽略的：<strong>缓存的收益等于命中率乘以被省掉的耗时</strong>，命中率 50% 的缓存只能砍掉一半耗时，却让你多了一整套一致性问题，所以命中率上不去的缓存不如不加。</p>
+<p>异步化是另一个方向：把不影响本次响应的工作移出请求路径。判断标准只有一个——<strong>调用方的这次响应是否依赖它的结果或成功</strong>。</p>
+<table>
+    <thead>
+        <tr>
+            <th>操作</th>
+            <th>能否异步</th>
+            <th>原因</th>
+            <th>异步化的前提</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>发通知、短信、站内消息</td>
+            <td>能</td>
+            <td>响应不依赖它，晚几秒无影响</td>
+            <td>可靠投递 + 消费端幂等</td>
+        </tr>
+        <tr>
+            <td>写审计日志、埋点、更新统计计数</td>
+            <td>能</td>
+            <td>不在业务判定路径上</td>
+            <td>丢失少量可接受，或用可重建的数据源</td>
+        </tr>
+        <tr>
+            <td>同步搜索索引、刷新缓存</td>
+            <td>能</td>
+            <td>最终一致即可</td>
+            <td>有补偿与重建机制，能容忍短暂不一致</td>
+        </tr>
+        <tr>
+            <td>本次响应要返回的数据</td>
+            <td>不能</td>
+            <td>结果是响应的一部分</td>
+            <td>如果太慢，改成「先返回任务 ID 再轮询」的接口形态</td>
+        </tr>
+        <tr>
+            <td>库存扣减、余额变更等资金语义写入</td>
+            <td>不能</td>
+            <td>必须与主流程原子，且要能把失败告诉调用方</td>
+            <td>只能优化它本身，不能移出去</td>
+        </tr>
+        <tr>
+            <td>决定接口成败的关键校验</td>
+            <td>不能</td>
+            <td>异步等于放弃了拒绝的能力</td>
+            <td>可以缓存校验结果，但不能跳过</td>
+        </tr>
+    </tbody>
+</table>
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">异步化不是把问题变没了，是把问题挪了地方</div>
+    <p>三条硬要求：任务必须可靠投递（丢进内存队列后进程重启就丢的方案不算异步化，算丢数据）；消费端必须幂等，因为重投是常态；必须有积压监控与告警，否则「接口很快」的代价是「通知晚了两小时」，而且没人知道。</p>
+</div>
+
+<h2>连接复用与攒批</h2>
+<p>不复用连接的代价在高 QPS 下非常可观：每次请求多一次 TCP 握手（同机房约 0.3ms）加一次 TLS 握手（1 到 2 个往返，跨地域时几十毫秒），还会在客户端堆积大量 TIME_WAIT 直到端口耗尽。<strong>「接口偶发变慢且伴随大量 TIME_WAIT」几乎就是连接没复用的签名。</strong></p>
+<pre><code class="language-go">// Go 的默认 http.Client 有两个坑：没有超时，且 MaxIdleConnsPerHost 只有 2，
+// 高并发下大部分请求实际在新建连接，表现为「明明是内网调用却有几十毫秒抖动」。
+var downstream = &amp;http.Client{
+    Timeout: 500 * time.Millisecond, // 总超时兜底，永远不要用零值
+    Transport: &amp;http.Transport{
+        MaxIdleConns:        200,
+        MaxIdleConnsPerHost: 100,              // 默认 2，必须按并发量调大
+        MaxConnsPerHost:     200,              // 上限，防止把下游连接数打爆
+        IdleConnTimeout:     90 * time.Second, // 要小于下游或中间层的空闲关闭时间
+        DialContext: (&amp;net.Dialer{
+            Timeout:   300 * time.Millisecond, // 建连超时单独设，比读超时短得多
+            KeepAlive: 30 * time.Second,
+        }).DialContext,
+        ForceAttemptHTTP2: true,
+    },
+}
+
+// 必须做的两件事，漏掉任何一个连接都不会被复用：
+//   1. 读完整个 Body：resp.Body 没读干净，连接不会回到空闲池
+//   2. 关闭 Body
+func call(ctx context.Context, url string) ([]byte, error) {
+    req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+    resp, err := downstream.Do(req)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    return io.ReadAll(resp.Body)
+}</code></pre>
+<p>攒批是典型的「用延迟换吞吐」：把 100 次单条写入合并成 1 次批量写入，往返次数降到百分之一，吞吐能涨一个量级，但每条写入平均要多等半个批次窗口。<strong>所以攒批适合写入与异步链路，不适合放在用户等待的读路径上</strong>。如果一定要在读路径上攒批，窗口要压到毫秒级并设置「攒够 N 条就立刻发」的双触发条件，同时把窗口时间算进接口的超时预算。</p>
+
+<h2>该优化哪一段，以及怎么防止退化</h2>
+<div class="mermaid">
+flowchart TB
+    A["拿到链路追踪 按耗时占比排序"] --> B{占比最大的一段在哪}
+    B -->|下游调用| C{调用之间有依赖吗}
+    C -->|无依赖 且是并列调用| D["串行改并行<br/>耗时从相加变成取最大"]
+    C -->|在循环里逐个调用| E["消掉 N+1<br/>批量接口 预加载 或本地缓存"]
+    C -->|有依赖无法并行| F{结果可以复用吗}
+    F -->|可以| G["加缓存 先算命中率再决定"]
+    F -->|不可以| H["把优化需求提给下游 或换数据模型"]
+    B -->|应用内排队| I["扩容或缩短服务时间<br/>详见度量与方法论篇"]
+    B -->|序列化与响应体| J["裁字段 设分页上限<br/>换序列化库 开压缩"]
+    B -->|业务 CPU| K{profile 里有明显热点吗}
+    K -->|有| L["只优化热点函数"]
+    K -->|没有| M["不要动 收益不足 1%"]
+    D --> N["回归防护 把该接口 P99 纳入定期压测"]
+    E --> N
+    G --> N
+    J --> N
+</div>
+<p>接口性能会<strong>随迭代缓慢退化</strong>，这是几乎所有长期项目的共同结局：每次需求只多加一个字段、多查一次下游、多一层校验，单次改动小到评审时察觉不到，半年后 P99 翻倍且找不到责任提交。防护手段有三条：核心接口固化压测脚本并定期跑，把与基线的偏差纳入告警；在评审清单里加一项「本次改动新增了几次下游调用」；对关键接口加下游调用次数的断言，测试环境超阈值直接失败。</p>
+<table>
+    <thead>
+        <tr>
+            <th>反模式</th>
+            <th>后果</th>
+            <th>正确做法</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>在循环里调下游或查库</td>
+            <td>把 1 次往返放大成 N 次，CPU 空转等网络</td>
+            <td>批量接口、预加载、本地缓存三选一</td>
+        </tr>
+        <tr>
+            <td>接口返回全部字段</td>
+            <td>响应体膨胀、序列化 CPU 上升、GC 压力变大</td>
+            <td>按场景裁字段，列表与详情分开</td>
+        </tr>
+        <tr>
+            <td>分页参数没有硬上限</td>
+            <td>一次请求就能把实例打挂，还是外部可触发的</td>
+            <td>服务端统一规范化，超限截断</td>
+        </tr>
+        <tr>
+            <td>把非关键操作同步做</td>
+            <td>发通知、写日志的抖动直接计入接口耗时</td>
+            <td>移出主路径，加可靠投递与积压监控</td>
+        </tr>
+        <tr>
+            <td>每次请求新建连接</td>
+            <td>多一次握手，TIME_WAIT 堆积到端口耗尽</td>
+            <td>配好连接池参数，并确保读完并关闭响应体</td>
+        </tr>
+        <tr>
+            <td>并行化但不限制并发数</td>
+            <td>下游瞬时压力放大若干倍，把下游打挂</td>
+            <td>有界线程池或并发上限，灰度观察下游指标</td>
+        </tr>
+        <tr>
+            <td>只设单次超时不设总预算</td>
+            <td>超时形同虚设，失败请求长时间占住资源</td>
+            <td>入口定总预算并逐层递减传递</td>
+        </tr>
+        <tr>
+            <td>优化前不拆解耗时构成</td>
+            <td>花几天优化占比 3% 的那一段</td>
+            <td>先出占比表，只动最大的那一段</td>
+        </tr>
+    </tbody>
+</table>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+        <li>并行化时给每个下游各设 300ms 却没有总预算：最坏情况耗时没降，但线程与连接被占用的总量翻了几倍。</li>
+        <li>把有数据依赖的调用并行了：只在高并发或慢的时候才偶发读到空值，排查成本极高。</li>
+        <li>Java 用默认的公共线程池跑 IO 任务：并行度只有核数减一，代码改成并行但耗时几乎不变。</li>
+        <li>Go 里裸开 goroutine 调下游且不限并发：单个请求就能把下游连接池打满。</li>
+        <li>下游提供了批量接口，但它内部还是循环单查：调用方看着是批量，往返次数一点没少。</li>
+        <li>批量参数不设上限：N+1 被换成一次超大请求，数据库一次扫出百万行。</li>
+        <li>忘记读完并关闭 HTTP 响应体：连接不会回到空闲池，实际每次都在新建连接。</li>
+        <li>MaxIdleConnsPerHost 用默认值 2：内网调用出现几十毫秒的莫名抖动。</li>
+        <li>空闲连接超时大于中间层的空闲关闭时间：拿到已被对端关闭的连接，偶发连接重置错误。</li>
+        <li>对图片、视频、已压缩文件再开压缩：白烧 CPU，体积几乎不变。</li>
+        <li>流式返回但中间层开了缓冲：响应被整体攒完才下发，首字节时间一点没改善。</li>
+        <li>异步化只丢进内存队列：进程重启或崩溃就静默丢数据，事后无法追溯。</li>
+        <li>加了缓存不看命中率：命中率 30% 的缓存带来了全部的一致性复杂度和三成收益。</li>
+        <li>在用户读路径上攒批：吞吐好看了，P99 反而被批次窗口抬高。</li>
+        <li>优化完不做回归防护：几十次迭代后接口回到原来的耗时，且没人知道是哪次引入的。</li>
+    </ul>
+</div>
+
+                    </div>
+                </article>
+            </main>
+        </div>
+    </div>
+    <footer class="site-footer">
+        <div class="footer-inner">
+            <p>© 2026 资深码农. 保留所有权利。</p>
+        </div>
+    </footer>
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "observability";</script>
+    <script defer src="../../../vendor/highlight.min.js"></script>
+    <script defer src="../../../js/main.js?v=2"></script>
+</body>
+</html>

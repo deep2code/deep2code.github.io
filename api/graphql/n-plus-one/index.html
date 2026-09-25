@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
+    <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
+    <title>GraphQL 的 N+1 与批量化：DataLoader 原理、失效场景与复杂度限制 - 资深码农</title>
+    <link rel="stylesheet" href="../../../css/style.min.css?v=4">
+    <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
+
+    <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+        <meta name="description" content="GraphQL N+1 为什么是执行模型的必然结果而不是实现失误：逐字段 resolver 调用导致的乘性查询爆炸、DataLoader 同 tick 攒批与按序分发原理、batchLoad 必须等长同序否则静默串号、loader 必须请求级否则越权、分页子列表与聚合字段与跨服务调用这些 DataLoader 失效场景的窗口函数与 GROUP BY 解法、投影下推与预加载的代价、深度限制与复杂度评分与持久化查询白名单的配置，以及用链路追踪和查询计数断言发现 N+1 的方法。">
+    <meta name="keywords" content="GraphQL,N+1,DataLoader,查询复杂度,持久化查询,@defer,@stream,查询缓存,性能优化,技术博客,程序员,踩坑,实践">
+    <meta name="author" content="资深码农">
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+    <meta name="googlebot" content="index, follow">
+    <meta name="bingbot" content="index, follow">
+    <meta name="baiduspider" content="index, follow">
+    <!-- AI crawler friendly: explicitly allow indexing -->
+    <meta name="GPTBot" content="index, follow">
+    <meta name="Claude-Web" content="index, follow">
+    <meta name="PerplexityBot" content="index, follow">
+    <meta name="CCBot" content="index, follow">
+    <meta name="Google-Extended" content="index, follow">
+    <link rel="canonical" href="https://www.yijunjun.asia/api/graphql/n-plus-one/">
+    <!-- Open Graph -->
+    <meta property="og:title" content="GraphQL 的 N+1 与批量化：DataLoader 原理、失效场景与复杂度限制 - 资深码农">
+    <meta property="og:description" content="GraphQL N+1 为什么是执行模型的必然结果而不是实现失误：逐字段 resolver 调用导致的乘性查询爆炸、DataLoader 同 tick 攒批与按序分发原理、batchLoad 必须等长同序否则静默串号、loader 必须请求级否则越权、分页子列表与聚合字段与跨服务调用这些 DataLoader 失效场景的窗口函数与 GROUP BY 解法、投影下推与预加载的代价、深度限制与复杂度评分与持久化查询白名单的配置，以及用链路追踪和查询计数断言发现 N+1 的方法。">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://www.yijunjun.asia/api/graphql/n-plus-one/">
+    <meta property="og:site_name" content="资深码农">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="article:published_time" content="2026-09-19">
+    <meta property="article:modified_time" content="2026-09-19">
+    <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="GraphQL 的 N+1 与批量化：DataLoader 原理、失效场景与复杂度限制 - 资深码农">
+    <meta name="twitter:description" content="GraphQL N+1 为什么是执行模型的必然结果而不是实现失误：逐字段 resolver 调用导致的乘性查询爆炸、DataLoader 同 tick 攒批与按序分发原理、batchLoad 必须等长同序否则静默串号、loader 必须请求级否则越权、分页子列表与聚合字段与跨服务调用这些 DataLoader 失效场景的窗口函数与 GROUP BY 解法、投影下推与预加载的代价、深度限制与复杂度评分与持久化查询白名单的配置，以及用链路追踪和查询计数断言发现 N+1 的方法。">
+    <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
+    <meta name="article:author" content="资深码农">
+    <meta name="article:section" content="GraphQL">
+    <meta name="article:tag" content="后端与编程语言">
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"GraphQL 的 N+1 与批量化：DataLoader 原理、失效场景与复杂度限制","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"GraphQL N+1 为什么是执行模型的必然结果而不是实现失误：逐字段 resolver 调用导致的乘性查询爆炸、DataLoader 同 tick 攒批与按序分发原理、batchLoad 必须等长同序否则静默串号、loader 必须请求级否则越权、分页子列表与聚合字段与跨服务调用这些 DataLoader 失效场景的窗口函数与 GROUP BY 解法、投影下推与预加载的代价、深度限制与复杂度评分与持久化查询白名单的配置，以及用链路追踪和查询计数断言发现 N+1 的方法。","url":"https://www.yijunjun.asia/api/graphql/n-plus-one/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/api/graphql/n-plus-one/"},"articleSection":"后端与编程语言"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "接口、协议与安全", "item": "https://www.yijunjun.asia/api/"}, {"position": 3, "name": "GraphQL 总览", "item": "https://www.yijunjun.asia/api/graphql/"}, {"position": 4, "name": "GraphQL 性能与 N+1 问题", "item": "https://www.yijunjun.asia/api/graphql/n-plus-one/"}]}</script>
+    <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "N+1 能不能直接用 SQL JOIN 解决，不用 DataLoader？", "acceptedAnswer": {"@type": "Answer", "text": "部分场景可以，这叫预加载：在父 resolver 里一次 JOIN 取出子数据塞进 parent，子 resolver 直接读。关系固定、层数不深时它比 DataLoader 还省一次往返。但它有三个限制：客户端没请求子字段时白做了 JOIN；一对多关系会让行数膨胀，需要在内存里去重；跨库或跨服务根本没法 JOIN。所以通用方案仍然是 DataLoader，预加载只用在热点路径上做针对性优化。"}}, {"@type": "Question", "name": "DataLoader 的 batchLoad 为什么必须返回等长同序的数组？", "acceptedAnswer": {"@type": "Answer", "text": "因为 DataLoader 是按下标把结果分发回各个 load 调用的。如果你直接返回数据库查询结果，只要有一个 key 查不到，返回数组就少一个元素，后面所有位置整体前移，于是 A 用户的请求拿到 B 用户的数据。这类 bug 不报错、不崩溃、监控看不出来，测试环境数据齐全时永远正常。固定写法是先把结果装进 Map，再按 keys 顺序逐个取，取不到显式填 null。Java 侧优先用 MappedBatchLoader，返回 Map 从机制上规避。"}}, {"@type": "Question", "name": "DataLoader 可以做成全局单例来提高缓存命中率吗？", "acceptedAnswer": {"@type": "Answer", "text": "绝对不行，这是安全问题而不只是正确性问题。DataLoader 自带的缓存设计上是请求级的，做成进程级单例后，带权限过滤的数据会被其他用户的请求命中，等于越权。跨请求复用应该交给外部缓存，并且缓存 key 里必须带上身份维度。正确做法是在 context 工厂里创建 loader，随请求创建随请求销毁，请求结束缓存就丢弃。"}}, {"@type": "Question", "name": "每个父对象要各自的前 10 条子数据，DataLoader 怎么批量？", "acceptedAnswer": {"@type": "Answer", "text": "标准 DataLoader 做不到，它只能攒 key，攒不出每个 key 各自的前 N 条。正解是窗口函数：ROW_NUMBER 配 PARTITION BY 父键，外层再按行号过滤，一条 SQL 取回所有父对象的前 N 条。MySQL 5.7 没有窗口函数，只能用 UNION ALL 拼接，这时 key 数量必须拆批控制在几十个以内。如果子列表还要各自独立的排序和过滤，更稳妥的做法是把它改成独立的根查询，让客户端多发一次请求。"}}, {"@type": "Question", "name": "自动持久化查询能不能当作安全防护？", "acceptedAnswer": {"@type": "Answer", "text": "不能，这是流传很广的误解。自动持久化查询的流程是客户端先用 hash 试探，服务端没有就让它把查询文本注册上来，之后按 hash 调用。也就是说任何客户端都能注册任意查询，它只节省请求带宽，防护能力等于零。真正的防护是构建期白名单：把客户端所有查询抽成 manifest 随服务发布，生产环境只接受 manifest 里的 hash，其他一律拒绝。"}}, {"@type": "Question", "name": "深度限制和复杂度评分只做一个够不够？", "acceptedAnswer": {"@type": "Answer", "text": "不够，两者拦的是不同形状的查询。深度限制拦的是循环引用造成的深嵌套，但一个只有两层、却要 500 条记录且每条都带明细的查询能轻松绕过它。复杂度评分按字段权重乘分页大小累加，才能算出宽查询的真实成本。两者都要配，而且复杂度阈值不要凭感觉拍，先跑影子模式只记录不拦截，按线上真实分布定阈值，否则上线当天就会误杀正常查询。"}}]}</script>
+</head>
+<body>
+    <div class="reading-progress"></div>
+
+    <header class="site-header">
+        <div class="header-inner">
+            <a href="./" class="header-brand">
+                <span class="logo-mark">~$</span>
+                <span class="blog-title">资深码农</span>
+            </a>
+            <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
+                <span></span><span></span><span></span>
+            </button>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../../programming/" data-group="programming">编程</a><a href="../../../database/" data-group="database">数据库</a><a href="../../../api/" data-group="api" class="active">接口</a><a href="../../../architecture/" data-group="architecture">架构</a><a href="../../../devops/" data-group="devops">运维</a><a href="../../../observability/" data-group="observability">可观测</a><a href="../../../frontend/" data-group="frontend">前端</a><a href="../../../tools/" data-group="tools">工具</a><a href="../../../ai/" data-group="ai">AI</a><a href="../../../life/" data-group="life">生活</a></nav>
+            <div class="header-search">
+                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="search-input" placeholder="搜索...">
+                <div class="search-results" id="search-results"></div>
+            </div>
+            <button class="theme-toggle" title="切换主题" aria-label="切换主题">
+                <span class="icon-moon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></span>
+                <span class="icon-sun"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></span>
+            </button>
+        </div>
+    </header>
+
+    <div id="main-area">
+        <div class="breadcrumbs">
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">接口、协议与安全</a><span class="separator">/</span><a href="../index.html">GraphQL 的执行模型与运维成本</a><span class="separator">/</span><span>GraphQL 性能与 N+1 问题</span>
+</div>
+
+        <div id="content-wrapper" class="article-layout">
+            <main id="body-content">
+                <article class="article">
+                    <header class="article-header">
+                        <h1 class="article-title">GraphQL 的 N+1 与批量化：DataLoader 原理、失效场景与复杂度限制</h1>
+                        <div class="article-meta">
+                            <span class="meta-item">🏷️ N+1 问题</span>
+                            <span class="meta-item reading-time"></span>
+                        </div>
+                    </header>
+                    <div class="article-content">
+<p>N+1 是 GraphQL 上线后一定会遇到的问题，不是「如果代码写得不好才会遇到」。它源自执行模型本身：resolver 按字段独立取数，父层返回多少条记录，子字段的 resolver 就被调用多少次。理解这一点很重要，因为它决定了治理方式——你没法靠 code review 可靠地消灭它，只能靠架构上的批量化机制，加上限流兜底。</p>
+
+<p>这篇讲透四件事：N+1 的结构性来源和它的乘性爆炸规模、DataLoader 的攒批原理与两个容易写错的致命约束、DataLoader 根本解决不了的四类场景该怎么办、以及为什么深度和复杂度限制是必需品而不是可选项。执行模型和 resolver 参数的基础见站内 GraphQL 类型系统与执行模型一篇。</p>
+
+<h2>为什么 N+1 是结构性的</h2>
+
+<p>看一个最普通的查询：取 10 个订单，每个订单要用户昵称。执行器先跑 <code>Query.orders</code> 拿到 10 条记录，然后<strong>对每一条记录分别调用一次 <code>Order.user</code> 的 resolver</strong>。这个 resolver 不知道自己正在被批量调用，它只看到一个 parent，于是老老实实发一次查询。1 次列表查询加 10 次用户查询，这就是 1+N。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant E as 执行器
+    participant R1 as Query.orders
+    participant R2 as Order.user
+    participant DB as 数据库
+    E->>R1: 执行根字段
+    R1->>DB: 查订单列表 取 10 条
+    DB-->>R1: 返回 10 行
+    Note over E,R2: 执行器拿到 10 个父对象<br/>对每个父对象独立调用子 resolver
+    E->>R2: parent 是第 1 个订单
+    R2->>DB: 按 id 查用户 7
+    E->>R2: parent 是第 2 个订单
+    R2->>DB: 按 id 查用户 9
+    E->>R2: 第 3 到第 10 个订单
+    R2->>DB: 再发 8 次同样形状的查询
+    Note over R2,DB: 11 次往返 · 每个 resolver 都不知道<br/>还有 9 个兄弟在做同样的事
+    E-->>E: 组装结果树
+</div>
+
+<p>真正致命的是<strong>嵌套时的乘性放大</strong>：查询每加一层，查询数就乘以那一层的扇出。「20 个订单、每单 10 条明细、每条明细带商品和商家」这种再正常不过的页面需求，算式是 1 + 20 + 20 乘 10 + 200 乘 2 = 621 次查询。而这个查询在 Schema 上完全合法，客户端写起来只有十几行。</p>
+
+<table>
+<thead><tr><th>查询形状</th><th>查询次数算式</th><th>单条 1ms 时总耗时</th><th>单条 5ms 时总耗时</th></tr></thead>
+<tbody>
+<tr><td>20 个订单</td><td>1</td><td>1ms</td><td>5ms</td></tr>
+<tr><td>加上每单的用户</td><td>1 + 20</td><td>21ms</td><td>105ms</td></tr>
+<tr><td>再加每单的明细</td><td>1 + 20 + 20</td><td>41ms</td><td>205ms</td></tr>
+<tr><td>再加每条明细的商品</td><td>1 + 20 + 20 + 200</td><td>241ms</td><td>1.2s</td></tr>
+<tr><td>再加商品的商家与库存</td><td>1 + 20 + 20 + 200 + 400</td><td>641ms</td><td>3.2s，已超常见网关超时</td></tr>
+<tr><td>全部用 DataLoader 批量化</td><td>1 + 1 + 1 + 1 + 2</td><td>6ms</td><td>30ms</td></tr>
+</tbody></table>
+
+<p>注意最后一行：批量化之后查询次数只和<strong>查询的层数</strong>有关，和数据条数无关。这是从线性增长变成常数级的差别，也是为什么 DataLoader 不是优化手段而是基础设施。</p>
+
+<h2>DataLoader 的攒批与分发</h2>
+
+<p>DataLoader 的机制出人意料地简单：<code>load(key)</code> 不立刻执行，而是把 key 推进待处理队列并返回一个 Promise；<strong>在当前事件循环 tick 结束时</strong>（Node 里是微任务队列排空的那个点），把攒到的所有 key 合成数组，调用一次你提供的 <code>batchLoad(keys)</code>；拿到结果后按下标把值分发回各个 Promise。</p>
+
+<p>它能生效的前提正好和 GraphQL 的执行模型吻合：同一层字段是并行发起的，10 个 <code>Order.user</code> resolver 在同一个 tick 内都调了 <code>load</code>，所以能攒进同一批。这也解释了一个常见困惑——<strong>如果你在 resolver 里先 await 了别的异步操作再调 load，就可能错过攒批窗口</strong>，一批会被拆成好几批。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant R as 10 个 Order.user resolver
+    participant L as DataLoader 队列
+    participant B as batchLoad 函数
+    participant DB as 数据库
+    R->>L: load 7 返回 pending 的 Promise
+    R->>L: load 9 重复 key 直接复用同一个 Promise
+    R->>L: 其余 8 次 load 陆续入队
+    Note over L: 本 tick 内只攒 key<br/>一次查询都不发
+    L->>B: tick 结束 一次性传入去重后的 keys 数组
+    B->>DB: 用一条 IN 查询取回这批 key
+    DB-->>B: 返回若干行 顺序由数据库决定
+    Note over B: 关键一步 按 keys 顺序重排<br/>查不到的位置补 null
+    B-->>L: 与 keys 等长且同序的结果数组
+    L-->>R: 按下标逐个 resolve 对应的 Promise
+</div>
+
+<p>整个机制只有几条约束，但每一条写错都有实际后果。</p>
+
+<table>
+<thead><tr><th>约束</th><th>写错的样子</th><th>后果</th><th>怎么保证</th></tr></thead>
+<tbody>
+<tr><td>返回值与 keys 等长同序</td><td>直接 return 数据库返回的 rows</td><td>某个 id 查不到时后面数据整体前移，<strong>A 用户拿到 B 用户的数据，而且不报任何错</strong></td><td>先建 Map 再按 keys 遍历取值，缺失位置显式填 null</td></tr>
+<tr><td>loader 实例必须请求级</td><td>在模块顶层创建后长期复用</td><td>请求级缓存变成进程级缓存，跨请求脏读；带权限过滤的 loader 直接变成<strong>越权漏洞</strong></td><td>在 context 工厂里创建，随请求生灭</td></tr>
+<tr><td>一对多要返回数组</td><td>没有子项时返回 null</td><td>客户端拿到 null 而不是空列表，非空列表类型还会触发错误冒泡</td><td>按 key 预建空数组再填充</td></tr>
+<tr><td>单条失败不要整批抛异常</td><td>batchLoad 里直接 throw</td><td>这一批所有 key 全部失败，一条坏数据拖垮整页</td><td>把 Error 实例放在对应下标上</td></tr>
+<tr><td>对象 key 要给 cacheKeyFn</td><td>直接拿对象当 key</td><td>默认按引用相等比较，缓存永不命中，还会重复入批</td><td>提供 cacheKeyFn 把对象序列化成字符串</td></tr>
+<tr><td>写后读要关缓存</td><td>同一请求里改完再读同一个 key</td><td>读到本请求早先缓存的旧值</td><td>该字段的 loader 关缓存，或写操作后 clear 对应 key</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">等长同序这条约束值得单独强调</div>
+    <p>它是唯一一类<strong>不报错、不崩溃、监控也看不出来，但会把数据串到别人身上</strong>的 bug。测试环境里数据齐全时永远正常，一旦线上有一条记录被软删除或权限过滤掉，返回数组就少一个元素，后面所有位置整体错位。写 batchLoad 时的固定动作就是：先把结果装进 Map，再 <code>keys.map</code> 逐个取，取不到填 null。Java 侧优先用 MappedBatchLoader，返回 Map 就从机制上避免了这个问题。</p>
+</div>
+<pre><code class="language-javascript">// loaders.js —— 每个请求创建一次，绝不能提到模块顶层做成单例
+import DataLoader from 'dataloader';
+
+export function createLoaders(db, remote) {
+  return {
+    // 1) 按主键批量：返回值必须与 keys 等长且同序，这是 DataLoader 唯一的硬契约
+    userById: new DataLoader(async (ids) =&gt; {
+      const rows = await db.query(
+        'SELECT id, nickname, avatar_url FROM user WHERE id IN (?)', [ids]);
+      const byId = new Map(rows.map((r) =&gt; [String(r.id), r]));
+      // 必须按 keys 顺序逐个取，查不到的位置填 null。
+      // 如果图省事写成 return rows：缺一条数据后面全部前移一位，
+      // A 用户会拿到 B 用户的昵称，而且不报任何错 —— 最危险的一类实现 bug
+      return ids.map((id) =&gt; byId.get(String(id)) ?? null);
+    }, { maxBatchSize: 500 }),   // IN 列表过长时优化器会放弃索引，主动拆批
+
+    // 2) 一对多：每个 key 返回一个数组，没有子项的位置填空数组而不是 null
+    itemsByOrderId: new DataLoader(async (orderIds) =&gt; {
+      const rows = await db.query(
+        'SELECT id, order_id, title, quantity FROM order_item WHERE order_id IN (?)', [orderIds]);
+      const grouped = new Map(orderIds.map((id) =&gt; [String(id), []]));
+      for (const r of rows) grouped.get(String(r.order_id)).push(r);
+      return orderIds.map((id) =&gt; grouped.get(String(id)));
+    }),
+
+    // 3) 批量里单条失败：把 Error 实例放到对应下标，只有那一次 load 会 reject，
+    //    其余 key 照常返回。整批抛异常会让所有等待者一起失败，不要那么做
+    profileById: new DataLoader(async (ids) =&gt; {
+      const settled = await Promise.allSettled(ids.map((id) =&gt; remote.getProfile(id)));
+      return settled.map((r, i) =&gt;
+        r.status === 'fulfilled' ? r.value : new Error('profile 加载失败 id=' + ids[i]));
+    }, { cache: false }),   // 同一请求内写后立即读的字段要关缓存，否则读到旧值
+
+    // 4) 复合 key：DataLoader 默认用严格相等比较 key，对象 key 必须给 cacheKeyFn
+    stockBySkuAndWarehouse: new DataLoader(async (keys) =&gt; {
+      const rows = await db.query(
+        'SELECT sku_id, warehouse_id, qty FROM stock WHERE (sku_id, warehouse_id) IN (?)',
+        [keys.map((k) =&gt; [k.skuId, k.warehouseId])]);
+      const m = new Map(rows.map((r) =&gt; [r.sku_id + ':' + r.warehouse_id, r.qty]));
+      return keys.map((k) =&gt; m.get(k.skuId + ':' + k.warehouseId) ?? 0);
+    }, { cacheKeyFn: (k) =&gt; k.skuId + ':' + k.warehouseId }),
+  };
+}
+
+// context 工厂里挂上去，随请求生灭
+export const context = async ({ req }) =&gt; ({
+  viewer: await auth(req),
+  loaders: createLoaders(db, remote),
+});</code></pre>
+<p>Java 侧的对应实现，以及跨服务场景下把攒批窗口调大的做法：</p>
+<pre><code class="language-java">// graphql-java / Spring GraphQL：优先用 MappedBatchLoader，返回 Map 就天然不会顺序错位
+@Component
+public class UserBatchLoader implements MappedBatchLoaderWithContext&lt;Long, User&gt; {
+
+    private final UserRepository repo;
+    // 阻塞式 JDBC 不要跑在 ForkJoinPool.commonPool 上，会把公共池占死
+    private final Executor executor;
+
+    public UserBatchLoader(UserRepository repo, @Qualifier("loaderExecutor") Executor executor) {
+        this.repo = repo;
+        this.executor = executor;
+    }
+
+    @Override
+    public CompletionStage&lt;Map&lt;Long, User&gt;&gt; load(Set&lt;Long&gt; keys, BatchLoaderEnvironment env) {
+        return CompletableFuture.supplyAsync(() -&gt; {
+            List&lt;User&gt; users = repo.findAllByIdIn(keys);          // 一次 IN 查询
+            // 缺失的 key 不出现在 Map 里，框架会自动补 null，不存在错位风险
+            return users.stream().collect(Collectors.toMap(User::getId, Function.identity()));
+        }, executor);
+    }
+}
+
+// 注册：registry 必须每请求新建，然后放进 GraphQLContext
+// 跨服务场景默认的“每批次结束就 dispatch”会攒不满，可以配一个几毫秒的调度窗口
+DataLoaderOptions options = DataLoaderOptions.newOptions()
+        .setMaxBatchSize(500)
+        .setCachingEnabled(true);          // 请求级缓存，请求结束即丢弃
+
+ScheduledDataLoaderRegistry registry = ScheduledDataLoaderRegistry.newScheduledRegistry()
+        .register("userById", DataLoaderFactory.newMappedDataLoader(userBatchLoader, options))
+        .schedule(Duration.ofMillis(2))    // 2ms 攒批窗口，换更大的批次
+        .build();
+
+// resolver 侧：拿 loader 而不是直接查库
+@SchemaMapping(typeName = "Order", field = "user")
+public CompletableFuture&lt;User&gt; user(Order order, DataFetchingEnvironment env) {
+    DataLoader&lt;Long, User&gt; loader = env.getDataLoader("userById");
+    return loader.load(order.getUserId());
+}</code></pre>
+<h2>DataLoader 解决不了的四类场景</h2>
+
+<p>DataLoader 的能力边界很明确：它只能把「一堆同形状的按 key 取数」合成一次调用。一旦每个父对象需要的不是「一个对象」而是「一段结果集」，攒批就失效了。这四类场景必须单独设计，硬套 DataLoader 只会写出一个假批量。</p>
+
+<div class="mermaid">
+flowchart TB
+    S["某个关联字段出现 N 次调用"] --> Q1{"每个父对象要的是<br/>单个对象还是一段结果集"}
+    Q1 -->|"单个对象或全部子项"| D1["标准 DataLoader<br/>一次 IN 查询搞定"]
+    Q1 -->|"要各自的前 N 条"| Q2{"数据库支持窗口函数吗"}
+    Q2 -->|"支持"| D2["ROW_NUMBER 加 PARTITION BY<br/>一条 SQL 取回所有父对象的前 N 条"]
+    Q2 -->|"不支持"| D3["UNION ALL 拼接<br/>或退化为受控并发查询"]
+    Q1 -->|"只要个数或求和"| D4["GROUP BY 批量聚合<br/>结果里缺失的 key 补 0"]
+    Q1 -->|"过滤条件因父对象而异"| Q3{"条件能不能收敛成少数几组"}
+    Q3 -->|"能"| D5["按条件分组 每组一次查询"]
+    Q3 -->|"不能"| D6["改建模<br/>把条件提到父层参数或预计算"]
+    Q1 -->|"数据在别的服务"| Q4{"下游有批量接口吗"}
+    Q4 -->|"有"| D7["网关侧 loader 调批量接口"]
+    Q4 -->|"没有"| D8["受控并发加信号量<br/>同时推动下游提供批量接口"]
+</div>
+
+<table>
+<thead><tr><th>场景</th><th>为什么 DataLoader 不够</th><th>解法</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>子列表要分页，每个父对象各取前 N 条</td><td>攒批只能攒 key，攒不出「每个 key 各自的前 N 条」</td><td>窗口函数一条 SQL 搞定；老版本数据库用 UNION ALL</td><td>SQL 复杂度上升，UNION ALL 在 key 多时语句很长，必须拆批</td></tr>
+<tr><td>需要聚合，比如每个订单的评论数</td><td>逐个 count 就是 N 次查询</td><td>一次 GROUP BY 批量算，loader 侧给缺失 key 补 0</td><td>基本没代价，但要记得补 0 而不是留 null</td></tr>
+<tr><td>过滤条件因父对象而异</td><td>条件不同就没法合并成一条 IN 查询</td><td>条件收敛成少数几组时按组批量；否则把条件上移到父层参数</td><td>可能要改 Schema 设计，或引入预计算字段</td></tr>
+<tr><td>跨服务调用</td><td>下游只提供单条查询接口</td><td>推动下游提供批量接口；短期用受控并发加信号量限制并发数</td><td>跨团队协调成本；并发方案会放大下游压力，必须限流</td></tr>
+<tr><td>子项本身还要再嵌套过滤排序</td><td>批量结果无法表达每个父对象独立的排序窗口</td><td>把这类字段改成独立的根查询，让客户端分两次请求</td><td>牺牲一次往返，换来可控的查询形状</td></tr>
+</tbody></table>
+<pre><code class="language-sql">-- 场景一：每个订单各取最新 3 条物流轨迹。
+-- DataLoader 能把 order_id 攒成一批，但攒不出“每个父对象各自的前 N 条”，
+-- 直接 IN 查询再在内存里裁剪，会把全部轨迹都拉回来，数据量大时更糟。
+-- MySQL 8.0 / PostgreSQL 用窗口函数一次搞定：
+SELECT * FROM (
+  SELECT t.order_id, t.happened_at, t.node_name,
+         ROW_NUMBER() OVER (PARTITION BY t.order_id ORDER BY t.happened_at DESC) AS rn
+  FROM logistics_trace t
+  WHERE t.order_id IN (101, 102, 103)          -- 这一批 key 由 DataLoader 攒出来
+) x
+WHERE x.rn &lt;= 3;
+
+-- 场景二：每个订单的评论数。逐个 count 就是典型 N+1，一次 GROUP BY 批量算完，
+-- 返回结果里没出现的 order_id 说明计数为 0，在 loader 侧补 0 而不是留 null。
+SELECT order_id, COUNT(*) AS cnt
+FROM comment
+WHERE order_id IN (101, 102, 103)
+GROUP BY order_id;
+
+-- 场景三：MySQL 5.7 没有窗口函数，退化为 UNION ALL。
+-- key 多了 SQL 会非常长，必须配合 maxBatchSize 拆批，一般 20 到 50 个一组。
+(SELECT order_id, happened_at, node_name FROM logistics_trace
+   WHERE order_id = 101 ORDER BY happened_at DESC LIMIT 3)
+UNION ALL
+(SELECT order_id, happened_at, node_name FROM logistics_trace
+   WHERE order_id = 102 ORDER BY happened_at DESC LIMIT 3);
+
+-- 判读：执行计划里 IN 列表过长导致 type 从 range 退化成 ALL 时，
+-- 说明 maxBatchSize 设得太大，索引与执行计划判读见站内 MySQL 相关文章。</code></pre>
+<h2>批量化之外的三种手段</h2>
+
+<p>DataLoader 解决的是「次数」，下面三种解决的是「每次的成本」。它们不互斥，但引入顺序有讲究：先把 DataLoader 铺满，再考虑这些，否则容易在错误的层次上做优化。</p>
+
+<table>
+<thead><tr><th>手段</th><th>做什么</th><th>收益</th><th>代价与失效场景</th></tr></thead>
+<tbody>
+<tr><td>分层缓存</td><td>DataLoader 管请求内去重，外部缓存管跨请求复用</td><td>热点对象查询量下降一个数量级</td><td>多了一致性问题：写操作要精确失效；带权限的数据缓存要把身份维度带进 key，否则越权</td></tr>
+<tr><td>投影下推</td><td>用 info 解析客户端实际请求的字段，只 SELECT 需要的列</td><td>避免 select 星号，宽表场景能省掉大量 IO 和网络传输</td><td>实现复杂度高：要处理片段、别名、接口多态；字段与列的映射一旦维护不住就会漏字段，建议只对少数宽表做</td></tr>
+<tr><td>预加载 JOIN</td><td>在父 resolver 里一次 JOIN 把子数据取出来塞进 parent，子 resolver 直接读 parent</td><td>连 loader 的一次往返都省了，层数固定的场景最划算</td><td>客户端没请求子字段时白做了 JOIN；关系是一对多时行数会膨胀，要在内存里去重</td></tr>
+<tr><td>字段级超时与降级</td><td>给每个外部调用设独立超时，超时返回 null</td><td>一个慢下游不会拖死整个查询</td><td>要求该字段是可空的，否则错误冒泡把父对象打成 null</td></tr>
+</tbody></table>
+
+<p>投影下推这条要特别说一句：它经常被当成 GraphQL 的标配收益宣传，实际落地成本很高。<code>info</code> 里的字段节点要处理内联片段、命名片段、别名、以及接口和联合的多态分支，还要维护字段到列的映射表。<strong>更稳妥的做法是只对确实很宽的表做下推，其他表把列写死在 service 层</strong>。想彻底解决就上支持投影的查询层，但那又引入了另一套复杂度。</p>
+
+<h2>深度与复杂度限制是必需品</h2>
+
+<p>只要你的 GraphQL 端点对外可达，就必须假定有人会构造恶意查询。GraphQL 的特性使得<strong>一个几十字节的查询能让后端产生指数级的工作量</strong>：任意两个互相引用的类型（用户有好友，好友也是用户）就能让攻击者写出无限深的嵌套；即使没有循环引用，深度嵌套加上大 first 参数也足以打满数据库连接池。</p>
+
+<p>更要紧的是，这类请求在 HTTP 层面看完全正常：一个 POST、一个 200、一个正常大小的请求体，WAF 和网关限流都不会拦它。<strong>只按 QPS 限流对 GraphQL 是无效的</strong>，因为一个请求的成本可以是另一个请求的一万倍。</p>
+
+<div class="mermaid">
+flowchart TB
+    subgraph L1["第一道 · 解析与校验阶段"]
+        A1["查询深度限制<br/>建议上限 8 到 12 层"]
+        A2["复杂度评分<br/>字段权重乘分页 size"]
+        A3["别名数量与查询体积限制<br/>防同一字段被重复请求上千次"]
+    end
+    subgraph L2["第二道 · 准入控制"]
+        B1["持久化查询白名单<br/>只放行构建期登记的查询"]
+        B2["对外关闭自省<br/>不把完整 Schema 送给攻击者"]
+    end
+    subgraph L3["第三道 · 执行阶段"]
+        C1["DataLoader 攒批<br/>把次数压成常数级"]
+        C2["字段级超时与并发信号量"]
+        C3["按 operationName 的配额与限流"]
+    end
+    subgraph L4["第四道 · 数据层"]
+        D1["分页 size 服务端强制上限"]
+        D2["连接池与慢查询兜底"]
+    end
+    A1 --> B1
+    A2 --> B1
+    A3 --> B1
+    B1 --> C1
+    B2 --> C1
+    C1 --> D1
+    C2 --> D1
+    C3 --> D2
+</div>
+
+<table>
+<thead><tr><th>防护手段</th><th>建议配置</th><th>能拦住什么</th><th>拦不住什么</th></tr></thead>
+<tbody>
+<tr><td>深度限制</td><td>8 到 12 层，按业务最深合法查询加两层</td><td>循环引用造成的无限嵌套</td><td>浅而宽的查询，比如一层里要 500 条并各带明细</td></tr>
+<tr><td>复杂度评分</td><td>标量 1 分、关联对象 2 到 5 分、列表字段乘 first；总上限先设线上 p99 的两倍</td><td>宽查询与大分页的组合</td><td>权重设得不准时会误杀正常查询，需要按数据先跑影子模式</td></tr>
+<tr><td>别名与体积限制</td><td>请求体不超过 100KB，同名字段别名数量设上限</td><td>用别名把同一个昂贵字段请求上千次</td><td>单个合法但昂贵的字段</td></tr>
+<tr><td>执行超时</td><td>单次执行 3 秒，字段级外部调用 500ms 到 1s</td><td>慢查询堆积把连接池占满</td><td>已经发出去的下游压力</td></tr>
+<tr><td>持久化查询白名单</td><td>构建期生成 manifest，生产只接受 hash</td><td>几乎一切构造型攻击，这是最彻底的方案</td><td>不适用于对外开放的公共 API，那种场景只能靠评分加配额</td></tr>
+<tr><td>自动持久化查询</td><td>省带宽用，不要当安全机制</td><td>什么都拦不住，客户端可以先注册任意查询</td><td>常被误认为等价于白名单，这是个流传很广的误解</td></tr>
+</tbody></table>
+<pre><code class="language-javascript">// server.js —— 深度和复杂度限制必须挂在执行之前，此时还没有任何数据库查询发出去
+import { ApolloServer } from '@apollo/server';
+import depthLimit from 'graphql-depth-limit';
+import { getComplexity, simpleEstimator, fieldExtensionsEstimator } from 'graphql-query-complexity';
+import { GraphQLError } from 'graphql';
+import manifest from './persisted-manifest.json' assert { type: 'json' };
+
+const MAX_DEPTH = 10;         // 业务查询超过 8 层基本都是写错了或在探测
+const MAX_COMPLEXITY = 1000;  // 先按线上 p99 的两倍设，再按周收紧
+
+const complexityPlugin = {
+  async requestDidStart() {
+    return {
+      // didResolveOperation: AST 和变量都有了，但还没开始执行 —— 算分的正确时机
+      async didResolveOperation({ request, document, schema }) {
+        const complexity = getComplexity({
+          schema, query: document, variables: request.variables,
+          estimators: [
+            // 字段上通过 extensions.complexity 声明权重，列表字段按 first 做乘算：
+            // orders 字段权重 2，first=100 时这一支就是 200 分
+            fieldExtensionsEstimator(),
+            simpleEstimator({ defaultComplexity: 1 }),
+          ],
+        });
+        if (complexity &gt; MAX_COMPLEXITY) {
+          throw new GraphQLError('查询过于复杂 ' + complexity, {
+            extensions: { code: 'QUERY_TOO_COMPLEX', complexity, max: MAX_COMPLEXITY,
+                          http: { status: 400 } },
+          });
+        }
+      },
+    };
+  },
+};
+
+// 最彻底的方案：只放行构建期登记过的查询。注意这和 APQ 不是一回事，
+// APQ 允许客户端先注册任意查询再按 hash 调用，只省带宽，不是安全机制。
+const ALLOWED = new Map(Object.entries(manifest));   // sha256 -&gt; query 文本
+const persistedOnlyPlugin = {
+  async requestDidStart({ request }) {
+    if (process.env.NODE_ENV !== 'production') return;
+    const hash = request.extensions?.persistedQuery?.sha256Hash;
+    if (!hash || !ALLOWED.has(hash)) {
+      throw new GraphQLError('查询不在白名单中', {
+        extensions: { code: 'PERSISTED_QUERY_NOT_ALLOWED', http: { status: 400 } },
+      });
+    }
+    request.query = ALLOWED.get(hash);   // 用服务端登记的文本，忽略客户端传来的
+  },
+};
+
+export const server = new ApolloServer({
+  schema,
+  validationRules: [depthLimit(MAX_DEPTH)],   // 校验阶段拦深度
+  plugins: [complexityPlugin, persistedOnlyPlugin],
+  // 还要配超时：单次执行超过 3 秒直接掐掉，避免慢查询堆积把连接池占满
+});</code></pre>
+<h2>怎么发现线上已经存在的 N+1</h2>
+
+<p>N+1 的隐蔽之处在于它<strong>在小数据量下完全不显形</strong>。开发环境十条测试数据，1+10 次查询也就几毫秒，接口看起来挺快；上线后列表页一页 50 条、每条带三层关联，同一段代码就变成几百次查询。所以不能靠「感觉慢了再查」，要主动检测。</p>
+
+<table>
+<thead><tr><th>手段</th><th>怎么做</th><th>怎么判读</th></tr></thead>
+<tbody>
+<tr><td>链路追踪</td><td>打开一次慢请求的 trace，展开 resolver span</td><td>同一个父 span 下出现几十个<strong>同名</strong>子 span，且数量约等于父层返回条数，就是 N+1。链路追踪的接入与采样见站内链路追踪一篇</td></tr>
+<tr><td>SQL 按 digest 聚合</td><td>查 performance_schema 的语句摘要表，或用 pt-query-digest 跑慢日志</td><td>同一 digest 的执行次数远高于请求数，形状又是按主键单条查，基本可以确定没批量</td></tr>
+<tr><td>DataLoader 命中率</td><td>统计每个 loader 的 load 调用次数与 batch 触发次数</td><td>两者比值接近 1 说明每次只攒到一个 key，攒批没生效，通常是 resolver 里提前 await 了别的东西</td></tr>
+<tr><td>开发环境查询计数断言</td><td>在集成测试里包一层数据源计数器，断言单次请求的查询数不超过阈值</td><td>这是唯一能防止 N+1 回归的手段，新加字段时会直接把测试打红</td></tr>
+<tr><td>字段级耗时统计</td><td>用插件按 operationName 加字段名统计总耗时与调用次数</td><td>调用次数异常高的字段就是嫌疑字段，实现见站内 Apollo Server 工程实践一篇</td></tr>
+<tr><td>压测时观察连接池</td><td>压测中看数据库连接等待与活跃连接数</td><td>并发不高但连接池被打满，通常是单请求内查询次数过多，不是并发问题</td></tr>
+</tbody></table>
+
+<div class="callout callout-tip">
+    <div class="callout-icon">✅</div>
+    <div class="callout-title">把查询计数写进测试是性价比最高的一步</div>
+    <p>在测试里给数据源包一层计数器，对关键查询断言「查询次数不超过 6 次」。这条断言会在有人新加一个没走 loader 的关联字段时立刻失败，比任何 code review 都可靠。阈值按查询层数设，不要按数据条数设，因为正确批量化之后次数就该和数据量无关。</p>
+</div>
+
+<h2>反模式速查</h2>
+
+<table>
+<thead><tr><th>反模式</th><th>表现</th><th>后果</th><th>正确做法</th></tr></thead>
+<tbody>
+<tr><td>关联字段不用 DataLoader</td><td>resolver 里直接按 parent.xxxId 查一次</td><td>数据量一上来查询次数线性爆炸</td><td>所有关联字段一律走 loader</td></tr>
+<tr><td>DataLoader 做成全局单例</td><td>在模块顶层创建后复用</td><td>跨请求缓存污染，权限数据泄露，属于安全问题</td><td>在 context 工厂里每请求创建</td></tr>
+<tr><td>batchLoad 返回值不补齐</td><td>直接 return 查询结果</td><td>缺失记录导致数据整体错位，静默串号</td><td>建 Map 后按 keys 顺序取，缺失填 null</td></tr>
+<tr><td>整批抛异常</td><td>batchLoad 里遇到一条坏数据就 throw</td><td>整页字段一起失败</td><td>把 Error 放在对应下标</td></tr>
+<tr><td>没有深度与复杂度限制</td><td>端点裸奔</td><td>一个几十字节的查询就能打满连接池</td><td>校验阶段挂深度限制加复杂度评分</td></tr>
+<tr><td>对外开放自省</td><td>生产环境自省查询可用</td><td>攻击者拿到完整 Schema，能精确构造最贵的查询</td><td>对外关闭或加认证</td></tr>
+<tr><td>把自动持久化查询当白名单</td><td>以为开了 APQ 就安全了</td><td>客户端仍可注册任意查询，防护等于零</td><td>用构建期 manifest 做真正的白名单</td></tr>
+<tr><td>resolver 里串行调多个下游</td><td>连续 await 三个远程调用</td><td>耗时相加，且破坏 DataLoader 的攒批窗口</td><td>能并行的用并行，跨服务批量走 loader</td></tr>
+<tr><td>只按 QPS 限流</td><td>网关按请求数限流就算完事</td><td>请求成本相差几个数量级，限流形同虚设</td><td>按复杂度分数计费式限流</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <p>1. batchLoad 直接返回数据库结果。少一条记录，后面全部错位，A 用户看到 B 用户的数据，不报错、不告警，靠肉眼永远发现不了。</p>
+    <p>2. DataLoader 提到模块顶层。跨请求缓存污染，带权限过滤的数据直接泄露给其他用户，这是安全事故而不是性能问题。</p>
+    <p>3. 一对多的 loader 在没有子项时返回 null。非空列表类型立刻触发错误冒泡，把整个父对象打成 null。</p>
+    <p>4. 在 resolver 里先 await 一个远程调用再 load。攒批窗口被打断，10 个 key 分成 10 批，DataLoader 形同没装。</p>
+    <p>5. maxBatchSize 不设或设得过大。IN 列表几千个 id，执行计划从范围扫描退化成全表扫描，比 N+1 还慢。</p>
+    <p>6. 用 GROUP BY 批量算计数后，没给结果里缺失的 key 补 0。前端拿到 null，展示成空白而不是 0。</p>
+    <p>7. 以为窗口函数到处都能用。MySQL 5.7 不支持，必须退化成 UNION ALL 或受控并发，迁移前要确认版本。</p>
+    <p>8. 给缓存的 key 里不带用户身份维度。带权限过滤的数据被其他用户命中，又是一次越权。</p>
+    <p>9. 只做深度限制不做复杂度评分。一层深、500 条宽、每条再带明细的查询轻松绕过深度限制。</p>
+    <p>10. 复杂度上限凭感觉拍。上线即误杀正常查询，应该先跑影子模式只记录不拦截，按线上分布定阈值。</p>
+    <p>11. 生产环境留着自省和调试沙盒。等于把「哪些字段最贵」的说明书交给攻击者。</p>
+    <p>12. 开发环境数据太少，从来没触发过 N+1。上线当天列表页直接把数据库打满，必须用查询计数断言在 CI 里卡住。</p>
+</div>
+                    </div>
+                </article>
+                <nav class="article-nav">
+                    <a class="nav-prev" href="../apollo/"><span class="nav-label">← 上一篇</span><span class="nav-title">Apollo Server 与 Client 实战</span></a>
+                    <a class="nav-next" href="../federation/"><span class="nav-label">下一篇 →</span><span class="nav-title">GraphQL 微服务架构</span></a>
+                </nav>
+                <aside class="related-card"><h2 class="related-title">同组阅读 · GraphQL</h2><ul class="related-list"><li><a class="side-post" href="../">GraphQL 总览</a></li><li><a class="side-post" href="../intro/">GraphQL 入门</a></li><li><a class="side-post" href="../rest-vs-graphql/">GraphQL vs REST vs gRPC</a></li><li><a class="side-post" href="../apollo/">Apollo Server 与 Client 实战</a></li><li><a class="side-post" href="./">GraphQL 性能与 N+1 问题</a></li><li><a class="side-post" href="../federation/">GraphQL 微服务架构</a></li></ul></aside>
+
+                <div class="share-bar">
+                    <span class="share-label">分享：</span>
+                    <button class="share-btn" data-platform="copy" title="复制链接">🔗</button>
+                    <button class="share-btn" data-platform="twitter" title="分享到 X/Twitter">𝕏</button>
+                    <button class="share-btn" data-platform="weibo" title="分享到微博">📱</button>
+                    <button class="share-btn" data-platform="email" title="邮件分享">✉️</button>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-links">
+            <a href="../../../feed.xml" title="RSS 订阅">
+                <svg viewBox="0 0 24 24"><path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1z"/></svg>
+                RSS 订阅
+            </a>
+            <a href="../../../atom.xml" title="Atom 订阅">Atom</a>
+            <a href="../../../sitemap.xml" title="网站地图">Sitemap</a>
+        </div>
+    </footer>
+
+    <button class="back-to-top" title="回到顶部">↑</button>
+
+        <script defer src="../../../vendor/highlight.min.js"></script>
+
+    
+    <script>window.SITE_BASE = "../../../";window.SITE_GROUP = "api";</script>
+    <script src="../../../js/main.js?v=2" defer></script>
+</body>
+</html>
