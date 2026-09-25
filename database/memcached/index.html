@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../images/logo.jpeg">
-    <title>Memcached - 资深码农</title>
+    <title>Memcached 的内存模型与适用边界 - 资深码农</title>
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Memcached 是读多写少「纯 KV 缓存」场景的首选：协议简单、内存效率高、原生多线程。本页覆盖安装、命令协议、内部结构，以及 2026 年的现状（v1.6.45、Meta 协议、Dragonfly/Valkey 对比），文末可直接查替代选型。">
+        <meta name="description" content="从 slab allocator 的 page 与 chunk 规格讲透 Memcached 的内存模型：chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」，1.5 之后的分段 LRU 与 lru_crawler 到底做了什么，多线程模型与 Redis 单线程的后果差异，客户端一致性哈希在扩缩容时的命中率影响，无持久化无复制的连带风险，以及 CAS 并发更新、value 上限、extstore 与 Redis 的选型矩阵。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,8 +26,8 @@
     <meta name="Google-Extended" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/memcached/">
     <!-- Open Graph -->
-    <meta property="og:title" content="Memcached - 资深码农">
-    <meta property="og:description" content="Memcached 是读多写少「纯 KV 缓存」场景的首选：协议简单、内存效率高、原生多线程。本页覆盖安装、命令协议、内部结构，以及 2026 年的现状（v1.6.45、Meta 协议、Dragonfly/Valkey 对比），文末可直接查替代选型。">
+    <meta property="og:title" content="Memcached 的内存模型与适用边界 - 资深码农">
+    <meta property="og:description" content="从 slab allocator 的 page 与 chunk 规格讲透 Memcached 的内存模型：chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」，1.5 之后的分段 LRU 与 lru_crawler 到底做了什么，多线程模型与 Redis 单线程的后果差异，客户端一致性哈希在扩缩容时的命中率影响，无持久化无复制的连带风险，以及 CAS 并发更新、value 上限、extstore 与 Redis 的选型矩阵。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/memcached/">
     <meta property="og:site_name" content="资深码农">
@@ -37,18 +37,18 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Memcached - 资深码农">
-    <meta name="twitter:description" content="Memcached 是读多写少「纯 KV 缓存」场景的首选：协议简单、内存效率高、原生多线程。本页覆盖安装、命令协议、内部结构，以及 2026 年的现状（v1.6.45、Meta 协议、Dragonfly/Valkey 对比），文末可直接查替代选型。">
+    <meta name="twitter:title" content="Memcached 的内存模型与适用边界 - 资深码农">
+    <meta name="twitter:description" content="从 slab allocator 的 page 与 chunk 规格讲透 Memcached 的内存模型：chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」，1.5 之后的分段 LRU 与 lru_crawler 到底做了什么，多线程模型与 Redis 单线程的后果差异，客户端一致性哈希在扩缩容时的命中率影响，无持久化无复制的连带风险，以及 CAS 并发更新、value 上限、extstore 与 Redis 的选型矩阵。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="数据库与缓存">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Memcached","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Memcached 是读多写少「纯 KV 缓存」场景的首选：协议简单、内存效率高、原生多线程。本页覆盖安装、命令协议、内部结构，以及 2026 年的现状（v1.6.45、Meta 协议、Dragonfly/Valkey 对比），文末可直接查替代选型。","url":"https://www.yijunjun.asia/database/memcached/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/memcached/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Memcached 的内存模型与适用边界","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"从 slab allocator 的 page 与 chunk 规格讲透 Memcached 的内存模型：chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」，1.5 之后的分段 LRU 与 lru_crawler 到底做了什么，多线程模型与 Redis 单线程的后果差异，客户端一致性哈希在扩缩容时的命中率影响，无持久化无复制的连带风险，以及 CAS 并发更新、value 上限、extstore 与 Redis 的选型矩阵。","url":"https://www.yijunjun.asia/database/memcached/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/memcached/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "Memcached", "item": "https://www.yijunjun.asia/database/memcached/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Memcached 入门：从你遇到的问题出发：新项目用 Redis？", "acceptedAnswer": {"@type": "Answer", "text": "现在新项目都用 Redis，不用 Memcached。"}}, {"@type": "Question", "name": "Memcached 入门：从你遇到的问题出发：Redis 更强大？", "acceptedAnswer": {"@type": "Answer", "text": "Redis 支持更多数据结构，功能更全。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Memcached 内存没满为什么还在驱逐数据？", "acceptedAnswer": {"@type": "Answer", "text": "因为 Memcached 的内存不是一个整体，而是以 1MB 的 page 为单位分配给各个 slab class，每个 class 只存落在自己 chunk 规格区间内的 item。一旦全部 page 都被分出去，某个 class 想再存新 item 就只能在本 class 内部驱逐，即使别的 class 还有大量空闲 chunk 也借不过来，这就是 slab 钙化。判定方法是看 stats slabs 里每个 class 的 total_pages 与 free_chunks，再看 stats items 里 evicted 是否集中在少数 class。缓解手段是开启 slab_reassign 与 slab_automove，让后台线程把整个空闲 page 搬到有驱逐压力的 class，但它只能整页搬移，不是实时均衡。"}}, {"@type": "Question", "name": "启动参数里的 -m 是进程内存上限吗？", "acceptedAnswer": {"@type": "Answer", "text": "不是。-m 限制的只是 slab 分配器用于存放 item 的空间上限，哈希表、每个连接的读写缓冲、worker 线程栈、以及 extstore 的写缓冲都不计入。所以进程的 RSS 一定会高于 -m，连接数很大时高出的部分相当可观。容器里给 Memcached 配 limit 时要在 -m 之上留出余量，否则表现为 Memcached 自己认为内存没满，但容器已经被 OOM Killer 干掉。"}}, {"@type": "Question", "name": "Memcached 的 LRU 是简单的链表淘汰吗？", "acceptedAnswer": {"@type": "Answer", "text": "1.5 之后不是。默认开启 lru_maintainer 后，每个 slab class 内部被拆成 HOT、WARM、COLD 三段，短 TTL 的 item 还可以进 TEMP 段。新写入的 item 进 HOT，只有被再次访问过的才会在后台被搬进 WARM，没被访问的降级到 COLD，驱逐只发生在 COLD 段的尾部。另外 lru_crawler 是一个独立的后台爬取线程，负责主动回收已过期但还占着 chunk 的 item；在它出现之前，过期 item 只能等到被访问或被驱逐时才释放空间。"}}, {"@type": "Question", "name": "客户端换一致性哈希就能随便扩容 Memcached 吗？", "acceptedAnswer": {"@type": "Answer", "text": "能把重映射比例从接近全量降到大约 1 除以节点数，但前提是所有客户端的哈希算法、虚拟节点数、服务器列表与权重完全一致。不同语言的客户端默认算法并不一样，Go 的 gomemcache 默认就是 crc32 取模而不是一致性哈希，一个服务换了实现就会和其他服务把同一个 key 写到不同节点，造成长期的读写不一致。扩容期间还要考虑旧节点上仍在被读到的陈旧值，稳妥做法是配合较短的 TTL 和一次可控的冷启动。"}}, {"@type": "Question", "name": "什么场景下还应该选 Memcached 而不是 Redis？", "acceptedAnswer": {"@type": "Answer", "text": "三类场景：一是纯 KV 只读缓存且单机需要吃满多核，Memcached 的多线程模型可以让一个实例把多个核心都用上，Redis 的命令执行仍是单线程；二是海量小对象且对每条数据的内存开销敏感，Memcached 的元数据开销比 Redis 的对象结构更小更可预测；三是希望缓存层足够笨，没有持久化 fork、没有复制积压、没有 Lua 脚本，故障模式少到可以在脑子里穷举。只要业务需要 list、zset、原子脚本、或者缓存不能在重启后为空，就应该选 Redis。"}}, {"@type": "Question", "name": "Memcached 真的完全不能持久化、不能超过内存容量吗？", "acceptedAnswer": {"@type": "Answer", "text": "这个说法需要修正两点。1.5.18 之后有 restart mode，用 -e 指定一个内存映射文件，在正常退出并以相同参数重启时可以恢复缓存内容，但进程被强杀或机器掉电时不保证可用，它解决的是滚动升级而不是数据可靠性。另外 1.5.4 之后有 extstore，用 ext_path 把较大的 value 下沉到 SSD，key 与元数据仍留在内存，这让单机缓存容量可以超过物理内存，代价是命中下沉数据时延迟从微秒级变成 SSD 级别。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -62,7 +62,7 @@
             <button class="nav-toggle" aria-label="打开导航菜单" aria-expanded="false">
                 <span></span><span></span><span></span>
             </button>
-            <nav class="header-nav" aria-label="分组导航"><a href="../backend/">后端</a><a href="../database/">数据库</a><a href="../ai/">AI</a><a href="../devops/">运维</a><a href="../frontend/">前端</a><a href="../tools/">工具</a><a href="../game/">游戏</a><a href="../os/">系统</a><a href="../other/">更多</a></nav>
+            <nav class="header-nav" aria-label="分组导航"><a href="../../backend/">后端</a><a href="../../database/">数据库</a><a href="../../ai/">AI</a><a href="../../devops/">运维</a><a href="../../frontend/">前端</a><a href="../../tools/">工具</a><a href="../../game/">游戏</a><a href="../../os/">系统</a><a href="../../other/">更多</a></nav>
             <div class="header-search">
                 <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                 <input type="search" id="search-input" placeholder="搜索...">
@@ -84,67 +84,305 @@
             <main id="body-content">
 <article class="article">
                     <header class="article-header">
-                        <h1 class="article-title">Memcached 入门：从你遇到的问题出发</h1>
+                        <h1 class="article-title">Memcached 的内存模型与适用边界</h1>
                         <div class="article-meta">
                             <span class="meta-item">🏷️ Memcached</span>
                             <span class="meta-item reading-time"></span>
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲理论，就讲你做项目时会遇到的真实问题，以及Memcached怎么帮你解决。</p>
+<p>Memcached 的对外接口只有十几条命令，但它的实际行为几乎全部由内存分配器决定。<strong>它不是「把 key 塞进堆里」的哈希表，而是一个预先切好格子的板材仓库</strong>：格子规格固定，东西按最接近的格子放，放不进去的空格子闲着也不会借给别人。理解这一层，线上最常见的两个困惑才有答案——为什么 <code>stats</code> 显示还剩很多内存却在疯狂驱逐，以及为什么同样 8GB，Memcached 能装下的小对象比 Redis 多一截。缓存穿透、击穿、雪崩属于访问模式层面的问题，站内缓存架构专篇已有系统讨论，本文只讲 Memcached 自身的内存模型、并发模型与适用边界。</p>
+
+<h2>内存模型：page、slab class、chunk、item 四层</h2>
+
+<p>Memcached 启动时并不会立刻申请 <code>-m</code> 指定的全部内存，而是在运行中按需以 <strong>page</strong>（默认 1MB）为单位向操作系统要内存，然后把这个 page 整块划给某一个 <strong>slab class</strong>。每个 class 有固定的 <strong>chunk</strong> 规格：最小档由 <code>-n</code>（默认 48 字节的数据空间）加上 item 头部决定，往上每一档乘以增长因子 <code>-f</code>（默认 1.25），一直排到单 item 上限。一个 page 被切成 <code>1048576 / chunk_size</code> 个等长 chunk，此后这个 page 只能存这一档的 item。</p>
+
+<p>存一条数据时，真正参与计算的长度是「item 头部（64 位上约 48 字节，启用 CAS 再加 8 字节）+ key（上限 250 字节）+ 后缀 + value」的总和，向上取到最近的 chunk 档。取整产生的差额就是 <strong>slab 内部碎片</strong>：增长因子 1.25 意味着最坏情况下浪费接近 20%，即某个 item 的总长刚好比上一档大 1 字节时，它要独占大 25% 的 chunk。</p>
 
 <div class="mermaid">
 flowchart TB
-    A[缓存] --> B[Redis]
-    B --> C[Memcached]
+    subgraph LIMIT["计入 -m 的 item 空间"]
+        PA["slab page 1MB<br/>已划给 class 5"]
+        PB["slab page 1MB<br/>已划给 class 13"]
+        CA["chunk 240B 共 4369 个"]
+        CB["chunk 1480B 共 708 个"]
+        IT["item = 头部 48B 起 + key + 后缀 + value<br/>向上取整到 chunk 规格"]
+    end
+    subgraph OUTSIDE["不计入 -m 的内存"]
+        HT["哈希表 hashpower 默认 16 即 65536 桶"]
+        CB2["每连接读写缓冲 随 -c 放大"]
+        TH["worker 线程栈与临时缓冲"]
+    end
+    PA --> CA
+    PB --> CB
+    CA --> IT
+    CB --> IT
+    LIMIT --> RSS["进程实际 RSS"]
+    OUTSIDE --> RSS
 </div>
 
-<h2>1. Redis 和 Memcached 选哪个</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>做缓存选 Redis 还是 Memcached？</p>
-</div>
-
-<p><strong>怎么解决？</strong>现在基本都用 Redis，功能全。Memcached 只有简单 KV，现在用得少了。</p>
-
-<h2>2. Memcached 是什么</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>听说 Memcached 是老的缓存，是什么？</p>
-</div>
-
-<p><strong>怎么解决？</strong>分布式内存对象缓存系统，简单 KV 缓存，比 Redis 老。</p>
-
-<h2>3. 什么时候用 Memcached</h2>
-
-<div class="callout callout-info">
-<div class="callout-title">你遇到的问题</div>
-<p>什么场景还用 Memcached？</p>
-</div>
-
-<p><strong>怎么解决？</strong>纯简单 KV 缓存，不需要持久化和复杂数据结构，Memcached 更轻量。</p>
-
-<h2>Redis vs Memcached</h2>
+<p>这张图里最容易被忽略的是右边那个 subgraph：<strong><code>-m</code> 限制的只是 item 空间，不是进程内存上限</strong>。哈希表、每个连接的读写缓冲、线程栈都在它之外，连接数上万时这部分不是零头。容器里按 <code>-m</code> 的数值设 memory limit，结果就是 Memcached 自己觉得内存没满、容器已经被 OOM Killer 杀掉。</p>
 
 <table>
-<thead><tr><th>对比</th><th>Redis</th><th>Memcached</th></tr></thead>
+<thead><tr><th>slab class</th><th>chunk_size</th><th>每 page chunk 数</th><th>覆盖的 item 总长区间</th><th>最坏取整浪费</th></tr></thead>
 <tbody>
-<tr><td>数据结构</td><td>丰富</td><td>只有字符串</td></tr>
-<tr><td>持久化</td><td>支持</td><td>不支持</td></tr>
-<tr><td>集群</td><td>支持</td><td>简单一致性哈希</td></tr>
+<tr><td>1</td><td>96</td><td>10922</td><td>1 - 96</td><td>—</td></tr>
+<tr><td>5</td><td>240</td><td>4369</td><td>193 - 240</td><td>约 19.6%（存 194B）</td></tr>
+<tr><td>9</td><td>600</td><td>1747</td><td>481 - 600</td><td>约 19.7%（存 482B）</td></tr>
+<tr><td>13</td><td>1480</td><td>708</td><td>1185 - 1480</td><td>约 19.9%（存 1186B）</td></tr>
+<tr><td>14</td><td>1856</td><td>564</td><td>1481 - 1856</td><td>约 20.1%（存 1482B）</td></tr>
+<tr><td>末档</td><td>1048576</td><td>1</td><td>接近单 item 上限</td><td>一个 page 只放一条</td></tr>
 </tbody></table>
 
-<div class="echart-container" id="memcached-vs-redis"></div>
+<p>这张表的用法不是背数字，而是<strong>把业务 value 的长度分布对着 chunk 档去看</strong>。如果你的序列化结果集中在 1190 字节左右，那每条都在浪费近 300 字节；把序列化格式换紧一点让它落回 1184 档，同样内存能多装两成 item。反过来，调小 <code>-f</code>（比如 1.08）能让档位更密、浪费更小，代价是 slab class 数量变多，每个 class 都要至少占一个 page，钙化的概率随之上升——小实例上尤其明显。</p>
 
+<h2>「内存没满却在驱逐」的根因与判定</h2>
 
-<div class="callout callout-tip">
-<div class="callout-title">新手最容易踩的坑</div>
-<ul>
-<li><strong>新项目用 Redis</strong>现在新项目都用 Redis，不用 Memcached。</li>
-<li><strong>Redis 更强大</strong>Redis 支持更多数据结构，功能更全。</li>
-</ul>
+<p>这是 Memcached 最经典的线上现象：监控上 <code>bytes</code> 离 <code>limit_maxbytes</code> 还有距离，<code>evictions</code> 却一直在涨。根因是 page 一旦划给某个 slab class 就长期属于它，而<strong>驱逐是 class 内部的事</strong>：class 13 要写新 item 时，只会在 class 13 的 LRU 尾部踢掉一个，哪怕 class 5 有几百个空闲 chunk 也借不过来。这个现象叫 slab 钙化（calcification），典型触发条件是业务 value 的长度分布发生了变化——上线一次改版，序列化结果从 800 字节变成 1300 字节，于是新档位没 page 可用、老档位的 page 全在空转。</p>
+
+<div class="mermaid">
+flowchart TB
+    S["evictions 持续增长"] --> Q1{"bytes 是否接近 limit_maxbytes"}
+    Q1 -->|"接近"| A1["容量确实不足<br/>扩内存或压缩 value 与 TTL"]
+    Q1 -->|"差距很大"| Q2{"stats slabs 的 total_pages 之和是否已吃满 -m"}
+    Q2 -->|"已吃满"| Q3{"stats items 的 evicted 是否集中在少数 class"}
+    Q2 -->|"没吃满"| A2["查 outofmemory 与超限写入<br/>可能是 value 超过单 item 上限被拒"]
+    Q3 -->|"集中"| A3["slab 钙化<br/>开 slab_reassign 与 slab_automove"]
+    Q3 -->|"分散"| A4["写入体积分布整体上移<br/>核对 mem_requested 与 total_malloced 差额"]
+</div>
+
+<pre><code class="language-bash"># 1) 全局水位：bytes 对 limit_maxbytes 看容量，evictions 看驱逐速率
+printf 'stats\r\nquit\r\n' | nc -q1 127.0.0.1 11211 | grep -E 'STAT (bytes|limit_maxbytes|curr_items|evictions|reclaimed|get_hits|get_misses) '
+
+# 2) 分 slab class 看钙化：对比 chunk_size / total_pages / used_chunks / free_chunks
+#    某个 class free_chunks 长期很大、另一个 class 一直在驱逐，就是钙化
+printf 'stats slabs\r\nquit\r\n' | nc -q1 127.0.0.1 11211
+
+# 3) 驱逐来源定位：evicted 是本 class 被踢的条数，evicted_unfetched 是写进来一次都没被读过就被踢的
+#    age 是 LRU 尾部 item 的存活秒数，它比命中率更能说明缓存到底留得住多久
+printf 'stats items\r\nquit\r\n' | nc -q1 127.0.0.1 11211
+
+# 4) 取整浪费的量化：total_malloced 是已分配给 slab 的字节，mem_requested 是 item 真实请求的字节
+#    两者差额 = chunk 取整浪费 + 空闲 chunk，占比超过 25% 就值得回头调 value 体积或 -f
+printf 'stats slabs\r\nquit\r\n' | nc -q1 127.0.0.1 11211 | grep -E 'mem_requested|total_malloced'</code></pre>
+
+<table>
+<thead><tr><th>指标组合</th><th>根因</th><th>验证动作</th><th>处理方向</th></tr></thead>
+<tbody>
+<tr><td>bytes 远低于 limit_maxbytes，total_pages 已满，evicted 集中在个别 class</td><td>slab 钙化</td><td>stats slabs 对比各 class 的 free_chunks</td><td>启用 slab_reassign 与 slab_automove；长期方案是收敛 value 体积分布</td></tr>
+<tr><td>total_malloced 与 mem_requested 差额大，各 class 都有驱逐</td><td>chunk 取整浪费叠加</td><td>按 class 算 used_chunks × chunk_size 与 mem_requested 的比</td><td>压缩序列化结果让它落回低一档；或调小 -f 加密档位</td></tr>
+<tr><td>evicted_unfetched 占 evicted 比例高</td><td>写进缓存的数据根本没人读</td><td>stats items 逐 class 对比 evicted 与 evicted_unfetched</td><td>停掉无效写入，别让冷数据挤热数据</td></tr>
+<tr><td>reclaimed 与 expired_unfetched 很高，驱逐却不多</td><td>大量 item 到期后才被动回收</td><td>确认 lru_crawler 是否开启、crawler_reclaimed 是否在涨</td><td>开启 lru_crawler，短 TTL 数据考虑 TEMP LRU</td></tr>
+<tr><td>outofmemory 非零</td><td>以 -M 启动，内存满后拒绝写入而不驱逐</td><td>stats items 看 outofmemory，客户端看 SERVER_ERROR</td><td>确认是否真的需要 -M；多数缓存场景不该用</td></tr>
+</tbody></table>
+
+<h2>分段 LRU、TEMP LRU 与 lru_crawler</h2>
+
+<p>「Memcached 就是一条简单的 LRU 链表」这个说法在 1.5 之后已经不成立。开启 <code>lru_maintainer</code>（1.5 起默认开启）后，<strong>每个 slab class 内部被拆成 HOT、WARM、COLD 三段</strong>，另有一个用于极短 TTL 数据的 TEMP 段。新写入的 item 先进 HOT；HOT 有比例上限，超出后尾部 item 按「期间是否被再次访问过」分流：被访问过的搬进 WARM，没被访问的降级到 COLD。<strong>驱逐只发生在 COLD 段的尾部</strong>，COLD 里的 item 若被命中，会被异步标记并搬回 WARM。这个设计的目的和 Redis 的近似 LRU 类似——避免一次全量扫描把整个热集冲掉。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> HOT: set 写入
+    HOT --> WARM: 期间被再次访问过
+    HOT --> COLD: 期间未被访问
+    WARM --> COLD: 尾部长期未命中
+    COLD --> WARM: 被命中后异步搬回
+    COLD --> [*]: 本 class 内存不足时从尾部驱逐
+    [*] --> TEMP: TTL 小于 temporary_ttl 的写入
+    TEMP --> [*]: 到期由 lru_crawler 回收 不参与搬移
+    note right of COLD
+        lru_maintainer 线程负责段间搬移
+        lru_crawler 线程负责主动回收过期 item
+        两者都是后台异步 不在请求路径上
+    end note
+</div>
+
+<p><code>lru_crawler</code> 是另一个常被误解的点。<strong>Memcached 的过期是惰性的：TTL 到了不等于 chunk 被释放</strong>，item 仍然占着位置，直到被访问（此时返回 miss 并释放）或被驱逐。lru_crawler 就是为此存在的后台线程，它按 class 爬取 LRU 并回收已过期的 item，对应的统计是 <code>crawler_reclaimed</code>。所以在一个写入量不大、但 TTL 普遍很短的实例上，如果关掉 crawler，你会看到「curr_items 里很多是死人、活数据却在被驱逐」。<code>lru_crawler metadump all</code> 还是唯一正当的 key 枚举方式——Memcached 没有 KEYS 命令，也不该有。</p>
+
+<table>
+<thead><tr><th>参数</th><th>默认</th><th>作用</th><th>调错的后果</th></tr></thead>
+<tbody>
+<tr><td>-o modern</td><td>1.5+ 大部分已默认</td><td>一次性打开分段 LRU、lru_crawler、slab_reassign 等现代选项</td><td>用老版本参数跑新版本，白白退回 1.4 行为</td></tr>
+<tr><td>slab_automove</td><td>1</td><td>0 关闭，1 保守搬移长期空闲的 page，2 激进搬移</td><td>设 2 时在体积分布抖动的负载下会来回搬 page，浪费 CPU 并制造毛刺</td></tr>
+<tr><td>lru_crawler_sleep</td><td>100（微秒）</td><td>爬取每步之间的休眠，越小回收越快、CPU 占用越高</td><td>设 0 在大实例上会明显抢占 worker 的 CPU</td></tr>
+<tr><td>hot_lru_pct / warm_lru_pct</td><td>20 / 40</td><td>HOT 与 WARM 段占本 class 内存的比例上限</td><td>HOT 给太大，一次批量写入就能把热数据推进 COLD</td></tr>
+<tr><td>temporary_ttl</td><td>61（秒）</td><td>TTL 低于此值的 item 进 TEMP 段，不参与段间搬移</td><td>业务 TTL 普遍小于它时，等于所有数据都走 TEMP，分段 LRU 失效</td></tr>
+</tbody></table>
+
+<h2>多线程模型：与 Redis 单线程的后果差异</h2>
+
+<p>Memcached 默认 <code>-t 4</code> 个 worker 线程，每个线程有独立的事件循环，新连接由主线程分派后就固定在某个 worker 上；item 与哈希桶由细粒度锁保护，所以<strong>单实例可以线性地吃掉多个 CPU 核心</strong>。Redis 的命令执行始终是单线程（io-threads 只并行化网络收发与协议解析），这不是缺陷而是取舍，但它带来几个具体后果上的差异。</p>
+
+<table>
+<thead><tr><th>维度</th><th>Memcached（多线程）</th><th>Redis（单线程执行）</th><th>工程含义</th></tr></thead>
+<tbody>
+<tr><td>单实例纵向扩展</td><td>提高 -t 可利用多核，瓶颈通常先到网卡与内存带宽</td><td>单核打满即为上限，需要多实例或 Cluster 分片</td><td>大机器上跑纯 KV 缓存，Memcached 实例数可以少很多</td></tr>
+<tr><td>慢操作的影响面</td><td>一个连接上的大 value 读写只拖累它所属的 worker</td><td>一条慢命令阻塞所有客户端</td><td>Redis 侧必须严禁 KEYS、大 key 的全量取回</td></tr>
+<tr><td>原子性范围</td><td>单 key 命令原子（含 CAS、incr、add），没有跨 key 事务</td><td>单线程天然串行，支持 MULTI 与 Lua 的跨 key 原子</td><td>需要「读改写多个 key」的逻辑，Memcached 只能靠 CAS 重试或外部锁</td></tr>
+<tr><td>尾延迟来源</td><td>锁竞争、slab 搬移、网络缓冲</td><td>另有持久化 fork、大 key 释放、过期批量清理</td><td>Memcached 的延迟曲线更平，没有 RDB fork 造成的秒级抖动</td></tr>
+<tr><td>线程数配置</td><td>一般不超过物理核数；过多会加剧锁竞争</td><td>io-threads 通常 2 到 4 就到收益拐点</td><td>两边都不是「越大越好」</td></tr>
+</tbody></table>
+
+<p>顺带纠正一个常见结论：「Redis 比 Memcached 快」和「Memcached 比 Redis 快」都不成立，因为它们在不同维度上快。<strong>单连接单命令的延迟两者在同一量级</strong>（都是内存操作加一次网络往返，微秒级），差异体现在单实例总吞吐（Memcached 因多线程更高）和功能密度（Redis 更高）。任何脱离并发度、value 大小、命令类型的「快 N 倍」结论都没有意义。Redis 的单线程事件循环、编码转换阈值与持久化细节，详见站内 Redis 深度原理。</p>
+
+<h2>客户端分片：扩缩容会打掉多少命中率</h2>
+
+<p>Memcached 服务端之间互相不知道彼此存在——<strong>没有集群协议，没有槽位，没有请求转发</strong>。分片完全由客户端决定，这带来一个后果：分片策略的正确性取决于「所有客户端是否算得一样」，而不是服务端配置。这是分布式缓存里最容易长期带病运行的地方。</p>
+
+<table>
+<thead><tr><th>分片策略</th><th>4 节点扩到 5 时的 key 重映射</th><th>5 缩到 4 时的重映射</th><th>实现要点</th><th>踩坑点</th></tr></thead>
+<tbody>
+<tr><td>哈希取模（如 Go 的 gomemcache 默认 crc32 取模）</td><td>约 80%</td><td>约 75%</td><td>实现最简单，节点列表顺序即语义</td><td>任何节点数变化都接近全量失效，扩容瞬间回源压力打满数据库</td></tr>
+<tr><td>Ketama 一致性哈希（libmemcached、PHP memcached 等）</td><td>约 1/5</td><td>约 1/5</td><td>需统一虚拟节点数（常见 160 个/节点）与节点命名格式</td><td>不同客户端的虚拟节点数或名字拼法不同，环就不一样，同一 key 落到不同节点</td></tr>
+<tr><td>Rendezvous 哈希（pymemcache HashClient 默认）</td><td>约 1/5</td><td>约 1/5</td><td>无需建环，按 key 对每个节点算权重取最大</td><td>节点数很多时计算成本随节点数线性增长</td></tr>
+<tr><td>按业务前缀静态分组</td><td>只影响被搬动的那组</td><td>同上</td><td>把 key 空间按业务显式切开，各组独立扩容</td><td>组内热点无法通过加节点缓解，容量规划要按组做</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+sequenceDiagram
+    participant CA as 客户端 A
+    participant CB as 客户端 B
+    participant N2 as 节点 2
+    participant N3 as 节点 3
+    participant DB as 数据库
+    N2 --x CA: 连续超时 触发自动摘除
+    CA ->> DB: 回源读取 user 9
+    DB -->> CA: 最新值
+    CA ->> N3: set user 9 为最新值
+    N3 -->> CA: STORED
+    Note over CB,N2: 客户端 B 的超时与探活阈值更长 仍认为节点 2 健康
+    CB ->> N2: get user 9
+    N2 -->> CB: 返回摘除前的旧值
+    Note over CA,DB: 同一个 key 在两个客户端眼里落在不同节点 读到互相矛盾的数据
+</div>
+
+<p>这张图说明<strong>客户端自动摘除（auto-eject）是一把双刃剑</strong>：它把节点故障变成了分片拓扑变更，而各客户端的拓扑变更不同步，同一个 key 就有了两份寿命不同的副本。节点恢复后更糟——被摘除期间写在别处的新值不会回流，旧节点上的陈旧值重新开始服务，直到 TTL 到期。可用的取舍只有几种：不开自动摘除（节点故障时该分片直接回源，用限流保护数据库）、开自动摘除但把 TTL 压到分钟级、或者把摘除决策上移到统一的配置中心让所有客户端同时生效。</p>
+
+<pre><code class="language-python">from pymemcache.client.hash import HashClient
+
+# HashClient 默认用 Rendezvous 哈希，不是取模，加减节点只影响约 1/N 的 key
+# 注意三个容易埋雷的默认值：
+#   default_noreply=True 会让 set/add/cas 的返回值失去意义，务必显式关掉
+#   ignore_exc=False 时节点故障会向上抛异常；设 True 则表现为 cache miss，
+#     看着更平滑，但会把节点故障静默转成数据库压力，必须配合回源限流
+#   dead_timeout 默认 60 秒，决定被摘除节点多久后重新探活
+client = HashClient(
+    [("10.0.0.11", 11211), ("10.0.0.12", 11211), ("10.0.0.13", 11211)],
+    use_pooling=True,
+    max_pool_size=16,
+    default_noreply=False,
+    ignore_exc=False,
+    timeout=0.2,
+    connect_timeout=0.2,
+    retry_attempts=2,
+    retry_timeout=1,
+    dead_timeout=10,
+)
+
+# 多 key 读取要用 get_many，客户端会按分片归并成每节点一次批量请求
+# 逐个 get 的开销不在服务端，而在 N 次网络往返
+rows = client.get_many([b"user:1", b"user:2", b"user:3"])</code></pre>
+
+<h2>无持久化、无复制的直接后果</h2>
+
+<p>Memcached 没有主从复制，也没有常规意义上的持久化。这条特性的真正含义不是「数据可能丢」——缓存本来就允许丢——而是<strong>它的失效是整节点、瞬时、全量的</strong>。一个 32GB 的实例重启，等于瞬间把这一分片的全部回源流量推给数据库。要评估风险，看的不是命中率，而是「假设这一片缓存现在归零，数据库能不能扛住这一片的全量 QPS」。</p>
+
+<table>
+<thead><tr><th>场景</th><th>Memcached 的实际行为</th><th>连带风险</th><th>缓解手段</th></tr></thead>
+<tbody>
+<tr><td>正常退出并原参数重启，且配置了 restart mode（-e 指定映射文件）</td><td>缓存内容可以恢复</td><td>参数或版本变化即失效，且不覆盖崩溃场景</td><td>把它当滚动升级工具用，不要当可靠性方案</td></tr>
+<tr><td>kill -9、宿主 OOM、掉电</td><td>缓存全空</td><td>本分片回源 QPS 瞬间 100%</td><td>回源侧必须有并发上限或单飞合并，见站内缓存架构专篇</td></tr>
+<tr><td>整集群滚动重启</td><td>逐节点清空</td><td>叠加起来可能形成持续数分钟的高回源</td><td>逐节点间隔足够长；重启后按热 key 列表做预热</td></tr>
+<tr><td>扩容加节点</td><td>取模策略下接近全量重映射</td><td>相当于一次自发的缓存雪崩</td><td>先确认客户端是一致性哈希；扩容放在低峰并分批</td></tr>
+<tr><td>节点故障被客户端摘除后恢复</td><td>旧数据重新对外服务</td><td>陈旧读，且不同客户端结论不一致</td><td>恢复前清空该节点，或让 TTL 足够短</td></tr>
+<tr><td>业务需要「缓存里的数据不能丢」</td><td>Memcached 无法满足</td><td>把会话、去重标记、计数器放进来就会真丢业务</td><td>换 Redis 并配持久化与复制，或把权威数据落库</td></tr>
+</tbody></table>
+
+<h2>CAS、add 与并发更新的边界</h2>
+
+<p>Memcached 常被说成「不支持原子操作」，这是错的。每个 item 都带一个 64 位的 <code>cas</code> 版本号，<code>gets</code> 会连同版本号返回，<code>cas</code> 命令只在版本号未变时写入成功，否则返回 <code>EXISTS</code>（key 已不存在则返回 <code>NOT_FOUND</code>）。这是一个<strong>单 key 的乐观锁</strong>，足以正确实现「读-改-写」；<code>add</code>（仅当 key 不存在时写入）则是一个天然的抢占原语，常用于分布式互斥或防止并发回源。</p>
+
+<pre><code class="language-python">from pymemcache.client.base import Client
+
+# default_noreply=False 是必须的：pymemcache 默认 noreply=True，
+# 此时 set/add/cas 一律返回 True，CAS 冲突会被静默吞掉
+client = Client(("127.0.0.1", 11211), default_noreply=False,
+                timeout=0.2, connect_timeout=0.2)
+
+def bump_counter(key, max_retry=3):
+    """单 key 读改写：用 CAS 保证并发安全，冲突过多则交给上层降级"""
+    for _ in range(max_retry):
+        value, cas = client.gets(key)
+        if cas is None:
+            # key 不存在：add 只会让一个并发者成功，其余返回 False 后重走一轮
+            if client.add(key, b"1", expire=300):
+                return 1
+            continue
+        new = str(int(value) + 1).encode()
+        # cas 返回 False 说明期间被别人改过，必须重读，绝不能退化成 set
+        if client.cas(key, new, cas, expire=300):
+            return int(new)
+    return None
+
+def acquire_lock(key, token, ttl=10):
+    """用 add 做互斥：成功即持有。注意 ttl 必须大于临界区最长耗时，
+    否则锁提前过期会出现两个持有者；释放时应校验 token 再删"""
+    return client.add(key, token, expire=ttl)</code></pre>
+
+<p>两个必须知道的边界。第一，<code>incr</code> / <code>decr</code> 只对「看起来像十进制数字」的 value 生效，对不存在的 key 返回 <code>NOT_FOUND</code> 而不会当 0 处理，<code>decr</code> 不会低于 0，而且它们<strong>不会刷新 TTL</strong>——用它做限流计数时，计数窗口的起点由第一次 <code>add</code> 决定。第二，<code>exptime</code> 的语义有个流传很久的坑：<strong>数值大于 2592000（30 天）时被解释为绝对 Unix 时间戳</strong>，而不是相对秒数。有人想设「一年有效」填 31536000，实际得到的是 1971 年的某个时刻，item 写进去立刻就是过期状态。要设超过 30 天就老老实实传时间戳。</p>
+
+<h2>value 上限、大对象与 extstore</h2>
+
+<p>单 item 默认上限 1MB，可用 <code>-I</code> 调整（下限 1k）。超限的 <code>set</code> 会收到 <code>SERVER_ERROR object too large for cache</code>，而不是静默截断——但很多客户端把这类 SERVER_ERROR 当成连接级错误处理，于是表现为「偶发连接重建 + 缓存写不进去」，排查时要盯客户端日志而不是服务端。1.4.29 之后 Memcached 支持把超过 <code>slab_chunk_max</code> 的大 item 拆成多个 chunk 链式存储，所以调大 <code>-I</code> 不会把 page 也变成那么大，但链式 item 的分配与释放成本更高，且更容易在大档 class 上制造钙化。</p>
+
+<p>关于「Memcached 容量不能超过内存」，1.5.4 之后也需要修正：<strong>extstore 允许把较大的 value 下沉到 SSD</strong>，key 与元数据仍常驻内存。适用前提很明确——value 不能太小（元数据开销会吃掉收益，默认只下沉超过 <code>ext_item_size</code> 的 item），访问要有明显冷热分层（命中下沉数据的延迟从微秒级变成 SSD 级别），并且要接受写放大带来的盘寿命消耗。</p>
+
+<h2>选择矩阵：什么时候 Memcached 仍然更好</h2>
+
+<p>2026 年选缓存的默认答案是 Redis，这没错，但「Memcached 已经没用了」是懒惰的结论。Memcached 的价值恰恰在于它<strong>功能少到故障模式可以穷举</strong>：没有持久化就没有 fork 抖动，没有复制就没有主从延迟和脑裂，没有脚本就没人能在缓存层写业务逻辑。对于一层纯粹的、丢了就回源的只读缓存，这些「缺失」都是优点。</p>
+
+<div class="mermaid">
+flowchart TB
+    S["要加一层缓存"] --> Q1{"业务需要 list set zset 或跨 key 原子逻辑吗"}
+    Q1 -->|"需要"| R["选 Redis"]
+    Q1 -->|"不需要"| Q2{"缓存归零后能靠回源自愈吗"}
+    Q2 -->|"不能 数据必须在重启后仍存在"| R
+    Q2 -->|"能"| Q3{"是海量小对象且单实例要吃满多核吗"}
+    Q3 -->|"是"| M["选 Memcached"]
+    Q3 -->|"否"| Q4{"团队已经在运维 Redis 了吗"}
+    Q4 -->|"是"| R2["复用 Redis 减少组件数"]
+    Q4 -->|"否"| M
+</div>
+
+<table>
+<thead><tr><th>维度</th><th>Memcached</th><th>Redis</th><th>选择含义</th></tr></thead>
+<tbody>
+<tr><td>数据模型</td><td>只有字节串 KV 与少量数值操作</td><td>list/hash/set/zset/stream/bitmap 等</td><td>只要用到第二个结构，就别在 Memcached 上模拟</td></tr>
+<tr><td>单实例多核</td><td>worker 多线程，可线性扩展</td><td>命令执行单线程</td><td>大机器少实例 vs 小实例多分片，直接影响部署密度</td></tr>
+<tr><td>每条数据的内存开销</td><td>item 头 48 字节起 + chunk 取整</td><td>对象结构 + 编码 + 分配器取整，通常更高且随类型变化</td><td>亿级小 KV 的场景，Memcached 的优势是实打实的</td></tr>
+<tr><td>持久化与复制</td><td>无（restart mode 仅覆盖优雅重启）</td><td>RDB/AOF、主从、Sentinel、Cluster</td><td>缓存内容有「不可重建」成分时必须 Redis</td></tr>
+<tr><td>集群与路由</td><td>客户端分片，服务端互不感知</td><td>Cluster 槽位 + 服务端重定向</td><td>Memcached 的拓扑一致性责任全在客户端</td></tr>
+<tr><td>可运维面</td><td>命令与统计项都少，故障模式可穷举</td><td>功能多，误用面也大（大 key、慢命令、脚本）</td><td>团队规模小、缓存职责单一时，少即是多</td></tr>
+<tr><td>冷数据下沉</td><td>extstore 支持下沉 SSD</td><td>社区版无（需商业版或换方案）</td><td>超内存容量的纯缓存，Memcached 反而有路可走</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">最容易踩的坑</div>
+    <ul>
+        <li>把 <code>-m</code> 当进程内存上限，容器 limit 按它设置，结果哈希表加连接缓冲把容器撑爆被 OOM Kill。</li>
+        <li>看到 <code>bytes</code> 没到 <code>limit_maxbytes</code> 就断定「内存够」，忽略 <code>stats slabs</code> 里 page 早已全部分完，驱逐其实是 slab 钙化。</li>
+        <li>value 序列化结果刚好越过 chunk 档（比如 1186 字节落进 1480 档），白扔 20% 内存却查不出原因。</li>
+        <li><code>exptime</code> 填了大于 2592000 的秒数，被当成绝对时间戳，数据写进去就是过期的。</li>
+        <li>用 <code>incr</code> 做限流计数，误以为它会刷新 TTL，导致窗口边界和预期不符；或忘了 key 不存在时 <code>incr</code> 返回 NOT_FOUND 而不是从 0 开始。</li>
+        <li>pymemcache 等客户端默认 <code>noreply=True</code>，<code>set</code>/<code>add</code>/<code>cas</code> 永远返回 True，CAS 冲突和写失败被静默吞掉。</li>
+        <li>不同语言的服务连同一个 Memcached 集群，一边 crc32 取模一边 ketama，同一个 key 有两份互不相干的缓存。</li>
+        <li>扩容时直接往客户端配置里加一台机器，取模策略下接近全量重映射，等于给数据库来一次人造雪崩。</li>
+        <li>开了客户端自动摘除却没管节点恢复，故障节点回来后继续供应陈旧值直到 TTL 到期。</li>
+        <li>关掉或忘了 <code>lru_crawler</code>，大量已过期 item 占着 chunk，活数据反而被驱逐。</li>
+        <li>把会话、幂等标记、分布式锁这类「丢了就出业务问题」的数据放进 Memcached，一次重启直接变成线上事故。</li>
+        <li><code>slab_automove=2</code> 在体积分布抖动的负载上反复搬页，CPU 和延迟毛刺同时上升。</li>
+    </ul>
 </div>
 
                     </div>
@@ -178,158 +416,9 @@ flowchart TB
     </footer>
 
     <button class="back-to-top" title="回到顶部">↑</button>
-<script>
-    function buildEchartOption(opt, isDark) {
-            var textColor = isDark ? '#c9d1d9' : '#333';
-            var axisColor = isDark ? '#555' : '#888';
-            var splitColor = isDark ? '#30363d' : '#e8e8e8';
-            var common = {
-                color: ['#00add8', '#dc382d', '#9c27b0', '#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6'],
-                title: { textStyle: { color: textColor, fontSize: 15, fontWeight: 600 }, subtextStyle: { color: axisColor } },
-                legend: { textStyle: { color: textColor }, top: 30 },
-                tooltip: { trigger: 'item' },
-                grid: { left: '8%', right: '5%', bottom: '8%', top: '18%', containLabel: true }
-            };
-
-            if (opt.type === 'radar') {
-                return Object.assign(common, {
-                    tooltip: { trigger: 'item' },
-                    radar: {
-                        indicator: opt.indicators || [],
-                        shape: 'polygon',
-                        splitNumber: 5,
-                        axisName: { color: textColor, fontSize: 12 },
-                        splitLine: { lineStyle: { color: splitColor } },
-                        splitArea: { areaStyle: { color: isDark ? ['rgba(255,255,255,0.02)', 'rgba(255,255,255,0.05)'] : ['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.04)'] } },
-                        axisLine: { lineStyle: { color: splitColor } }
-                    },
-                    series: [{
-                        type: 'radar',
-                        data: (opt.series || []).map(function (s) {
-                            return { name: s.name, value: s.value, areaStyle: { opacity: 0.15 } };
-                        })
-                    }]
-                });
-            }
-
-            if (opt.type === 'bar') {
-                var categories = opt.categories || [];
-                var series = (opt.series || []).map(function (s) {
-                    return {
-                        name: s.name,
-                        type: 'bar',
-                        data: s.value,
-                        itemStyle: { borderRadius: [4, 4, 0, 0] }
-                    };
-                });
-                return Object.assign(common, {
-                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-                    xAxis: { type: 'category', data: categories, axisLabel: { color: textColor, fontSize: 11 }, axisLine: { lineStyle: { color: splitColor } } },
-                    yAxis: { type: 'value', axisLabel: { color: textColor }, splitLine: { lineStyle: { color: splitColor } } },
-                    series: series
-                });
-            }
-
-            if (opt.type === 'pie') {
-                return Object.assign(common, {
-                    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-                    series: [{
-                        type: 'pie',
-                        radius: ['35%', '65%'],
-                        center: ['50%', '55%'],
-                        data: (opt.series || []).map(function (s) {
-                            return { name: s.name, value: s.value };
-                        }),
-                        label: { color: textColor, fontSize: 12 },
-                        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } }
-                    }]
-                });
-            }
-
-            if (opt.type === 'gauge') {
-                return Object.assign(common, {
-                    tooltip: { show: false },
-                    series: [{
-                        type: 'gauge',
-                        data: opt.series || [],
-                        axisLine: { lineStyle: { width: 12 } },
-                        detail: { formatter: '{value}%', color: textColor, fontSize: 16 }
-                    }]
-                });
-            }
-
-            if (opt.type === 'line') {
-                var cats = opt.categories || [];
-                var lseries = (opt.series || []).map(function (s) {
-                    return { name: s.name, type: 'line', data: s.value, smooth: true, symbolSize: 6 };
-                });
-                return Object.assign(common, {
-                    tooltip: { trigger: 'axis' },
-                    xAxis: { type: 'category', data: cats, axisLabel: { color: textColor, fontSize: 11 }, axisLine: { lineStyle: { color: splitColor } } },
-                    yAxis: { type: 'value', axisLabel: { color: textColor }, splitLine: { lineStyle: { color: splitColor } } },
-                    series: lseries
-                });
-            }
-
-            // Fallback: pass option through directly
-            return Object.assign(common, opt.option || {});
-        }
-</script>
 
     <script>window.SITE_BASE = "../../";window.SITE_GROUP = "database";</script>
     <script defer src="../../vendor/highlight.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-    <script>
-        function initMemcachedCharts() {
-            if (typeof echarts === 'undefined') {
-                setTimeout(initMemcachedCharts, 100);
-                return;
-            }
-            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            var textColor = isDark ? '#c9d1d9' : '#333';
-            var splitColor = isDark ? '#30363d' : '#e8e8e8';
-
-            var el = document.getElementById('memcached-vs-redis');
-            if (el) {
-                var chart = echarts.init(el);
-                var option = {
-                    title: { text: 'Memcached vs Redis 性能对比', left: 'center', textStyle: { color: textColor, fontSize: 15, fontWeight: 600 } },
-                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-                    legend: { top: 30 },
-                    grid: { left: '8%', right: '5%', bottom: '10%', top: '20%', containLabel: true },
-                    xAxis: {
-                        type: 'category',
-                        data: ['简单 KV', '多线程', '数据结构', '持久化', '集群支持'],
-                        axisLabel: { color: textColor, fontSize: 11 },
-                        axisLine: { lineStyle: { color: splitColor } }
-                    },
-                    yAxis: {
-                        type: 'value',
-                        max: 10,
-                        axisLabel: { color: textColor },
-                        splitLine: { lineStyle: { color: splitColor } }
-                    },
-                    series: [
-                        {
-                            name: 'Memcached',
-                            type: 'bar',
-                            data: [10, 10, 3, 1, 4],
-                            itemStyle: { borderRadius: [4, 4, 0, 0], color: '#8b5cf6' }
-                        },
-                        {
-                            name: 'Redis',
-                            type: 'bar',
-                            data: [9, 5, 10, 10, 9],
-                            itemStyle: { borderRadius: [4, 4, 0, 0], color: '#ef4444' }
-                        }
-                    ]
-                };
-                chart.setOption(option);
-                window.addEventListener('resize', function() { chart.resize(); });
-            }
-        }
-        initMemcachedCharts();
-    </script>
     <script defer src="../../js/main.js?v=2"></script>
 </body>
 </html>
