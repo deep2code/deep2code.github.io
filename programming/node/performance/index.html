@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="一套可执行的 Node.js 性能诊断流程：先用事件循环延迟直方图与 eventLoopUtilization 分诊「阻塞、下游慢、内存」三类问题；CPU profile 与火焰图的采集方式对照及判读规则（宽度是采样占比、找平顶、等待类问题采不到栈）；堆内与堆外的边界说明为何堆上限不能配成容器 limit；三快照法定位泄漏与六类常见泄漏源；trace-gc 日志判读、trace-sync-io 定位同步阻塞；压测为何必须看 p99 并防范协调遗漏；prom-client 暴露事件循环延迟、堆分代、GC 与活跃句柄等 Node 特有指标的可抄代码。">
+        <meta name="description" content="性能诊断三段式：先给四类数据的采集命令与各自回答什么问题（常开的事件循环延迟直方图、--cpu-prof 与 inspector 按需采 30 秒、heapsnapshot-signal 拍快照、--trace-gc 与 0x 火焰图），再讲延迟直方图与 eventLoopUtilization 怎么区分在算与在等、火焰图三条判读规则与六种形状、堆内堆外边界与三快照法、GC 日志判读、压测的协调遗漏、生产该暴露的四类运行时指标，最后给从症状到工具的分诊矩阵与反模式对照。">
     <meta name="keywords" content="Node.js,性能优化,V8,隐藏类,内联缓存,内存泄漏,clinic.js,GC,流式处理,集群模式,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/node/performance/">
     <!-- Open Graph -->
     <meta property="og:title" content="Node.js 性能诊断：事件循环延迟、内存与火焰图 - 资深码农">
-    <meta property="og:description" content="一套可执行的 Node.js 性能诊断流程：先用事件循环延迟直方图与 eventLoopUtilization 分诊「阻塞、下游慢、内存」三类问题；CPU profile 与火焰图的采集方式对照及判读规则（宽度是采样占比、找平顶、等待类问题采不到栈）；堆内与堆外的边界说明为何堆上限不能配成容器 limit；三快照法定位泄漏与六类常见泄漏源；trace-gc 日志判读、trace-sync-io 定位同步阻塞；压测为何必须看 p99 并防范协调遗漏；prom-client 暴露事件循环延迟、堆分代、GC 与活跃句柄等 Node 特有指标的可抄代码。">
+    <meta property="og:description" content="性能诊断三段式：先给四类数据的采集命令与各自回答什么问题（常开的事件循环延迟直方图、--cpu-prof 与 inspector 按需采 30 秒、heapsnapshot-signal 拍快照、--trace-gc 与 0x 火焰图），再讲延迟直方图与 eventLoopUtilization 怎么区分在算与在等、火焰图三条判读规则与六种形状、堆内堆外边界与三快照法、GC 日志判读、压测的协调遗漏、生产该暴露的四类运行时指标，最后给从症状到工具的分诊矩阵与反模式对照。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/node/performance/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Node.js 性能诊断：事件循环延迟、内存与火焰图 - 资深码农">
-    <meta name="twitter:description" content="一套可执行的 Node.js 性能诊断流程：先用事件循环延迟直方图与 eventLoopUtilization 分诊「阻塞、下游慢、内存」三类问题；CPU profile 与火焰图的采集方式对照及判读规则（宽度是采样占比、找平顶、等待类问题采不到栈）；堆内与堆外的边界说明为何堆上限不能配成容器 limit；三快照法定位泄漏与六类常见泄漏源；trace-gc 日志判读、trace-sync-io 定位同步阻塞；压测为何必须看 p99 并防范协调遗漏；prom-client 暴露事件循环延迟、堆分代、GC 与活跃句柄等 Node 特有指标的可抄代码。">
+    <meta name="twitter:description" content="性能诊断三段式：先给四类数据的采集命令与各自回答什么问题（常开的事件循环延迟直方图、--cpu-prof 与 inspector 按需采 30 秒、heapsnapshot-signal 拍快照、--trace-gc 与 0x 火焰图），再讲延迟直方图与 eventLoopUtilization 怎么区分在算与在等、火焰图三条判读规则与六种形状、堆内堆外边界与三快照法、GC 日志判读、压测的协调遗漏、生产该暴露的四类运行时指标，最后给从症状到工具的分诊矩阵与反模式对照。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta name="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "Node.js 性能诊断：事件循环延迟、内存与火焰图", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "一套可执行的 Node.js 性能诊断流程：先用事件循环延迟直方图与 eventLoopUtilization 分诊「阻塞、下游慢、内存」三类问题；CPU profile 与火焰图的采集方式对照及判读规则（宽度是采样占比、找平顶、等待类问题采不到栈）；堆内与堆外的边界说明为何堆上限不能配成容器 limit；三快照法定位泄漏与六类常见泄漏源；trace-gc 日志判读、trace-sync-io 定位同步阻塞；压测为何必须看 p99 并防范协调遗漏；prom-client 暴露事件循环延迟、堆分代、GC 与活跃句柄等 Node 特有指标的可抄代码。", "url": "https://www.yijunjun.asia/programming/node/performance/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/node/performance/"}, "articleSection": "后端与编程语言"}</script>    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Node.js 总览", "item": "https://www.yijunjun.asia/programming/node/"}, {"position": 4, "name": "Node.js 性能优化", "item": "https://www.yijunjun.asia/programming/node/performance/"}]}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "Node.js 性能诊断：事件循环延迟、内存与火焰图", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "性能诊断三段式：先给四类数据的采集命令与各自回答什么问题（常开的事件循环延迟直方图、--cpu-prof 与 inspector 按需采 30 秒、heapsnapshot-signal 拍快照、--trace-gc 与 0x 火焰图），再讲延迟直方图与 eventLoopUtilization 怎么区分在算与在等、火焰图三条判读规则与六种形状、堆内堆外边界与三快照法、GC 日志判读、压测的协调遗漏、生产该暴露的四类运行时指标，最后给从症状到工具的分诊矩阵与反模式对照。", "url": "https://www.yijunjun.asia/programming/node/performance/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/node/performance/"}, "articleSection": "后端与编程语言"}</script>    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Node.js 总览", "item": "https://www.yijunjun.asia/programming/node/"}, {"position": 4, "name": "Node.js 性能优化", "item": "https://www.yijunjun.asia/programming/node/performance/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Node.js 性能问题应该按什么顺序排查", "acceptedAnswer": {"@type": "Answer", "text": "先分诊再选工具。第一步看事件循环延迟直方图，p99 高说明主线程被阻塞，此时再看 CPU：CPU 单核满载是 JS 同步计算，抓 CPU profile 找平顶函数；CPU 不满是同步 IO，用 trace-sync-io 定位。第二步如果延迟正常就看内存，RSS 持续上涨且 GC 后老生代基线抬升就是泄漏。第三步都正常就看下游 RT 和连接池等待，以及 libuv 线程池是否排队。一上来就抓火焰图是最常见的浪费，因为等待类问题在火焰图上完全看不到。"}}, {"@type": "Question", "name": "怎么采集 Node 的事件循环延迟", "acceptedAnswer": {"@type": "Answer", "text": "用 perf_hooks 的 monitorEventLoopDelay 创建一个原生直方图，传入 resolution 采样间隔，建议 10 毫秒，然后调用 enable 开始采集。读数时注意返回值单位是纳秒，除以一百万才是毫秒。每个上报周期结束后要调用 reset，否则分位数会变成进程启动以来的累计值。经验阈值是 p99 小于 10 毫秒健康，10 到 50 毫秒需要观察，超过 50 毫秒已经影响长尾，超过 200 毫秒基本可以断定有同步代码在跑。配合 eventLoopUtilization 可以区分是在算还是在等。"}}, {"@type": "Question", "name": "火焰图应该怎么读，为什么有时看不出问题", "acceptedAnswer": {"@type": "Answer", "text": "横轴宽度是采样命中次数的占比，不是时间顺序也不是绝对耗时，同一层左右相邻的框没有先后关系。要找的是平顶，也就是某个函数自身占了很宽一条且上面没有子调用，说明时间花在它自己的代码里。看不出问题通常有两种情况：一是等待类的慢，等数据库、等下游、等线程池时进程在内核里睡着，采样器采不到 JS 栈，图会很窄；二是采样时间窗口没覆盖到慢请求。整体很窄且总采样数很少，本身就是一条强信号，说明瓶颈不在 CPU。"}}, {"@type": "Question", "name": "为什么不能把 max-old-space-size 配成容器内存上限", "acceptedAnswer": {"@type": "Answer", "text": "因为 V8 堆只是 Node 进程内存的一部分。Buffer 与 ArrayBuffer 的实际字节、原生模块分配、线程栈、已编译代码和 V8 元数据都在堆外，不受堆上限约束。把堆上限配成等于容器上限，意味着堆刚用满时进程总占用已经超过容器限制，结果是被容器直接杀掉，拿不到 OOM 堆栈也来不及导出快照。正确做法是给堆外留出足够余量，具体比例取决于业务用 Buffer 的多少，并同时监控 rss 与 external 两个指标。"}}, {"@type": "Question", "name": "Node 内存泄漏怎么用堆快照定位", "acceptedAnswer": {"@type": "Answer", "text": "用三快照法。在服务稳定后拍第一张作为基线，跑一段真实业务后拍第二张，再跑同样一段后拍第三张。在浏览器开发者工具的内存面板用比较视图，先比较第二张与第一张，再比较第三张与第二张，只关注两次比较里都持续增长的构造函数，只在一次里增长的多半是缓存预热或惰性初始化。锁定对象后看引用链面板，链条顶端就是没有释放的持有者。生产环境用 heapsnapshot-signal 启动参数配合信号触发，不要开调试端口。"}}, {"@type": "Question", "name": "压测为什么必须看 p99 而不是 QPS", "acceptedAnswer": {"@type": "Answer", "text": "QPS 是结果而不是目标。同样五万 QPS，p99 是五毫秒还是五百毫秒是两个完全不同的系统，而用户体验取决于长尾。平均延迟更不可信，它会把一千次零点二毫秒加一次八百毫秒算成一毫秒左右。还要警惕协调遗漏：固定连接数的压测工具在响应变慢时会自然降低发压速率，慢请求的样本数反而减少，测出的分布比真实情况乐观。对抗办法是用恒定速率模式发压并把排队时间计入延迟，同时确认压测客户端自身 CPU 没有打满。"}}]}</script>
@@ -89,35 +89,106 @@
                         </div>
                     </header>
                     <div class="article-content">
-<h2>先分诊，再动工具</h2>
-<p>Node 服务变慢的原因就三大类：<strong>主线程被阻塞</strong>、<strong>等下游</strong>、<strong>内存与 GC</strong>。三类的工具、指标、修法完全不同，先分诊再选工具能省掉一半时间。最常见的错误是一上来就抓火焰图——如果问题是等下游，火焰图里什么都看不到，因为等待不消耗 CPU，采样器根本采不到。</p>
-<div class="mermaid">
-flowchart TD
-    S["接口 p99 变高"] --> Q1{"事件循环延迟 p99<br/>是否达到几十毫秒"}
-    Q1 -->|"是"| Q2{"CPU 是否单核接近满载"}
-    Q2 -->|"是"| A1["JS 同步计算<br/>抓 CPU profile 找平顶"]
-    Q2 -->|"否"| A2["同步 IO 或大对象序列化<br/>用 trace-sync-io 定位"]
-    Q1 -->|"否"| Q3{"RSS 是否持续上涨不回落"}
-    Q3 -->|"是"| Q4{"堆用量涨 还是堆外涨"}
-    Q4 -->|"堆内"| A3["JS 对象泄漏<br/>三快照法比较增量"]
-    Q4 -->|"堆外"| A4["Buffer 或原生模块泄漏<br/>查流未消费与 native addon"]
-    Q3 -->|"否"| Q5{"下游数据库或 HTTP 的 p99<br/>是否同步升高"}
-    Q5 -->|"是"| A5["下游问题<br/>看连接池等待与超时配置"]
-    Q5 -->|"否"| A6["看线程池排队<br/>fs 与 crypto 并发是否超过池规模"]
+<p>性能问题的难点不在工具多，而在<strong>先采什么</strong>。Node 服务变慢只有三大类原因——主线程被阻塞、在等下游、内存与 GC——每一类对应一套不同的数据，采错了就会得出「工具没用」的结论。最典型的浪费是一上来抓火焰图：如果问题是等下游，等待不消耗 CPU，采样器采不到任何栈，图是空的。这篇先把四类数据的采集命令和它们各自能回答的问题列清楚，再讲每类数据怎么判读，最后给从症状到工具的分诊矩阵。事件循环为什么会被卡住见 <a href="../event-loop/">事件循环的六个阶段</a>，堆上限与容器 limit 的配比见 <a href="../">Node.js 后端的适用边界</a>。</p>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：四类数据（事件循环延迟、CPU profile、堆快照、GC 与火焰图）的采集命令、产物、各自回答什么问题、什么时候不该采，外加一段生产环境按需采 30 秒 profile 的最小实现。</li>
+        <li><strong>② 原理</strong>：延迟直方图是怎么测出来的与为什么看分位不看均值、火焰图的三条判读规则与六种形状、堆内堆外的边界与三快照法、GC 日志的判读、压测的协调遗漏、以及生产该暴露哪四类运行时指标。</li>
+        <li><strong>③ 场景</strong>：从症状到工具的分诊矩阵、按场景的采集决策与代价、反模式对照，以及什么时候该停止在 Node 里挖。</li>
+    </ul>
 </div>
+
+<h2>① 用法 · 四类数据怎么采，各自回答什么问题</h2>
+<p>这一层只给命令和产物。判读规则在原理层，选哪一类在场景层。先看全景：</p>
 <table>
-<thead><tr><th>观测信号</th><th>指向哪一类问题</th><th>为什么这么判</th><th>下一步动作</th></tr></thead>
+<thead><tr><th>数据类型</th><th>怎么采</th><th>产物</th><th>回答什么问题</th><th>什么时候不要采</th></tr></thead>
 <tbody>
-<tr><td>事件循环延迟 p99 高、CPU 单核满</td><td>JS 同步计算</td><td>采样器能采到执行中的栈</td><td><code>--cpu-prof</code> 找平顶函数</td></tr>
-<tr><td>事件循环延迟 p99 高、CPU 不满</td><td>同步 IO 或换页</td><td>阻塞在系统调用上，不占用户态 CPU</td><td><code>--trace-sync-io</code>、检查 <code>*Sync</code> 调用</td></tr>
-<tr><td>延迟正常、下游 RT 同步升高</td><td>下游或连接池</td><td>本进程没被拖住，等待在外部</td><td>看连接池等待时间、超时与重试</td></tr>
-<tr><td>延迟正常、RSS 持续上涨</td><td>内存泄漏</td><td>GC 回收不掉，老生代基线抬升</td><td>三快照法 + <code>--trace-gc</code></td></tr>
-<tr><td>延迟毛刺周期性出现</td><td>GC 停顿或定时任务</td><td>周期与 GC 日志或 cron 对得上</td><td><code>--trace-gc</code> 对齐时间戳</td></tr>
-<tr><td>延迟正常、CPU 不高、下游也不慢</td><td>libuv 线程池排队</td><td>等待发生在池队列里，三个指标都看不见</td><td>统计 fs/crypto/zlib 并发，详见 <a href="../event-loop/">事件循环篇</a></td></tr>
+<tr><td>事件循环延迟直方图</td><td><code>perf_hooks.monitorEventLoopDelay</code>，常开</td><td>p50 / p99 / max，单位纳秒</td><td>主线程有没有被阻塞、单次最长阻塞多久</td><td>没有负载时采——空载永远接近 0，说明不了任何事</td></tr>
+<tr><td>CPU profile</td><td><code>--cpu-prof</code>，或生产用 inspector 按需采 30 秒</td><td><code>.cpuprofile</code>，导入 Chrome DevTools</td><td>CPU 时间花在哪个函数上</td><td>怀疑「在等」的时候采——等待不占 CPU，图会是空的</td></tr>
+<tr><td>堆快照</td><td><code>--heapsnapshot-signal=SIGUSR2</code> 加发信号</td><td><code>.heapsnapshot</code>，Memory 面板比较</td><td>谁在持有内存、引用链的顶端是谁</td><td>单张快照就下结论；快照期间进程会停顿且文件可能上 GB</td></tr>
+<tr><td>GC 日志</td><td><code>--trace-gc</code></td><td>每次回收的类型与前后堆用量</td><td>是不是泄漏（基线是否抬升）、停顿有多长</td><td>需要长期保留时——日志量大，按需开或采样开</td></tr>
+<tr><td>火焰图（含原生栈）</td><td><code>npx 0x -- node app.js</code></td><td>交互式 HTML，含 libuv 与 GC 帧</td><td>瓶颈是不是在原生层或 GC 里</td><td>生产常驻——它要求以特定方式启动进程</td></tr>
 </tbody>
 </table>
+<p>对应的命令如下，四段可以分别单独用：</p>
+<pre><code class="language-bash"># 1) 事件循环延迟：这是唯一需要常开的一项，代码见原理层
+#    临时观测可以用 -r 预加载探针，不改业务代码
+node -r ./metrics/loop.js server.js
 
-<h2>事件循环延迟：最该先接的指标</h2>
+# 2) CPU profile（压测环境）：进程正常退出时落盘
+node --cpu-prof --cpu-prof-dir=./prof server.js
+#    产物 CPU.&lt;时间戳&gt;.cpuprofile → Chrome DevTools 的 Performance 面板导入
+#    注意必须让进程正常退出（SIGINT 可以，SIGKILL 不行），否则没有文件
+
+# 3) 堆快照：启动时声明信号，随后按需触发，一次业务周期前后各拍一张
+node --heapsnapshot-signal=SIGUSR2 server.js
+kill -SIGUSR2 $(pgrep -f 'node server.js')     # 每次生成一个 .heapsnapshot
+#    不要用 SIGUSR1：Node 用它启动调试器，等于在生产开了一个代码执行入口
+
+# 4) GC 日志：判断泄漏最硬的证据，忽略新生代回收以便看清老生代基线
+node --trace-gc --trace-gc-ignore-scavenger server.js 2&gt;&amp;1 | tee gc.log
+
+# 5) 火焰图含原生栈：怀疑瓶颈在 libuv 或 GC 时才需要
+npx 0x -- node server.js
+
+# 6) 压测：固定速率而不是固定连接数，并确认压测机自己没打满
+npx autocannon -c 100 -d 30 --renderStatusCodes http://127.0.0.1:3000/api/users</code></pre>
+<p>生产环境不能长期开 profiling，但需要「出问题的那 30 秒」。标准做法是留一个只监听回环地址的管控入口，按需开关：</p>
+<pre><code class="language-javascript">// admin/profile.js —— 生产按需采 30 秒 CPU profile
+// 安全前提：只监听 127.0.0.1，不注册到服务发现，不走公网入口。
+// 如果必须经网关访问，网关侧要加内网鉴权，否则等于把 profile 与源码结构公开。
+const http = require('node:http')
+const fs = require('node:fs')
+const inspector = require('node:inspector')
+
+let busy = false   // 同一时刻只允许一个采样，避免叠加开销
+
+function takeCpuProfile(ms, cb) {
+  const session = new inspector.Session()
+  session.connect()                              // 连到本进程的 inspector，不开调试端口
+  session.post('Profiler.enable', () =&gt; {
+    session.post('Profiler.start', () =&gt; {
+      setTimeout(() =&gt; {
+        session.post('Profiler.stop', (err, { profile } = {}) =&gt; {
+          session.disconnect()                   // 必须断开，否则采样器一直挂着
+          if (err) return cb(err)
+          const file = '/tmp/cpu-' + Date.now() + '.cpuprofile'
+          fs.writeFile(file, JSON.stringify(profile), (e) =&gt; cb(e, file))
+        })
+      }, ms).unref()
+    })
+  })
+}
+
+http.createServer((req, res) =&gt; {
+  if (req.url !== '/admin/cpuprof' || busy) { res.statusCode = busy ? 429 : 404; return res.end() }
+  busy = true
+  // 30 秒是经验值：短于 10 秒采样点太少，长于 60 秒开销与文件体积都不划算
+  takeCpuProfile(30_000, (err, file) =&gt; {
+    busy = false
+    res.statusCode = err ? 500 : 200
+    res.end(err ? String(err) : file)
+  })
+}).listen(9229 + 1, '127.0.0.1')   // 显式绑回环；端口不要和业务端口共用</code></pre>
+<table>
+<thead><tr><th>要回答什么</th><th>先采哪一类</th><th>判读的关键一眼</th></tr></thead>
+<tbody>
+<tr><td>服务是不是被主线程阻塞了</td><td>事件循环延迟直方图（加压之后再看）</td><td>p99 到几十毫秒即存在长同步段；<code>max</code> 直接等于单次最长阻塞</td></tr>
+<tr><td>阻塞发生在哪个函数</td><td>CPU profile</td><td>找自身很宽、上面没有子调用的「平顶」</td></tr>
+<tr><td>内存为什么一直涨</td><td>GC 日志先行，再拍三张堆快照</td><td>Mark-Compact 之后的堆用量是否逐次抬升</td></tr>
+<tr><td>是堆内还是堆外在涨</td><td><code>process.memoryUsage()</code> 的时间序列</td><td><code>heapUsed</code> 平稳而 <code>external</code> 与 <code>rss</code> 上涨即堆外</td></tr>
+<tr><td>延迟毛刺是不是 GC 造成的</td><td>GC 日志与延迟时间戳对齐</td><td>毛刺时刻能对上 Mark-Compact 行</td></tr>
+<tr><td>瓶颈是不是在原生层</td><td><code>0x</code> 火焰图</td><td>宽的帧落在 libuv 或 GC 而不是 JS 函数上</td></tr>
+<tr><td>压测结论能不能信</td><td>压测客户端自身的 CPU 与发压速率</td><td>客户端打满、或速率随服务变慢而下降，数据即作废</td></tr>
+</tbody>
+</table>
+<p>每一类数据的具体判读——直方图为什么不能看均值、火焰图的形状怎么对应原因、快照怎么比较——下面逐节展开。</p>
+
+<h2>② 原理 · 事件循环延迟：指标怎么来的，怎么判读</h2>
+<p>搞清这一节能解决一个常见反问：CPU 才 12%，你凭什么说服务过载了。</p>
 <p><code>perf_hooks.monitorEventLoopDelay</code> 返回一个原生直方图，内部用固定间隔的定时器测「本该在 t 时刻醒来，实际几点醒的」，单位是<strong>纳秒</strong>。它比 CPU 使用率灵敏得多：任何形式的主线程阻塞都会立刻体现在 p99 上，而 CPU 使用率在多核机器上被平均掉，单核打满时整机可能只有 12%。</p>
 <pre><code class="language-javascript">// metrics/loop.js —— 生产可直接抄
 const { monitorEventLoopDelay, performance } = require('node:perf_hooks')
@@ -154,8 +225,10 @@ setInterval(() =&gt; {
     <div class="callout-title">为什么看直方图而不是平均值</div>
     <p>平均延迟会把「1000 次 0.2ms + 1 次 800ms」算成 1ms 左右，看起来完全健康，而那 1 次 800ms 已经让几百个并发请求集体超时。直方图的 <code>max</code> 字段尤其重要：它直接告诉你单次最长阻塞，是判断「有没有同步大计算」最快的一个数。</p>
 </div>
+<p>两个维度配合起来才能分出「在算」和「在等」：延迟高且 ELU 也高，说明主线程真的在执行 JavaScript，该去采 CPU profile；延迟高但 ELU 低，说明主线程醒得晚却没在干活，典型是同步 IO、内存换页或者被 CFS 限流。</p>
 
-<h2>CPU 火焰图：怎么采，怎么读</h2>
+<h2>② 原理 · CPU 火焰图：怎么采，怎么读</h2>
+<p>搞清这一节能解决那个最常见的误判：图里一片空白就怀疑工具坏了。</p>
 <p>Node 自带的 <code>--cpu-prof</code> 已经够用，不需要额外装东西；<code>0x</code> 和 <code>clinic</code> 的价值在于把内核栈、libuv 栈一起画进来，以及生成更好读的交互页面。</p>
 <table>
 <thead><tr><th>方式</th><th>怎么采</th><th>产物</th><th>能看到 C++ / 内核栈吗</th><th>适用场景</th></tr></thead>
@@ -179,28 +252,9 @@ setInterval(() =&gt; {
 <tr><td><code>compile</code> / <code>deoptimize</code> 帧明显</td><td>反复去优化</td><td>同一函数传入形状不一致的对象</td><td>固定对象形状，避免联合类型热路径</td></tr>
 </tbody>
 </table>
-<pre><code class="language-bash"># 1) 压测环境：直接开 CPU profile，退出时落盘到当前目录
-node --cpu-prof --cpu-prof-dir=./prof app.js
-# 产物 CPU.20260923.*.cpuprofile → Chrome DevTools 的 Performance 面板导入
 
-# 2) 生产环境：不要长期开 profiling（有额外开销），按需采 30 秒
-#    用信号触发堆快照更安全，Node 18+ 支持
-node --heapsnapshot-signal=SIGUSR2 app.js &amp;
-kill -USR2 $(pgrep -f "node app.js")      # 每次触发生成一个 .heapsnapshot
-
-# 3) GC 日志：判断老生代是否回落
-node --trace-gc --trace-gc-ignore-scavenger app.js 2&gt;&amp;1 | tee gc.log
-# 关注每行末尾的 heap 用量：Mark-Compact 之后的值如果一路抬升不回落，就是泄漏
-
-# 4) 同步 IO 巡检：只在开发或预发开，命中时打印调用栈
-node --trace-sync-io app.js
-
-# 5) 压测：看 p99，别只看 QPS
-npx autocannon -c 100 -d 30 -p 10 --renderStatusCodes http://127.0.0.1:3000/api/users
-#   -c 连接数，-d 秒数，-p 单连接流水线深度（不确定就不要开，默认 1 更接近真实）
-#   同时盯住压测机自己的 CPU：客户端打满时测出来的延迟全是假的</code></pre>
-
-<h2>内存：堆内、堆外与容器上限</h2>
+<h2>② 原理 · 内存：堆内、堆外与容器上限</h2>
+<p>搞清这一节能解决两个问题：为什么容器被杀却没有 OOM 堆栈，以及怎么把「涨了」变成「谁在持有」。</p>
 <p>一句结论先给：<strong>堆上限不能配成容器内存上限</strong>。Node 进程的内存除了 V8 堆，还有 Buffer、原生模块、线程栈、代码与元数据，这些都在堆外，不受 <code>--max-old-space-size</code> 约束。把堆上限配成和容器 limit 相等，等于承诺「堆用满时进程正好占满容器」，而实际上还要加上堆外那一块，结果是被容器直接杀掉，连 OOM 堆栈都拿不到。堆上限与容器 limit 的取值关系详见 <a href="../">Node.js 总览</a>。</p>
 <div class="mermaid">
 flowchart TB
@@ -275,7 +329,8 @@ class BoundedCache {
 // 因为你不会知道它是在正常工作还是已经长到了上限并开始疯狂淘汰。
 module.exports = { BoundedCache }</code></pre>
 
-<h2>GC 观测与同步阻塞定位</h2>
+<h2>② 原理 · GC 观测与同步阻塞定位</h2>
+<p>搞清这一节能解决「内存涨了到底要不要调堆上限」这个决定——绝大多数情况下答案是不要。</p>
 <p><code>--trace-gc</code> 的每一行都会打印这次回收的类型和前后堆用量。判读只看两件事：<strong>Mark-Compact 之后的堆用量是否回落到一个稳定基线</strong>，以及<strong>单次停顿时长</strong>。Scavenge（新生代）通常在 1ms 量级，频繁但便宜；Mark-Compact 是几十到几百毫秒的停顿，如果每分钟出现好几次，说明老生代压力已经很大。</p>
 <table>
 <thead><tr><th>GC 日志形态</th><th>判定</th><th>动作</th></tr></thead>
@@ -289,7 +344,8 @@ module.exports = { BoundedCache }</code></pre>
 </table>
 <p>同步阻塞有两条互补的定位路径。第一条是 <code>--trace-sync-io</code>：进程启动完成后，任何一次同步 IO 调用都会打印警告和调用栈，直接指出代码位置——只在开发和预发环境开，因为它本身有开销。第二条是反推：事件循环延迟直方图的 <code>max</code> 和 p99 已经告诉你「单次最长阻塞有多久」，用这个数去对照日志时间戳，通常能定位到某个特定接口或定时任务。</p>
 
-<h2>压测要看什么</h2>
+<h2>② 原理 · 压测要看什么</h2>
+<p>搞清这一节能解决一类返工：压测数据很漂亮，上线之后长尾全面超时。</p>
 <p>压测最常见的三个错误：只看 QPS、用平均延迟、以及压测客户端自己成了瓶颈。QPS 是结果而不是目标，同样 5 万 QPS，p99 是 5ms 还是 500ms 是两个完全不同的系统。更隐蔽的是<strong>协调遗漏</strong>：很多压测工具在响应变慢时会自然降低发压速率（因为连接被占住），结果「服务变慢」这件事本身减少了慢请求的样本数，测出来的延迟分布比真实情况乐观得多。对抗办法是固定发压速率（恒定 RPS 模式）而不是固定连接数，并把队列等待时间计入延迟。系统性的压测方法论与容量规划详见站内 <a href="../../../observability/performance/">后端性能优化</a> 分组。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -310,7 +366,8 @@ sequenceDiagram
     Note over Tool,Dev: 再看 Retainers 引用链<br/>链条顶端就是没有释放的持有者
 </div>
 
-<h2>生产可观测性：暴露 Node 特有指标</h2>
+<h2>② 原理 · 生产可观测性：暴露 Node 特有指标</h2>
+<p>搞清这一节能解决「故障发生时没有数据可看」——排查工具再熟，没有常驻指标也只能等它复发。</p>
 <p>通用的 QPS、延迟、错误率任何语言都一样，Node 真正需要额外暴露的是运行时自身的四类指标：事件循环延迟、堆分代用量、GC 次数与耗时、活跃句柄与请求数。最后一项经常被忽略，但它是「句柄泄漏」和「优雅关闭卡住」最直接的证据。</p>
 <pre><code class="language-javascript">// metrics/index.js —— prom-client 暴露 Node 运行时指标
 const { collectDefaultMetrics, Registry, Gauge } = require('prom-client')
@@ -357,7 +414,48 @@ module.exports = { registry, metricsHandler }</code></pre>
     <p>三条就够用：事件循环延迟 p99 连续 5 分钟超过 50ms；GC 后老生代用量占堆上限超过 80%；活跃句柄数在 10 分钟内单调递增。前两条覆盖了阻塞与内存，第三条能在句柄泄漏演变成 OOM 之前几个小时就报出来。</p>
 </div>
 
-<h2>反模式对照</h2>
+<h2>③ 场景 · 从症状到工具的分诊矩阵</h2>
+<p>把前面的工具和判读收成一个入口：先按观测信号分诊，再决定采哪一类数据，别反过来。</p>
+<div class="mermaid">
+flowchart TD
+    S["接口 p99 变高"] --> Q1{"事件循环延迟 p99<br/>是否达到几十毫秒"}
+    Q1 -->|"是"| Q2{"CPU 是否单核接近满载"}
+    Q2 -->|"是"| A1["JS 同步计算<br/>抓 CPU profile 找平顶"]
+    Q2 -->|"否"| A2["同步 IO 或大对象序列化<br/>用 trace-sync-io 定位"]
+    Q1 -->|"否"| Q3{"RSS 是否持续上涨不回落"}
+    Q3 -->|"是"| Q4{"堆用量涨 还是堆外涨"}
+    Q4 -->|"堆内"| A3["JS 对象泄漏<br/>三快照法比较增量"]
+    Q4 -->|"堆外"| A4["Buffer 或原生模块泄漏<br/>查流未消费与 native addon"]
+    Q3 -->|"否"| Q5{"下游数据库或 HTTP 的 p99<br/>是否同步升高"}
+    Q5 -->|"是"| A5["下游问题<br/>看连接池等待与超时配置"]
+    Q5 -->|"否"| A6["看线程池排队<br/>fs 与 crypto 并发是否超过池规模"]
+</div>
+<table>
+<thead><tr><th>观测信号</th><th>指向哪一类问题</th><th>为什么这么判</th><th>下一步动作</th></tr></thead>
+<tbody>
+<tr><td>事件循环延迟 p99 高、CPU 单核满</td><td>JS 同步计算</td><td>采样器能采到执行中的栈</td><td><code>--cpu-prof</code> 找平顶函数</td></tr>
+<tr><td>事件循环延迟 p99 高、CPU 不满</td><td>同步 IO 或换页</td><td>阻塞在系统调用上，不占用户态 CPU</td><td><code>--trace-sync-io</code>、检查 <code>*Sync</code> 调用</td></tr>
+<tr><td>延迟正常、下游 RT 同步升高</td><td>下游或连接池</td><td>本进程没被拖住，等待在外部</td><td>看连接池等待时间、超时与重试</td></tr>
+<tr><td>延迟正常、RSS 持续上涨</td><td>内存泄漏</td><td>GC 回收不掉，老生代基线抬升</td><td>三快照法 + <code>--trace-gc</code></td></tr>
+<tr><td>延迟毛刺周期性出现</td><td>GC 停顿或定时任务</td><td>周期与 GC 日志或 cron 对得上</td><td><code>--trace-gc</code> 对齐时间戳</td></tr>
+<tr><td>延迟正常、CPU 不高、下游也不慢</td><td>libuv 线程池排队</td><td>等待发生在池队列里，三个指标都看不见</td><td>统计 fs/crypto/zlib 并发，详见 <a href="../event-loop/">事件循环篇</a></td></tr>
+</tbody>
+</table>
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>线上正在出问题，只有一次采集机会</td><td>先拍堆快照与采 30 秒 CPU profile，再考虑重启</td><td>重启会销毁全部现场，事后只能等复发</td><td>快照期间进程停顿，profile 有额外开销，需要在故障中承担</td></tr>
+<tr><td>内存每天涨一点，两周后 OOM</td><td>开 <code>--trace-gc</code> 观察基线，再用三快照法比较</td><td>只有 GC 后的老生代用量能区分「缓存预热」和「真泄漏」</td><td>要等够长的观察窗口；快照文件可能上 GB，需要磁盘与传输通道</td></tr>
+<tr><td>延迟毛刺偶发，复现不了</td><td>常驻延迟直方图并把 <code>max</code> 上报，出现时用时间戳反查日志</td><td>毛刺按定义不会出现在平均值里，只能靠极值和时间对齐抓</td><td>指标基数变大；反查依赖日志有足够上下文</td></tr>
+<tr><td>压测要给出容量结论</td><td>恒定速率模式、压测机独立、同时记录延迟与 GC</td><td>固定连接数会因协调遗漏低估长尾</td><td>压测环境成本更高，一次测试周期更长</td></tr>
+<tr><td>怀疑瓶颈在原生模块或 GC</td><td>用 <code>0x</code> 采含原生栈的火焰图</td><td><code>--cpu-prof</code> 只有 JS 栈，原生层完全看不到</td><td>要以特定方式启动进程，不适合生产常驻</td></tr>
+<tr><td>内存吃紧想先止血</td><td>先确认基线是否抬升，没抬升才调大堆上限</td><td>泄漏场景下调大堆只是把 OOM 推迟并让复现更难</td><td>调大堆会挤占堆外空间，容器 limit 不变时风险更高</td></tr>
+<tr><td>指标端口要不要暴露</td><td>只绑内网或回环，按需的 profile 入口同样如此</td><td>运行时状态与调试入口等于内部信息与执行入口</td><td>需要额外的内网访问通道或跳板</td></tr>
+</tbody>
+</table>
+
+<h2>③ 场景 · 反模式对照与不适用边界</h2>
+<p>下表每一行都是真实返工过的流程问题，不是代码问题。</p>
 <table>
 <thead><tr><th>反模式</th><th>为什么坏</th><th>正确做法</th></tr></thead>
 <tbody>
@@ -372,25 +470,35 @@ module.exports = { registry, metricsHandler }</code></pre>
 <tr><td>日志里 <code>JSON.stringify</code> 整个对象</td><td>序列化成本进入请求路径，还可能泄漏敏感字段</td><td>只打必要字段，用结构化日志库</td></tr>
 </tbody>
 </table>
+<p><strong>不适用边界</strong>：当延迟直方图正常、RSS 平稳、火焰图很窄时，瓶颈不在这个进程里，继续采数据没有意义——该去查下游与链路。阻塞发生在事件循环哪个阶段、线程池为什么会排队，在 <a href="../event-loop/">事件循环的六个阶段与实际影响</a>；容器内存与进程模型怎么配，在 <a href="../">Node.js 后端的适用边界</a>；跨服务的延迟归因、连接池与数据库访问，在 <a href="../../../observability/performance/">后端性能优化</a>；框架与中间件链路带来的每请求固定开销，在 <a href="../framework-compare/">Node.js Web 框架选型</a>。</p>
+<p>这条路径上，上一篇解释了为什么会卡，本篇把它变成可采集、可判读的数据，下一篇转到另一个维度：怎么用类型系统把一部分错误提前到编译期。</p>
 
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">最容易踩的坑</div>
-    <p>1. 直方图忘了 <code>reset()</code>，p99 变成进程启动至今的累计值，启动期的一次毛刺永远挂在图上。</p>
-    <p>2. 把 <code>monitorEventLoopDelay</code> 的返回值当毫秒用，实际是纳秒，阈值差了六个数量级。</p>
-    <p>3. <code>resolution</code> 设成 1ms，直方图自身的定时器变成噪声源，低负载时反而测出更高的延迟。</p>
-    <p>4. 拿火焰图去查「等下游」的慢，图里一片空白然后怀疑工具坏了。</p>
-    <p>5. 把火焰图的横轴当时间轴读，以为左边的函数先执行。</p>
-    <p>6. 只拍两张堆快照就下结论，把缓存预热和惰性初始化误判成泄漏。</p>
-    <p>7. 在生产直接开 <code>--inspect</code> 抓快照，调试端口暴露等于任意代码执行入口。</p>
-    <p>8. 堆上限配成容器 limit，Buffer 一涨就被容器杀掉，拿不到任何 OOM 现场。</p>
-    <p>9. 内存涨就调大堆上限，泄漏还在，只是 OOM 从每天一次变成每周一次且更难复现。</p>
-    <p>10. 缓存只加 TTL 不加容量上限，突发流量下条目数先爆内存。</p>
-    <p>11. 压测只报 QPS 不报 p99，上线后长尾超时，回头发现压测数据毫无参考价值。</p>
-    <p>12. 压测机 CPU 已经打满还在加并发，测出来的「服务瓶颈」其实是客户端瓶颈。</p>
-    <p>13. 指标端口和业务端口共用且暴露到公网，把运行时内部状态直接公开。</p>
+    <ul>
+        <li>直方图忘了 <code>reset()</code>，p99 变成进程启动至今的累计值，启动期的一次毛刺永远挂在图上。</li>
+        <li>把 <code>monitorEventLoopDelay</code> 的返回值当毫秒用，实际是纳秒，阈值差了六个数量级。</li>
+        <li><code>resolution</code> 设成 1ms，直方图自身的定时器变成噪声源，低负载时反而测出更高的延迟。</li>
+        <li>空载状态下采集延迟，看到接近 0 就认为服务健康——必须先加压到接近真实负载。</li>
+        <li>拿火焰图去查「等下游」的慢，图里一片空白然后怀疑工具坏了。</li>
+        <li>把火焰图的横轴当时间轴读，以为左边的函数先执行。</li>
+        <li>用 <code>--cpu-prof</code> 但进程被 SIGKILL 结束，profile 文件根本没落盘。</li>
+        <li>用 <code>SIGUSR1</code> 当自定义信号，结果启动了 Node 的调试器，等于开了一个代码执行入口。</li>
+        <li>只拍两张堆快照就下结论，把缓存预热和惰性初始化误判成泄漏。</li>
+        <li>在生产直接开 <code>--inspect</code> 抓快照，调试端口暴露等于任意代码执行入口。</li>
+        <li>堆上限配成容器 limit，Buffer 一涨就被容器杀掉，拿不到任何 OOM 现场。</li>
+        <li>内存涨就调大堆上限，泄漏还在，只是 OOM 从每天一次变成每周一次且更难复现。</li>
+        <li>缓存只加 TTL 不加容量上限，突发流量下条目数先爆内存。</li>
+        <li>压测只报 QPS 不报 p99，上线后长尾超时，回头发现压测数据毫无参考价值。</li>
+        <li>压测机 CPU 已经打满还在加并发，测出来的「服务瓶颈」其实是客户端瓶颈。</li>
+        <li>指标端口和业务端口共用且暴露到公网，把运行时内部状态直接公开。</li>
+    </ul>
 </div>
-                    </div>
+
+<p class="cluster-nav">同主题路径：<a href="../event-loop/">← 上一步：Node.js 事件循环的六个阶段与实际影响</a> · <a href="../typescript/">下一步：Node.js 项目里的 TypeScript 工程化 →</a></p>
+</div>
                 </article>
                 <nav class="article-nav">
                     <a class="nav-prev" href="../framework-compare/"><span class="nav-label">← 上一篇</span><span class="nav-title">Express vs NestJS vs Fastify</span></a>

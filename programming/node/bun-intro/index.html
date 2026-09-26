@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="把 Bun 当工具链用是收益最确定、风险最低的一步。本文讲清 bun install 为什么快（并发拉取加全局缓存硬链接）、bun.lock 与 package-lock.json 的关系与迁移方式、bun run 与 bun x 省掉了什么开销、原生 TypeScript 只转译不做类型检查所以 CI 里仍必须跑 tsc、bun test 相对 Jest 的能力边界、bun build 与 --compile 打单文件可执行程序，并给出一份用 bun 装依赖跑测试、用 node 跑生产的 scripts 与 CI 配置。">
+    <meta name="description" content="Bun 工具链三段式：先给 install、run、test、build 四个子命令的最小可用用法与各自边界、一张「要做什么 → 用哪条命令 → 注意什么」对照表和关键参数速查，再讲安装为什么快（并发拉取加全局缓存硬链接）、锁文件格式与迁移、原生 TypeScript 只转译不检查、bun test 相对 Jest 的能力边界、bun build 的产物形态与 bunfig.toml，最后给「bun 装依赖跑测试、node 跑生产」这套组合的决策矩阵、可抄的 scripts 与 CI 配置。">
     <meta name="keywords" content="Bun,Bun 入门,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/programming/node/bun-intro/">
     <meta property="og:title" content="Bun 工具链上手：install、run、test、build 的机制与边界 - Bun - 资深码农">
-    <meta property="og:description" content="把 Bun 当工具链用是收益最确定、风险最低的一步。本文讲清 bun install 为什么快（并发拉取加全局缓存硬链接）、bun.lock 与 package-lock.json 的关系与迁移方式、bun run 与 bun x 省掉了什么开销、原生 TypeScript 只转译不做类型检查所以 CI 里仍必须跑 tsc、bun test 相对 Jest 的能力边界、bun build 与 --compile 打单文件可执行程序，并给出一份用 bun 装依赖跑测试、用 node 跑生产的 scripts 与 CI 配置。">
+    <meta property="og:description" content="Bun 工具链三段式：先给 install、run、test、build 四个子命令的最小可用用法与各自边界、一张「要做什么 → 用哪条命令 → 注意什么」对照表和关键参数速查，再讲安装为什么快（并发拉取加全局缓存硬链接）、锁文件格式与迁移、原生 TypeScript 只转译不检查、bun test 相对 Jest 的能力边界、bun build 的产物形态与 bunfig.toml，最后给「bun 装依赖跑测试、node 跑生产」这套组合的决策矩阵、可抄的 scripts 与 CI 配置。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/node/bun-intro/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Bun 工具链上手：install、run、test、build 的机制与边界 - Bun">
-    <meta name="twitter:description" content="把 Bun 当工具链用是收益最确定、风险最低的一步。本文讲清 bun install 为什么快（并发拉取加全局缓存硬链接）、bun.lock 与 package-lock.json 的关系与迁移方式、bun run 与 bun x 省掉了什么开销、原生 TypeScript 只转译不做类型检查所以 CI 里仍必须跑 tsc、bun test 相对 Jest 的能力边界、bun build 与 --compile 打单文件可执行程序，并给出一份用 bun 装依赖跑测试、用 node 跑生产的 scripts 与 CI 配置。">
+    <meta name="twitter:description" content="Bun 工具链三段式：先给 install、run、test、build 四个子命令的最小可用用法与各自边界、一张「要做什么 → 用哪条命令 → 注意什么」对照表和关键参数速查，再讲安装为什么快（并发拉取加全局缓存硬链接）、锁文件格式与迁移、原生 TypeScript 只转译不检查、bun test 相对 Jest 的能力边界、bun build 的产物形态与 bunfig.toml，最后给「bun 装依赖跑测试、node 跑生产」这套组合的决策矩阵、可抄的 scripts 与 CI 配置。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -69,41 +69,128 @@
                     <div class="article-content">
 <p>Bun 最值得先用起来的不是运行时，而是工具链：<strong>它能在不改一行业务代码的前提下把 CI 的依赖安装和测试时间压掉一大截，而且随时能退回去。</strong>这篇只讲工具链——装依赖、跑脚本、跑测试、打包，以及每一项的真实边界。它是什么、能不能上生产见 <a href="../bun/">Bun 总览</a>，引擎与 Node 兼容层见 <a href="../bun-runtime/">Bun 运行时特性</a>，整体迁移路径见 <a href="../bun-migration/">从 Node.js 迁移</a>。</p>
 
-<h2>安装与版本管理：先把版本锁住</h2>
-<p>Bun 的迭代速度很快，小版本之间的行为差异是真实存在的，所以第一件事不是装它，而是决定怎么锁它。<strong>本地、CI、镜像三处的 Bun 版本必须一致</strong>，否则「本地能跑 CI 不能跑」会变成日常。</p>
-<pre><code class="language-bash"># 安装（会落到 ~/.bun，记得把 ~/.bun/bin 加进 PATH）
-curl -fsSL https://bun.sh/install | bash
-
-# 锁定版本：三种方式按环境选，不要用 latest
-curl -fsSL https://bun.sh/install | bash -s "bun-v1.2.21"   # 装指定版本
-bun upgrade --stable                                         # 手动升级，不要写进 CI
-# package.json 里声明，配合 CI 校验，团队成员一眼能看到该用哪个版本
-#   "packageManager": "bun@1.2.21"
-
-# 确认当前版本与构建号（提 issue 或比对性能时必须带上）
-bun --version
-bun --revision
-
-# 常用命令速查
-bun install                 # 装依赖，读 package.json，写/校验 bun.lock
-bun install --frozen-lockfile   # CI 专用：锁文件与 package.json 不一致就直接失败
-bun add zod                 # 加依赖
-bun add -d vitest           # 加 devDependency
-bun remove lodash           # 删依赖
-bun outdated                # 看哪些依赖有新版本
-bun pm ls                   # 看实际装出来的依赖树
-bun pm cache rm             # 清全局缓存（怀疑缓存污染时用）
-bun run dev                 # 跑 package.json 里的 scripts
-bun x prisma migrate dev    # 等价于 npx，临时执行一个包的 bin
-bun --bun run vite          # 强制用 Bun 运行时执行这个 bin，而不是 Node</code></pre>
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
-    <div class="callout-title">最后一行很关键</div>
-    <p><code>bun run &lt;bin&gt;</code> 在执行依赖里的可执行脚本时，如果脚本头部是 <code>#!/usr/bin/env node</code>，默认<strong>仍然用 Node 去跑</strong>。很多人换了命令却发现性能没变化，原因就在这里。要真正用 Bun 执行，得显式加 <code>--bun</code>（或在 <code>bunfig.toml</code> 里配 <code>[run] bun = true</code>）。</p>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：四个子命令的最小可用用法与各自的边界（install 的锁文件、run 的三种入口解析、test 的断言与 mock、build 的两种产物形态），一张「要做什么 → 用哪条命令 → 注意什么」对照表，以及关键参数与配置项速查。</li>
+        <li><strong>② 原理</strong>：安装快在哪个环节（并发拉取加全局缓存硬链接）、锁文件三种格式的取舍与迁移、<code>bun run</code> 省掉的固定开销、原生 TypeScript 为什么不做类型检查、<code>bun test</code> 相对 Jest 的能力边界、<code>bun build</code> 参数矩阵与 <code>bunfig.toml</code> 配置项。</li>
+        <li><strong>③ 场景</strong>：什么项目该换哪几步、「bun 装依赖跑测试、node 跑生产」这套组合怎么落地（可抄的 scripts 与 CI 配置），以及哪些情况应该原地不动。</li>
+    </ul>
 </div>
 
-<h2>bun install 为什么快，以及快在哪个环节</h2>
-<p>npm 慢的原因从来不是「JS 写的所以慢」，而是两个具体环节：<strong>元数据请求的往返次数</strong>和<strong>往 node_modules 里逐个文件写入</strong>。Bun 对这两处都做了替换。</p>
+<h2>① 用法 · 四个子命令的最小可用用法与各自的边界</h2>
+<p>四个子命令各自能独立使用、独立回退，所以先把「最小能跑起来的那条命令」和「它的边界」一起记住，比读完整份文档更管用。下面这段可以直接对着项目敲，注释写的是为什么要这么写。</p>
+<pre><code class="language-bash"># ---- 四个子命令的最小可用用法，每条后面跟的就是它的边界 ----
+
+# 0) 先锁版本：本地、CI、镜像三处不一致，「本地能跑 CI 不能跑」就会变成日常
+curl -fsSL https://bun.sh/install | bash -s "bun-v1.2.21"   # ~/.bun/bin 要进 PATH
+bun --version &amp;&amp; bun --revision        # 比对性能或提 issue 时都要带上 revision
+
+# 1) install：读 package.json，写并校验 bun.lock
+bun install
+bun install --frozen-lockfile           # CI 专用：与 package.json 不一致就直接失败
+bun add zod &amp;&amp; bun add -d vitest &amp;&amp; bun remove lodash
+bun install --save-text-lockfile        # 把旧的二进制 bun.lockb 转成可评审的文本格式
+# 边界一：需要 postinstall 的包（Prisma、Puppeteer 之类）必须先进 trustedDependencies
+# 边界二：仓库里只能留一种锁文件，两种并存必然有人用错命令
+
+# 2) run：入口解析有三种来源，分不清就会「以为换了运行时其实没换」
+bun run dev                             # ① package.json 的 scripts
+bun src/main.ts                         # ② 直接给文件路径，原生转译 TS，但不做类型检查
+bun x prisma -v                         # ③ 临时执行某个包的 bin，等价于 npx
+bun --bun run vite                      # 带 node shebang 的 bin 默认仍由 Node 执行
+bun --watch src/main.ts                 # 改文件就重启；--hot 是保留状态的热替换，语义不同
+
+# 3) test：不需要配置文件，默认递归匹配 *.test.ts 这类文件名，并按文件并行
+bun test
+bun test --coverage                     # 统计口径与 Jest 不同，门禁阈值要重新标定
+bun test test/user.test.ts -t '重复用户名'   # 精确到文件与用例名，排查单个失败时用
+
+# 4) build：产物形态由 target 决定，这是「保不保留退路」的分水岭
+bun build src/main.ts --target=node --outdir dist --sourcemap=external
+bun build src/cli.ts --compile --outfile mycli   # 内嵌运行时的单文件，几十 MB 量级
+
+# 5) 这一行永远不能被 bun 替代：它只擦类型，不校验类型
+bunx tsc --noEmit</code></pre>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">上面第 2 组的最后一行很关键</div>
+    <p><code>bun run &lt;bin&gt;</code> 在执行依赖里的可执行脚本时，如果脚本头部是 <code>#!/usr/bin/env node</code>，默认<strong>仍然用 Node 去跑</strong>。很多人换了命令却发现性能没变化，原因就在这里。要真正用 Bun 执行，得显式加 <code>--bun</code>（或在 <code>bunfig.toml</code> 里配 <code>[run] bun = true</code>）。</p>
+</div>
+<p><code>bun test</code> 的断言与 mock 是迁移里最容易卡住的一块，先看一个最小但完整的测试文件——它展示了 mock 的顺序要求，这一点和 Jest 的自动提升不一样：</p>
+<pre><code class="language-typescript">// test/user.test.ts —— 直接 bun test 就能跑，不需要任何配置文件
+import { describe, expect, test, beforeEach, mock } from 'bun:test';
+
+// mock.module 必须在被测模块被加载之前执行：Jest 会把 jest.mock 自动提升到文件顶部，
+// Bun 不会，所以这里要靠「先 mock、后动态 import」的顺序自己保证
+const sendMail = mock(async () =&gt; ({ ok: true }));
+mock.module('../src/mailer', () =&gt; ({ sendMail }));
+
+// 动态 import 拿到的才是 mock 生效之后的模块；写成顶部静态 import 就晚了
+const { register } = await import('../src/user');
+
+describe('register', () =&gt; {
+  beforeEach(() =&gt; {
+    sendMail.mockClear();          // 不清理调用记录，第二个用例的次数断言会带上前一个的
+  });
+
+  test('注册成功会发一封欢迎邮件', async () =&gt; {
+    const user = await register({ name: 'alice', password: 'pw-12345678' });
+    expect(user.id).toBeGreaterThan(0);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  test('重复用户名要报明确的错误', async () =&gt; {
+    await register({ name: 'bob', password: 'pw-12345678' });
+    // 断言必须带上错误信息：只写 rejects.toThrow() 的话任何异常都能让用例通过
+    await expect(register({ name: 'bob', password: 'pw-12345678' }))
+      .rejects.toThrow('duplicated name');
+  });
+});</code></pre>
+<p>日常干活查下面这张表就够了，左列是要做的事，右列是那条命令的边界。</p>
+<table>
+    <thead>
+        <tr><th>要做什么</th><th>用哪条命令</th><th>注意什么</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>第一次把项目切到 bun 装依赖</td><td><code>bun install</code></td><td>会读现有 <code>package-lock.json</code> 作为版本来源生成 <code>bun.lock</code>，之后必须做一次依赖树 diff</td></tr>
+        <tr><td>在 CI 里装依赖</td><td><code>bun install --frozen-lockfile</code></td><td>缓存 <code>~/.bun/install/cache</code>，缓存 key 必须带锁文件哈希，否则会命中旧缓存</td></tr>
+        <tr><td>依赖装完却缺二进制</td><td>把包名写进 <code>trustedDependencies</code> 后重装</td><td>Bun 默认不执行非信任包的 <code>postinstall</code>，这是「装成半成品」的唯一常见原因</td></tr>
+        <tr><td>跑 package.json 里的脚本</td><td><code>bun run dev</code></td><td>脚本内部调用的 bin 仍可能由 Node 执行，要 Bun 跑就加 <code>--bun</code></td></tr>
+        <tr><td>直接执行一个 TS 入口</td><td><code>bun src/main.ts</code></td><td>只转译不检查类型，<code>tsc --noEmit</code> 不能省</td></tr>
+        <tr><td>开发时自动重启</td><td><code>bun --watch src/main.ts</code></td><td><code>--hot</code> 保留进程状态，有状态模块会出现「改了没生效」的错觉</td></tr>
+        <tr><td>跑测试并出覆盖率</td><td><code>bun test --coverage</code></td><td>默认按文件并行，共享同一张表或同一个端口的用例要显式串行化</td></tr>
+        <tr><td>只跑一个失败用例</td><td><code>bun test &lt;file&gt; -t '用例名片段'</code></td><td>名称是子串匹配，写得太短会一次跑起一堆</td></tr>
+        <tr><td>打服务端产物并保留退路</td><td><code>bun build --target=node</code></td><td>用 <code>--target=bun</code> 等于放弃退路；sourcemap 要显式开</td></tr>
+        <tr><td>分发 CLI 给不装 Node 的用户</td><td><code>bun build --compile</code></td><td>产物内嵌整个运行时，体积几十 MB 到 100MB 量级，不要拿它做服务端镜像</td></tr>
+        <tr><td>怀疑缓存脏了</td><td><code>bun pm cache rm</code></td><td>先确认不是锁文件问题；清缓存会让下一次安装退回冷缓存耗时</td></tr>
+    </tbody>
+</table>
+<p>下面这张是参数与配置项速查。默认值随版本变化的一律以 <code>bun &lt;子命令&gt; --help</code> 的输出为准，不要照抄记忆。</p>
+<table>
+    <thead>
+        <tr><th>参数或配置项</th><th>作用</th><th>默认</th><th>什么时候需要改</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>--frozen-lockfile</code></td><td>锁文件与 <code>package.json</code> 不一致时直接失败</td><td>关</td><td>CI 必开，否则锁文件会被静默改写，等于没锁</td></tr>
+        <tr><td><code>--production</code></td><td>只装生产依赖</td><td>关</td><td>镜像的运行阶段开，减小体积与攻击面</td></tr>
+        <tr><td><code>--save-text-lockfile</code></td><td>生成文本格式锁文件</td><td>1.2 起文本格式已是默认</td><td>从 <code>bun.lockb</code> 迁移时执行一次</td></tr>
+        <tr><td><code>trustedDependencies</code>（package.json）</td><td>允许执行 <code>postinstall</code> 的包白名单</td><td>只信内置列表</td><td>依赖需要下载二进制或生成代码时逐个加</td></tr>
+        <tr><td><code>--bun</code>（配合 run）</td><td>强制用 Bun 执行 bin，不回落 Node</td><td>关，遇到 node shebang 就回落</td><td>确实想换掉执行器时；也可在 <code>bunfig.toml</code> 配 <code>[run] bun = true</code></td></tr>
+        <tr><td><code>--watch</code> 与 <code>--hot</code></td><td>前者重启进程，后者保留状态热替换</td><td>都关</td><td>开发时按语义选，有状态模块不要用 <code>--hot</code></td></tr>
+        <tr><td><code>--coverage</code></td><td>输出文本与 lcov 覆盖率</td><td>关</td><td>接质量门禁时开，并重新标定阈值基线</td></tr>
+        <tr><td><code>preload</code>（bunfig 的 <code>[test]</code>）</td><td>测试前置脚本</td><td>无</td><td>需要 DOM 实现、测试库连接或全局 fixture 时</td></tr>
+        <tr><td><code>--target</code></td><td>产物的目标运行时</td><td>随入口与命令而定，以 <code>bun build --help</code> 为准</td><td>想保留退路时显式写 <code>node</code></td></tr>
+        <tr><td><code>--sourcemap</code></td><td>生成 sourcemap</td><td>不生成</td><td>线上错误上报必开，否则堆栈无法还原</td></tr>
+        <tr><td><code>--minify</code></td><td>压缩产物</td><td>关</td><td>体积敏感时开；排查问题期间关掉</td></tr>
+        <tr><td><code>--external</code></td><td>把依赖排除在产物外</td><td>无</td><td>native addon、体积巨大的可选依赖</td></tr>
+    </tbody>
+</table>
+<p>这些边界为什么长这样、哪些是实现决定的、哪些只是当前状态，看原理层。</p>
+
+<h2>② 原理 · bun install 为什么快，以及快在哪个环节</h2>
+<p>搞清这一节能解决一个具体判断：你的环境里到底能省多少，以及什么情况下省不下来。npm 慢的原因从来不是「JS 写的所以慢」，而是两个具体环节：<strong>元数据请求的往返次数</strong>和<strong>往 node_modules 里逐个文件写入</strong>。Bun 对这两处都做了替换。</p>
 <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -161,8 +248,8 @@ stateDiagram-v2
     构建失败 --> [*]
 </div>
 
-<h2>bun run 与 bun x：省掉的是 Node 的启动开销</h2>
-<p><code>npm run</code> 本身就是一个 Node 进程——先启动 Node、加载 npm 自己那堆 JS、解析 <code>package.json</code>，然后才 spawn 你的脚本，这层固定开销通常在一两百毫秒。<code>bun run</code> 是原生二进制直接读 scripts 执行，几乎为零。对于要反复执行的脚本（watch、pre-commit 钩子、批量任务）这个差别很直观。</p>
+<h2>② 原理 · bun run 与 bun x：省掉的是 Node 的启动开销</h2>
+<p>搞清这一节能解释一个现象：为什么有人把 <code>npm run</code> 换成 <code>bun run</code> 之后感觉「快了一点」，另一些人却完全没感觉。<code>npm run</code> 本身就是一个 Node 进程——先启动 Node、加载 npm 自己那堆 JS、解析 <code>package.json</code>，然后才 spawn 你的脚本，这层固定开销通常在一两百毫秒。<code>bun run</code> 是原生二进制直接读 scripts 执行，几乎为零。省掉的是<strong>固定开销</strong>，所以脚本本身跑得越久、这个差别越不明显；反复执行的短脚本（watch、pre-commit 钩子、批量任务）收益最直观。</p>
 <table>
     <thead>
         <tr><th>原来的命令</th><th>Bun 等价命令</th><th>差异与注意点</th></tr>
@@ -180,12 +267,12 @@ stateDiagram-v2
     </tbody>
 </table>
 
-<h2>原生 TypeScript：只转译，不检查</h2>
-<p>这是关于 Bun 流传最广的误解，必须讲清楚：<strong>Bun 对 TypeScript 做的是类型擦除式转译，把类型标注删掉直接执行，完全不做类型检查。</strong>也就是说下面这段代码在 Bun 下能正常跑：把 <code>string</code> 赋给 <code>number</code> 的参数、调用不存在的方法（只要运行时刚好没走到）、类型不匹配的解构，一律不报错。</p>
-<p>所以结论很硬：<strong><code>tsc --noEmit</code> 必须继续留在 CI 和提交前钩子里</strong>，它是类型正确性的唯一保证。这一点对 SWC、esbuild 同样成立，它们都是只转译不检查。另外几个 <code>tsconfig.json</code> 相关的实际差异也要知道：Bun 会读 <code>paths</code> 别名（所以路径映射基本可用），但 <code>target</code>、<code>module</code> 这类输出相关选项对它没有意义（它按自己的策略转译），<code>emitDecoratorMetadata</code> 需要显式开启且历史上支持度有过变化——重度依赖装饰器元数据的框架（如 NestJS）在 Bun 下要专门验证，具体见 <a href="../nestjs/">NestJS 架构模型与取舍</a> 里关于编译链的那张表。</p>
+<h2>② 原理 · 原生 TypeScript：只转译，不检查</h2>
+<p>搞清这一节能避免一类最贵的事故：类型错误一路进生产。<strong>Bun 对 TypeScript 做的是类型擦除式转译，把类型标注删掉直接执行，完全不做类型检查。</strong>也就是说下面这些在 Bun 下能正常跑：把 <code>string</code> 赋给 <code>number</code> 的参数、调用不存在的方法（只要运行时刚好没走到）、类型不匹配的解构，一律不报错。</p>
+<p>所以结论很硬：<strong><code>tsc --noEmit</code> 必须继续留在 CI 和提交前钩子里</strong>，它是类型正确性的唯一保证。这一点对 SWC、esbuild 同样成立，它们都是只转译不检查。另外几个 <code>tsconfig.json</code> 相关的实际差异也要知道：Bun 会读 <code>paths</code> 别名（所以路径映射基本可用），但 <code>target</code>、<code>module</code> 这类输出相关选项对它没有意义（它按自己的策略转译），<code>emitDecoratorMetadata</code> 需要显式开启且历史上支持度有过变化——重度依赖装饰器元数据的框架（如 NestJS）在 Bun 下要专门验证，具体见 <a href="../nestjs/">NestJS 架构模型与取舍</a> 里关于编译链的那张表。工程上怎么组织 tsconfig 与类型边界，见 <a href="../typescript/">Node.js 项目里的 TypeScript 工程化</a>。</p>
 
-<h2>bun test：速度收益明显，边界要先确认</h2>
-<p><code>bun test</code> 提供 Jest 风格的 <code>describe</code> / <code>test</code> / <code>expect</code> 与生命周期钩子，多数断言可以直接跑。速度收益来自两点：启动快、转译快，而测试进程本来就是大量短生命周期进程，所以大型套件常能快好几倍。要注意的是能力边界。</p>
+<h2>② 原理 · bun test：速度收益明显，边界要先确认</h2>
+<p>搞清这一节能预估迁移测试的工作量，而不是迁一半才发现 mock 全要重写。<code>bun test</code> 提供 Jest 风格的 <code>describe</code> / <code>test</code> / <code>expect</code> 与生命周期钩子，多数断言可以直接跑。速度收益来自两点：启动快、转译快，而测试进程本来就是大量短生命周期进程，所以大型套件常能快好几倍。要注意的是能力边界。</p>
 <table>
     <thead>
         <tr><th>能力</th><th>状态</th><th>迁移时要做什么</th></tr>
@@ -201,8 +288,8 @@ stateDiagram-v2
     </tbody>
 </table>
 
-<h2>bun build 与单文件可执行程序</h2>
-<p>打包能力的核心场景有两个：一是服务端代码打成单个 JS 便于部署，二是 <code>--compile</code> 把运行时一起打进一个可执行文件。<strong>后者对 CLI 分发很有价值</strong>——用户不需要装 Node，也不会遇到版本不匹配，代价是产物几十 MB 到 100MB 量级（里面内嵌了整个 Bun 运行时）。</p>
+<h2>② 原理 · bun build 与单文件可执行程序</h2>
+<p>搞清这一节能避免两种典型误用：拿 <code>--target=bun</code> 的产物去 Node 上跑，以及拿 <code>--compile</code> 的产物做服务端镜像。打包能力的核心场景有两个：一是服务端代码打成单个 JS 便于部署，二是 <code>--compile</code> 把运行时一起打进一个可执行文件。<strong>后者对 CLI 分发很有价值</strong>——用户不需要装 Node，也不会遇到版本不匹配，代价是产物几十 MB 到 100MB 量级（里面内嵌了整个 Bun 运行时）。</p>
 <table>
     <thead>
         <tr><th>参数</th><th>作用</th><th>什么时候用</th></tr>
@@ -218,7 +305,8 @@ stateDiagram-v2
     </tbody>
 </table>
 
-<h2>bunfig.toml 常用配置</h2>
+<h2>② 原理 · bunfig.toml 常用配置</h2>
+<p>搞清这一节能解决「同一条命令在不同人机器上行为不同」的问题：很多行为其实是配置文件决定的，而不是命令本身。</p>
 <pre><code class="language-properties"># bunfig.toml 放在项目根目录，和 package.json 同级
 [install]
 # 私有源：也支持按 scope 分别配置，配合 CI 的 token 注入
@@ -248,8 +336,24 @@ coverageThreshold = 0.8
 # 自定义扩展名的处理方式，例如把 .sql 当文本读入
 ".sql" = "text"</code></pre>
 
-<h2>最稳妥的组合：bun 装依赖跑测试，node 跑生产</h2>
-<p>这套组合把收益最确定的两项（CI 装依赖、跑测试）拿到手，同时完全不碰生产运行时，风险几乎为零，任何时候都能回退。</p>
+<h2>③ 场景 · 该换哪几步：按项目形态查表</h2>
+<p>工具链的四块可以分别决策，所以没有「全换或不换」这种选项。下面这张矩阵给的是「怎么做、为什么、代价」：</p>
+<table>
+    <thead>
+        <tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>CI 时长里装依赖占大头</td><td>只换 <code>bun install --frozen-lockfile</code>，测试暂时留在 Jest</td><td>冷缓存安装是最大且最确定的一项收益，改动面只有一行命令</td><td>本地必须跟着换，否则锁文件与依赖树会两套并行</td></tr>
+        <tr><td>单测十几分钟且 mock 用得浅</td><td>换 <code>bun test</code>，先跑一遍拿到新的覆盖率基线再设阈值</td><td>测试是大量短生命周期进程，启动与转译的收益被放大</td><td>快照与计时器 mock 要逐个实测，门禁阈值要重标</td></tr>
+        <tr><td>测试重度依赖 <code>jest.mock</code> 的自动提升</td><td>保留 Jest，只用 Bun 装依赖</td><td>mock 语义不同，改写量可能超过收益</td><td>放弃测试加速那部分收益</td></tr>
+        <tr><td>monorepo 多包共享依赖</td><td>先在一个子包上验证 workspace 解析与提升行为</td><td>依赖提升与 peer 处理是差异高发区，全量切换风险不可控</td><td>观察期变长，过渡期要接受两套命令并存</td></tr>
+        <tr><td>前端构建链插件很多</td><td>构建继续用 Vite 或 esbuild，只用 Bun 装依赖与跑测试</td><td><code>bun build</code> 的插件生态还少</td><td>构建这块拿不到收益</td></tr>
+        <tr><td>要把 CLI 发给不装 Node 的用户</td><td><code>bun build --compile</code> 出单文件</td><td>零依赖运行，不会有版本不匹配问题</td><td>产物几十 MB 到 100MB 量级，分发与更新成本上升</td></tr>
+        <tr><td>有私有源与 token 鉴权</td><td><code>bunfig.toml</code> 的 <code>[install.scopes]</code> 配 scope，token 用环境变量注入</td><td>避免凭据进仓库，同时保持本地与 CI 一致</td><td>CI 要额外配 secret，新成员上手多一步</td></tr>
+        <tr><td>想顺手把生产运行时也换掉</td><td>不要在这一步做，<code>bun build</code> 的 target 先选 <code>node</code></td><td>运行时风险高一个量级，且和工具链收益无关</td><td>放弃运行时那部分收益，路径见迁移篇</td></tr>
+    </tbody>
+</table>
+<p>最稳妥的落地形态是下面这套组合：<strong>bun 装依赖跑测试，node 跑生产</strong>。它把收益最确定的两项拿到手，同时完全不碰生产运行时，风险几乎为零，任何时候都能回退。</p>
 <pre><code class="language-json">{
   "name": "order-api",
   "packageManager": "bun@1.2.21",
@@ -310,8 +414,10 @@ flowchart TB
     Q3 -->|"没有"| A4["生产仍用 node<br/>build 时 target 选 node"]
     Q3 -->|"验证过"| A5["可按阶段切 Bun 运行时<br/>详见站内迁移篇"]
 </div>
+<p><strong>不适用边界</strong>：工具链换完之后 CI 还是慢，问题大概率在测试设计或镜像构建，不在包管理器。运行时相关的一切——引擎差异、<code>node:*</code> 兼容层缺口、可观测性短板——不属于这篇，在 <a href="../bun-runtime/">Bun 运行时机制</a>；真正要把生产切过去的分阶段路径与回退预案在 <a href="../bun-migration/">从 Node.js 迁移到 Bun</a>；该不该引入 Bun 这个前置判断在 <a href="../bun/">Bun 是什么、快在哪、能不能上生产</a>。</p>
+<p>在这条路径上，上一篇回答「值不值得引入」，本篇把工具链用起来（风险最低的那一半收益），下一篇进到引擎与兼容层——那是运行时风险的来源。</p>
 
-<h2>反模式对照表</h2>
+<h2>③ 场景 · 反模式与正确做法对照</h2>
 <table>
     <thead>
         <tr><th>反模式</th><th>后果</th><th>正确做法</th></tr>
@@ -328,12 +434,14 @@ flowchart TB
     </tbody>
 </table>
 
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
         <li>把「Bun 原生支持 TS」理解成「不用类型检查了」：它只擦类型不校验，<code>tsc --noEmit</code> 必须留在 CI。</li>
         <li><code>bun run</code> 执行依赖的 bin 时默认仍用 Node：不加 <code>--bun</code> 你以为换了运行时其实没换。</li>
+        <li><code>mock.module</code> 写在静态 import 之后：被测模块已经绑定真实实现，mock 静默失效。</li>
         <li>两种锁文件并存：不同成员装出不同依赖树，这是最难定位的一类环境差异。</li>
         <li>CI 不固定 Bun 版本：小版本升级会带来行为变化，旧构建再也复现不出来。</li>
         <li>CI 里用 <code>bun install</code> 而不是 <code>bun install --frozen-lockfile</code>：锁文件被静默改写，等于没锁。</li>
@@ -346,6 +454,8 @@ flowchart TB
         <li>打包不出 sourcemap：线上报错堆栈全是压缩后的行号，错误上报平台无法还原。</li>
     </ul>
 </div>
+
+<p class="cluster-nav">同主题路径：<a href="../bun/">← 上一步：Bun 是什么、快在哪、能不能上生产</a> · <a href="../bun-runtime/">下一步：Bun 运行时机制：JavaScriptCore、原生 API 与 Node 兼容层的边界 →</a></p>
 
                     </div>
 </article>

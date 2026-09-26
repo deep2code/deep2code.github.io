@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="asyncio 的性能陷阱逐个拆解：协作式调度下只有 await 才让出控制权，所以一次同步阻塞会放大到全部在途请求；五类最常见的阻塞源与对应替代库；用事件循环延迟与慢回调告警把阻塞找出来；gather 与 as_completed 与 TaskGroup 的异常语义差异；为什么必须用 Semaphore 限并发；取消只能在 await 点生效；忘记 await 与 create_task 不持引用这两类隐蔽 bug。">
+    <meta name="description" content="asyncio 性能陷阱的三段式：先给四步动手判定（ruff 的 ASYNC 规则静态扫描、PYTHONASYNCIODEBUG 与慢回调阈值定位到行、常驻事件循环延迟探针、并发 10 与并发 100 的吞吐对照脚本）与把阻塞挪出事件循环的四种写法，再讲协作式调度下只有 await 才让出控制权、五类阻塞源与替代库、三种探测手段的可见范围、gather 与 TaskGroup 的异常语义差异、取消只能在 await 点生效、忘记 await 与 create_task 不持引用这两类静默 bug，最后给按业务形态选并发模型与限流位置的决策矩阵。">
     <meta name="keywords" content="FastAPI,异步与性能优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/programming/python/fastapi-async/">
     <meta property="og:title" content="asyncio 的性能陷阱 - FastAPI - 资深码农">
-    <meta property="og:description" content="asyncio 的性能陷阱逐个拆解：协作式调度下只有 await 才让出控制权，所以一次同步阻塞会放大到全部在途请求；五类最常见的阻塞源与对应替代库；用事件循环延迟与慢回调告警把阻塞找出来；gather 与 as_completed 与 TaskGroup 的异常语义差异；为什么必须用 Semaphore 限并发；取消只能在 await 点生效；忘记 await 与 create_task 不持引用这两类隐蔽 bug。">
+    <meta property="og:description" content="asyncio 性能陷阱的三段式：先给四步动手判定（ruff 的 ASYNC 规则静态扫描、PYTHONASYNCIODEBUG 与慢回调阈值定位到行、常驻事件循环延迟探针、并发 10 与并发 100 的吞吐对照脚本）与把阻塞挪出事件循环的四种写法，再讲协作式调度下只有 await 才让出控制权、五类阻塞源与替代库、三种探测手段的可见范围、gather 与 TaskGroup 的异常语义差异、取消只能在 await 点生效、忘记 await 与 create_task 不持引用这两类静默 bug，最后给按业务形态选并发模型与限流位置的决策矩阵。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/python/fastapi-async/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="asyncio 的性能陷阱 - FastAPI">
-    <meta name="twitter:description" content="asyncio 的性能陷阱逐个拆解：协作式调度下只有 await 才让出控制权，所以一次同步阻塞会放大到全部在途请求；五类最常见的阻塞源与对应替代库；用事件循环延迟与慢回调告警把阻塞找出来；gather 与 as_completed 与 TaskGroup 的异常语义差异；为什么必须用 Semaphore 限并发；取消只能在 await 点生效；忘记 await 与 create_task 不持引用这两类隐蔽 bug。">
+    <meta name="twitter:description" content="asyncio 性能陷阱的三段式：先给四步动手判定（ruff 的 ASYNC 规则静态扫描、PYTHONASYNCIODEBUG 与慢回调阈值定位到行、常驻事件循环延迟探针、并发 10 与并发 100 的吞吐对照脚本）与把阻塞挪出事件循环的四种写法，再讲协作式调度下只有 await 才让出控制权、五类阻塞源与替代库、三种探测手段的可见范围、gather 与 TaskGroup 的异常语义差异、取消只能在 await 点生效、忘记 await 与 create_task 不持引用这两类静默 bug，最后给按业务形态选并发模型与限流位置的决策矩阵。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -67,11 +67,195 @@
                         <h1 class="article-title">asyncio 的性能陷阱</h1>
                     </header>
                     <div class="article-content">
-<p>asyncio 的坑有一个共同特征：<strong>不报错</strong>。代码能跑、测试能过、单请求延迟正常，只有并发一上来才暴露，而现象又是最容易误判的「CPU 不高但延迟很高」。这篇把这些陷阱按机制串起来：为什么一次阻塞会放大到全部请求、怎么把阻塞找出来、并发怎么限、取消为什么有时不生效。框架层面的 async 与 sync handler 分派见<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
+<p>asyncio 的坑有一个共同特征：<strong>不报错</strong>。代码能跑、测试能过、单请求延迟正常，只有并发一上来才暴露，而现象又是最容易误判的「CPU 不高但延迟很高」。这篇先给一套能动手跑的判定流程——怎么证明事件循环真的被阻塞了、阻塞在哪一行、挪出去之后怎么确认有效——再把这些陷阱按机制串起来。框架层面的 async 与 sync handler 分派见<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
 
-<h2>协作式调度：只有 await 才让出控制权</h2>
-<p>asyncio 是<strong>单线程事件循环 + 协程协作式调度</strong>。循环从就绪队列取一个协程跑，跑到 <code>await</code> 且确实需要等待时，协程交回控制权，循环再取下一个。关键推论：<strong>不 await 的代码，事件循环无法中断它</strong>。一段纯计算、一次同步 socket 调用、一个 <code>time.sleep</code>，期间整个循环停转，所有已就绪的协程一个都推进不了。</p>
-<p>这解释了那个典型故障画像：QPS 上不去、延迟随并发线性恶化、CPU 使用率却只有 20%。CPU 不高是因为大家都在等一个被阻塞的线程，而不是在算东西。</p>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：四步把「是不是阻塞」变成可验证的结论（静态扫一遍、开调试模式看慢回调、常驻事件循环延迟探针、并发 10 与并发 100 的吞吐对照），以及把阻塞调用挪出事件循环的四种正确写法与一张参数速查表。</li>
+        <li><strong>② 原理</strong>：协作式调度下只有 <code>await</code> 才让出控制权、五类阻塞源与各自的替代库、三种探测手段各能看到什么、<code>gather</code> 与 <code>as_completed</code> 与 <code>TaskGroup</code> 的异常语义差异、取消为什么只能在 <code>await</code> 点生效、忘记 <code>await</code> 与 <code>create_task</code> 不持引用这两类静默 bug，以及协程与线程的量级对照。</li>
+        <li><strong>③ 场景</strong>：按业务形态选并发模型、限流放在哪一层、代价是什么，以及哪些问题看着像 asyncio 问题其实不是。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 怎么测出协程被阻塞，以及把它挪出去</h2>
+<p>「延迟高」不等于「被阻塞」，先按下面四步做判定，顺序不要跳：静态检查最便宜，压测对照最有说服力。</p>
+
+<pre><code class="language-bash"># ---------- 第 1 步：静态先扫一遍，不花运行时代价 ----------
+# ASYNC 规则集专抓 async 函数里的同步调用（time.sleep、同步 open、阻塞 HTTP 客户端等）
+# RUF006 抓 create_task 返回值没被保存的写法
+uv run ruff check --select ASYNC,RUF006 src
+
+# ---------- 第 2 步：本地或压测环境开调试模式，让慢回调自己报出来 ----------
+# 超过阈值还没让出控制权的回调会打 WARNING，日志里带函数名与文件行号
+PYTHONASYNCIODEBUG=1 uv run uvicorn myapp.main:app --port 8000
+# 日志里出现 Executing ... took 0.5xx seconds 就是命中：括号里的位置就是阻塞点
+
+# ---------- 第 3 步：常驻事件循环延迟指标（生产也能开，见下面的代码）----------
+# 健康时是个位数毫秒；持续几百毫秒说明循环被人占着不放
+
+# ---------- 第 4 步：压测对照，这一步才能证明「串行化」 ----------
+# 同一个接口分别用并发 10 与并发 100 跑，看吞吐是否随并发上升
+uv run python loadcheck.py http://127.0.0.1:8000/v1/orders/1 10
+uv run python loadcheck.py http://127.0.0.1:8000/v1/orders/1 100
+# 判读：并发翻十倍而吞吐几乎不变、单请求耗时同比恶化 =&gt; 事件循环被阻塞，不是算力不足
+#       吞吐随并发上升直到某个拐点 =&gt; 正常，瓶颈在下游或 CPU
+</code></pre>
+
+<pre><code class="language-python"># loadcheck.py —— 第 4 步用的对照脚本，只依赖 httpx
+import asyncio
+import sys
+import time
+
+import httpx
+
+
+async def main(url: str, concurrency: int, total: int = 300) -&gt; None:
+    sem = asyncio.Semaphore(concurrency)
+    latencies: list[float] = []
+
+    # 复用同一个 client：每次新建连接会把连接建立开销算进延迟，掩盖真正的差异
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        async def one() -&gt; None:
+            async with sem:
+                t0 = time.perf_counter()
+                await client.get(url)
+                latencies.append(time.perf_counter() - t0)
+
+        start = time.perf_counter()
+        async with asyncio.TaskGroup() as tg:
+            for _ in range(total):
+                tg.create_task(one())
+        elapsed = time.perf_counter() - start
+
+    latencies.sort()
+    print(f"并发={concurrency} 吞吐={total / elapsed:.1f} req/s "
+          f"P50={latencies[len(latencies) // 2] * 1000:.0f}ms "
+          f"P95={latencies[int(len(latencies) * 0.95)] * 1000:.0f}ms")
+
+
+if __name__ == "__main__":
+    asyncio.run(main(sys.argv[1], int(sys.argv[2])))
+</code></pre>
+
+<pre><code class="language-python"># src/myapp/core/loop_probe.py —— 第 3 步：事件循环延迟探针，开销可忽略，建议常驻
+import asyncio
+import logging
+import time
+
+logger = logging.getLogger(__name__)
+
+
+async def monitor_loop_lag(interval: float = 1.0, warn_ms: float = 100.0) -&gt; None:
+    """睡 interval 秒，测量实际唤醒时间与预期的差值。
+    这个差值就是事件循环的排队延迟：没人阻塞时它接近 0，
+    有人占着循环不放时它直接跳到几百毫秒。它比 CPU 使用率灵敏得多。"""
+    while True:
+        start = time.perf_counter()
+        await asyncio.sleep(interval)
+        lag_ms = (time.perf_counter() - start - interval) * 1000
+        if lag_ms &gt; warn_ms:
+            # 和 P99 曲线对齐看：lag 突增的时间点就是阻塞发生的时间点
+            logger.warning("event_loop_lag", extra={"lag_ms": round(lag_ms, 1)})
+        metrics.gauge("asyncio.loop_lag_ms", max(lag_ms, 0.0))   # 作为容量水位指标上报
+
+
+def enable_debug(threshold_s: float = 0.1) -&gt; None:
+    """只在本地与压测环境调用：调试模式会记录协程创建栈，本身有开销"""
+    loop = asyncio.get_running_loop()
+    loop.set_debug(True)
+    loop.slow_callback_duration = threshold_s   # 超过这个时长未让出的回调会被告警
+</code></pre>
+
+<p>定位到阻塞点之后，按调用的性质选下面四种写法之一。判断标准是单次阻塞的量级：<strong>超过 1 毫秒才值得处理，超过 10 毫秒必须处理</strong>。</p>
+
+<pre><code class="language-python">import asyncio
+import functools
+from concurrent.futures import ProcessPoolExecutor
+
+import anyio
+import httpx
+from fastapi import APIRouter
+
+router = APIRouter()
+
+# ---------- 写法一：有异步替代库的，直接换掉（首选）----------
+# 不要在 async 函数里用同步 HTTP 客户端；client 在 lifespan 里建一次并复用
+@router.get("/a")
+async def call_downstream(client: httpx.AsyncClient) -&gt; dict:
+    resp = await client.get("https://example.internal/api", timeout=3.0)
+    return resp.json()
+
+
+# ---------- 写法二：只有同步库可用，挪到线程里 ----------
+@router.get("/b")
+async def call_legacy_sdk() -&gt; dict:
+    # to_thread 用的是事件循环的默认线程池；它解决的是「不要卡住循环」，
+    # 并不能提高吞吐上限——线程数就是并发上限，且 GIL 仍在
+    return await asyncio.to_thread(legacy_sdk.fetch, "key")   # 传参数，不要传 lambda 闭包
+
+
+# ---------- 写法三：CPU 密集，必须进程池；线程池对 GIL 无效 ----------
+_pool = ProcessPoolExecutor(max_workers=2)   # 在 lifespan 里建，关闭时 shutdown
+
+
+@router.get("/c")
+async def heavy() -&gt; dict:
+    loop = asyncio.get_running_loop()
+    # functools.partial 而不是 lambda：提交给进程池的可调用对象必须可 pickle
+    result = await loop.run_in_executor(_pool, functools.partial(cpu_bound, 10_000))
+    return {"result": result}
+
+
+# ---------- 写法四：整段逻辑都是同步的，把 handler 写成普通 def ----------
+# 框架会把普通 def handler 丢进线程池执行，反而比在 async 里同步调用安全
+@router.get("/d")
+def sync_handler() -&gt; dict:
+    return {"rows": legacy_orm.query_all()}      # 同步 ORM 放这里是可以的
+
+
+async def tune_threadpool() -&gt; None:
+    # 线程池容量是一个全局上限：所有 def handler 与 to_thread 共用它。
+    # 同步调用一多就会在这里排队，现象是延迟升高而循环延迟指标正常
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    limiter.total_tokens = 80        # 按下游连接数与内存反推，不是越大越好
+</code></pre>
+
+<p>常见任务按下表查：</p>
+<table>
+<thead><tr><th>要做什么</th><th>怎么做</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>确认「延迟高」是不是阻塞</td><td>并发 10 与并发 100 各压一轮，看吞吐有没有上升</td><td>吞吐不涨而延迟同比恶化才是串行化；只看单请求耗时看不出来</td></tr>
+<tr><td>找出阻塞在哪一行</td><td><code>PYTHONASYNCIODEBUG=1</code> 加低阈值的 <code>slow_callback_duration</code></td><td>调试模式有开销，别常开在生产；它只报「超过阈值」的回调</td></tr>
+<tr><td>生产上持续监控</td><td>常驻事件循环延迟探针并上报指标</td><td>这是 asyncio 服务最该看的指标，出问题时它比 CPU 先动</td></tr>
+<tr><td>把同步 HTTP 调用异步化</td><td>换 <code>httpx.AsyncClient</code>，client 在 <code>lifespan</code> 里建一次</td><td>每请求新建 client 等于放弃连接复用，延迟反而更差</td></tr>
+<tr><td>只有同步库可用</td><td><code>await asyncio.to_thread(fn, arg)</code></td><td>它只保证不卡住循环，并发上限变成线程数；GIL 依然存在</td></tr>
+<tr><td>一段 CPU 密集计算</td><td><code>run_in_executor</code> 配进程池，提交可 pickle 的可调用对象</td><td>线程池对 GIL 无用；进程池有序列化与启动成本，小任务不划算</td></tr>
+<tr><td>整个接口都是同步逻辑</td><td>把 handler 写成普通 <code>def</code>，交给框架的线程池</td><td>比在 <code>async def</code> 里做同步调用安全；但会占用全局线程池额度</td></tr>
+<tr><td>并发调多个下游</td><td><code>TaskGroup</code> 加 <code>Semaphore</code>，每个任务单独设超时</td><td>上限按下游能承受的连接数反推，不是按任务数</td></tr>
+</tbody>
+</table>
+
+<p>与阻塞有关的几个参数与默认值：</p>
+<table>
+<thead><tr><th>参数 / 接口</th><th>作用</th><th>默认值</th><th>什么时候需要改</th></tr></thead>
+<tbody>
+<tr><td><code>PYTHONASYNCIODEBUG</code></td><td>启动即打开 asyncio 调试模式</td><td>未设置（关）</td><td>本地与压测环境排查时开；生产不开</td></tr>
+<tr><td><code>loop.slow_callback_duration</code></td><td>回调执行超过它就打 WARNING</td><td>0.1 秒</td><td>想抓更细的阻塞时调到几十毫秒，噪音会变多</td></tr>
+<tr><td><code>asyncio.to_thread</code> 用的默认线程池</td><td>同步调用的执行位置</td><td>随版本变化，以 <code>ThreadPoolExecutor</code> 文档的默认 <code>max_workers</code> 为准</td><td>需要精确控制并发时自己建 executor 并显式传入</td></tr>
+<tr><td>框架线程池额度（<code>anyio</code> 限流器）</td><td>普通 <code>def</code> handler 与 <code>to_thread</code> 共用的上限</td><td>以 anyio 版本的 <code>total_tokens</code> 实际值为准，量级是几十</td><td>同步 handler 多、且下游能吃下更多并发时上调；内存或下游先到瓶颈时下调</td></tr>
+<tr><td><code>asyncio.timeout</code></td><td>上下文管理器形式的超时（3.11 起）</td><td>无默认，必须显式给</td><td>所有对外调用都要给；对纯计算段落无效，原因见原理层</td></tr>
+<tr><td><code>asyncio.Semaphore</code></td><td>限制同时在跑的任务数</td><td>无默认</td><td>任务数上百就必须加；按下游连接数反推</td></tr>
+<tr><td>ruff 的 <code>ASYNC</code> 规则集</td><td>静态抓出 async 函数里的同步调用</td><td>未启用</td><td>一律开；这是唯一零运行时成本的拦截手段</td></tr>
+</tbody>
+</table>
+
+<p>为什么一次阻塞会放大到全部请求、为什么线程池对 CPU 密集没用、为什么超时对纯计算无效——都在下面几节。</p>
+
+<h2>② 原理 · 协作式调度：只有 await 才让出控制权</h2>
+<p>搞清这一节能解决的现象是：QPS 上不去、延迟随并发线性恶化、CPU 使用率却只有百分之二十，于是被误判成「机器不够」。asyncio 是<strong>单线程事件循环加协程协作式调度</strong>。循环从就绪队列取一个协程跑，跑到 <code>await</code> 且确实需要等待时，协程交回控制权，循环再取下一个。关键推论：<strong>不 await 的代码，事件循环无法中断它</strong>。一段纯计算、一次同步 socket 调用、一个 <code>time.sleep</code>，期间整个循环停转，所有已就绪的协程一个都推进不了。</p>
+<p>CPU 不高是因为大家都在等一个被阻塞的线程，而不是在算东西——这正是上面第 4 步压测对照能把它认出来的原因。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -80,7 +264,7 @@ sequenceDiagram
     participant R2 as 请求 2 协程
     participant RN as 其余 998 个协程
     L->>R1: 调度执行
-    R1->>R1: requests.get 同步阻塞 200ms
+    R1->>R1: 同步客户端阻塞 200ms
     Note over L: 循环停转，就绪队列无人被调度
     R2--xL: 已就绪但拿不到执行权
     RN--xL: 同样全部排队
@@ -91,7 +275,8 @@ sequenceDiagram
     L->>RN: 改用 await 之后<br/>1000 个请求的等待重叠进行，总耗时约 200ms
 </div>
 
-<h2>五类最常见的阻塞源</h2>
+<h2>② 原理 · 五类最常见的阻塞源</h2>
+<p>搞清这一节能解决的现象是：知道有阻塞，但不知道从哪些库开始找。下表左列按出现频率排序，右列是「还没来得及换库时」的过渡手段。</p>
 <table>
 <thead><tr><th>阻塞源</th><th>典型写法</th><th>替代方案</th><th>过渡手段</th></tr></thead>
 <tbody>
@@ -99,7 +284,7 @@ sequenceDiagram
 <tr><td>同步数据库驱动</td><td><code>psycopg2</code>、同步 SQLAlchemy Session、<code>pymysql</code></td><td><code>asyncpg</code>、<code>aiomysql</code>、SQLAlchemy 异步引擎</td><td>整个 handler 写成普通 <code>def</code>，交给线程池</td></tr>
 <tr><td>CPU 密集计算</td><td>大循环、序列化巨大对象、图像处理、加解密</td><td>下沉到释放 GIL 的 C 扩展</td><td><code>run_in_executor</code> 配进程池，线程池对 GIL 无效</td></tr>
 <tr><td>同步 sleep 与锁</td><td><code>time.sleep</code>、<code>threading.Lock</code>、<code>queue.Queue.get</code></td><td><code>asyncio.sleep</code>、<code>asyncio.Lock</code>、<code>asyncio.Queue</code></td><td>无，必须换</td></tr>
-<tr><td>大文件同步读写</td><td><code>open().read()</code> 读几百 MB、日志同步落盘</td><td><code>aiofiles</code>，或分块 + <code>to_thread</code></td><td>小文件其实可以接受，别过度改造</td></tr>
+<tr><td>大文件同步读写</td><td><code>open().read()</code> 读几百 MB、日志同步落盘</td><td><code>aiofiles</code>，或分块加 <code>to_thread</code></td><td>小文件其实可以接受，别过度改造</td></tr>
 <tr><td>隐藏在库里的阻塞</td><td>某些客户端的 DNS 解析、<code>import</code> 时读远程配置</td><td>预热到启动阶段</td><td>把可疑调用包进 <code>to_thread</code> 观察差异</td></tr>
 </tbody>
 </table>
@@ -110,42 +295,27 @@ sequenceDiagram
     <p>读一个几 KB 的配置文件，阻塞时间是微秒级，换成异步反而引入线程池调度开销。判断标准是量级：单次阻塞超过 1 毫秒才值得处理，超过 10 毫秒必须处理。别把「异步化」当成目标本身。</p>
 </div>
 
-<h2>怎么把阻塞找出来</h2>
-<pre><code class="language-python">import asyncio
+<h2>② 原理 · 三种探测手段各能看到什么</h2>
+<p>搞清这一节能解决的现象是：开了一堆工具却互相矛盾，不知道该信哪个。三种手段的可见范围不同，不是替代关系。</p>
+<table>
+<thead><tr><th>手段</th><th>输出</th><th>怎么判读</th></tr></thead>
+<tbody>
+<tr><td><code>loop.set_debug(True)</code> 加 <code>slow_callback_duration</code></td><td>Executing ... took 0.52 seconds 的 WARNING</td><td>日志里的文件行号就是阻塞点，直接改</td></tr>
+<tr><td>事件循环延迟指标</td><td>健康时个位数毫秒</td><td>持续超过几十到一百毫秒说明有阻塞或 worker 过载</td></tr>
+<tr><td><code>asyncio.all_tasks()</code> 计数</td><td>存活任务数</td><td>单调上涨说明任务泄漏（创建了但从不结束）</td></tr>
+<tr><td>ruff 的 <code>ASYNC</code> 规则集</td><td>静态告警</td><td>能抓出 async 函数里的 <code>time.sleep</code>、同步 open、同步 HTTP 客户端等</td></tr>
+<tr><td>CPU 低但延迟高</td><td>监控图形</td><td>几乎可以断定是阻塞或等锁，而不是算力不足</td></tr>
+<tr><td>压测时吞吐不随并发上升</td><td>压测报告</td><td>并发从 10 加到 100 吞吐几乎不变，典型的串行化特征</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-python"># 排查悬空任务：循环延迟正常但存活任务数只涨不降时用它
+import asyncio
 import logging
-import time
 
 logger = logging.getLogger(__name__)
 
 
-# ---------- 手段一：调试模式 + 慢回调阈值（本地与压测环境）----------
-def enable_debug(threshold_s: float = 0.1) -&gt; None:
-    loop = asyncio.get_running_loop()
-    loop.set_debug(True)
-    # 任何一次执行超过阈值还没让出控制权的回调都会打 WARNING，
-    # 日志里带函数名与文件行号，直接定位到具体那一行
-    loop.slow_callback_duration = threshold_s
-    # 等价于启动时设置环境变量 PYTHONASYNCIODEBUG=1
-    # 注意调试模式本身有开销（会记录协程创建栈），不要在生产常开
-
-
-# ---------- 手段二：事件循环延迟探测（生产常驻，开销可忽略）----------
-async def monitor_loop_lag(interval: float = 1.0, warn_ms: float = 100.0) -&gt; None:
-    """睡 interval 秒，测量实际唤醒时间与预期的差值。
-    这个差值就是事件循环的排队延迟：健康时是个位数毫秒，
-    出现阻塞时会直接跳到几百毫秒甚至秒级。把它上报成指标，比看 CPU 有用得多。"""
-    while True:
-        start = time.perf_counter()
-        await asyncio.sleep(interval)
-        lag_ms = (time.perf_counter() - start - interval) * 1000
-        if lag_ms &gt; warn_ms:
-            # 配合 P99 曲线看：lag 突增的时间点就是阻塞发生的时间点
-            logger.warning("event_loop_lag", extra={"lag_ms": round(lag_ms, 1)})
-        # 正常情况下也可以定期上报，作为容量水位指标
-        metrics.gauge("asyncio.loop_lag_ms", max(lag_ms, 0.0))
-
-
-# ---------- 手段三：看还有多少任务在跑（排查悬空任务）----------
 async def dump_tasks() -&gt; None:
     tasks = [t for t in asyncio.all_tasks() if not t.done()]
     logger.info("alive_tasks", extra={"count": len(tasks)})
@@ -154,20 +324,8 @@ async def dump_tasks() -&gt; None:
         logger.info("task", extra={"name": t.get_name(), "coro": repr(t.get_coro())})
 </code></pre>
 
-<table>
-<thead><tr><th>手段</th><th>输出</th><th>怎么判读</th></tr></thead>
-<tbody>
-<tr><td><code>loop.set_debug(True)</code> + <code>slow_callback_duration</code></td><td>Executing ... took 0.52 seconds 的 WARNING</td><td>日志里的文件行号就是阻塞点，直接改</td></tr>
-<tr><td>事件循环延迟指标</td><td>健康时个位数毫秒</td><td>持续超过 50~100ms 说明有阻塞或 worker 过载</td></tr>
-<tr><td><code>asyncio.all_tasks()</code> 计数</td><td>存活任务数</td><td>单调上涨说明任务泄漏（创建了但从不结束）</td></tr>
-<tr><td>ruff 的 <code>ASYNC</code> 规则集</td><td>静态告警</td><td>能抓出 async 函数里的 <code>time.sleep</code>、同步 open、requests 等</td></tr>
-<tr><td>CPU 低但延迟高</td><td>监控图形</td><td>几乎可以断定是阻塞或等锁，而不是算力不足</td></tr>
-<tr><td>压测时吞吐不随并发上升</td><td>压测报告</td><td>并发从 10 加到 100 吞吐几乎不变，典型的串行化特征</td></tr>
-</tbody>
-</table>
-
-<h2>并发控制：gather、as_completed 与 TaskGroup</h2>
-<p>三个原语的差别主要在<strong>异常语义</strong>和<strong>资源边界</strong>，不是写法偏好。</p>
+<h2>② 原理 · 并发控制：gather、as_completed 与 TaskGroup</h2>
+<p>搞清这一节能解决的现象是：一批并发任务里有一个失败，结果剩下的任务还在后台跑、连接没关、日志里也看不到异常。三个原语的差别主要在<strong>异常语义</strong>和<strong>资源边界</strong>，不是写法偏好。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -254,8 +412,8 @@ async def gather_semantics():
 </tbody>
 </table>
 
-<h2>超时与取消：只能在 await 点生效</h2>
-<p>取消的实现方式是<strong>在协程下一次到达 <code>await</code> 时抛出 <code>CancelledError</code></strong>。所以一段不含 await 的纯计算、或者卡在同步阻塞里的代码，<strong>无法被取消</strong>——超时时间到了也只能等它自己跑完。这是「设了 3 秒超时为什么还是卡了 30 秒」的答案。</p>
+<h2>② 原理 · 超时与取消：只能在 await 点生效</h2>
+<p>搞清这一节能解决的现象是：「设了 3 秒超时为什么还是卡了 30 秒」，以及优雅关闭时连接池里的连接一直没被归还。取消的实现方式是<strong>在协程下一次到达 <code>await</code> 时抛出 <code>CancelledError</code></strong>。所以一段不含 await 的纯计算、或者卡在同步阻塞里的代码，<strong>无法被取消</strong>——超时时间到了也只能等它自己跑完。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -337,13 +495,13 @@ def called_inside_running_loop():
     return fut.result(timeout=5)
 </code></pre>
 
-<h2>两类最隐蔽的 bug</h2>
-<p>它们的共同点是<strong>不抛异常</strong>，只在日志里留一条容易被忽略的警告。</p>
+<h2>② 原理 · 两类最隐蔽的 bug</h2>
+<p>搞清这一节能解决的现象是：某个通知偶发不发出、某个后台任务偶发不执行，而日志里一条错误都没有。它们的共同点是<strong>不抛异常</strong>，只在日志里留一条容易被忽略的警告。</p>
 
 <table>
 <thead><tr><th>bug</th><th>写法</th><th>现象</th><th>正确做法</th></tr></thead>
 <tbody>
-<tr><td>忘记 <code>await</code></td><td><code>send_notify(uid)</code> 少写 await</td><td>协程对象被创建但从未执行，业务静默不生效；回收时可能打 coroutine was never awaited 警告</td><td>开 ruff 的 <code>RUF006</code>/<code>ASYNC</code> 规则；mypy 也能发现返回值未使用</td></tr>
+<tr><td>忘记 <code>await</code></td><td><code>send_notify(uid)</code> 少写 await</td><td>协程对象被创建但从未执行，业务静默不生效；回收时可能打 coroutine was never awaited 警告</td><td>开 ruff 的 <code>RUF006</code> 与 <code>ASYNC</code> 规则；mypy 也能发现返回值未使用</td></tr>
 <tr><td><code>create_task</code> 不持引用</td><td><code>asyncio.create_task(job())</code> 后不保存</td><td>事件循环只持弱引用，任务可能在完成前被 GC 掉，表现为「偶发不执行」</td><td>存进集合并在 done 回调里移除，或用 <code>TaskGroup</code></td></tr>
 <tr><td>后台任务异常无人看</td><td>裸 <code>create_task</code></td><td>异常被存在 Task 里，没人 await 就只在回收时打印</td><td>加 <code>task.add_done_callback</code> 统一记录异常</td></tr>
 <tr><td>吞掉 <code>CancelledError</code></td><td><code>except Exception</code> 之后又写了 <code>except BaseException: pass</code></td><td>优雅关闭失效，进程被强杀；3.8 起 CancelledError 继承 BaseException 正是为此</td><td>捕获后必须 <code>raise</code></td></tr>
@@ -370,12 +528,13 @@ def spawn(coro) -&gt; asyncio.Task:
     return task
 </code></pre>
 
-<h2>asyncio 与多线程的量级对照</h2>
+<h2>② 原理 · asyncio 与多线程的量级对照</h2>
+<p>搞清这一节能解决的现象是：为了「性能」把一个十并发的内部服务改成全异步，付出了一堆改造成本却测不出差别。</p>
 <table>
 <thead><tr><th>并发规模</th><th>asyncio</th><th>线程池</th><th>结论</th></tr></thead>
 <tbody>
 <tr><td>10 个并发</td><td>差别可忽略</td><td>差别可忽略</td><td>别为这个量级做异步改造</td></tr>
-<tr><td>100 个并发</td><td>内存增长可忽略</td><td>线程栈按 8MB 虚拟地址预留，实际驻留几十 KB 起</td><td>都能跑，线程池更好写</td></tr>
+<tr><td>100 个并发</td><td>内存增长可忽略</td><td>线程栈按虚拟地址预留，实际驻留几十 KB 起</td><td>都能跑，线程池更好写</td></tr>
 <tr><td>1000 个并发</td><td>协程各几 KB，内存增长在 MB 级</td><td>线程调度开销开始显著，上下文切换微秒级累加</td><td>asyncio 明显占优</td></tr>
 <tr><td>10000 个长连接</td><td>可行，单 worker 即可</td><td>不可行</td><td>长连接、WebSocket、SSE 只有 asyncio 这条路</td></tr>
 <tr><td>CPU 密集</td><td>更差（阻塞循环）</td><td>同样受 GIL 限制</td><td>都不行，必须多进程</td></tr>
@@ -383,20 +542,44 @@ def spawn(coro) -&gt; asyncio.Task:
 </tbody>
 </table>
 
-<h2>反模式速查</h2>
+<h2>③ 场景 · 按业务形态选并发模型与限流位置</h2>
+<p>把前面的判断收拢成按形态的结论，代价一并写出来。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>接口大部分时间在等下游（典型 API 网关型服务）</td><td>全链路异步库，每个外部调用都带超时</td><td>等待可以重叠，这是 asyncio 唯一真正的收益来源</td><td>整条链路都得换成异步库，混一个同步调用就白费</td></tr>
+<tr><td>只有同步 ORM 可用，短期换不掉</td><td>handler 写成普通 <code>def</code>，并按下游连接数调线程池额度</td><td>框架会把它放进线程池，比在 async 里同步调用安全得多</td><td>并发上限变成线程数；线程栈与连接数都要算进容量</td></tr>
+<tr><td>请求里有一段加解密或图像处理</td><td>进程池，或把这段能力拆成独立服务</td><td>线程池对 GIL 无效，放在事件循环里会卡住所有请求</td><td>序列化与进程启动成本；参数必须可 pickle</td></tr>
+<tr><td>一次请求要扇出调几十上百个下游</td><td><code>TaskGroup</code> 加 <code>Semaphore</code>，每个子调用单独超时</td><td>无界扇出会同时打爆下游与自己的句柄</td><td>总耗时变长；要明确「部分失败」时接口返回什么</td></tr>
+<tr><td>长连接、WebSocket、SSE 推送</td><td>asyncio，单 worker 也能扛上万连接</td><td>连接多但大部分时间空闲，线程模型撑不住</td><td>单进程故障影响面大，要靠多副本兜</td></tr>
+<tr><td>批量任务（导数据、对账）</td><td>不要塞进请求生命周期，交给后台 worker 或队列</td><td>请求级的取消会让任务在中途消失</td><td>要引入队列组件，见站内<a href="../../../architecture/messaging/">消息队列专题</a></td></tr>
+<tr><td>限流该放哪一层</td><td>入口按 QPS 限，出口按下游连接数限，两层都要有</td><td>只限入口，扇出仍会放大；只限出口，自己的内存先爆</td><td>两套阈值都要随下游容量调整</td></tr>
+<tr><td>并发只有几十、且团队不熟 asyncio</td><td>同步栈加线程池，别改造</td><td>这个量级两种模型测不出差别，改造成本却是实打实的</td><td>无；这是纯粹的省钱</td></tr>
+</tbody>
+</table>
+
+<p>反过来看就是这张反模式表：</p>
+
 <table>
 <thead><tr><th>反模式</th><th>现象</th><th>修法</th></tr></thead>
 <tbody>
 <tr><td>async 函数里用同步库</td><td>CPU 低、延迟随并发线性上升</td><td>换异步库，或 <code>asyncio.to_thread</code></td></tr>
 <tr><td><code>gather</code> 不限并发</td><td>句柄耗尽、下游被打挂、内存飙升</td><td><code>Semaphore</code> 限流并分批</td></tr>
 <tr><td>忘记 <code>await</code></td><td>逻辑静默不执行</td><td>开 ruff 异步规则，CI 里拦住</td></tr>
-<tr><td><code>create_task</code> 不持引用</td><td>任务偶发不执行</td><td>存集合 + done 回调移除，或 <code>TaskGroup</code></td></tr>
+<tr><td><code>create_task</code> 不持引用</td><td>任务偶发不执行</td><td>存集合加 done 回调移除，或 <code>TaskGroup</code></td></tr>
 <tr><td>事件循环里跑 CPU 计算</td><td>全部请求一起卡，且超时无效</td><td>进程池；线程池对 GIL 无用</td></tr>
 <tr><td>每个请求 <code>asyncio.run</code></td><td>连接池失效，开销成倍</td><td>整链路异步，或复用单循环</td></tr>
 <tr><td>吞掉 <code>CancelledError</code></td><td>优雅关闭失效，滚动更新期间请求被硬切</td><td>捕获后必须重抛</td></tr>
 <tr><td><code>finally</code> 里裸 await 做清理</td><td>清理被二次取消，连接泄漏</td><td>用 <code>asyncio.shield</code> 包住</td></tr>
+<tr><td>每请求新建 HTTP 客户端</td><td>连接无法复用，延迟里多出建连与握手</td><td>在 <code>lifespan</code> 里建一个并注入</td></tr>
 </tbody>
 </table>
+
+<p><strong>不适用边界</strong>：接口慢但事件循环延迟正常，说明瓶颈在下游或 SQL，属于数据库与链路问题，见站内<a href="../../../observability/performance/">后端性能优化专题</a>；worker 数、进程模型、WSGI 与 ASGI 契约在<a href="../web/">《Python Web 服务的部署形态》</a>；线程、进程、协程三条路线的取舍与 GIL 的确切约束在<a href="../concurrency/">《Python 并发的三条路线与选择》</a>；内存只涨不降、指标多进程串号、优雅关闭的完整链路在<a href="../fastapi-production/">《Python 服务上生产》</a>；对象开销与热路径的单操作成本在<a href="../core/">《Python 运行时机制》</a>；框架怎么分派 async 与 sync handler、依赖注入的执行时机在<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
+<p>这条路径上，上一篇解决的是「三套环境装出同一套依赖」，本篇进入运行期的并发正确性与延迟，下一篇再把视角挪到进程之外：探针、优雅关闭、日志与发布。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../fastapi-dependencies/">← 上一步：依赖与环境管理：从 pip 到 uv</a> · <a href="../fastapi-production/">下一步：Python 服务上生产：进程模型、优雅关闭与可观测性 →</a></p>
 
 <h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
@@ -404,6 +587,8 @@ def spawn(coro) -&gt; asyncio.Task:
     <div class="callout-title">避坑清单</div>
     <ul>
         <li>在 async 函数里用 <code>requests</code>、同步 ORM、<code>time.sleep</code>：整个 worker 串行化，CPU 却看不出异常，最容易误诊为「机器不够」。</li>
+        <li>只看 CPU 和 QPS 不看事件循环延迟：这个指标是 asyncio 服务最该常驻的健康信号，出问题时它先动。</li>
+        <li>用单请求耗时判断有没有阻塞：必须做并发对照，吞吐不随并发上升才是串行化的证据。</li>
         <li><code>asyncio.gather</code> 一把提交上万任务：文件描述符耗尽、下游连接被打爆，还会因为超时重试形成二次冲击。</li>
         <li>以为 <code>gather</code> 抛异常后其他任务停了：默认它们还在后台跑，持有的连接和句柄全部泄漏。</li>
         <li><code>return_exceptions=True</code> 之后不检查返回值类型：异常被当成正常结果写进了业务数据。</li>
@@ -411,10 +596,12 @@ def spawn(coro) -&gt; asyncio.Task:
         <li><code>create_task</code> 之后不保存引用：事件循环只持弱引用，任务可能在跑完之前被 GC，表现为「偶发丢消息」。</li>
         <li>后台任务不加 done 回调记异常：任务里的报错只在对象被回收时打印，等于没有监控。</li>
         <li>给 CPU 密集代码设超时：取消只在 await 点生效，纯计算段落根本无法被打断，超时形同虚设。</li>
+        <li>用线程池跑 CPU 密集任务：GIL 让它们互相排队，换成进程池才有意义。</li>
         <li>在 <code>finally</code> 里直接 await 做清理：这段清理自身可能被取消打断，连接没归还，池很快耗尽。</li>
         <li>捕获 <code>CancelledError</code> 后不重抛：优雅关闭失效，发布期间在途请求被硬切。</li>
         <li>在已有事件循环里调 <code>asyncio.run</code>：直接 RuntimeError；跨线程调用要用 <code>run_coroutine_threadsafe</code>。</li>
-        <li>只看 CPU 和 QPS 不看事件循环延迟：这个指标是 asyncio 服务最该常驻的健康信号，出问题时它先动。</li>
+        <li>每个请求新建一个 HTTP 客户端：连接池形同虚设，延迟里凭空多出建连与 TLS 握手。</li>
+        <li>把 asyncio 调试模式常开在生产：它会记录协程创建栈，排查工具自己变成性能问题。</li>
     </ul>
 </div>
                     </div>

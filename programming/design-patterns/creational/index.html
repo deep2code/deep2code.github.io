@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="创建型模式的真实取舍：单例最大的问题不是线程安全写法而是全局可变状态，它带来难测试、隐藏依赖、初始化顺序不可控，容器化下单例只是进程内单例；工厂只有在调用方不该知道具体类型时才成立，抽象工厂在业务代码里几乎用不到；Builder 要区分参数过多的可读性问题与分步构造校验不变量两种用途；对象池只在创建成本远高于管理成本时值得，必须处理借出超时、泄漏检测与有效性校验；最后给出构造器注入与字段注入的可测性差异。">
+    <meta name="description" content="创建型模式三段式：先给「场景 → 最简写法 → 什么时候才升级成完整模式」的可抄代码，包括包级函数、一次性初始化、选项函数、直接用驱动自带连接池，以及轻量创建手段在 Java 与 Go 与 Python 里的速查；再讲单例真正的问题是全局可变状态、写法差异（volatile 与反序列化与反射）、工厂在只有一个实现时退化成样板、Builder 两种用途里只有分步校验不可替代、对象池的状态机与参数矩阵、构造器注入与字段注入的可测性差异；最后给按对象形态选创建方式的决策矩阵与不适用边界。">
     <meta name="keywords" content="常用设计模式,创建型模式,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/programming/design-patterns/creational/">
     <meta property="og:title" content="创建型模式的真实取舍：单例的全局状态代价、工厂的边界与对象池 - 常用设计模式 - 资深码农">
-    <meta property="og:description" content="创建型模式的真实取舍：单例最大的问题不是线程安全写法而是全局可变状态，它带来难测试、隐藏依赖、初始化顺序不可控，容器化下单例只是进程内单例；工厂只有在调用方不该知道具体类型时才成立，抽象工厂在业务代码里几乎用不到；Builder 要区分参数过多的可读性问题与分步构造校验不变量两种用途；对象池只在创建成本远高于管理成本时值得，必须处理借出超时、泄漏检测与有效性校验；最后给出构造器注入与字段注入的可测性差异。">
+    <meta property="og:description" content="创建型模式三段式：先给「场景 → 最简写法 → 什么时候才升级成完整模式」的可抄代码，包括包级函数、一次性初始化、选项函数、直接用驱动自带连接池，以及轻量创建手段在 Java 与 Go 与 Python 里的速查；再讲单例真正的问题是全局可变状态、写法差异（volatile 与反序列化与反射）、工厂在只有一个实现时退化成样板、Builder 两种用途里只有分步校验不可替代、对象池的状态机与参数矩阵、构造器注入与字段注入的可测性差异；最后给按对象形态选创建方式的决策矩阵与不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/design-patterns/creational/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="创建型模式的真实取舍：单例的全局状态代价与工厂的边界 - 常用设计模式">
-    <meta name="twitter:description" content="创建型模式的真实取舍：单例最大的问题不是线程安全写法而是全局可变状态，它带来难测试、隐藏依赖、初始化顺序不可控，容器化下单例只是进程内单例；工厂只有在调用方不该知道具体类型时才成立，抽象工厂在业务代码里几乎用不到；Builder 要区分参数过多的可读性问题与分步构造校验不变量两种用途；对象池只在创建成本远高于管理成本时值得，必须处理借出超时、泄漏检测与有效性校验；最后给出构造器注入与字段注入的可测性差异。">
+    <meta name="twitter:description" content="创建型模式三段式：先给「场景 → 最简写法 → 什么时候才升级成完整模式」的可抄代码，包括包级函数、一次性初始化、选项函数、直接用驱动自带连接池，以及轻量创建手段在 Java 与 Go 与 Python 里的速查；再讲单例真正的问题是全局可变状态、写法差异（volatile 与反序列化与反射）、工厂在只有一个实现时退化成样板、Builder 两种用途里只有分步校验不可替代、对象池的状态机与参数矩阵、构造器注入与字段注入的可测性差异；最后给按对象形态选创建方式的决策矩阵与不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,7 +73,102 @@
                     <div class="article-content">
 <p>创建型模式解决的是同一个问题：<strong>谁来决定「用哪个具体类、用哪个实例、什么时候创建」</strong>。这个决定权放在调用方手里最简单，放出去就需要一道接缝。这篇不讲单例的四种写法，而讲每个创建型模式的<strong>真实代价</strong>：单例为什么难测试、工厂在什么条件下退化成纯样板、Builder 的两种用途里只有一种不可替代、对象池在 GC 语言里什么时候反而更慢，以及为什么依赖注入是创建型模式的现代答案。</p>
 
-<h2>创建职责的四个去处</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：七个创建场景各自的最简写法与升级时机，一段可抄的 Go 代码（包级函数、一次性初始化、选项函数、直接用驱动自带的连接池），以及轻量创建手段在 Java 与 Go 与 Python 里的对应速查。</li>
+        <li><strong>② 原理</strong>：单例真正的问题是全局可变状态、写法差异背后的 volatile 与反序列化与反射、工厂在只有一个实现时为什么退化成样板、Builder 两种用途的区别、对象池的生命周期状态机与参数矩阵、注入方式对可测性的影响。</li>
+        <li><strong>③ 场景</strong>：按对象形态选创建方式的决策矩阵、每种选择的代价，以及创建型模式管不到的那部分。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 场景到最简写法：先用函数，别急着建类</h2>
+<p>创建型模式最常见的浪费是「一上来就建工厂和接口」。下表按场景给最简写法，右边两列给出什么时候才值得升级、以及最容易搞错的地方。为什么这些最简写法足够，见原理层。</p>
+
+<table>
+<thead><tr><th>场景</th><th>最简写法</th><th>什么时候才升级成完整模式</th><th>最常见的错误做法</th></tr></thead>
+<tbody>
+<tr><td>一组无状态工具逻辑</td><td>包级函数或静态方法，不要实例</td><td>需要按环境替换整套实现时才给它接口</td><td>套上单例仪式，写 getInstance 和私有构造器</td></tr>
+<tr><td>初始化昂贵、之后只读：词典、编译好的正则、汇率表</td><td>一次性初始化的包级变量（Go 的 <code>sync.OnceValue</code>、Java 的静态内部类持有者）</td><td>需要按 key 缓存多份实例时，才轮到双重检查锁</td><td>把读配置、建连接写进静态初始化块</td></tr>
+<tr><td>两三个实现按配置选一个</td><td>一张从 key 到构造函数的 map，未知 key 显式失败</td><td>必须整族产品一起替换时才考虑抽象工厂</td><td>只有一个实现也写接口加工厂，白多一跳</td></tr>
+<tr><td>构造参数多且大半可选</td><td>命名参数与默认值、record；Go 用选项函数</td><td>参数分阶段到达且要在出口统一校验不变量时才用 Builder</td><td>先 new 一个空对象再到处 setter，中间态被别处看到</td></tr>
+<tr><td>以一个模板对象为基础做副本</td><td>写一个显式的拷贝函数，字段逐个列出来</td><td>结构深且层级多时再引入序列化深拷贝</td><td>用浅拷贝，模板里的集合被所有副本共享</td></tr>
+<tr><td>复用昂贵连接：数据库、HTTP、消息客户端</td><td>直接用驱动或客户端自带的池，只调参数</td><td>只有自研协议客户端才需要自己写池</td><td>给普通对象做池化，或自己再包一层池</td></tr>
+<tr><td>依赖多、生命周期各不相同</td><td>交给容器，构造器注入</td><td>创建需要运行期入参时才写 provider 或工厂</td><td>字段注入，再在方法体里取单例</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-go">// 场景一：无状态逻辑就是一个函数。没有状态就没有「实例」的必要，更没有单例的必要
+func NormalizePhone(s string) string {
+    return strings.TrimPrefix(strings.ReplaceAll(s, " ", ""), "+86")
+}
+
+// 场景二：初始化昂贵且之后只读 —— 一次性初始化，不要手写双重检查锁
+// 注意：函数体内 panic 也算「已执行一次」，后续调用不会重试而是重放那次 panic
+var loadRates = sync.OnceValue(func() map[string]int64 {
+    return mustLoadRates("/etc/app/rates.json")
+})
+
+// 场景三：可选参数多 —— 选项函数。默认值集中一处，调用方只写要改的那几项
+type Client struct {
+    timeout time.Duration
+    retries int
+}
+
+type Option func(*Client)
+
+func WithTimeout(d time.Duration) Option { return func(c *Client) { c.timeout = d } }
+func WithRetries(n int) Option           { return func(c *Client) { c.retries = n } }
+
+func NewClient(opts ...Option) (*Client, error) {
+    c := &amp;Client{timeout: 2 * time.Second, retries: 1} // 默认值写在构造入口，不散落到调用方
+    for _, o := range opts {
+        o(c)
+    }
+    // 校验放在构造出口：对象一旦返回就必须是完全就绪的，不留「构造完但不可用」的中间态
+    if c.timeout &lt;= 0 {
+        return nil, fmt.Errorf("timeout must be positive, got %v", c.timeout)
+    }
+    if c.retries &lt; 0 {
+        return nil, fmt.Errorf("retries must not be negative, got %d", c.retries)
+    }
+    return c, nil
+}
+
+// 场景四：昂贵资源用现成的池，自己只负责调参数
+func openDB(dsn string) (*sql.DB, error) {
+    db, err := sql.Open("mysql", dsn) // Open 不建连接，第一次查询或 Ping 才建
+    if err != nil {
+        return nil, err
+    }
+    db.SetMaxOpenConns(20)                   // 上限按数据库承载能力设，调大不等于更快
+    db.SetMaxIdleConns(20)                   // 与上限持平，避免高峰期反复建连又立刻关掉
+    db.SetConnMaxIdleTime(10 * time.Minute)  // 必须小于数据库或中间设备的空闲断连时间
+    db.SetConnMaxLifetime(30 * time.Minute)  // 略小于负载均衡回收长连接的时间
+    if err := db.PingContext(context.Background()); err != nil {
+        return nil, err // 启动期就暴露配置错误，而不是等第一个请求
+    }
+    return db, nil
+}</code></pre>
+
+<p>同样的四种手段在不同语言里叫法不同，这张表用来对照着搬：</p>
+
+<table>
+<thead><tr><th>要做的事</th><th>Java</th><th>Go</th><th>Python</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>只初始化一次</td><td>静态内部类持有者，或枚举</td><td><code>sync.OnceValue</code>（1.21 起）</td><td>模块级变量，或 <code>functools.lru_cache</code></td><td>初始化里抛异常也算执行过，后续不会重试</td></tr>
+<tr><td>可选参数</td><td>record 配若干静态工厂方法</td><td>选项函数</td><td>关键字参数与默认值</td><td>Python 的默认参数不要用可变对象，它在函数定义时只求值一次</td></tr>
+<tr><td>按 key 选实现</td><td><code>Map</code> 到 <code>Supplier</code></td><td>map 到构造函数</td><td>dict 到 callable</td><td>未知 key 一律显式失败，不要回退默认实现</td></tr>
+<tr><td>产出不可变对象</td><td>record、<code>List.copyOf</code></td><td>值语义加不导出字段</td><td><code>dataclass(frozen=True)</code></td><td>要冻结集合本身，只冻结引用等于没冻结</td></tr>
+<tr><td>复用连接</td><td>连接池组件（如 HikariCP）</td><td><code>database/sql</code> 自带池</td><td>驱动自带池或 ORM 的池</td><td>各家参数名不同，默认值以自己版本的文档或配置输出为准</td></tr>
+<tr><td>把时钟这类隐藏依赖显式化</td><td><code>java.time.Clock</code></td><td>传一个 <code>func() time.Time</code></td><td>注入一个 now 函数</td><td>不注入就测不了过期、跨月、闰年这些边界</td></tr>
+</tbody>
+</table>
+
+<p>用法层到这里就够干活了。下面的原理层解释这些写法为什么成立：单例的四个结构性缺陷、写法之间的真实差异、池化的收益公式，以及注入方式为什么是可测性问题而不是风格问题。</p>
+
+<h2>② 原理 · 创建职责的四个去处</h2>
 <p>先把选项摆清楚。一个对象的创建职责只有四个可能的落点，模式讨论的其实是「该落在哪一格」。落点越靠右，调用方知道得越少，但装配链越长、启动期越重、静态可读性越差。</p>
 
 <div class="mermaid">
@@ -100,7 +195,7 @@ flowchart TB
     Q --> L4
     </div>
 
-<h2>单例真正的问题：它是全局可变状态</h2>
+<h2>② 原理 · 单例真正的问题：它是全局可变状态</h2>
 <p>面试里问单例，答案总是绕着线程安全转。<strong>线程安全只是写法问题，静态内部类持有者或枚举一行就解决；单例真正的问题是它是全局可变状态</strong>，这四个结构性缺陷和写法无关，换任何写法都存在。</p>
 
 <table>
@@ -119,7 +214,7 @@ flowchart TB
 <p>本地限流器写成单例，按「每秒 100 次」配置。服务扩到 6 个副本后，实际放行 600 次每秒，下游被打挂。单例的语义在多副本部署下静默改变，而代码一行都没改，这是最难复盘的一类问题。</p>
 </div>
 
-<h2>写法只值一张表：volatile、反序列化、反射</h2>
+<h2>② 原理 · 写法只值一张表：volatile、反序列化、反射</h2>
 <p>写法这件事不值得展开，一张表加三条结论就够。结论是：<strong>Java 里首选枚举，需要懒加载就用静态内部类持有者，双重检查锁只在需要按参数创建多个实例的场景才值得手写</strong>。</p>
 
 <table>
@@ -135,7 +230,7 @@ flowchart TB
 
 <p>三条必须知道的细节：一是<strong>双重检查锁的字段必须是 volatile</strong>，因为创建对象包含分配内存、执行构造器、引用指向内存三步，后两步允许重排，别的线程可能看到一个字段还是默认值的半成品；二是<strong>实现了 Serializable 的单例会在反序列化时被创建出第二个实例</strong>，除非提供 readResolve 返回已有实例；三是<strong>反射可以绕过私有构造器</strong>，真要防就在构造器里检查实例是否已存在并抛异常，或者直接用枚举。</p>
 
-<h2>什么时候单例仍然合理</h2>
+<h2>② 原理 · 什么时候单例仍然合理</h2>
 <p>单例不是禁用项，它只是被用在了太多不该用的地方。判断口径很简单：<strong>无状态，或者状态不可变且初始化昂贵</strong>，这两种情况下全局共享一份是对的；只要它持有可变状态，就该交给容器并作为依赖注入。</p>
 
 <div class="mermaid">
@@ -150,7 +245,7 @@ flowchart TB
     Q3 -->|"不需要"| NO2["作为容器 Bean 注入<br/>保证可替换、可观测"]
     </div>
 
-<h2>工厂的价值边界：只有一个实现时它是纯样板</h2>
+<h2>② 原理 · 工厂的价值边界：只有一个实现时它是纯样板</h2>
 <p>工厂的价值只在一个条件下成立：<strong>调用方不应该知道具体类型</strong>。支付渠道按商户配置切换、存储后端按环境切换、协议解析器按版本号切换，这些调用方确实不该知道。反过来，如果只有一个实现，工厂做的事就是把 new 换了个名字，代价是多一个文件、多一跳跳转、以及 IDE 里点不进真正的实现。</p>
 
 <table>
@@ -170,7 +265,7 @@ flowchart TB
 <p>工厂里的分支数小于 2 就删掉工厂。分支数大于 5 且会持续增删，就把 switch 换成注册表；但注册表的代价是调用点无法静态搜索，务必把选中的 key 打进日志和链路追踪标签。</p>
 </div>
 
-<h2>Builder 的两种用途，只有一种不可替代</h2>
+<h2>② 原理 · Builder 的两种用途，只有一种不可替代</h2>
 <p>Builder 被混为一谈的两种用途必须分开：<strong>一种是解决构造参数过多的可读性问题，另一种是需要分步构造并在最后校验不变量</strong>。前者在现代语言里有更轻的答案（命名参数、默认参数、record 加静态工厂），后者才是 Builder 真正的价值。</p>
 
 <table>
@@ -235,7 +330,7 @@ record Address(String province, String city, String detail, String zipCode) {
 
 <p>原型模式在这个语境下也可以一句话说完：<strong>它的真实价值只剩「以一个已有对象为模板做拷贝」</strong>，例如按模板生成配置、按默认值生成请求对象。Java 的 clone 契约有名的难用（默认是浅拷贝、需要配合 Cloneable 标记接口、final 字段无法赋值），实践中直接写拷贝构造器或用序列化做深拷贝更清楚。要特别小心的是<strong>浅拷贝共享可变集合</strong>：模板对象里的 List 被所有拷贝共享，一个请求往里加一个元素，所有后续请求都看得到。</p>
 
-<h2>对象池：只有创建成本远高于管理成本时才值得</h2>
+<h2>② 原理 · 对象池：只有创建成本远高于管理成本时才值得</h2>
 <p>池化的收益公式很朴素：<strong>省下的创建成本要明显大于借还管理、校验、超时控制带来的成本与风险</strong>。连接和线程满足这个条件，因为它们的创建涉及系统调用、TCP 握手、TLS 协商、认证鉴权，耗时在毫秒量级；而普通对象在现代分代收集器下分配只是指针碰撞，年轻代回收接近免费，池化反而让对象长期存活、晋升老年代、增加标记与跨代引用开销，<strong>在 GC 语言里给普通对象做池化通常更慢</strong>。</p>
 
 <div class="mermaid">
@@ -332,7 +427,7 @@ func (p *Pool) Release(c *Conn) {
     }
 }</code></pre>
 
-<h2>依赖注入：创建型模式的现代答案</h2>
+<h2>② 原理 · 依赖注入：创建型模式的现代答案</h2>
 <p>把创建职责交给容器之后，单例、工厂、原型这三个模式的大半场景就消失了：作用域由容器声明，选哪个实现由条件装配决定，对象生命周期有统一的初始化与销毁回调。剩下的关键选择只有一个——<strong>依赖怎么进来</strong>。构造器注入和字段注入的差别不是风格问题，而是可测性和正确性问题。</p>
 
 <table>
@@ -377,6 +472,29 @@ public final class CouponService {
         return c.expireAt().isAfter(java.time.LocalDateTime.now(clock)) &amp;&amp; c.amount() &gt;= minAmount;
     }
 }</code></pre>
+
+<h2>③ 场景 · 按对象形态选创建方式</h2>
+
+<p>把前面的判断按真实场景收成一张表。注意第二列不是「用哪个模式」，而是「创建职责放在哪里」——这才是创建型模式真正在讨论的事。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>多副本部署下需要全局唯一的计数、序号、限流</td><td>状态放 Redis 或数据库，进程内只留无状态逻辑</td><td>进程内单例在 N 个副本下就是 N 份，阈值被放大 N 倍</td><td>多一次网络往返，还要设计中间件不可用时的降级口径</td></tr>
+<tr><td>配置、汇率表、路由表这类启动后基本只读的数据</td><td>一次性初始化，更新时构造新副本再整份替换（原子引用）</td><td>读路径完全无锁，写入不影响正在读的请求</td><td>写放大：改一个字段也要复制整份，大对象上不划算</td></tr>
+<tr><td>要按运行期入参创建，例如按租户建一套客户端</td><td>工厂方法或带参数的 provider，容器只负责注入这个工厂</td><td>容器按类型装配，表达不了「按入参产出不同实例」</td><td>缓存与逐出要自己管，忘了逐出就是无界增长</td></tr>
+<tr><td>对象构造需要读配置文件、连库、预热缓存</td><td>构造器只赋值，IO 挪到显式的初始化阶段并接入就绪检查</td><td>构造器里做 IO 会让对象在测试里根本创建不出来</td><td>多一个启动阶段，要处理「已构造但未就绪」期间的请求</td></tr>
+<tr><td>自研协议的客户端需要复用连接</td><td>自己写有界池，四件事一个都不能少：借出超时、有效性校验、归还非阻塞、泄漏检测</td><td>缺任一件都会产生比原问题更难查的故障，且都在池耗尽时才爆发</td><td>实现与维护成本高，必须同时暴露 active、idle、pending 三个指标</td></tr>
+<tr><td>压测显示对象创建是热点</td><td>先分清是分配贵还是初始化贵：初始化贵才缓存，分配贵改数据结构与复用切片</td><td>GC 语言里分配接近指针碰撞，池化普通对象通常更慢</td><td>缓存引入生命周期与状态污染问题，排查难度上升</td></tr>
+<tr><td>遗留代码里到处是 getInstance</td><td>先在调用边界加一层可注入的包装，新代码只走包装，旧调用逐步替换</td><td>一次性全量替换的回归面不可控</td><td>过渡期两条路径并存，需要明确约定新代码禁用旧入口</td></tr>
+<tr><td>只是想让「层次看起来完整」</td><td>不要加工厂，直接构造</td><td>没有第二个实现时，工厂只是把 new 换了个名字</td><td>无；省下的那一跳是纯收益</td></tr>
+</tbody>
+</table>
+
+<p><strong>不适用边界</strong>：创建型模式只解决「谁来创建、创建几个」，解决不了创建出来之后的包装与访问控制（见 <a href="../structural/">结构型模式的边界价值</a>）和行为编排（见 <a href="../behavioral/">行为型模式的现代形态</a>）。容器的作用域、条件装配与循环依赖属于框架机制，见 <a href="../../java/spring-core/">Spring 核心机制</a>；连接池上限与数据库侧最大连接数、锁竞争的关系见 <a href="../../../database/mysql/">MySQL 专题</a>；「把依赖注进来之后怎么真的测出收益」见 <a href="../../testing/">测试策略与可测性设计</a>；对象长期存活对 GC 的影响见 <a href="../../java/jvm-tuning/">JVM 调优</a>。另外，如果问题其实是「一个对象承担了太多职责」，换任何创建方式都没用，那是拆分问题。</p>
+<p>这条路径上，上一篇给的是「要不要加抽象」的总纲，本篇把范围收到「谁来创建」，下一篇接着谈创建出来之后怎么包一层、包几层。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../">← 上一步：设计模式的本质与代价：接缝、SOLID 取舍与现代语言内建能力</a> · <a href="../structural/">下一步：结构型模式的边界价值：适配器防腐、装饰器与代理的分野、门面收窄依赖 →</a></p>
 
 <h2>最容易踩的坑</h2>
 

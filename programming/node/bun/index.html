@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Bun 同时是运行时、包管理器和工具链。本文拆解它的性能到底来自哪里：JavaScriptCore 替代 V8 带来的启动优势、Zig 实现的原生 API、包安装用全局缓存加硬链接省掉的文件操作，并用一个真实接口的耗时构成说明为什么「比 Node 快 3 倍」这类数字只在 hello world 基准里成立。最后给出包管理、测试、打包、运行时四个身份各自的生产风险判断与分阶段采用建议，以及与 Deno 的定位对照。">
+    <meta name="description" content="Bun 三段式：先给一份十分钟就能跑完的自查脚本、「要做什么 → 用哪条命令 → 注意什么」对照表和各项能力的边界速查，再拆解性能来源（JavaScriptCore 的启动路径、Zig 原生实现、全局缓存加硬链接的安装策略）以及一个真实接口耗时构成为什么让「快 3 倍」失效，最后给包管理、测试、打包、运行时四个身份各自的生产风险判断、分阶段采用顺序与最小验证动作、与 Deno 的定位对照和反模式清单。">
     <meta name="keywords" content="Bun,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/programming/node/bun/">
     <meta property="og:title" content="Bun 是什么、快在哪、能不能上生产 - 资深码农">
-    <meta property="og:description" content="Bun 同时是运行时、包管理器和工具链。本文拆解它的性能到底来自哪里：JavaScriptCore 替代 V8 带来的启动优势、Zig 实现的原生 API、包安装用全局缓存加硬链接省掉的文件操作，并用一个真实接口的耗时构成说明为什么「比 Node 快 3 倍」这类数字只在 hello world 基准里成立。最后给出包管理、测试、打包、运行时四个身份各自的生产风险判断与分阶段采用建议，以及与 Deno 的定位对照。">
+    <meta property="og:description" content="Bun 三段式：先给一份十分钟就能跑完的自查脚本、「要做什么 → 用哪条命令 → 注意什么」对照表和各项能力的边界速查，再拆解性能来源（JavaScriptCore 的启动路径、Zig 原生实现、全局缓存加硬链接的安装策略）以及一个真实接口耗时构成为什么让「快 3 倍」失效，最后给包管理、测试、打包、运行时四个身份各自的生产风险判断、分阶段采用顺序与最小验证动作、与 Deno 的定位对照和反模式清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/node/bun/">
     <meta property="og:site_name" content="资深码农">
@@ -26,11 +26,11 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Bun 是什么、快在哪、能不能上生产 - 资深码农">
-    <meta name="twitter:description" content="Bun 同时是运行时、包管理器和工具链。本文拆解它的性能到底来自哪里：JavaScriptCore 替代 V8 带来的启动优势、Zig 实现的原生 API、包安装用全局缓存加硬链接省掉的文件操作，并用一个真实接口的耗时构成说明为什么「比 Node 快 3 倍」这类数字只在 hello world 基准里成立。最后给出包管理、测试、打包、运行时四个身份各自的生产风险判断与分阶段采用建议，以及与 Deno 的定位对照。">
+    <meta name="twitter:description" content="Bun 三段式：先给一份十分钟就能跑完的自查脚本、「要做什么 → 用哪条命令 → 注意什么」对照表和各项能力的边界速查，再拆解性能来源（JavaScriptCore 的启动路径、Zig 原生实现、全局缓存加硬链接的安装策略）以及一个真实接口耗时构成为什么让「快 3 倍」失效，最后给包管理、测试、打包、运行时四个身份各自的生产风险判断、分阶段采用顺序与最小验证动作、与 Deno 的定位对照和反模式清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Bun 真的比 Node.js 快 3 倍吗？", "acceptedAnswer": {"@type": "Answer", "text": "在 http hello world 这类基准里能跑出这种倍数，在真实业务里通常看不出来。一个典型的订单查询接口耗时 48ms，其中数据库两条查询占 42ms、缓存 1ms，运行时真正参与的反序列化、业务处理和 JSON 序列化加起来只有 4ms 左右。即使 Bun 把这 4ms 砍掉一半，总耗时也只是从 48ms 变成 46ms。倍数差异之所以在基准里成立，是因为那里没有数据库，运行时开销就是全部耗时。所以看到性能宣传时先问一句：被测接口的瓶颈在哪。"}}, {"@type": "Question", "name": "Bun 为什么启动比 Node 快？", "acceptedAnswer": {"@type": "Answer", "text": "主要是引擎换了。Bun 用的是 WebKit 的 JavaScriptCore 而不是 V8，JSC 的解释器启动路径更短、初始化开销更小，对短生命周期进程有利。其次 Bun 用 Zig 实现了大量内置能力，避免了 Node 那套 JavaScript 内建模块在启动时的加载与编译。再加上它原生支持 TypeScript，不需要再套一层 ts-node 或 tsx 进程。这些优势在 CLI 工具、脚本、Serverless 冷启动上是实打实的，但对一个常驻几天的 HTTP 服务几乎没有意义。"}}, {"@type": "Question", "name": "bun install 为什么比 npm 快那么多？", "acceptedAnswer": {"@type": "Answer", "text": "两个原因。一是网络层：它高并发请求包元数据与 tarball，而不是像早期 npm 那样大量串行往返。二是文件层：它把包解压到全局缓存后用硬链接或写时复制的方式落到 node_modules，避免了逐文件拷贝这种最耗时的操作，同时省掉 npm 生命周期里大量的 lstat 与 mkdir 调用。这也解释了它的适用边界：在 CI 的冷缓存环境里提升最明显，在本地已有完整 node_modules 时差距会缩小。"}}, {"@type": "Question", "name": "Bun 现在能上生产吗？", "acceptedAnswer": {"@type": "Answer", "text": "分开看四个身份。作为包管理器风险最低，大量团队已经在 CI 里用它装依赖来省时间。作为测试运行器基本可用，Jest 兼容 API 覆盖了常见断言与钩子。作为打包器可用，但插件生态比 Vite 或 esbuild 少。作为运行时风险最高，取决于你的依赖有没有用到它未完全兼容的 Node API，以及你的 APM 探针、profiler、内存快照工具在 Bun 下有没有替代品。稳妥的路径是先只用它装依赖和跑测试，运行时留给 Node。"}}, {"@type": "Question", "name": "Bun 和 Deno 怎么选？", "acceptedAnswer": {"@type": "Answer", "text": "两者的设计出发点不同。Deno 从安全边界出发，默认不给网络、文件、环境变量权限，要靠显式参数开启，还带一套自己的标准库，npm 兼容是后来补上的。Bun 从兼容性和速度出发，目标就是尽量无痛替换 Node，能直接吃现有的 node_modules 与 package.json。如果你要迁移一个现成的 Node 项目，Bun 的摩擦更小；如果你在做需要严格权限隔离的新项目，或者看重内置标准库与一体化工具链的规范性，Deno 更合适。"}}, {"@type": "Question", "name": "在 CI 用 bun install 但本地用 npm 会有问题吗？", "acceptedAnswer": {"@type": "Answer", "text": "会。两套包管理器维护各自的锁文件，解析算法和对 peerDependencies 的处理并不完全一致，同一个 package.json 可能解析出不同的传递依赖版本。结果就是本地测试通过而 CI 构建出的产物依赖树不同，出现只在某一侧复现的 bug，而且排查时几乎不会第一时间怀疑到包管理器。要么全员统一用 bun 并只提交 bun.lock，要么统一用 npm，不要两套并行。"}}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Bun 真的比 Node.js 快 3 倍吗？", "acceptedAnswer": {"@type": "Answer", "text": "在 http hello world 这类基准里能跑出这种倍数，在真实业务里通常看不出来。一个典型的订单查询接口耗时 48ms，其中数据库两条查询占 42ms、缓存 1ms，运行时真正参与的反序列化、业务处理和 JSON 序列化加起来只有 4ms 左右。即使 Bun 把这 4ms 砍掉一半，总耗时也只是从 48ms 变成 46ms。倍数差异之所以在基准里成立，是因为那里没有数据库，运行时开销就是全部耗时。所以看到性能宣传时先问一句：被测接口的瓶颈在哪。"}}, {"@type": "Question", "name": "Bun 为什么启动比 Node 快？", "acceptedAnswer": {"@type": "Answer", "text": "主要是引擎换了。Bun 用的是 WebKit 的 JavaScriptCore 而不是 V8，JSC 的解释器启动路径更短、初始化开销更小，对短生命周期进程有利。其次 Bun 用 Zig 实现了大量内置能力，避免了 Node 那套 JavaScript 内建模块在启动时的加载与编译。再加上它原生支持 TypeScript，不需要再套一层 ts-node 或 tsx 进程。这些优势在 CLI 工具、脚本、Serverless 冷启动上是实打实的，但对一个常驻几天的 HTTP 服务几乎没有意义。"}}, {"@type": "Question", "name": "bun install 为什么比 npm 快那么多？", "acceptedAnswer": {"@type": "Answer", "text": "两个原因。一是网络层：它高并发请求包元数据与 tarball，而不是像早期 npm 那样大量串行往返。二是文件层：它把包解压到全局缓存后用硬链接或写时复制的方式落到 node_modules，避免了逐文件拷贝这种最耗时的操作，同时省掉 npm 生命周期里大量的 lstat 与 mkdir 调用。这也解释了它的适用边界：在 CI 的冷缓存环境里提升最明显，在本地已有完整 node_modules 时差距会缩小。"}}, {"@type": "Question", "name": "Bun 现在能上生产吗？", "acceptedAnswer": {"@type": "Answer", "text": "分开看四个身份。作为包管理器风险最低，大量团队已经在 CI 里用它装依赖来省时间。作为测试运行器基本可用，Jest 兼容 API 覆盖了常见断言与钩子。作为打包器可用，但插件生态比 Vite 或 esbuild 少。作为运行时风险最高，取决于你的依赖有没有用到它未完全兼容的 Node API，以及你的 APM 探针、profiler、内存快照工具在 Bun 下有没有替代品。稳妥的路径是先只用它装依赖和跑测试，运行时留给 Node。"}}, {"@type": "Question", "name": "Bun 和 Deno 怎么选？", "acceptedAnswer": {"@type": "Answer", "text": "两者的设计出发点不同。Deno 从安全边界出发，默认不给网络、文件、环境变量权限，要靠显式参数开启，还带一套自己的标准库，npm 兼容是后来补上的。Bun 从兼容性和速度出发，目标就是尽量无痛替换 Node，能直接吃现有的 node_modules 与 package.json。如果你要迁移一个现成的 Node 项目，Bun 的摩擦更小；如果你在做需要严格权限隔离的新项目，或者看重内置标准库与一体化工具链的规范性，Deno 更合适。"}}, {"@type": "Question", "name": "在 CI 用 bun install 但本地用 npm 会有问题吗？", "acceptedAnswer": {"@type": "Answer", "text": "会。两套包管理器维护各自的锁文件，解析算法和对 peerDependencies 的处理并不完全一致，同一个 package.json 可能解析出不同的传递依赖版本。结果就是本地测试通过而 CI 构建出的产物依赖树不同，出现只在某一侧复现的 bug，而且排查时几乎不会第一时间怀疑到包管理器。要么全员统一用 bun 并只提交 bun.lock，要么统一用 npm，不要两套并行。"}}, {"@type": "Question", "name": "怎么快速判断我的项目该不该用 Bun？", "acceptedAnswer": {"@type": "Answer", "text": "跑一份十分钟的自查就够了，四个依据。第一，扫 node_modules 里有没有 .node 二进制或需要 node-gyp 编译的包，有不可替代的就先别碰运行时。第二，在冷缓存下分别计时 bun install 与 npm ci，看 CI 能省下的分钟数是否值得推动全员换包管理器。第三，用 bun test 把完整测试套件跑一遍，逐条看失败用例而不是只看通过率。第四，从 APM 或日志里拆出目标接口的耗时构成，如果大头在数据库或下游调用，换运行时不会带来任何业务收益。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -72,8 +72,78 @@
                     <div class="article-content">
 <p>Bun 的讨论里混杂了太多基准图，反而把最该问的问题盖住了：<strong>它不是一个东西，而是三个——一个运行时、一个包管理器、一套工具链</strong>，这三者的成熟度和生产风险差了一个量级。包管理器现在就可以用，运行时要非常小心。这篇只解决选型判断：它快在哪、快多少是真的、四个身份分别能不能上生产。上手命令与工具链细节见 <a href="../bun-intro/">Bun 入门</a>，引擎与 Node 兼容层机制见 <a href="../bun-runtime/">Bun 运行时特性</a>，迁移实操见 <a href="../bun-migration/">从 Node.js 迁移</a>。</p>
 
-<h2>Bun 的三个身份：它到底替代了什么</h2>
-<p>Node 生态的现状是「一个运行时 + 十几个工具」，Bun 的产品定位就是把这些收进一个二进制。理解它替代了哪些工具，就能理解你可以分几步引入它。</p>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一份十分钟能跑完的自查脚本（依赖里有没有硬阻塞、CI 装依赖能省多少、测试套件能不能跑通、接口瓶颈在不在运行时），一张「要做什么 → 用哪条命令 → 注意什么」对照表，以及 Bun 各项能力的边界速查。</li>
+        <li><strong>② 原理</strong>：三个身份各自替代了什么、性能来源逐条拆解（JSC 的启动路径、Zig 原生实现、全局缓存加硬链接的安装策略），以及一个真实接口的耗时构成为什么让「快 3 倍」在业务里失效，附一次不骗人的基准测试怎么做。</li>
+        <li><strong>③ 场景</strong>：四个身份分别能不能上生产、每一步的准入线与最小验证动作、和 Node 与 Deno 怎么选，以及哪些情况根本不该指望换运行时。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 先跑这份自查，再决定要不要引入 Bun</h2>
+<p>「该不该在这个项目用 Bun」不是靠读文章决定的，是靠四个依据决定的：依赖里有没有硬阻塞、CI 装依赖能省多少、测试套件能不能跑通、你的接口瓶颈在不在运行时。下面这段十分钟内能跑完，注释写的是每一步为什么必须做，机制解释在原理层。</p>
+<pre><code class="language-bash"># ---- 十分钟自查：先拿到四个判断依据，再决定引不引入 ----
+
+# 0) 装上并锁定版本：Bun 迭代快，自查用的版本必须和将来 CI 里用的同一个
+curl -fsSL https://bun.sh/install | bash -s "bun-v1.2.21"
+bun --version &amp;&amp; bun --revision      # revision 在比对性能或提 issue 时都要带上
+
+# 1) 依据一：依赖里有没有硬阻塞。带 .node 二进制或需要编译的包是运行时迁移的死结
+find node_modules -name '*.node' -not -path '*/test/*' | sed 's#node_modules/##' | sort -u
+grep -l '"gypfile": *true' node_modules/*/package.json 2&gt;/dev/null
+
+# 2) 依据二：CI 装依赖能省多少。必须在冷缓存下各测一次，否则数据没有可比性
+rm -rf node_modules ~/.bun/install/cache &amp;&amp; time bun install
+rm -rf node_modules &amp;&amp; npm cache clean --force &amp;&amp; time npm ci
+
+# 3) 依据三：测试套件在 Bun 下能不能跑通。看失败用例，不要只看通过数
+bun test 2&gt;&amp;1 | tail -30
+
+# 4) 依据四：你的接口瓶颈在不在运行时。缺这一条，性能理由就是空的
+curl -so /dev/null -w 'total=%{time_total}s connect=%{time_connect}s\n' \
+  http://127.0.0.1:8080/api/orders/123
+# 再从 APM 或慢日志里拆出数据库与下游调用的占比：大头在那边就别指望换运行时
+
+# 5) 类型检查单独确认：Bun 只擦类型不校验，这一行永远不能被它替代
+npx tsc --noEmit</code></pre>
+<p>自查结论出来之后，按下表决定动手顺序。左列是你真正想解决的问题，右列是那条命令的边界——大部分「换了没效果」的抱怨都来自忽略右列。</p>
+<table>
+    <thead>
+        <tr><th>要做什么</th><th>用哪条命令</th><th>注意什么</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>让 CI 装依赖变快</td><td><code>bun install --frozen-lockfile</code></td><td>缓存 <code>~/.bun/install/cache</code> 且 key 带锁文件哈希；仓库里只留一种锁文件，本地也要一起换</td></tr>
+        <tr><td>本地起服务与热重启变快</td><td><code>bun --watch src/main.ts</code></td><td>生产仍用 node；<code>--hot</code> 是保留状态的热替换，语义不同，别混用</td></tr>
+        <tr><td>让单测套件跑得快</td><td><code>bun test</code></td><td>mock 机制与覆盖率口径都和 Jest 不同，阈值要重新标定基线</td></tr>
+        <tr><td>验证依赖在 Bun 下能不能用</td><td>先扫 <code>.node</code>，再 <code>bun test</code> 全跑一遍</td><td>官方兼容性列表只说明模块存在，不能替代实测</td></tr>
+        <tr><td>打包但要保留退回 Node 的能力</td><td><code>bun build --target=node --sourcemap=external</code></td><td>不要用 <code>--target=bun</code>，也不要在业务代码里出现 <code>Bun.*</code></td></tr>
+        <tr><td>提升线上 QPS 或降低 p99</td><td>先量接口耗时构成，再决定动不动运行时</td><td>大头在数据库或下游时，换运行时的收益接近零，原因见原理层</td></tr>
+        <tr><td>分发给不装 Node 的用户的 CLI</td><td><code>bun build --compile</code></td><td>产物内嵌整个运行时，体积在几十 MB 到 100MB 量级，不适合做服务端镜像</td></tr>
+        <tr><td>确认能不能急救式回退</td><td><code>grep -rn "Bun\." src/</code> 必须无输出</td><td>有一处专有 API，回退就要改代码，紧急时来不及</td></tr>
+    </tbody>
+</table>
+<p>下面这张是能力边界速查：只回答「这项能力现在能不能指望」，不能指望时用什么顶上。状态随版本推进，以你自己机器上 <code>bun --revision</code> 那个版本的实测为准，不要把它当成长期承诺。</p>
+<table>
+    <thead>
+        <tr><th>能力</th><th>现在能不能指望</th><th>为什么</th><th>指望不上时怎么办</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>装依赖与锁文件管理</td><td>可以</td><td>最成熟的一项，CI 加速是主流用法</td><td>网络受限或私有源鉴权复杂时退回 npm</td></tr>
+        <tr><td>直接执行 TypeScript</td><td>可以，但只转译不检查</td><td>做的是类型擦除，不做类型推导与校验</td><td><code>tsc --noEmit</code> 必须留在 CI，见 <a href="../typescript/">Node.js 项目里的 TypeScript 工程化</a></td></tr>
+        <tr><td>跑单测与集成测试</td><td>多数项目可以</td><td>Jest 风格断言与钩子覆盖度高</td><td>重度依赖 <code>jest.mock</code> 自动提升语义的套件留在 Jest</td></tr>
+        <tr><td>打包服务端产物</td><td>核心能力可以</td><td>基于自带的转译与打包实现</td><td>插件依赖强的构建链用 esbuild 或 Vite</td></tr>
+        <tr><td>作为生产运行时</td><td>取决于依赖与可观测性</td><td>兼容层是逐个 API 补齐的，不是转发给 Node</td><td>先只用工具链，运行时留给 node</td></tr>
+        <tr><td>APM 探针、火焰图、堆快照</td><td>多数指望不上</td><td>引擎与调试协议都不是 V8 那一套</td><td>手工埋点加 RSS 长期曲线兜底，细节见 <a href="../bun-runtime/">Bun 运行时机制</a></td></tr>
+        <tr><td><code>node:cluster</code> 多进程</td><td>指望不上</td><td>兼容层只有部分实现</td><td>改成多容器部署，本来在编排系统上就该这么做</td></tr>
+        <tr><td>native addon（N-API）</td><td>多数常见包可以，但不保证</td><td>靠 N-API 兼容，覆盖不到全部场景</td><td>找纯 JS 替代，或放弃迁运行时</td></tr>
+        <tr><td>内存上限精确控制</td><td>指望不上</td><td>没有 <code>--max-old-space-size</code> 的等价参数</td><td>靠容器 limit 加压测定容量，并多留余量</td></tr>
+    </tbody>
+</table>
+
+<h2>② 原理 · Bun 的三个身份：它到底替代了什么</h2>
+<p>搞清这一节能解决一个具体问题：为什么「引入 Bun」可以拆成五步走，而不是一次性的技术选型决定。Node 生态的现状是「一个运行时 + 十几个工具」，Bun 的产品定位就是把这些收进一个二进制，所以它的每一部分都能被单独替换、也能被单独退回。</p>
 <div class="mermaid">
 flowchart TB
     subgraph NODE["Node.js 生态：一个运行时加一堆工具"]
@@ -118,8 +188,8 @@ flowchart TB
     </tbody>
 </table>
 
-<h2>性能来源的诚实拆解</h2>
-<p>Bun 的快不是魔法，来源清楚且各自有明确的适用边界：</p>
+<h2>② 原理 · 性能来源的诚实拆解</h2>
+<p>搞清这一节能解决一个高频困惑：为什么别人贴的基准图快出好几倍，自己换完却什么都没发生。Bun 的快不是魔法，来源清楚且各自有明确的适用边界：</p>
 <p><strong>一是引擎换成了 JavaScriptCore。</strong>JSC（WebKit 的引擎）解释器启动路径比 V8 短、初始化开销小，所以进程启动快。这对 CLI、脚本、Serverless 冷启动是实打实的收益，对一个常驻运行几天的 HTTP 服务几乎没有意义。<strong>二是大量内置能力用 Zig 重写。</strong><code>Bun.serve</code>、文件读写、<code>bun:sqlite</code>、密码哈希这些走的是原生实现，少了 JS 与 C++ 之间的边界开销。<strong>三是包安装的 IO 策略。</strong>高并发拉取元数据与 tarball，解压进全局缓存后用硬链接或写时复制落地，省掉逐文件拷贝以及 npm 生命周期里海量的 <code>lstat</code>、<code>mkdir</code> 调用。</p>
 <table>
     <thead>
@@ -157,9 +227,10 @@ sequenceDiagram
     Note over RT,DB: 运行时能影响的只有那 4ms<br/>就算砍掉一半 总耗时也只从 48ms 到 46ms
     Note over CL,RD: 而 hello world 基准里 这 4ms 就是全部耗时<br/>差异于是被放大成 3 倍
 </div>
-<p>推论很直接：<strong>如果你的接口 p99 是 200ms 且大头在数据库，换运行时不会救你，该做的是加索引、改查询、加缓存。</strong>Bun 值得投入的地方是 CI 时长和本地开发体验这两项确定收益。</p>
+<p>推论很直接：<strong>如果你的接口 p99 是 200ms 且大头在数据库，换运行时不会救你，该做的是加索引、改查询、加缓存。</strong>Bun 值得投入的地方是 CI 时长和本地开发体验这两项确定收益。接口耗时到底怎么拆、事件循环延迟怎么量，见 <a href="../performance/">Node.js 性能诊断</a>。</p>
 
-<h2>怎么做一次不骗人的基准测试</h2>
+<h2>② 原理 · 怎么做一次不骗人的基准测试</h2>
+<p>搞清这一节能解决的是「数据可信度」问题：同一个项目，不同人测出来的结论经常相反，差别几乎全在预热、数据集和对比口径上。</p>
 <pre><code class="language-bash"># 第一步：先测 hello world，只是为了知道「上限差异」有多大，不要拿它当决策依据
 bun run bench/hello.ts &amp;                       # Bun.serve 版本
 node bench/hello.js &amp;                          # node:http 版本
@@ -179,7 +250,8 @@ npx autocannon -c 50 -d 60 -w 5000 \
 # 第四步：确认版本，Bun 迭代很快，跨小版本的性能与兼容性都可能变
 bun --revision &amp;&amp; node -v</code></pre>
 
-<h2>四个身份分别能不能上生产</h2>
+<h2>③ 场景 · 四个身份分别能不能上生产</h2>
+<p>前面的机制是「为什么」，这里收拢成「做还是不做」。先看四个身份各自的准入线：</p>
 <table>
     <thead>
         <tr><th>用途</th><th>风险</th><th>上线前必须验证什么</th><th>出问题时的回退成本</th></tr>
@@ -206,6 +278,22 @@ flowchart TB
     Q4 -->|"没有"| N3["非核心服务可以试<br/>核心服务等生态补齐"]
     Q4 -->|"有"| A4["按阶段迁移<br/>详见站内迁移篇"]
 </div>
+<p>再按真实业务形态查这张矩阵，它给的是「怎么做、为什么、代价」三件套：</p>
+<table>
+    <thead>
+        <tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>CI 一次构建十分钟，装依赖占了一半</td><td>只把 <code>bun install --frozen-lockfile</code> 搬进 CI，锁文件统一到一种</td><td>冷缓存下的安装加速是整个 Bun 里收益最确定的一项</td><td>全员必须换包管理器，本地留着 npm 就等于埋了环境差异</td></tr>
+        <tr><td>单测套件十几分钟，PR 排队等 CI</td><td>换 <code>bun test</code>，先跑一遍拿到新的覆盖率基线再设阈值</td><td>测试是大量短生命周期进程，启动与转译的收益被放大</td><td>重度依赖 <code>jest.mock</code> 的用例要改写，覆盖率门禁要重标</td></tr>
+        <tr><td>本地改一行代码要等好几秒才重启</td><td>本地 <code>bun --watch</code>，生产继续 node</td><td>原生转译省掉 tsx 或 ts-node 的额外进程</td><td>本地与生产两套运行时，行为差异要靠 CI 与集成测试兜住</td></tr>
+        <tr><td>接口 p99 200ms，大头在数据库</td><td>不要动运行时，去加索引、改查询、加缓存</td><td>运行时在总耗时里只占几毫秒，砍一半也看不出来</td><td>无；反而省下一次高风险变更</td></tr>
+        <tr><td>Serverless 冷启动影响体验或计费</td><td>可以认真评估把运行时换成 Bun</td><td>这类负载里启动开销本身就是主要成本</td><td>要确认平台是否官方支持，以及可观测手段是否还在</td></tr>
+        <tr><td>要把 CLI 工具发给不装 Node 的人</td><td><code>bun build --compile</code> 出单文件可执行程序</td><td>用户无需装运行时，也不会遇到版本不匹配</td><td>产物几十 MB 到 100MB 量级，不适合再拿去做服务端镜像</td></tr>
+        <tr><td>新项目要求严格的权限隔离</td><td>评估 Deno 而不是 Bun</td><td>默认拒绝一切权限是 Deno 的设计出发点，不是 Bun 的</td><td>npm 生态兼容更繁琐，历史包袱处理成本更高</td></tr>
+        <tr><td>依赖里有不可替代的 native addon</td><td>只用工具链，运行时保持 node</td><td>N-API 兼容覆盖不到全部场景，这是硬阻塞</td><td>放弃运行时那部分收益，但本来它也最小</td></tr>
+    </tbody>
+</table>
 <p>分阶段采用的建议顺序是固定的：<strong>先只用它装依赖，再用它跑测试和本地开发，然后是非核心服务的运行时，最后才是核心服务。</strong>每一步都要有独立的回退开关，且不要跳步——跳过前两步直接换生产运行时，是这套技术最常见的翻车方式。</p>
 <p>每个阶段都有一条明确的准入线，达不到就停在原地，不要靠「应该没问题」往下推。下面这组命令是各身份的最小验证动作：包管理器看依赖树是否和 npm 解析一致，测试运行器要逐条比对失败用例而不是只看通过率，打包要确认产物在<strong>目标运行时</strong>真的能起来，运行时则必须同时看启动告警、真实流量表现和优雅关闭这三件事——后两项恰恰是单测覆盖不到、又最容易在发布时炸的地方。</p>
 <pre><code class="language-bash"># ---- 四个身份各自的最小验证动作，过不了就不要往下推进 ----
@@ -226,8 +314,10 @@ sleep 1 &amp;&amp; curl -sf http://127.0.0.1:8080/healthz &amp;&amp; echo 'node 
 bun --print 'process.versions'          # 确认兼容的 node 版本号
 bun src/main.ts &amp;                       # 盯启动日志里有无 not implemented 类告警
 kill -TERM %1                           # 优雅关闭：是否执行清理逻辑并以 0 退出</code></pre>
+<p><strong>不适用边界</strong>：如果你的问题是「单线程被 CPU 密集任务卡住」「事件循环延迟高」「内存一直涨」，换运行时解决不了，这些属于 Node 模型本身的约束与诊断方法，在 <a href="../">Node.js 后端的适用边界</a> 与 <a href="../performance/">Node.js 性能诊断</a>。如果是框架层的中间件开销与路由匹配成本，在 <a href="../framework-compare/">Node.js Web 框架选型</a>。如果目标是「一份代码同时跑在 Node、Bun、Workers 上」，那要解决的是框架抽象层问题，见 <a href="../hono-edge/">Hono 的跨运行时部署</a>。</p>
+<p>这四篇构成一条路径：本篇只做选型判断，下一篇把工具链的四个子命令用起来，第三篇进到引擎与兼容层机制，最后一篇给分阶段迁移与回退预案。</p>
 
-<h2>与 Deno 的定位差别</h2>
+<h2>③ 场景 · 和 Node、Deno 怎么选</h2>
 <p>Bun 和 Deno 经常被放在一起讨论，但它们解决的问题不同。<strong>Deno 从安全边界出发</strong>：默认不给网络、文件系统、环境变量权限，要靠显式参数授予，并自带一套标准库，对 npm 的兼容是后来补上的。<strong>Bun 从兼容与速度出发</strong>：目标是尽量无痛替换 Node，直接吃现有的 <code>node_modules</code> 和 <code>package.json</code>。</p>
 <table>
     <thead>
@@ -243,7 +333,7 @@ kill -TERM %1                           # 优雅关闭：是否执行清理逻�
     </tbody>
 </table>
 
-<h2>反模式对照表</h2>
+<h2>③ 场景 · 反模式与正确做法对照</h2>
 <table>
     <thead>
         <tr><th>反模式</th><th>后果</th><th>正确做法</th></tr>
@@ -258,9 +348,10 @@ kill -TERM %1                           # 优雅关闭：是否执行清理逻�
     </tbody>
 </table>
 
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
         <li>把「Bun 比 Node 快 3 倍」当成业务提升：那是 hello world 的数字，你的接口 48ms 里运行时只占 4ms。</li>
         <li>没区分 Bun 的四个身份就整体评估：包管理器可以今天就用，运行时的风险高一个量级。</li>
@@ -272,10 +363,13 @@ kill -TERM %1                           # 优雅关闭：是否执行清理逻�
         <li>忘了 Bun 默认会自动加载 <code>.env</code>：本地跑得好好的，到线上因为缺环境变量而启动失败。</li>
         <li>以为 Bun 原生跑 TS 就不需要类型检查：它只转译不校验，<code>tsc --noEmit</code> 仍然必须留在 CI 里。</li>
         <li>迁移前没有压测基线：换完之后 QPS 涨了还是跌了、内存高了多少，全都说不清。</li>
+        <li>自查时在热缓存下比较安装耗时：两边都命中缓存，结论会完全反过来。</li>
         <li>核心服务先迁：应该反过来，从风险最低的非核心服务开始积累运维经验。</li>
         <li>没准备回退开关：镜像 tag、锁文件、启动命令都要能在几分钟内切回 Node。</li>
     </ul>
 </div>
+
+<p class="cluster-nav">同主题路径：<a href="../hono-edge/">← 上一步：Hono 的跨运行时部署：Node、Bun、Deno 与 Workers</a> · <a href="../bun-intro/">下一步：Bun 工具链上手：install、run、test、build 的机制与边界 →</a></p>
 
                     </div>
 </article>

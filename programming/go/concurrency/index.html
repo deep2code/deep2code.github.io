@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="把 nil、空、满、已关闭四种 channel 状态下 send / recv / close 的行为整理成语义矩阵，逐个拆解 goroutine 泄漏、循环变量捕获（含 Go 1.22 的行为变更）、WaitGroup 的 Add 位置、map 并发读写的不可恢复 fatal error 与闭包共享变量竞争这五类高频 bug，并给出 Mutex / RWMutex / atomic / channel 的选型依据、errgroup 限并发写法与 race 检测器的正确用法。">
+        <meta name="description" content="Go 并发三段式：先给四个可直接抄的定式（errgroup 收敛错误并限并发、带缓冲 channel 做信号量、sync.OnceValue 初始化、后台 goroutine 的生命周期骨架）、「要做什么 → 用哪个原语」对照表与 go test 并发旗标速查，再讲 channel 五种状态的语义矩阵、select 随机性与 timer 泄漏、五类高频 bug 与 Go 1.22 的循环变量变更、Mutex 与 RWMutex 与 atomic 的取舍、race 检测器的能力边界与 happens-before 规则，最后给业务形态到方案的选型矩阵。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/concurrency/">
     <!-- Open Graph -->
     <meta property="og:title" content="Go 并发原语与常见并发 bug - 资深码农">
-    <meta property="og:description" content="把 nil、空、满、已关闭四种 channel 状态下 send / recv / close 的行为整理成语义矩阵，逐个拆解 goroutine 泄漏、循环变量捕获（含 Go 1.22 的行为变更）、WaitGroup 的 Add 位置、map 并发读写的不可恢复 fatal error 与闭包共享变量竞争这五类高频 bug，并给出 Mutex / RWMutex / atomic / channel 的选型依据、errgroup 限并发写法与 race 检测器的正确用法。">
+    <meta property="og:description" content="Go 并发三段式：先给四个可直接抄的定式（errgroup 收敛错误并限并发、带缓冲 channel 做信号量、sync.OnceValue 初始化、后台 goroutine 的生命周期骨架）、「要做什么 → 用哪个原语」对照表与 go test 并发旗标速查，再讲 channel 五种状态的语义矩阵、select 随机性与 timer 泄漏、五类高频 bug 与 Go 1.22 的循环变量变更、Mutex 与 RWMutex 与 atomic 的取舍、race 检测器的能力边界与 happens-before 规则，最后给业务形态到方案的选型矩阵。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/concurrency/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Go 并发原语与常见并发 bug - 资深码农">
-    <meta name="twitter:description" content="把 nil、空、满、已关闭四种 channel 状态下 send / recv / close 的行为整理成语义矩阵，逐个拆解 goroutine 泄漏、循环变量捕获（含 Go 1.22 的行为变更）、WaitGroup 的 Add 位置、map 并发读写的不可恢复 fatal error 与闭包共享变量竞争这五类高频 bug，并给出 Mutex / RWMutex / atomic / channel 的选型依据、errgroup 限并发写法与 race 检测器的正确用法。">
+    <meta name="twitter:description" content="Go 并发三段式：先给四个可直接抄的定式（errgroup 收敛错误并限并发、带缓冲 channel 做信号量、sync.OnceValue 初始化、后台 goroutine 的生命周期骨架）、「要做什么 → 用哪个原语」对照表与 go test 并发旗标速查，再讲 channel 五种状态的语义矩阵、select 随机性与 timer 泄漏、五类高频 bug 与 Go 1.22 的循环变量变更、Mutex 与 RWMutex 与 atomic 的取舍、race 检测器的能力边界与 happens-before 规则，最后给业务形态到方案的选型矩阵。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 并发原语与常见并发 bug","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"把 nil、空、满、已关闭四种 channel 状态下 send / recv / close 的行为整理成语义矩阵，逐个拆解 goroutine 泄漏、循环变量捕获（含 Go 1.22 的行为变更）、WaitGroup 的 Add 位置、map 并发读写的不可恢复 fatal error 与闭包共享变量竞争这五类高频 bug，并给出 Mutex / RWMutex / atomic / channel 的选型依据、errgroup 限并发写法与 race 检测器的正确用法。","url":"https://www.yijunjun.asia/programming/go/concurrency/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/concurrency/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 并发原语与常见并发 bug","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Go 并发三段式：先给四个可直接抄的定式（errgroup 收敛错误并限并发、带缓冲 channel 做信号量、sync.OnceValue 初始化、后台 goroutine 的生命周期骨架）、「要做什么 → 用哪个原语」对照表与 go test 并发旗标速查，再讲 channel 五种状态的语义矩阵、select 随机性与 timer 泄漏、五类高频 bug 与 Go 1.22 的循环变量变更、Mutex 与 RWMutex 与 atomic 的取舍、race 检测器的能力边界与 happens-before 规则，最后给业务形态到方案的选型矩阵。","url":"https://www.yijunjun.asia/programming/go/concurrency/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/concurrency/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go 代码片段", "item": "https://www.yijunjun.asia/programming/go/concurrency/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,7 +90,159 @@
                         </div>
                     </header>
                     <div class="article-content">
-<h2>channel 的语义矩阵：一张表解释大多数死锁与 panic</h2>
+<p>Go 的并发难点从来不在 <code>go</code> 这个关键字，而在三件事：goroutine 起来之后谁负责让它停、共享状态该用哪个原语保护、以及怎么让偶发的竞争在 CI 里稳定复现。这篇按这三件事组织——先给工程上已经收敛的几个标准定式，再展开 channel 与锁的语义细节，最后收拢选型判断。调度器与内存分配的运行时机制在 <a href="../">Go 运行时模型</a>，取消信号怎么一路传下去在 <a href="../context/">Context 篇</a>。</p>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：四个可直接抄的并发定式（errgroup 收敛错误、带缓冲 channel 限流、只初始化一次、后台 goroutine 的完整生命周期），一张「要做什么 → 用哪个原语 → 用错的后果」对照表，以及 <code>go test</code> 的并发相关旗标。</li>
+        <li><strong>② 原理</strong>：channel 在五种状态下 send / recv / close 的完整语义、select 的随机性与 timer 泄漏、五类高频并发 bug 的成因与版本差异、Mutex 与 RWMutex 与 atomic 的取舍、race 检测器能力边界与 Go 内存模型的 happens-before 规则。</li>
+        <li><strong>③ 场景</strong>：具体业务形态下该选哪套方案、代价是什么，以及哪些问题看着像并发问题其实不是。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 四个标准定式与并发测试的正确跑法</h2>
+<p>会写 Go 的人缺的不是语法，是「这类问题的标准写法长什么样」。下面四段是生产代码里反复出现、且已经没有争议的形态，注释只说明为什么要这么写，机制解释见原理层。</p>
+<pre><code class="language-go">// 定式一：并发调多个下游并收敛错误 —— 永远配 SetLimit
+func fanOut(parent context.Context, urls []string) error {
+    g, ctx := errgroup.WithContext(parent) // 任一任务返回错误就取消这个 ctx
+    g.SetLimit(10)                         // 不设就是无界 fan-out，按下游连接池大小设
+    for _, u := range urls {
+        u := u // 1.22 之前必须这一行；1.22 起每轮迭代本就是新变量
+        g.Go(func() error {
+            req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+            if err != nil {
+                return err
+            }
+            resp, err := http.DefaultClient.Do(req)
+            if err != nil {
+                return err // 返回错误后兄弟任务的 ctx 也被取消，会尽快退出
+            }
+            defer resp.Body.Close()
+            _, err = io.Copy(io.Discard, resp.Body) // 不读完 body 这条连接就无法复用
+            return err
+        })
+    }
+    return g.Wait() // 只返回第一个非 nil 错误，其余错误被丢弃，需要全部就自己收集
+}
+
+// 定式二：带缓冲 channel 当信号量做限流 —— 不引第三方库时的标准写法
+func runLimited(ctx context.Context, jobs []Job, n int) error {
+    sem := make(chan struct{}, n)
+    var wg sync.WaitGroup
+    for _, j := range jobs {
+        select {
+        case sem &lt;- struct{}{}: // 拿不到令牌就阻塞在这里，这就是天然的背压
+        case &lt;-ctx.Done():
+            wg.Wait() // 已经起来的任务必须等它们退出，否则就是 goroutine 泄漏
+            return ctx.Err()
+        }
+        wg.Add(1) // Add 必须在 go 语句之前，为什么见原理层
+        go func(j Job) {
+            defer wg.Done()
+            defer func() { &lt;-sem }() // 归还令牌要放在 defer 里，panic 时也得还
+            j.Run(ctx)
+        }(j)
+    }
+    wg.Wait()
+    return nil
+}
+
+// 定式三：只初始化一次 —— 1.21 起用 OnceValue，不要再写 Once 加全局变量
+// 注意：函数体内 panic 也算「执行过一次」，后续调用不会重试而是重放那次 panic
+var loadConfig = sync.OnceValue(func() *Config {
+    return mustLoadConfig("/etc/app/config.yaml")
+})
+
+// 定式四：后台 goroutine 的完整生命周期 —— 起它的人负责让它能停
+type Worker struct {
+    stop context.CancelFunc
+    done chan struct{}
+}
+
+func StartWorker(parent context.Context, tick time.Duration) *Worker {
+    ctx, cancel := context.WithCancel(parent)
+    w := &amp;Worker{stop: cancel, done: make(chan struct{})}
+    go func() {
+        defer close(w.done) // 用 done channel 而不是 WaitGroup，Shutdown 才能带超时
+        t := time.NewTicker(tick)
+        defer t.Stop() // 不 Stop 会泄漏 ticker，循环里千万别用 time.After
+        for {
+            select {
+            case &lt;-ctx.Done():
+                return
+            case &lt;-t.C:
+                w.runOnce(ctx) // 业务逻辑；内部同样要把 ctx 一路往下传
+            }
+        }
+    }()
+    return w
+}
+
+// Shutdown 必须可超时，否则一个卡住的任务会让整个进程退不出去
+func (w *Worker) Shutdown(ctx context.Context) error {
+    w.stop()
+    select {
+    case &lt;-w.done:
+        return nil
+    case &lt;-ctx.Done():
+        return ctx.Err() // 上层据此决定是记日志还是直接强退
+    }
+}</code></pre>
+<p>选原语的时候按下表查，左列是你要做的事，右列是选错之后线上会发生什么：</p>
+<table>
+    <thead>
+        <tr><th>要做什么</th><th>用哪个原语</th><th>用错的后果</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>并发调 N 个下游，一个失败就整体放弃</td><td><code>errgroup.WithContext</code> 加 <code>SetLimit</code></td><td>用裸 <code>WaitGroup</code> 收不到错误也取消不了兄弟任务；不限并发直接打爆下游连接池</td></tr>
+        <tr><td>限制同时在跑的任务数</td><td>带缓冲 channel 当信号量，或 <code>SetLimit</code></td><td><code>for</code> 里直接 <code>go</code> 是无上限的，内存与下游同时爆</td></tr>
+        <tr><td>只初始化一次并缓存结果</td><td><code>sync.OnceValue</code>（1.21 起）</td><td>「判空再赋值」是读改写，必然数据竞争；<code>Once</code> 里 panic 之后不会重试</td></tr>
+        <tr><td>传递数据或退出信号</td><td>channel 配 <code>select</code> 与 <code>ctx</code></td><td>用共享 bool 变量当信号，没有同步操作就没有可见性保证，对方可能永远读到旧值</td></tr>
+        <tr><td>保护一份共享状态</td><td><code>sync.Mutex</code>，默认就选它</td><td>用容量 1 的 channel 做互斥，可读性差且多一次 goroutine 调度开销</td></tr>
+        <tr><td>单个整数或指针的计数与整份替换</td><td><code>atomic.Int64</code> 与 <code>atomic.Pointer[T]</code></td><td><code>count++</code> 是读、加、写三步，低并发下看不出来、上量就丢数</td></tr>
+        <tr><td>让后台 goroutine 能停</td><td>传 ctx 加 done channel，Shutdown 带超时</td><td>起了不管就是定时炸弹：进程退不出去、优雅关闭变成强杀</td></tr>
+        <tr><td>合并同一个 key 的并发请求</td><td><code>singleflight</code></td><td>不合并会在缓存失效那一刻把请求全打到数据库</td></tr>
+    </tbody>
+</table>
+<p>并发 bug 的特点是「不跑到就发现不了」，所以测试怎么跑和写什么代码同等重要：</p>
+<pre><code class="language-bash"># CI 里的固定组合：-race 必开，-count=1 用来绕过测试结果缓存
+go test -race -count=1 ./...
+
+# 复现偶发竞争：同一个测试跑很多轮，并在不同 GOMAXPROCS 下各跑一遍
+go test -race -run TestConcurrentUpdate -count=200 -cpu=1,2,8 ./internal/cache
+
+# 打乱测试执行顺序，暴露靠顺序才能通过的隐式依赖（1.17 起）
+go test -shuffle=on ./...
+
+# 并发测试卡死时别等默认的 10 分钟；超时触发会打印全部 goroutine 栈
+# 拿到栈之后直接搜 semacquire（等锁）与 chan receive（等 channel）两个关键字
+go test -race -timeout=60s ./...
+
+# 静态检查零成本必开：loopclosure、copylocks、lostcancel 三个检查器专治并发写法
+go vet ./...
+
+# race 的开销是 CPU 约 2 到 10 倍、内存约 5 到 10 倍，所以只进 CI 不进生产
+go build -race -o myapp_race ./cmd/server</code></pre>
+<table>
+    <thead>
+        <tr><th>旗标</th><th>作用</th><th>默认值</th><th>什么时候需要改</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>-race</code></td><td>运行时检测数据竞争，报出冲突双方的调用栈</td><td>关</td><td>单测与集成测试一律开；生产构建绝不开</td></tr>
+        <tr><td><code>-count=N</code></td><td>重复执行 N 轮；<code>N</code> 大于 1 时禁用结果缓存</td><td>1</td><td>复现偶发竞争时设几百轮；<code>-count=1</code> 专门用来跳过缓存</td></tr>
+        <tr><td><code>-cpu=1,2,8</code></td><td>用不同的 <code>GOMAXPROCS</code> 各跑一遍</td><td>当前 <code>GOMAXPROCS</code></td><td>竞争只在多核下才重叠时必须加，单核跑一百遍也测不出来</td></tr>
+        <tr><td><code>-timeout</code></td><td>超时后 panic 并打印所有 goroutine 的栈</td><td>10m</td><td>排查死锁时缩到一分钟量级，不然一次尝试要等十分钟</td></tr>
+        <tr><td><code>-parallel</code></td><td>同时运行的 <code>t.Parallel</code> 测试数</td><td><code>GOMAXPROCS</code></td><td>测试之间抢同一个外部资源（端口、库表）时调小</td></tr>
+        <tr><td><code>-shuffle=on</code></td><td>打乱包内测试与包之间的执行顺序</td><td>off</td><td>怀疑测试之间有隐式顺序依赖时开</td></tr>
+        <tr><td><code>-mutexprofile</code> 与 <code>-blockprofile</code></td><td>把锁争用与阻塞采样落成文件</td><td>关</td><td>压测型测试里定位是哪把锁在拖吞吐</td></tr>
+    </tbody>
+</table>
+<p>上面这些定式为什么长这样——为什么 <code>Add</code> 必须在 <code>go</code> 之前、为什么循环里不能用 <code>time.After</code>、为什么共享变量当信号不可靠——全部在下面几节。</p>
+
+<h2>② 原理 · channel 的语义矩阵：一张表解释大多数死锁与 panic</h2>
+<p>搞清这张表能直接定位绝大多数 channel 相关的线上事故：send on closed channel 的 panic、莫名其妙的永久阻塞、以及接收方提前退出导致的泄漏。</p>
 <p>channel 的行为不是「发送方塞值、接收方取值」这么简单。它在五种状态下的表现各不相同，而绝大多数 channel 相关的 bug——死锁、panic、泄漏——都可以在这张表里直接定位到对应的格子。</p>
 <table>
     <thead>
@@ -129,7 +281,8 @@ stateDiagram-v2
 <p>最高频的事故是<strong>往已关闭的 channel 发送</strong>：这不是死锁，是直接 panic，而且无法 recover（runtime 直接报 send on closed channel）。典型场景：一个生产者还在跑，消费者那边觉得够了关了 channel，生产者下一次 send 就炸。正确做法是<strong>只让发送方关闭 channel</strong>，接收方通过 <code>range</code> 或检查 <code>ok</code> 来感知关闭。</p>
 <p>第二高频的是<strong>对 nil channel 操作</strong>：<code>var ch chan int</code> 声明但没 make，send 和 recv 都永久阻塞。在 select 里这其实是个有用的技巧——把某个 case 的 channel 设为 nil 就等于禁用了它，不会被选中。</p>
 
-<h2>select 的随机性与 time.After 的内存泄漏</h2>
+<h2>② 原理 · select 的随机性与 time.After 的内存泄漏</h2>
+<p>这一节解释两个现象：想用 case 顺序表达优先级却发现不生效，以及一个高频循环把内存吃到只涨不跌。</p>
 <p>select 多个 case 同时就绪时，Go 运行时<strong>随机选一个</strong>，不是按书写顺序。这意味着你不能用 case 的排列来表达优先级——想要优先级必须嵌套 select 或在外层做显式判断。</p>
 <p><code>default</code> 把 select 变成非阻塞的尝试：所有 case 都不就绪就走 default，常用于「试着从 channel 取值，没有就做别的事」。</p>
 <p>但 <code>time.After</code> 在循环里是典型的内存泄漏模式：</p>
@@ -167,7 +320,8 @@ for {
     <p>返回 false 说明 timer 已经到期或者已经被 Stop 过了。如果是到期了，它的 channel 上有一个待读的信号，必须排掉才能安全 Reset，否则下一轮 select 会在 Reset 后立即选中 timer case。这是 timer 复用最常出错的细节。</p>
 </div>
 
-<h2>五类最常见的并发 bug</h2>
+<h2>② 原理 · 五类最常见的并发 bug</h2>
+<p>这五类覆盖了代码审查与线上事故里绝大多数 Go 并发问题，每类都对应一种可复现的症状与一个固定的定位工具。</p>
 <p>下面五类覆盖了我这些年在代码审查和线上事故里遇到的绝大多数 Go 并发问题。每类都给正反例和定位方法。</p>
 <table>
     <thead>
@@ -313,7 +467,8 @@ for i := 0; i &lt; 100; i++ {
 }</code></pre>
 <p><code>-race</code> 检测器能在运行时发现这类问题，但它<strong>只能发现实际发生过的竞争</strong>——如果你的测试里没有触发并发路径，它什么都检不出来。所以必须写有并发的测试（多个 goroutine 同时调同一个函数），并在 CI 里带 <code>-race</code> 跑。性能开销大约 2 到 10 倍，不适合在生产开。</p>
 
-<h2>锁的选择与常见陷阱</h2>
+<h2>② 原理 · 锁的选择与常见陷阱</h2>
+<p>用法层的对照表给了结论，这一节说清依据：为什么默认选 <code>Mutex</code>、<code>RWMutex</code> 在什么读写比下才有收益、<code>sync.Map</code> 为什么常常更慢。</p>
 <p>先用决策图收敛选项，再看细节：</p>
 <div class="mermaid">
 flowchart TB
@@ -343,7 +498,8 @@ flowchart TB
 <p><strong>RWMutex 不可重入</strong>：持有读锁时再调一个也拿读锁的函数不会死锁（因为多个读锁共存），但持有写锁时再拿读锁或写锁就直接死锁，Go 不会检测递归锁。</p>
 <p><strong>锁的复制陷阱</strong>：<code>sync.Mutex</code> 和 <code>sync.WaitGroup</code> 等同步原语不能被复制。把包含锁的结构体按值传递给函数或赋值给另一个变量，锁的状态不会跟着过去，两边各有一把独立的锁，不再互斥。用 <code>go vet</code> 能检出这个问题（<code>copylocks</code> 检查器）。解法是始终用指针传递包含锁的结构体。</p>
 
-<h2>sync.Once、errgroup 与 singleflight</h2>
+<h2>② 原理 · sync.Once、errgroup 与 singleflight 的关键细节</h2>
+<p>这三个工具的坑都不在用法上，而在失败路径上：panic 之后会不会重试、错误怎么传播、一次失败会不会放大成全员失败。</p>
 <table>
     <thead>
         <tr><th>工具</th><th>解决什么问题</th><th>关键细节</th></tr>
@@ -354,25 +510,9 @@ flowchart TB
         <tr><td><code>singleflight</code></td><td>对同一个 key 的并发请求合并成一次实际调用（如缓存击穿防护）</td><td>所有等待者拿到同一个结果，包括 error。如果那次调用失败了，所有人都失败——在缓存穿透场景下要评估风险</td></tr>
     </tbody>
 </table>
-<pre><code class="language-go">// errgroup 推荐写法：限制并发 + 监听 ctx
-g, ctx := errgroup.WithContext(parentCtx)
-g.SetLimit(10) // 同时最多 10 个 goroutine，不设就是无限
-for _, url := range urls {
-    g.Go(func() error {
-        req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-        resp, err := http.DefaultClient.Do(req)
-        if err != nil {
-            return err // 返回错误后 ctx 被取消，其余任务也会尽快退出
-        }
-        defer resp.Body.Close()
-        return processResp(resp)
-    })
-}
-if err := g.Wait(); err != nil {
-    return fmt.Errorf("fan-out failed: %w", err)
-}</code></pre>
 
-<h2>race 检测器与内存模型要点</h2>
+<h2>② 原理 · race 检测器的能力边界与内存模型</h2>
+<p>搞清这一节能回答一个关键问题：CI 里 <code>-race</code> 全绿，到底能不能说明代码没有数据竞争。</p>
 <p><code>-race</code> 编译选项在运行时拦截所有内存访问并检查 happens-before 关系。它<strong>只能发现实际执行路径上的竞争</strong>，所以测试覆盖率和并发测试的质量直接决定它的效果。</p>
 <pre><code class="language-bash"># 测试时开 race
 go test -race -count=1 ./...
@@ -406,6 +546,28 @@ sequenceDiagram
     G2->>G2: 读 x 保证看到 42
     Note over G1,G2: 如果没有 channel 或锁，G2 读到的 x 可能是旧值甚至零值
 </div>
+
+<h2>③ 场景 · 具体业务形态下该选哪套方案</h2>
+<p>前面的原语选择是「点」，这里收拢成「面」：按真实业务形态给方案、给理由、也给代价。</p>
+<table>
+    <thead>
+        <tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>批量处理几万条记录且每条都要调下游</td><td><code>errgroup</code> 加 <code>SetLimit</code>，上限按下游连接池大小设</td><td>无界 fan-out 会同时打爆下游和自己的内存，这是最常见的生产事故之一</td><td>总耗时变长，必须接受背压；单条失败要决定是整体回滚还是记录跳过</td></tr>
+        <tr><td>配置或路由表这类读极多、写极少的数据</td><td><code>atomic.Pointer[T]</code> 整份替换</td><td>读路径完全无锁，写的时候构造新副本再一次性换掉指针</td><td>写放大：每次改一个字段都要复制整份数据，大对象上不划算</td></tr>
+        <tr><td>读多写少但键集不断变化的 map</td><td><code>sync.Mutex</code> 加普通 map</td><td><code>sync.Map</code> 的 dirty 提升在写多时反而更慢，而且没有 <code>len</code></td><td>读路径要过一次锁；真成为瓶颈再按 key 哈希分片</td></tr>
+        <tr><td>缓存失效瞬间大量请求打向数据库</td><td><code>singleflight</code> 合并同 key 请求</td><td>同一个 key 在同一时刻只真正查一次</td><td>那一次失败则所有等待者一起失败，故障面被放大，必要时用 <code>DoChan</code> 分别处理</td></tr>
+        <tr><td>要求高优先级消息先被处理</td><td>嵌套 <code>select</code> 或先做一次非阻塞尝试，不要靠 case 顺序</td><td>多路同时就绪时运行时随机选，书写顺序不表达优先级</td><td>代码变复杂，且低优先级分支存在饿死风险，需要额外兜底</td></tr>
+        <tr><td>后台常驻任务（定时对账、消费队列）</td><td>从 <code>Background</code> 派生独立 ctx，Shutdown 带超时</td><td>用请求的 ctx 会在请求结束那一刻被取消，任务看起来像「没执行」</td><td>关闭流程要额外写一套，细节见 <a href="../context/">Context 篇</a></td></tr>
+        <tr><td>并发 bug 只在线上出现，本地怎么跑都正常</td><td>补有并发的测试，再用 <code>-count</code> 放大轮次并加 <code>-cpu</code> 多档</td><td>race 是动态分析，没被实际执行到的路径它一个字都不会报</td><td>测试时间明显变长，取舍见 <a href="../../testing/">测试策略与可测性设计</a></td></tr>
+        <tr><td>只是想「等一下」看并发结果</td><td>永远不用 <code>time.Sleep</code>，改用 <code>WaitGroup</code> 或 channel</td><td><code>sleep</code> 不建立任何 happens-before 关系，时长也不确定</td><td>无；这是纯粹的收益</td></tr>
+    </tbody>
+</table>
+<p><strong>不适用边界</strong>：并发原语解决不了「取消信号没传下去」——请求悬挂、超时不生效、连接池被慢请求耗尽都在 <a href="../context/">Go Context 的传播、取消与误用</a>。单个接口本身慢、GC 毛刺、线程数异常增长属于运行时层面，在 <a href="../">Go 运行时模型</a> 与 <a href="../../../observability/">可观测系列</a>。共享数据结构选错导致的复杂度问题（用切片线性查找当索引）在 <a href="../../algorithms/">算法与数据结构</a>。高并发下日志的分配与写入顺序见 <a href="../slog/">结构化日志与 log/slog</a>；Web 框架每请求一个 goroutine 的模型与中间件里的并发约束见 <a href="../iris/">Go Web 框架选型方法论</a>。</p>
+<p>这条路径上，上一篇讲的是运行时替你管的那部分，本篇讲你自己要管的并发结构，下一篇把范围收窄到「取消与超时怎么一路传下去」——它是并发正确性的另一半。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../">← 上一步：Go 运行时模型：GMP 调度、内存分配与 GC</a> · <a href="../context/">下一步：Go Context 的传播、取消与误用 →</a></p>
 
 <h2>最容易踩的坑</h2>
 <div class="callout callout-danger">

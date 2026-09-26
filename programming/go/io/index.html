@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="io.Reader 与 io.Writer 是 Go 最成功的抽象：一个方法的接口让文件、网络、压缩、加密任意组合成流式管道。本文讲清 io.Copy 的接口探测与 sendfile 零拷贝路径、bufio 缓冲的真实收益量级、Scanner 默认 64KB 行上限导致只查 Scan 不查 Err 就静默丢数据的陷阱，以及 Close 与 ReadAll 相关的高频错误。">
+        <meta name="description" content="io 包三段式：先给六个可直接抄走的读写定式（io.Copy 转发、Scanner 读行时的 64KB 上限与 Err 检查、写入路径把 Close 错误并入返回值、LimitReader 限制不可信输入、MultiWriter 同时落盘与算摘要、响应体排空）和两张速查表，再讲 io.Copy 的两次接口断言与 sendfile 零拷贝路径、bufio 缓冲的数量级收益、Read 契约里 n 大于 0 同时带 error 的陷阱，以及从症状反查根因的命令清单，最后给按数据来源与规模选定式的决策矩阵与流式的不适用边界。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/io/">
     <!-- Open Graph -->
     <meta property="og:title" content="io 接口与流式处理 - 资深码农">
-    <meta property="og:description" content="io.Reader 与 io.Writer 是 Go 最成功的抽象：一个方法的接口让文件、网络、压缩、加密任意组合成流式管道。本文讲清 io.Copy 的接口探测与 sendfile 零拷贝路径、bufio 缓冲的真实收益量级、Scanner 默认 64KB 行上限导致只查 Scan 不查 Err 就静默丢数据的陷阱，以及 Close 与 ReadAll 相关的高频错误。">
+    <meta property="og:description" content="io 包三段式：先给六个可直接抄走的读写定式（io.Copy 转发、Scanner 读行时的 64KB 上限与 Err 检查、写入路径把 Close 错误并入返回值、LimitReader 限制不可信输入、MultiWriter 同时落盘与算摘要、响应体排空）和两张速查表，再讲 io.Copy 的两次接口断言与 sendfile 零拷贝路径、bufio 缓冲的数量级收益、Read 契约里 n 大于 0 同时带 error 的陷阱，以及从症状反查根因的命令清单，最后给按数据来源与规模选定式的决策矩阵与流式的不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/io/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="io 接口与流式处理 - 资深码农">
-    <meta name="twitter:description" content="io.Reader 与 io.Writer 是 Go 最成功的抽象：一个方法的接口让文件、网络、压缩、加密任意组合成流式管道。本文讲清 io.Copy 的接口探测与 sendfile 零拷贝路径、bufio 缓冲的真实收益量级、Scanner 默认 64KB 行上限导致只查 Scan 不查 Err 就静默丢数据的陷阱，以及 Close 与 ReadAll 相关的高频错误。">
+    <meta name="twitter:description" content="io 包三段式：先给六个可直接抄走的读写定式（io.Copy 转发、Scanner 读行时的 64KB 上限与 Err 检查、写入路径把 Close 错误并入返回值、LimitReader 限制不可信输入、MultiWriter 同时落盘与算摘要、响应体排空）和两张速查表，再讲 io.Copy 的两次接口断言与 sendfile 零拷贝路径、bufio 缓冲的数量级收益、Read 契约里 n 大于 0 同时带 error 的陷阱，以及从症状反查根因的命令清单，最后给按数据来源与规模选定式的决策矩阵与流式的不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "io 接口与流式处理", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "io.Reader 与 io.Writer 是 Go 最成功的抽象：一个方法的接口让文件、网络、压缩、加密任意组合成流式管道。本文讲清 io.Copy 的接口探测与 sendfile 零拷贝路径、bufio 缓冲的真实收益量级、Scanner 默认 64KB 行上限导致只查 Scan 不查 Err 就静默丢数据的陷阱，以及 Close 与 ReadAll 相关的高频错误。", "url": "https://www.yijunjun.asia/programming/go/io/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/io/"}, "articleSection": "后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "io 接口与流式处理", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "io 包三段式：先给六个可直接抄走的读写定式（io.Copy 转发、Scanner 读行时的 64KB 上限与 Err 检查、写入路径把 Close 错误并入返回值、LimitReader 限制不可信输入、MultiWriter 同时落盘与算摘要、响应体排空）和两张速查表，再讲 io.Copy 的两次接口断言与 sendfile 零拷贝路径、bufio 缓冲的数量级收益、Read 契约里 n 大于 0 同时带 error 的陷阱，以及从症状反查根因的命令清单，最后给按数据来源与规模选定式的决策矩阵与流式的不适用边界。", "url": "https://www.yijunjun.asia/programming/go/io/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/io/"}, "articleSection": "后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go IO 包", "item": "https://www.yijunjun.asia/programming/go/io/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,7 +90,178 @@
                         </div>
                     </header>
                     <div class="article-content">
-<h2>一个方法的接口，为什么是 Go 最成功的抽象</h2>
+<p>这篇的靶子很具体：<strong>IO 相关的线上问题几乎都不是「不会写」，而是标准写法没记牢</strong>——响应体没排空导致连接不复用、<code>Close</code> 的错误被丢掉产出损坏文件、<code>bufio.Scanner</code> 撞上 64KB 行上限静默丢数据。这几类问题都有固定的正确写法，也都能在 code review 里一眼认出来。</p>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：六个可以直接抄走的读写定式（<code>io.Copy</code> 转发、读行、写入路径合并 <code>Close</code> 错误、不可信输入限长、一次读取两个用途、响应体排空），配「要做什么 → 用哪个函数 → 用错的后果」对照表与 <code>io</code> / <code>bufio</code> 速查表，外加「连接不复用」的排查步骤。</li>
+        <li><strong>② 原理</strong>：单方法接口为什么能任意组合、<code>io.Copy</code> 的两次接口断言与 <code>sendfile</code> 快路径、缓冲带来的数量级差异、<code>Read</code> 契约里「n 大于 0 同时带 error」的陷阱，以及从症状反查根因的命令清单。</li>
+        <li><strong>③ 场景</strong>：按数据来源与规模选定式的判断图与决策矩阵，以及哪些情况下流式反而是过度设计。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 读写的六个标准定式</h2>
+<p>下面是一个完整可编译的文件，六个函数覆盖了日常读写需求的绝大部分。每个定式的注释只解释「为什么必须这么写」，机制原因在原理层展开。</p>
+<pre><code class="language-go">package streamio
+
+import (
+    "bufio"
+    "crypto/sha256"
+    "encoding/hex"
+    "errors"
+    "fmt"
+    "io"
+    "net/http"
+    "net/http/httptrace"
+    "os"
+)
+
+// 定式一：转发。能用 io.Copy 就不要自己写 for 循环读写，
+// 手写版本一定走不到 sendfile 与 splice 这些内核路径（原因见原理层）
+func Forward(dst io.Writer, src io.Reader) (int64, error) {
+    return io.Copy(dst, src)
+}
+
+// 定式二：读行。Scanner 默认单个 token 上限是 64KB，超了就静默停止循环，
+// 所以 Buffer 与 Err 这两行缺一不可
+func EachLine(r io.Reader, fn func(line []byte) error) error {
+    sc := bufio.NewScanner(r)
+    // 第二个参数才是 token 上限，按业务里最长的一行抬高；第一个参数只是初始缓冲
+    sc.Buffer(make([]byte, 0, 64*1024), 8&lt;&lt;20)
+    for sc.Scan() {
+        // sc.Bytes 的底层数组下一轮会被复用，要留存必须 copy 一份或改用 sc.Text
+        if err := fn(sc.Bytes()); err != nil {
+            return err
+        }
+    }
+    // 漏掉这一行，ErrTooLong 会被当成「正常读完」，后面的数据全部无声丢失
+    return sc.Err()
+}
+
+// 定式三：写入。命名返回值加 defer，把 Close 的错误并进返回值，
+// 因为 bufio 的缓冲与压缩流的尾部都是在 Close 时才真正落盘
+func WriteFile(path string, src io.Reader) (err error) {
+    f, err := os.Create(path)
+    if err != nil {
+        return err
+    }
+    defer func() {
+        // 只在业务本身没出错时才覆盖，否则会把真正的错误挤掉
+        if cerr := f.Close(); err == nil {
+            err = cerr
+        }
+    }()
+
+    bw := bufio.NewWriterSize(f, 256*1024)
+    if _, err = io.Copy(bw, src); err != nil {
+        return err
+    }
+    // Flush 必须显式调用并检查，且要在 Close 之前，否则末尾一段会静默丢失
+    return bw.Flush()
+}
+
+// 定式四：来源不可信的输入。多读一个字节，才能区分「刚好等于上限」与「已经超限」
+func ReadCapped(r io.Reader, max int64) ([]byte, error) {
+    buf, err := io.ReadAll(io.LimitReader(r, max+1))
+    if err != nil {
+        return nil, err
+    }
+    if int64(len(buf)) &gt; max {
+        return nil, fmt.Errorf("input exceeds %d bytes", max)
+    }
+    return buf, nil
+}
+
+// 定式五：一份数据两个用途。MultiWriter 让落盘与算摘要共用同一次读取，
+// 网络流只能读一遍，分两次读第二遍直接是 EOF
+func SaveWithDigest(path string, src io.Reader) (sum string, err error) {
+    f, err := os.Create(path)
+    if err != nil {
+        return "", err
+    }
+    defer func() {
+        if cerr := f.Close(); err == nil {
+            err = cerr
+        }
+    }()
+
+    h := sha256.New()
+    if _, err = io.Copy(io.MultiWriter(f, h), src); err != nil {
+        return "", err
+    }
+    return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// 定式六：就算完全不关心响应体，也必须先排空再 Close，
+// 否则这条连接无法放回连接池，每次请求都要重新建连与 TLS 握手
+func Drain(resp *http.Response) error {
+    defer resp.Body.Close()
+    if _, err := io.Copy(io.Discard, resp.Body); err != nil &amp;&amp; !errors.Is(err, io.EOF) {
+        return err
+    }
+    return nil
+}
+
+// 排查用：把连接复用情况打出来，Reused 为 false 说明上一次请求没有正确排空
+func traceReuse(req *http.Request, log func(format string, args ...any)) *http.Request {
+    trace := &amp;httptrace.ClientTrace{
+        GotConn: func(info httptrace.GotConnInfo) {
+            log("reused=%v wasIdle=%v", info.Reused, info.WasIdle)
+        },
+    }
+    return req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+}</code></pre>
+<p>下面这张表是干活时查的：先按「要做什么」定位，再看第三列确认自己有没有正在犯那个错。</p>
+<table>
+<thead><tr><th>要做什么</th><th>用哪个接口或函数</th><th>用错的后果</th></tr></thead>
+<tbody>
+<tr><td>把一个流原样搬到另一个地方</td><td><code>io.Copy(dst, src)</code></td><td>自己写 for 循环读写，白白放弃 <code>sendfile</code> 与 <code>splice</code>，静态文件与代理场景差距明显</td></tr>
+<tr><td>逐行处理大文件或日志</td><td><code>bufio.Scanner</code> 加 <code>Buffer</code> 加 <code>Err</code>，或 <code>bufio.Reader.ReadSlice</code></td><td>只看 <code>Scan()</code> 返回值：超长行让循环正常退出，后面所有数据丢掉且毫无报错</td></tr>
+<tr><td>写文件或产出压缩包</td><td>命名返回值加 <code>defer</code> 合并 <code>Close</code> 错误，<code>Flush</code> 先于 <code>Close</code></td><td>产出一个大小看着对、解压却失败的 <code>gz</code>，而调用方收到的是成功</td></tr>
+<tr><td>读来源不可信的输入</td><td><code>io.LimitReader(r, max+1)</code>，HTTP 层用 <code>http.MaxBytesReader</code></td><td>直接 <code>io.ReadAll</code>：扩容期间新旧数组并存，峰值内存约为数据量两倍</td></tr>
+<tr><td>一份数据既落盘又算摘要</td><td><code>io.MultiWriter</code>，只有 Reader 侧可用 <code>io.TeeReader</code></td><td>读两遍：网络流不可回退，第二遍拿到的是 EOF，摘要算成空内容的哈希</td></tr>
+<tr><td>必须读满固定长度</td><td><code>io.ReadFull</code> / <code>io.ReadAtLeast</code></td><td>用一次 <code>Read</code> 就当读满，短读让定长协议头解析错位</td></tr>
+<tr><td>只处理流中的某一段</td><td><code>io.NewSectionReader</code>，前提是底层实现 <code>io.ReaderAt</code></td><td>对 <code>net.Conn</code> 调 <code>Seek</code>：网络流不可回退，只能靠 HTTP Range 重新请求</td></tr>
+<tr><td>生产者只会写、消费者只要读</td><td><code>io.Pipe</code> 加 <code>CloseWithError</code></td><td>出错只调 <code>Close</code>：读端看到干净的 EOF，半截数据被当成完整内容</td></tr>
+<tr><td>调用完 HTTP 且不关心响应体</td><td><code>io.Copy(io.Discard, resp.Body)</code> 之后再 <code>Close</code></td><td>连接不复用，QPS 升高后本地端口耗尽，同时每次都重新握手</td></tr>
+</tbody>
+</table>
+<p>第二张表按函数查：<strong>默认值那一列是最容易被忽略的部分</strong>，两个 64KB 和两个 4KB 分别对应四类不同的故障。</p>
+<table>
+<thead><tr><th>函数或类型</th><th>解决什么问题</th><th>关键默认值或边界</th><th>什么时候要改</th></tr></thead>
+<tbody>
+<tr><td><code>io.Copy</code></td><td>流式搬运，自动尝试零拷贝</td><td>两次接口断言都不命中时分配 32KB 中间缓冲</td><td>想复用缓冲或指定大小时换 <code>io.CopyBuffer</code></td></tr>
+<tr><td><code>io.CopyN</code></td><td>只搬固定字节数</td><td>不足时返回 <code>io.EOF</code>，不是静默少搬</td><td>解析带长度字段的协议体</td></tr>
+<tr><td><code>io.ReadAll</code></td><td>一次读进内存</td><td>无上限，扩容期间峰值内存约为数据量两倍</td><td>输入不可信或大小未知时必须换 <code>LimitReader</code> 加流式</td></tr>
+<tr><td><code>io.LimitReader</code></td><td>给不可信输入套硬上限</td><td>读到上限返回 EOF，<strong>不会报错</strong></td><td>要区分「刚好等于上限」就传 <code>max+1</code> 再自己判断</td></tr>
+<tr><td><code>io.Discard</code></td><td>需要读完但不要内容</td><td>实现了 <code>ReaderFrom</code>，排空本身不产生拷贝</td><td>排空 HTTP 响应体固定用它</td></tr>
+<tr><td><code>io.TeeReader</code> / <code>io.MultiWriter</code></td><td>一次读取多个用途</td><td>任一目的地报错整个拷贝中断</td><td>边传边算校验和、日志同时落盘与转发</td></tr>
+<tr><td><code>io.MultiReader</code></td><td>把多个流首尾拼成一个</td><td>按顺序耗尽，前一个的 EOF 不会传给调用方</td><td>把已 <code>Peek</code> 出来的头部与剩余 body 拼回去</td></tr>
+<tr><td><code>io.NewSectionReader</code></td><td>暴露底层数据的一个区间且可并发读</td><td>要求底层实现 <code>ReaderAt</code>，<code>net.Conn</code> 不满足</td><td>分片下载、zip 包内单文件读取</td></tr>
+<tr><td><code>io.Pipe</code></td><td>接通只会写的生产者与只要读的消费者</td><td>无缓冲，读写严格配对，写端阻塞直到读端取走</td><td>出错一律用 <code>CloseWithError</code> 传播</td></tr>
+<tr><td><code>io.NopCloser</code></td><td>某个 API 要 <code>ReadCloser</code> 而你只有 <code>Reader</code></td><td><code>Close</code> 是空操作，不会释放底层资源</td><td>把 <code>bytes.Reader</code> 塞进 <code>http.Request.Body</code></td></tr>
+<tr><td><code>bufio.NewReader</code></td><td>把多次小读合并成少数系统调用</td><td>默认缓冲 4096 字节</td><td>顺序读大文件时抬到 64KB 量级，用 <code>NewReaderSize</code></td></tr>
+<tr><td><code>bufio.Scanner</code></td><td>按行或自定义分隔符切分</td><td>单个 token 上限 <code>bufio.MaxScanTokenSize</code> 即 64KB</td><td>数据里可能有超长行时必须调 <code>Buffer</code> 抬高，并检查 <code>Err</code></td></tr>
+<tr><td><code>bufio.Writer</code></td><td>合并小写入</td><td>默认缓冲 4096 字节，<strong>不 Flush 就丢尾部</strong></td><td>批量落盘抬到 256KB 量级，<code>Flush</code> 必须检查错误</td></tr>
+<tr><td><code>io.WriteString</code></td><td>写字符串时少一次字节切片转换</td><td>目标实现 <code>io.StringWriter</code> 时直接走快路径</td><td>热路径上拼响应</td></tr>
+</tbody>
+</table>
+<p><strong>「连接不复用」的排查步骤</strong>：这是漏了定式六之后最常见的症状，表现是延迟毛刺随 QPS 升高，但 CPU 与下游都看不出问题。按下面三步走，十分钟内能定性。</p>
+<pre><code class="language-bash"># 1) 看 TIME_WAIT 是否与 QPS 同步增长：同步增长说明连接在被不断新建与丢弃
+netstat -an | awk '$6=="TIME_WAIT"' | wc -l
+
+# 2) 看 fd：同一个下游地址出现成百上千条，说明连接压根没回池
+lsof -p "$(pgrep -f myapp)" | grep -c TCP
+
+# 3) 看客户端指标：Go 1.11 起 http.Transport 的空闲连接数可从 expvar 或自己埋点导出，
+#    更直接的证据是上面 traceReuse 打出的 reused=false
+curl -s localhost:6060/debug/pprof/goroutine?debug=1 | grep -c 'net/http.(*persistConn)'</code></pre>
+<p>三步看下来：<code>reused=false</code> 长期出现、<code>TIME_WAIT</code> 随 QPS 线性上涨、<code>persistConn</code> 的 goroutine 数量剧烈波动，任意两条同时成立就可以直接去代码里找「只 <code>Close</code> 没排空」的调用点了。相关的下游超时与取消传播见 <a href="../context/">Go Context 的传播、取消与误用</a>，延迟毛刺的量化方法在 <a href="../../../observability/">可观测性与性能</a>。</p>
+
+<h2>② 原理 · 一个方法的接口，为什么是 Go 最成功的抽象</h2>
+<p>搞清这一节，能解释为什么上面那些定式的参数类型全是 <code>io.Reader</code> 和 <code>io.Writer</code>，以及为什么你自己包一层装饰器就可能让性能掉一个档。</p>
 <p><code>io.Reader</code> 只有一个方法，<code>io.Writer</code> 也只有一个方法。这两个接口的价值恰恰来自「小」：<strong>方法越少，能实现它的类型就越多，可组合的空间就越大</strong>。文件、TCP 连接、内存缓冲、字符串、gzip 流、AES 加密流、限速器、进度条、HTTP 请求体，全都满足同一个接口，于是任何接收 <code>io.Reader</code> 的函数天然能处理所有这些来源。</p>
 <p>对比一下就知道这有多难得：在需要显式声明实现关系的语言里，让一个第三方类型去满足你定义的接口通常要写适配器；而 Go 的隐式实现让「凑巧都有一个 Read 方法」就等于可互换。这也是为什么 Go 的 IO 生态里几乎看不到适配层——大家共用同一组接口。</p>
 <div class="callout callout-danger">
@@ -112,8 +283,8 @@
 </tbody>
 </table>
 
-<h2>组合管道：一条真实的流式链路</h2>
-<p>单方法接口最直接的收益是可以把处理步骤像水管一样接起来，而且<strong>全程内存占用只和缓冲区大小有关，与数据量无关</strong>。</p>
+<h2>② 原理 · 组合管道：一条真实的流式链路</h2>
+<p>搞清这一节，能解决「处理大文件内存就爆」这一类问题：管道搭对了，内存占用只和缓冲区大小有关，与数据量无关。</p>
 <div class="mermaid">
 flowchart TB
     subgraph src["数据源 只需满足 Reader"]
@@ -206,8 +377,10 @@ func uploadEncrypted(ctx context.Context, url, path string, key []byte) error {
     }
     return nil
 }</code></pre>
+<p>这段里的 goroutine 与错误传播是 <code>io.Pipe</code> 的固有代价，写法上的讲究见 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>。</p>
 
-<h2>io.Copy 的零拷贝：它到底做了什么</h2>
+<h2>② 原理 · io.Copy 的零拷贝：它到底做了什么</h2>
+<p>搞清这一节，能解释「为什么加了一层统计字节数的 Writer 之后吞吐掉了一半」——快路径是靠接口断言命中的，装饰器会把它挡掉。</p>
 <p><code>io.Copy</code> 不是「分配一块缓冲然后循环读写」这么简单。它先做两次接口断言，命中就走快路径，都不命中才退化成缓冲循环。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -241,7 +414,8 @@ sequenceDiagram
 </table>
 <p>实践结论：<strong>能用 <code>io.Copy</code> 就不要自己写 <code>for</code> 循环读写</strong>，自己写的版本一定走不到内核零拷贝。反过来，如果你写了一个包装 <code>Writer</code> 的装饰器（比如统计字节数的），它会把 <code>ReaderFrom</code> 快路径挡掉，这时要么在装饰器上也实现 <code>ReadFrom</code> 转发下去，要么接受退化。</p>
 
-<h2>缓冲：为什么 bufio 不是可选项</h2>
+<h2>② 原理 · 缓冲：为什么 bufio 不是可选项</h2>
+<p>搞清这一节，能解决「CPU 不高但吞吐上不去」这类问题：多数情况下时间全花在系统调用的固定开销上。</p>
 <p><strong>没有缓冲的每一次 <code>Read</code> 或 <code>Write</code> 都是一次系统调用。</strong>系统调用的固定开销在几百纳秒到一微秒量级，所以逐字节读一个 1MB 文件意味着一百万次陷入内核，耗时能到秒级；包一层 <code>bufio</code> 之后只有几十次系统调用，耗时是毫秒级。这中间是三到四个数量级的差距，不是「优化」而是「能不能用」的区别。</p>
 <table>
 <thead><tr><th>读取 1MB 文件的方式</th><th>系统调用次数量级</th><th>相对耗时量级</th><th>说明</th></tr></thead>
@@ -259,6 +433,7 @@ sequenceDiagram
     <div class="callout-title">bufio.Scanner 的 64KB 行上限会让你静默丢数据</div>
     <p><code>bufio.Scanner</code> 默认单个 token 上限是 <code>bufio.MaxScanTokenSize</code> 即 64KB。遇到更长的一行时，<code>Scan()</code> 直接返回 false，<code>for sc.Scan()</code> 正常退出，<strong>看起来和读完文件完全一样</strong>，实际后面所有内容都没处理。错误藏在 <code>sc.Err()</code> 里（<code>bufio.ErrTooLong</code>），只检查 <code>Scan()</code> 返回值的代码永远发现不了。处理日志、CSV、JSON Lines 这类可能出现超长行的数据时，这个坑几乎必踩。</p>
 </div>
+<p>定式二给的是「抬高上限」这条路。如果超长行本身就是要防御的输入，就得换成下面这种自己掌控拼接与截断的写法。</p>
 <pre><code class="language-go">// 流式逐行处理超大文件：内存恒定，且能正确处理超长行
 func processLines(path string, fn func(line []byte) error) error {
     f, err := os.Open(path)
@@ -304,22 +479,10 @@ func processLines(path string, fn func(line []byte) error) error {
             return err
         }
     }
-}
-
-// 如果坚持用 Scanner，下面这两行是必须的
-func scanLines(r io.Reader) error {
-    sc := bufio.NewScanner(r)
-    // 默认上限是 bufio.MaxScanTokenSize 即 64KB，按业务抬高
-    sc.Buffer(make([]byte, 0, 64*1024), 8&lt;&lt;20)
-    for sc.Scan() {
-        _ = sc.Bytes() // 底层数组下次 Scan 会复用，要留存必须 copy 或用 sc.Text
-    }
-    // 只看 Scan 返回值会把 ErrTooLong 当成读完，Err 必须检查
-    return sc.Err()
 }</code></pre>
 
-<h2>常见错误清单</h2>
-<p>下面这些是我在 code review 里见得最多的 IO 错误，每一条都对应过真实的线上问题。</p>
+<h2>② 原理 · 常见错误清单：错在哪、症状是什么</h2>
+<p>下面这些是我在 code review 里见得最多的 IO 错误，每一条都对应过真实的线上问题。表格按「写法 → 后果 → 修法」组织，可以直接当评审清单用。</p>
 <table>
 <thead><tr><th>错误写法</th><th>后果</th><th>正确做法</th></tr></thead>
 <tbody>
@@ -336,79 +499,7 @@ func scanLines(r io.Reader) error {
 </tbody>
 </table>
 
-<h2>工具箱：每个函数解决什么真实问题</h2>
-<div class="mermaid">
-flowchart TB
-    S["手上有一个数据流要处理"] --> Q1{"数据量可控吗"}
-    Q1 -->|"来自可信源且确定很小"| RA["io.ReadAll<br/>一次读进内存最省事"]
-    Q1 -->|"不可控或来自外部用户"| Q2{"要不要硬上限"}
-    Q2 -->|"要"| LR["io.LimitReader 套一层<br/>读到上限加一字节即判超限"]
-    Q2 -->|"不要 全量流式"| Q3{"具体要做什么"}
-    Q3 -->|"原样搬到另一个 Writer"| CP["io.Copy<br/>自动尝试零拷贝路径"]
-    Q3 -->|"搬的同时要留一份或算摘要"| TEE["io.TeeReader 配 io.MultiWriter"]
-    Q3 -->|"只读文件中间某一段"| SEC["io.SectionReader<br/>前提是底层实现 ReaderAt"]
-    Q3 -->|"生产者只会写 消费者只会读"| PIPE["io.Pipe<br/>出错必须 CloseWithError"]
-    Q3 -->|"把几个流首尾拼成一个"| MR["io.MultiReader<br/>拼请求头与请求体常用"]
-    Q3 -->|"按行或分隔符切分"| BUF["bufio.Reader 的 ReadSlice<br/>或 Scanner 加 Buffer"]
-</div>
-<table>
-<thead><tr><th>函数或类型</th><th>解决的真实问题</th><th>一句话场景</th></tr></thead>
-<tbody>
-<tr><td>io.Pipe</td><td>生产者只有 Writer 消费者只要 Reader 两边接不上</td><td>把 gzip.Writer 的输出直接当作 HTTP 请求体</td></tr>
-<tr><td>io.TeeReader</td><td>读一遍数据但需要同时留一份副本</td><td>上传文件时边传边算 SHA256 校验和</td></tr>
-<tr><td>io.MultiWriter</td><td>同一份输出要同时落到多个目的地</td><td>日志同时写文件与 stdout 与远端采集</td></tr>
-<tr><td>io.MultiReader</td><td>把多个流按顺序拼成一个逻辑流</td><td>已 Peek 出来的头部与剩余 body 重新拼回去</td></tr>
-<tr><td>io.SectionReader</td><td>只暴露底层数据的一个区间且可并发读</td><td>分片下载与 zip 包内单文件读取</td></tr>
-<tr><td>io.LimitReader</td><td>给来源不可信的输入加硬上限</td><td>拒绝超过 10MB 的请求体而不先读进内存</td></tr>
-<tr><td>io.Discard</td><td>需要把流读完但不要内容</td><td>排空 HTTP 响应体以便连接复用</td></tr>
-<tr><td>io.NopCloser</td><td>某个 API 要 ReadCloser 但你只有 Reader</td><td>把 bytes.Reader 塞进 http.Request.Body</td></tr>
-<tr><td>io.ReadFull 与 io.ReadAtLeast</td><td>必须读满固定长度否则算错误</td><td>解析定长协议头</td></tr>
-<tr><td>io.WriteString</td><td>写字符串时避免一次字节切片转换</td><td>热路径上拼响应</td></tr>
-</tbody>
-</table>
-<pre><code class="language-go">// 下载不可信来源的大响应：不用 ReadAll，用 LimitReader 兜上限 加 流式落盘
-func downloadTo(ctx context.Context, url, dst string, maxBytes int64) (err error) {
-    req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-    if err != nil {
-        return err
-    }
-    resp, err := http.DefaultClient.Do(req)
-    if err != nil {
-        return err
-    }
-    defer func() {
-        _, _ = io.Copy(io.Discard, resp.Body) // 排空 才能复用连接
-        _ = resp.Body.Close()
-    }()
-    if resp.StatusCode != http.StatusOK {
-        return fmt.Errorf("unexpected status %s", resp.Status)
-    }
-
-    f, err := os.Create(dst)
-    if err != nil {
-        return err
-    }
-    defer func() {
-        // 写入路径上 Close 的 error 必须回传：它可能携带延迟报出的写失败
-        if cerr := f.Close(); err == nil {
-            err = cerr
-        }
-    }()
-
-    bw := bufio.NewWriterSize(f, 256*1024)
-    // 多读一个字节：这样才能区分「刚好等于上限」和「已经超过上限」
-    n, err := io.Copy(bw, io.LimitReader(resp.Body, maxBytes+1))
-    if err != nil {
-        return err
-    }
-    if n &gt; maxBytes {
-        return fmt.Errorf("response exceeds %d bytes", maxBytes)
-    }
-    // Flush 必须在 Close 之前，且它的 error 必须检查，否则末尾数据会静默丢失
-    return bw.Flush()
-}</code></pre>
-
-<h2>排查：IO 问题怎么定位</h2>
+<h2>② 原理 · 症状到根因：IO 问题的排查路径</h2>
 <p>IO 类问题的症状往往和根因离得很远：fd 泄漏表现成「服务跑了三天突然全部报错」，缺少缓冲表现成「CPU 不高但吞吐上不去」，响应体没排空表现成「延迟毛刺随 QPS 升高」。下面这些命令可以把症状直接落到根因上。</p>
 <table>
 <thead><tr><th>症状</th><th>排查命令</th><th>输出怎么判读</th><th>对应根因</th></tr></thead>
@@ -425,26 +516,59 @@ func downloadTo(ctx context.Context, url, dst string, maxBytes int64) (err error
 </table>
 <p>判读顺序建议是先看 fd 再看系统调用次数再看内存栈。fd 数量是最容易确认也最容易修的；系统调用次数能一眼看出有没有缺缓冲；内存栈用来定位那些「只在特定请求上」打爆内存的 <code>ReadAll</code>。三步走完，绝大多数 IO 问题都能落到具体某一行代码上。</p>
 
-<div class="callout callout-warning">
-    <div class="callout-icon">⚠️</div>
-    <div class="callout-title">最容易踩的坑</div>
-    <p>1. 只检查 <code>Scanner.Scan()</code> 不检查 <code>Err()</code>：超过 64KB 的行让循环正常退出，后面的数据全丢，日志处理脚本最常中招。</p>
-    <p>2. 保存 <code>Scanner.Bytes()</code> 或 <code>bufio.Reader.ReadSlice()</code> 返回的切片：底层数组下一轮会被复用，存进 map 里的内容全被覆盖成最后一行。</p>
-    <p>3. 写入路径上 <code>defer f.Close()</code> 却不接错误：<code>gzip.Writer</code> 的尾部、<code>bufio.Writer</code> 的缓冲都在 Close 时才写出，产出损坏文件却报成功。</p>
-    <p>4. 用了 <code>bufio.NewWriter</code> 忘记 <code>Flush</code>：文件末尾缺一段，而且缺多少取决于缓冲区大小，非常难定位。</p>
-    <p>5. <code>io.ReadAll</code> 读用户上传或下游响应：扩容峰值内存约为数据量两倍，几百兆输入就能打挂进程。</p>
-    <p>6. <code>http.Response.Body</code> 不读完就 Close：连接不能复用，QPS 上去后本地端口耗尽，同时每次都要重新 TLS 握手。</p>
-    <p>7. <code>io.Pipe</code> 的写端出错时只调 <code>Close()</code>：读端拿到的是干净的 EOF，半截数据被当成完整内容，要用 <code>CloseWithError</code>。</p>
-    <p>8. 先判 <code>err != nil</code> 再处理 n 字节：最后一次读同时返回数据和 EOF 时丢尾部，只在数据长度恰好落在边界时复现。</p>
-    <p>9. 对 <code>net.Conn</code> 调 <code>Seek</code>：网络流不可回退，需要重读就得自己缓存或用 HTTP Range。</p>
-    <p>10. 自己写 <code>for</code> 循环替代 <code>io.Copy</code>：白白放弃 <code>sendfile</code> 与 <code>splice</code>，静态文件服务场景差距明显。</p>
-    <p>11. 包了一层自定义 <code>Writer</code> 装饰器却没转发 <code>ReadFrom</code>：无意中把上游的零拷贝路径挡掉了。</p>
-    <p>12. 在 <code>io.Copy</code> 的目标是内存 buffer 时不限上限：等价于 <code>ReadAll</code>，同样会被大输入打爆。</p>
+<h2>③ 场景 · 按数据来源与规模选定式</h2>
+<p>动手之前先过这张图，它决定了你该用上面哪个定式。</p>
+<div class="mermaid">
+flowchart TB
+    S["手上有一个数据流要处理"] --> Q1{"数据量可控吗"}
+    Q1 -->|"来自可信源且确定很小"| RA["io.ReadAll<br/>一次读进内存最省事"]
+    Q1 -->|"不可控或来自外部用户"| Q2{"要不要硬上限"}
+    Q2 -->|"要"| LR["io.LimitReader 套一层<br/>读到上限加一字节即判超限"]
+    Q2 -->|"不要 全量流式"| Q3{"具体要做什么"}
+    Q3 -->|"原样搬到另一个 Writer"| CP["io.Copy<br/>自动尝试零拷贝路径"]
+    Q3 -->|"搬的同时要留一份或算摘要"| TEE["io.TeeReader 配 io.MultiWriter"]
+    Q3 -->|"只读文件中间某一段"| SEC["io.SectionReader<br/>前提是底层实现 ReaderAt"]
+    Q3 -->|"生产者只会写 消费者只会读"| PIPE["io.Pipe<br/>出错必须 CloseWithError"]
+    Q3 -->|"把几个流首尾拼成一个"| MR["io.MultiReader<br/>拼请求头与请求体常用"]
+    Q3 -->|"按行或分隔符切分"| BUF["bufio.Reader 的 ReadSlice<br/>或 Scanner 加 Buffer"]
 </div>
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>静态文件或大对象转发给 HTTP 客户端</td><td><code>http.ServeContent</code> 或 <code>io.Copy</code> 直接写 <code>ResponseWriter</code></td><td>命中 <code>ReaderFrom</code> 可走 <code>sendfile</code>，数据不出内核</td><td>中间插任何装饰器（限速、计数、加密）都会让快路径退化成 32KB 循环</td></tr>
+<tr><td>请求体或上传来自外部用户</td><td><code>http.MaxBytesReader</code> 或 <code>io.LimitReader</code> 套死上限，边读边落盘</td><td>峰值内存与数据量脱钩，攻击者无法用一个大 body 打爆进程</td><td>要自己处理超限时的状态码与半截临时文件的清理</td></tr>
+<tr><td>逐行处理 GB 级日志</td><td><code>bufio.Reader.ReadSlice</code> 自己处理超长行</td><td>内存恒定，超长行由你决定截断还是报错</td><td>代码比 <code>Scanner</code> 长，返回切片必须 copy 才能留存</td></tr>
+<tr><td>同一份输出要送到多个目的地</td><td><code>io.MultiWriter</code></td><td>源只读一遍，落盘与转发共用同一次拷贝</td><td>任一 Writer 报错整个 <code>Copy</code> 就中断，最慢的目的地决定整体速度</td></tr>
+<tr><td>生产侧只会写、消费侧只要读（gzip 接 HTTP body）</td><td><code>io.Pipe</code> 加 <code>CloseWithError</code></td><td>不必先在内存里攒出完整包体</td><td>多一个 goroutine 与一条必须正确传播错误的路径，写错就是永久阻塞</td></tr>
+<tr><td>配置、证书、模板这类确定很小的可信输入</td><td><code>os.ReadFile</code> 或 <code>io.ReadAll</code></td><td>代码最短，流式在这里是过度设计</td><td>一旦这个路径被换成用户可控的文件，就变成内存事故</td></tr>
+<tr><td>并发读同一文件的不同区间（分片下载、zip 解析）</td><td><code>io.NewSectionReader</code> 配 <code>io.ReaderAt</code></td><td><code>ReadAt</code> 不共享偏移量，可以安全并发调用</td><td><code>net.Conn</code> 不实现 <code>ReaderAt</code>，只能对本地文件或已落盘内容用</td></tr>
+</tbody>
+</table>
+<p><strong>不适用边界</strong>：流式不是万能选项。对象小于几十 KB 且来源可信时，<code>os.ReadFile</code> 一把读完远比搭一条管道清晰；需要随机访问或反复回退时，流式接口帮不上忙，应该先落盘或读进内存再用 <code>bytes.Reader</code>；<code>io.Pipe</code> 引入的 goroutine 在高并发下本身就是成本，能用 <code>bytes.Buffer</code> 解决的小包体不值得上管道。日志的结构化输出不要自己拼 <code>io.Writer</code>，用 <a href="../slog/">结构化日志与 log/slog</a>；缓冲区大小与复用的量级判断见 <a href="../../algorithms/">算法与数据结构在后端工程中的位置</a>；给流式代码写测试时 <code>strings.Reader</code> 与 <code>iotest</code> 的用法在 <a href="../../testing/">测试策略与可测性设计</a>；吞吐与延迟的量化定位在 <a href="../../../observability/">可观测性与性能</a>。</p>
+<p>回到最上面那两条习惯：<strong>函数参数永远声明成 <code>io.Reader</code> 或 <code>io.Writer</code> 而不是具体类型，能流式就绝不 <code>ReadAll</code></strong>。剩下的注意力全部花在三件事上——读的时候先处理数据再判 error；写的时候把 <code>Flush</code> 和 <code>Close</code> 的错误当成业务错误对待；来源不可信的输入一律先套 <code>io.LimitReader</code>。这三件事做到了，IO 相关的线上问题会少掉九成。</p>
+<p>本篇是标准库这一层的第一站：语言机制四篇解决的是运行时、并发、取消与类型抽象，从这里开始转向具体能力，下一步是排序与切片操作。</p>
 
-<h2>结论</h2>
-<p><code>io.Reader</code> 和 <code>io.Writer</code> 的价值在于它们小到几乎所有东西都能实现，于是「组合」成了默认的扩展方式：压缩、加密、限速、计数、分流，每一个都是一层装饰器，接口不变。写代码时的两条习惯足够覆盖大部分场景——<strong>函数参数永远声明成 <code>io.Reader</code> 或 <code>io.Writer</code> 而不是具体类型，能流式就绝不 <code>ReadAll</code></strong>。</p>
-<p>剩下的注意力全部花在三件事上：读的时候先处理数据再判 error；写的时候把 <code>Flush</code> 和 <code>Close</code> 的错误当成业务错误对待；来源不可信的输入一律先套 <code>io.LimitReader</code>。这三件事做到了，IO 相关的线上问题会少掉九成。</p>
+<p class="cluster-nav">同主题路径：<a href="../generics-usage/">← 上一步：Go 泛型该用在哪，以及标准库的变化</a> · <a href="../sort/">下一步：排序与切片操作的现代写法 →</a></p>
+
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+        <li><strong>只检查 <code>Scanner.Scan()</code> 不检查 <code>Err()</code></strong>：超过 64KB 的行让循环正常退出，后面的数据全丢，日志处理脚本最常中招。</li>
+        <li><strong>保存 <code>Scanner.Bytes()</code> 或 <code>bufio.Reader.ReadSlice()</code> 返回的切片</strong>：底层数组下一轮会被复用，存进 map 里的内容全被覆盖成最后一行。</li>
+        <li><strong>写入路径上 <code>defer f.Close()</code> 却不接错误</strong>：<code>gzip.Writer</code> 的尾部、<code>bufio.Writer</code> 的缓冲都在 Close 时才写出，产出损坏文件却报成功。</li>
+        <li><strong>用了 <code>bufio.NewWriter</code> 忘记 <code>Flush</code></strong>：文件末尾缺一段，而且缺多少取决于缓冲区大小，非常难定位。</li>
+        <li><strong><code>io.ReadAll</code> 读用户上传或下游响应</strong>：扩容峰值内存约为数据量两倍，几百兆输入就能打挂进程。</li>
+        <li><strong><code>http.Response.Body</code> 不读完就 Close</strong>：连接不能复用，QPS 上去后本地端口耗尽，同时每次都要重新 TLS 握手。</li>
+        <li><strong><code>io.Pipe</code> 的写端出错时只调 <code>Close()</code></strong>：读端拿到的是干净的 EOF，半截数据被当成完整内容，要用 <code>CloseWithError</code>。</li>
+        <li><strong>先判 <code>err != nil</code> 再处理 n 字节</strong>：最后一次读同时返回数据和 EOF 时丢尾部，只在数据长度恰好落在边界时复现。</li>
+        <li><strong>对 <code>net.Conn</code> 调 <code>Seek</code></strong>：网络流不可回退，需要重读就得自己缓存或用 HTTP Range。</li>
+        <li><strong>自己写 <code>for</code> 循环替代 <code>io.Copy</code></strong>：白白放弃 <code>sendfile</code> 与 <code>splice</code>，静态文件服务场景差距明显。</li>
+        <li><strong>包了一层自定义 <code>Writer</code> 装饰器却没转发 <code>ReadFrom</code></strong>：无意中把上游的零拷贝路径挡掉了。</li>
+        <li><strong>在 <code>io.Copy</code> 的目标是内存 buffer 时不限上限</strong>：等价于 <code>ReadAll</code>，同样会被大输入打爆。</li>
+    </ul>
+</div>
                     </div>
                 </article>
 

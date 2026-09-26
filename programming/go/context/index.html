@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="讲清 context 的四个职责与五种派生函数的差异，重点说明取消为什么是协作式的、链条中间换成 context.Background 会怎样静默失效，给出超时预算向下传递的可抄封装、ctx value 的私有 key 模式，以及 database/sql、http.Client、os/exec、gRPC 在取消时的真实行为差异与优雅关闭里 ctx 的三种不同用法。">
+        <meta name="description" content="Go Context 三段式：先给一条完整链路的传播骨架、可直接抄的超时预算封装、「场景 → 该用哪个构造函数」对照表与「取消没生效」的七步排查，再讲四个职责与五种派生函数的差异、取消为什么是协作式的、WithValue 的边界与私有 key 模式、database/sql 与 http.Client 与 os/exec 与 gRPC 在取消时的真实行为、优雅关闭里 ctx 的三种不同用法，最后给多层串行、并发扇出、流式响应等形态的超时策略与代价。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/context/">
     <!-- Open Graph -->
     <meta property="og:title" content="Go Context 的传播、取消与误用 - 资深码农">
-    <meta property="og:description" content="讲清 context 的四个职责与五种派生函数的差异，重点说明取消为什么是协作式的、链条中间换成 context.Background 会怎样静默失效，给出超时预算向下传递的可抄封装、ctx value 的私有 key 模式，以及 database/sql、http.Client、os/exec、gRPC 在取消时的真实行为差异与优雅关闭里 ctx 的三种不同用法。">
+    <meta property="og:description" content="Go Context 三段式：先给一条完整链路的传播骨架、可直接抄的超时预算封装、「场景 → 该用哪个构造函数」对照表与「取消没生效」的七步排查，再讲四个职责与五种派生函数的差异、取消为什么是协作式的、WithValue 的边界与私有 key 模式、database/sql 与 http.Client 与 os/exec 与 gRPC 在取消时的真实行为、优雅关闭里 ctx 的三种不同用法，最后给多层串行、并发扇出、流式响应等形态的超时策略与代价。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/context/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Go Context 的传播、取消与误用 - 资深码农">
-    <meta name="twitter:description" content="讲清 context 的四个职责与五种派生函数的差异，重点说明取消为什么是协作式的、链条中间换成 context.Background 会怎样静默失效，给出超时预算向下传递的可抄封装、ctx value 的私有 key 模式，以及 database/sql、http.Client、os/exec、gRPC 在取消时的真实行为差异与优雅关闭里 ctx 的三种不同用法。">
+    <meta name="twitter:description" content="Go Context 三段式：先给一条完整链路的传播骨架、可直接抄的超时预算封装、「场景 → 该用哪个构造函数」对照表与「取消没生效」的七步排查，再讲四个职责与五种派生函数的差异、取消为什么是协作式的、WithValue 的边界与私有 key 模式、database/sql 与 http.Client 与 os/exec 与 gRPC 在取消时的真实行为、优雅关闭里 ctx 的三种不同用法，最后给多层串行、并发扇出、流式响应等形态的超时策略与代价。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go Context 的传播、取消与误用","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"讲清 context 的四个职责与五种派生函数的差异，重点说明取消为什么是协作式的、链条中间换成 context.Background 会怎样静默失效，给出超时预算向下传递的可抄封装、ctx value 的私有 key 模式，以及 database/sql、http.Client、os/exec、gRPC 在取消时的真实行为差异与优雅关闭里 ctx 的三种不同用法。","url":"https://www.yijunjun.asia/programming/go/context/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/context/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go Context 的传播、取消与误用","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Go Context 三段式：先给一条完整链路的传播骨架、可直接抄的超时预算封装、「场景 → 该用哪个构造函数」对照表与「取消没生效」的七步排查，再讲四个职责与五种派生函数的差异、取消为什么是协作式的、WithValue 的边界与私有 key 模式、database/sql 与 http.Client 与 os/exec 与 gRPC 在取消时的真实行为、优雅关闭里 ctx 的三种不同用法，最后给多层串行、并发扇出、流式响应等形态的超时策略与代价。","url":"https://www.yijunjun.asia/programming/go/context/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/context/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Context", "item": "https://www.yijunjun.asia/programming/go/context/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,7 +91,141 @@
                         </div>
                     </header>
                     <div class="article-content">
-<h2>context 的四个职责，以及它不负责什么</h2>
+<p>关于 context 的代码审查意见，十条里有八条是同一类问题：ctx 被传下去了，但传的过程中语义断了——中间某层换成了 <code>context.Background()</code>、子调用设了比父更长的超时、或者被调方压根没有 <code>select</code> 它。这类错误不报错、不崩，只在压力上来时表现为请求悬挂和连接池耗尽。这篇先给能直接照抄的传播定式与排查步骤，再展开语义细节。并发结构本身在 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>，运行时层面的表现在 <a href="../">Go 运行时模型</a>。</p>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一条完整链路的传播骨架（入口定总预算、<code>defer cancel</code>、<code>errors.Is</code> 区分取消与超时、<code>WithoutCancel</code> 做收尾）、可直接抄的超时预算封装、「场景 → 该用哪个构造函数」对照表，以及「取消没生效」的七步排查。</li>
+        <li><strong>② 原理</strong>：四个职责与五种派生函数的差异、取消为什么是协作式的、超时预算的收敛模型、<code>WithValue</code> 的边界与私有 key 模式、<code>database/sql</code> 与 <code>http.Client</code> 与 gRPC 在取消时的真实行为、优雅关闭里 ctx 的三种不同用法。</li>
+        <li><strong>③ 场景</strong>：多层串行、并发扇出、流式响应、长耗时批处理这几种形态各自的超时策略与代价，以及哪些问题不该指望 context 解决。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 传播定式与「取消没生效」的排查步骤</h2>
+<p>先看一条完整链路在入口层该怎么写。这段是骨架，四个容易漏的点都在注释里，机制原因见原理层。</p>
+<pre><code class="language-go">// 入口层的固定写法：总预算在这里一次性定下来，下游只能收敛不能放大
+func (h *Handler) GetProfile(w http.ResponseWriter, r *http.Request) {
+    // r.Context() 已经绑定这次请求：客户端断开时它会被取消
+    // 总预算要小于上游给你的超时，留出网络与排队的余量
+    ctx, cancel := context.WithTimeout(r.Context(), 800*time.Millisecond)
+    defer cancel() // 拿到 cancel 就立刻 defer；它是幂等的，多调无害
+
+    p, err := h.svc.Profile(ctx, userID(r)) // ctx 永远是第一个参数，不要存进结构体
+
+    switch {
+    case err == nil:
+        writeJSON(w, http.StatusOK, p)
+    case errors.Is(err, context.Canceled):
+        // 客户端自己走了，这不是服务端错误，别计进 5xx 指标否则告警全是噪音
+        h.metrics.Inc("client_gone")
+    case errors.Is(err, context.DeadlineExceeded):
+        http.Error(w, "upstream timeout", http.StatusGatewayTimeout)
+    default:
+        http.Error(w, "internal", http.StatusInternalServerError)
+    }
+
+    if err != nil {
+        // 失败后的审计与补偿必须脱离已取消的链，否则一调用就立即失败
+        // WithoutCancel 保留 value（traceID 还在）但切断取消，同时也丢掉了 deadline，
+        // 所以必须再套一个独立超时，不然这段收尾工作没有任何时间上限
+        audit, cancelAudit := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+        defer cancelAudit()
+        h.audit.Record(audit, "profile_failed", err)
+    }
+}</code></pre>
+<p>每一层往下派生时的取值规则写成一个封装，全项目强制用它，超时就一定是收敛的：</p>
+<pre><code class="language-go">// budget.go：向下传递超时预算的封装，直接可用
+
+// WithBudget 返回一个超时不超过 want 的子 context。
+// 如果父 ctx 剩余时间已经少于 want，就沿用父的 deadline，不做无意义的放大。
+// reserve 是留给本层收尾的时间，避免下游用满预算后自己来不及写响应。
+func WithBudget(ctx context.Context, want, reserve time.Duration) (context.Context, context.CancelFunc) {
+    dl, ok := ctx.Deadline()
+    if !ok {
+        // 父没有 deadline（通常是后台任务或入口漏设），按 want 兜底
+        return context.WithTimeout(ctx, want)
+    }
+    remain := time.Until(dl) - reserve
+    if remain &lt;= 0 {
+        // 预算已经耗尽，不必再发起下游调用，直接返回一个已取消的 ctx
+        c, cancel := context.WithCancel(ctx)
+        cancel()
+        return c, cancel
+    }
+    if remain &lt; want {
+        want = remain // 取较小值：绝不放大父的预算
+    }
+    return context.WithTimeout(ctx, want)
+}
+
+// 调用侧：每一层都这么写，超时就一定是收敛的
+func (s *Service) GetProfile(ctx context.Context, uid int64) (*Profile, error) {
+    // 给 DB 最多 300ms，并给本层留 20ms 做序列化与日志
+    dbCtx, cancel := WithBudget(ctx, 300*time.Millisecond, 20*time.Millisecond)
+    defer cancel() // 必须 defer：否则 timer 要等到 300ms 才释放
+
+    row := s.db.QueryRowContext(dbCtx, "SELECT name, age FROM users WHERE id = ?", uid)
+    var p Profile
+    if err := row.Scan(&amp;p.Name, &amp;p.Age); err != nil {
+        // 区分「是我超时了」还是「上游取消了」，两者的告警级别不同
+        if errors.Is(err, context.DeadlineExceeded) {
+            return nil, fmt.Errorf("db timeout after budget: %w", err)
+        }
+        if errors.Is(err, context.Canceled) {
+            return nil, fmt.Errorf("upstream gone: %w", err) // 客户端断开，不该算服务端错误
+        }
+        return nil, err
+    }
+    return &amp;p, nil
+}</code></pre>
+<p>拿到一个 ctx 之后该用哪个构造函数，查下表，别凭感觉：</p>
+<table>
+    <thead>
+        <tr><th>场景</th><th>该用哪个构造函数</th><th>必须一起做什么</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>进程入口，要响应 SIGTERM</td><td><code>signal.NotifyContext(context.Background(), ...)</code></td><td><code>defer stop()</code>；<strong>不要拿它派生请求 ctx</strong>，否则收到信号会立刻掐断存量请求</td></tr>
+        <tr><td>HTTP handler 入口</td><td><code>r.Context()</code> 再套一个 <code>WithTimeout</code></td><td><code>defer cancel()</code>；总预算要小于上游给的超时</td></tr>
+        <tr><td>往下调一个下游</td><td><code>WithTimeout</code>，取「父剩余」与「本层期望」的较小值</td><td>预留本层收尾时间；要绝对时间点就换 <code>WithDeadline</code>，父 deadline 更早时父生效</td></tr>
+        <tr><td>某个条件下要手动取消一批子任务</td><td><code>WithCancel</code></td><td>必须 <code>defer cancel()</code>，否则子节点一直挂在父的 children 集合里</td></tr>
+        <tr><td>挂 traceID、用户身份这类横切元数据</td><td><code>WithValue</code>，key 用包内私有空结构体</td><td>成对导出 getter 与 setter；绝不放业务参数和依赖</td></tr>
+        <tr><td>请求失败后写审计、发补偿消息</td><td><code>context.WithoutCancel(ctx)</code>（1.21 起）</td><td><strong>必须再套一个 <code>WithTimeout</code></strong>，因为它把 deadline 也一并丢了</td></tr>
+        <tr><td>后台常驻任务、队列消费者</td><td>从 <code>context.Background()</code> 派生</td><td>需要 traceID 就手工拷过去，绝不复用请求 ctx</td></tr>
+        <tr><td>优雅关闭的宽限期</td><td><code>context.WithTimeout(context.Background(), 20*time.Second)</code></td><td>父<strong>必须</strong>是 <code>Background</code>，从已取消的信号 ctx 派生会让 <code>Shutdown</code> 立即强制断连</td></tr>
+    </tbody>
+</table>
+<p>「我传了 ctx 但超时没生效」是最高频的报障，按下面的顺序查，基本第二步就能定位：</p>
+<table>
+    <thead>
+        <tr><th>第几步</th><th>具体怎么做</th><th>命中说明什么</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>1</td><td>在 handler 里打一行 <code>ctx.Deadline()</code> 的返回值</td><td>第二个返回值为 false，说明整条链根本没有超时预算，入口漏设了</td></tr>
+        <tr><td>2</td><td>全仓搜 <code>context.Background()</code> 与 <code>context.TODO()</code>，排除 main、init、测试与后台任务</td><td>在 service 或 repository 层出现就是断链，这是最高频的原因</td></tr>
+        <tr><td>3</td><td>打开 golangci-lint 的 <code>noctx</code></td><td>命中 <code>http.Get</code>、<code>exec.Command</code>、<code>db.Query</code> 这类无 ctx 版本，说明 ctx 压根没接上</td></tr>
+        <tr><td>4</td><td>读被调方（含第三方库）的实现，看它有没有 <code>select ctx.Done()</code> 或把 ctx 继续往下传</td><td>签名里有 ctx 但内部不用，传了也白传</td></tr>
+        <tr><td>5</td><td>搜下游各层里写死的超时常量</td><td>子超时大于父剩余时间等于没设，永远是父先到点</td></tr>
+        <tr><td>6</td><td>把 <code>err == context.DeadlineExceeded</code> 全部换成 <code>errors.Is</code></td><td>下游包装过错误时直接比较会静默失效，超时被当成普通错误上报</td></tr>
+        <tr><td>7</td><td>采 goroutine profile，看对应的那一类栈是否在堆积</td><td>调用方已经返回但 goroutine 还在，说明它阻塞在 send 或者压根没监听 Done</td></tr>
+    </tbody>
+</table>
+<p>第 2 步和第 3 步可以固化到 CI 里，不要靠人工 review：</p>
+<pre><code class="language-bash"># 识别方法：在非 main 包、非顶层入口的位置搜 Background 和 TODO
+# 正常情况下 context.Background() 只该出现在 main、init、测试、以及明确脱离请求的后台任务里
+grep -rn 'context.Background()\|context.TODO()' --include='*.go' . \
+  | grep -v '_test.go' \
+  | grep -v '/cmd/' \
+  | grep -v 'func main'
+
+# 更严格的做法：用 lint 规则禁掉。golangci-lint 里打开 contextcheck
+# 它能检出「函数拿到了 ctx 参数却在内部新建了 Background」这类断链
+golangci-lint run --enable=contextcheck,noctx ./...
+# noctx 专门检出该用带 ctx 版本却用了无 ctx 版本的调用，例如 http.Get 而非 NewRequestWithContext</code></pre>
+
+<h2>② 原理 · context 的四个职责，以及它不负责什么</h2>
+<p>搞清这四个职责与五种派生函数的差异，才能解释用法层那张表为什么是那样：哪个函数会建 timer、哪个会往父节点注册 children、哪个会连 deadline 一起丢掉。</p>
 <p><code>context.Context</code> 只有四个方法，对应四个职责：<strong>取消信号</strong>（<code>Done()</code>）、<strong>取消原因</strong>（<code>Err()</code>）、<strong>截止时间</strong>（<code>Deadline()</code>）、<strong>请求级值传递</strong>（<code>Value()</code>）。超时是截止时间的相对写法，本质是同一件事。</p>
 <p>比列举方法更重要的是理解它的设计方向：<strong>context 是「向下传播取消」的机制，不是「向上返回结果」的通道</strong>。信号只能从父流向子，子 context 取消不影响父。想往上传结果就用返回值或 channel，别试图塞进 ctx。</p>
 <table>
@@ -149,7 +283,8 @@ flowchart TB
     WOC --> AUD
     SIG -.->|"只用于 Shutdown 判断<br/>不要拿它派生请求 ctx"| BG
 </div>
-<h2>取消是协作式的：这是最核心的认知</h2>
+<h2>② 原理 · 取消是协作式的：这是最核心的认知</h2>
+<p>这一节解释排查步骤第 4 步为什么必须去读被调方的代码：运行时没有任何机制能强行中断一段正在跑的逻辑。</p>
 <p>把一个 ctx 传进函数，<strong>不会</strong>让这个函数自动具备超时能力。运行时没有任何机制去强制中断一段正在跑的代码。取消生效只有两条路径：<strong>被调用方自己 select <code>ctx.Done()</code></strong>，或者<strong>把 ctx 继续往下传给一个真正支持它的库</strong>（库内部最终还是走第一条路）。</p>
 <p>所以「我传了 ctx 但超时没生效」几乎总是因为链条中间断了。下面这张时序图画的是一次正常工作的取消传播：</p>
 <div class="mermaid">
@@ -174,24 +309,14 @@ sequenceDiagram
     H-->>C: 返回 504 并释放 handler goroutine
 </div>
 <p>任意一层把 ctx 换成 <code>context.Background()</code>，图里从那一层往下的虚线全部消失。这是我见过最高频的 context 错误，而且它不会报错、不会崩，只是在压力下让请求悬挂、连接池耗尽。</p>
-<pre><code class="language-bash"># 识别方法：在非 main 包、非顶层入口的位置搜 Background 和 TODO
-# 正常情况下 context.Background() 只该出现在 main、init、测试、以及明确脱离请求的后台任务里
-grep -rn 'context.Background()\|context.TODO()' --include='*.go' . \
-  | grep -v '_test.go' \
-  | grep -v '/cmd/' \
-  | grep -v 'func main'
-
-# 更严格的做法：用 lint 规则禁掉。golangci-lint 里打开 contextcheck
-# 它能检出「函数拿到了 ctx 参数却在内部新建了 Background」这类断链
-golangci-lint run --enable=contextcheck,noctx ./...
-# noctx 专门检出该用带 ctx 版本却用了无 ctx 版本的调用，例如 http.Get 而非 NewRequestWithContext</code></pre>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">「传了 ctx 就有超时」是错觉</div>
     <p>把 ctx 传给一个不检查它的函数，等于传了个用不上的参数。典型例子：自己写的 <code>for</code> 循环批处理、纯 CPU 计算、调用某些只把 ctx 放在签名里但内部没用的第三方库、以及 <code>os/exec</code> 里用 <code>exec.Command</code> 而不是 <code>exec.CommandContext</code>。判断一个库是否真支持，看它内部有没有 select <code>ctx.Done()</code> 或者把 ctx 往下传给标准库的带 ctx 方法。</p>
 </div>
 
-<h2>超时预算的向下传递</h2>
+<h2>② 原理 · 超时预算的向下传递</h2>
+<p>用法层的 <code>WithBudget</code> 封装为什么要取较小值、为什么要预留收尾时间，答案在这一节。</p>
 <p>另一个高频错误是每一层都按自己的想法设超时。入口设 1s，service 层调 DB 时设 3s——后者形同虚设，因为父 context 800ms 后就取消了；但更糟的情况是入口没设、每层各设 3s，于是一次请求最长能拖到 3s 乘以串行层数。</p>
 <p>正确的模型是<strong>超时预算</strong>：入口分配总预算，每层往下时取「父剩余时间」和「本层期望上限」的较小值，并预留一点给自己做收尾（写响应、记日志）。</p>
 <p>拿到一个 ctx 之后该怎么派生，按这张图判断：</p>
@@ -207,53 +332,10 @@ flowchart TB
     Q4 -->|"是"| KEEP["直接沿用父 ctx<br/>或用剩余时间减去收尾预留"]
     Q4 -->|"否"| NEW["WithTimeout 本层期望值<br/>并立刻 defer cancel"]
 </div>
-<pre><code class="language-go">// budget.go：向下传递超时预算的封装，直接可用
+<p>用法层那份封装里的错误判定用的是 <code>errors.Is</code>，这一点不能省：<code>DeadlineExceeded</code> 和 <code>Canceled</code> 经常被下游库包装过一层，<code>err == context.Canceled</code> 会漏判。区分这两者在监控上很重要——<code>Canceled</code> 多数是客户端主动断开（用户刷新页面、上游超时重试），不该计入服务端错误率；<code>DeadlineExceeded</code> 才是自己慢了。</p>
 
-// WithBudget 返回一个超时不超过 want 的子 context。
-// 如果父 ctx 剩余时间已经少于 want，就沿用父的 deadline，不做无意义的放大。
-// reserve 是留给本层收尾的时间，避免下游用满预算后自己来不及写响应。
-func WithBudget(ctx context.Context, want, reserve time.Duration) (context.Context, context.CancelFunc) {
-    dl, ok := ctx.Deadline()
-    if !ok {
-        // 父没有 deadline（通常是后台任务或入口漏设），按 want 兜底
-        return context.WithTimeout(ctx, want)
-    }
-    remain := time.Until(dl) - reserve
-    if remain &lt;= 0 {
-        // 预算已经耗尽，不必再发起下游调用，直接返回一个已取消的 ctx
-        c, cancel := context.WithCancel(ctx)
-        cancel()
-        return c, cancel
-    }
-    if remain &lt; want {
-        want = remain // 取较小值：绝不放大父的预算
-    }
-    return context.WithTimeout(ctx, want)
-}
-
-// 调用侧：每一层都这么写，超时就一定是收敛的
-func (s *Service) GetProfile(ctx context.Context, uid int64) (*Profile, error) {
-    // 给 DB 最多 300ms，并给本层留 20ms 做序列化与日志
-    dbCtx, cancel := WithBudget(ctx, 300*time.Millisecond, 20*time.Millisecond)
-    defer cancel() // 必须 defer：否则 timer 要等到 300ms 才释放
-
-    row := s.db.QueryRowContext(dbCtx, "SELECT name, age FROM users WHERE id = ?", uid)
-    var p Profile
-    if err := row.Scan(&amp;p.Name, &amp;p.Age); err != nil {
-        // 区分「是我超时了」还是「上游取消了」，两者的告警级别不同
-        if errors.Is(err, context.DeadlineExceeded) {
-            return nil, fmt.Errorf("db timeout after budget: %w", err)
-        }
-        if errors.Is(err, context.Canceled) {
-            return nil, fmt.Errorf("upstream gone: %w", err) // 客户端断开，不该算服务端错误
-        }
-        return nil, err
-    }
-    return &amp;p, nil
-}</code></pre>
-<p>注意错误判定要用 <code>errors.Is</code>：<code>DeadlineExceeded</code> 和 <code>Canceled</code> 经常被下游库包装过一层，<code>err == context.Canceled</code> 会漏判。区分这两者在监控上很重要——<code>Canceled</code> 多数是客户端主动断开（用户刷新页面、上游超时重试），不该计入服务端错误率；<code>DeadlineExceeded</code> 才是自己慢了。</p>
-
-<h2>WithValue：该放什么，不该放什么</h2>
+<h2>② 原理 · WithValue：该放什么，不该放什么</h2>
+<p>搞清这条边界能避免一类最难重构的代码：函数签名不再说明它需要什么，删一个 ctx key 只能靠线上崩溃才知道影响面。</p>
 <p><code>WithValue</code> 的定位很窄：<strong>只放请求级的横切元数据</strong>——traceID、请求 ID、用户身份、租户标识、语言偏好。判断标准是「这个值是否需要穿过不关心它的中间层」，traceID 要穿过整条调用链才有意义，而业务参数不需要。</p>
 <p>不该放的是<strong>可选参数与依赖</strong>。把 <code>pageSize</code>、数据库句柄、logger 实例塞进 ctx，会带来三个后果：函数签名不再说明它需要什么、类型不安全（取出来要断言且可能是 nil）、编译器和 IDE 完全无法校验。重构时最痛苦的代码往往就是这种——你不知道删掉某个 ctx key 会让哪里在运行时崩。</p>
 <pre><code class="language-go">// ctxkey.go：ctx value 的标准封装模式，每个包自己维护一份
@@ -285,7 +367,8 @@ func UserFrom(ctx context.Context) (*User, bool) {
 }</code></pre>
 <p>用 <code>string</code> 当 key 是老代码里的常见写法，问题在于两个包都用 <code>"userID"</code> 时会互相覆盖，而且任何人都能从外部读写你的值。用私有空结构体类型既避免碰撞也做到了封装。</p>
 
-<h2>数据库与 HTTP 客户端的真实行为</h2>
+<h2>② 原理 · 数据库与 HTTP 客户端在取消时的真实行为</h2>
+<p>这一节直接影响容量规划：取消返回了不等于资源释放了，不同库的差异比想象中大。</p>
 <p>「ctx 取消了资源就释放了」是个过于乐观的假设。取消的实际效果依赖具体库的实现，而这直接影响你的容量规划。</p>
 <table>
     <thead>
@@ -307,7 +390,8 @@ func UserFrom(ctx context.Context) (*User, bool) {
     <p>这是个容易被忽视的负反馈：下游变慢导致超时增多，每次超时都关闭一条连接，连接池被掏空后每个请求都要重新建连（加上 TLS 握手），这又进一步拉高延迟、造成更多超时。所以给下游设超时的同时，一定要配熔断或限流，不要让系统在这个环上转。连接池本身的参数调优详见站内连接池与 ORM 篇。</p>
 </div>
 
-<h2>服务端的 ctx：r.Context、BaseContext 与优雅关闭</h2>
+<h2>② 原理 · 服务端的 ctx：r.Context、BaseContext 与优雅关闭</h2>
+<p>搞清这三者的父子关系，能解释「每次发版都固定出现一批 502」这个几乎所有团队都踩过的坑。</p>
 <p><code>r.Context()</code> 的生命周期绑在这次请求上，<strong>客户端断开连接时它会被取消</strong>。这带来一个有用的能力：长耗时接口可以据此提前放弃计算，不为已经走掉的客户端做无用功。</p>
 <p>但有个边界要注意：<strong>响应已经写了一部分时，取消不能简单地 return</strong>。HTTP 状态码和已写入的头部无法撤回，流式接口（SSE、chunked、大文件下载）中途放弃只会让客户端拿到截断的响应。这种情况下要么在写第一个字节之前完成所有可能失败的工作，要么用协议层面的手段（SSE 发一个 error 事件、chunked 用尾部标记）告知客户端数据不完整。</p>
 <div class="mermaid">
@@ -362,7 +446,8 @@ func main() {
 }</code></pre>
 <p>第 2 点是优雅关闭最常见的 bug：用已经取消的信号 ctx 去派生 <code>Shutdown</code> 的 ctx，结果 Shutdown 一调用就立即返回，所有存量请求被直接掐断，表现为发版时固定出现一批 502。</p>
 
-<h2>常见错误清单</h2>
+<h2>② 原理 · 常见错误清单：错在哪、症状是什么</h2>
+<p>下面八条是审查里最常标出来的写法，每条都给了「为什么错」而不只是「不要这么写」。</p>
 <table>
     <thead>
         <tr><th>错误写法</th><th>为什么错</th><th>症状</th><th>正确做法</th></tr>
@@ -378,6 +463,28 @@ func main() {
         <tr><td>给后台常驻任务传请求的 ctx</td><td>请求结束后 ctx 就取消了</td><td>后台任务刚起来就被取消，看起来像「没执行」</td><td>后台任务用 <code>Background</code> 派生的独立 ctx，需要元数据就手工拷贝过去</td></tr>
     </tbody>
 </table>
+
+<h2>③ 场景 · 不同调用形态下的超时与取消策略</h2>
+<p>同一套机制在不同调用形态下的正确用法差别很大。下表按形态给策略，并明确代价——超时设计本质上是在「放弃得够早」和「不误杀慢但会成功的请求」之间取舍。</p>
+<table>
+    <thead>
+        <tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>网关到内部服务的多层串行调用</td><td>入口定总预算，每层取较小值并预留收尾时间</td><td>每层各设 3 秒会让一次请求拖到 3 秒乘以串行层数</td><td>需要一个公共封装并在所有层强制使用，靠自觉必然有漏网的那层</td></tr>
+        <tr><td>一次请求要并发调多个下游</td><td>同一个子 ctx 传给所有分支，用 <code>errgroup.WithContext</code></td><td>任一分支失败就取消其余，省下已经没有意义的下游开销</td><td>非关键下游失败会连带取消关键分支，可选依赖要单独派生 ctx</td></tr>
+        <tr><td>慢 SQL 必须被真正终止</td><td>除了传 ctx，还要在数据库侧配语句级超时</td><td>驱动只是尝试中断，数据库上那条语句可能还在消耗 CPU</td><td>需要 DBA 侧配置，参数与取舍见 <a href="../../../database/">数据库系列</a></td></tr>
+        <tr><td>下游频繁超时且延迟持续升高</td><td>配熔断或限流，不要只是把超时调得更短</td><td><code>http.Client</code> 每次超时都关连接，连接池被掏空后重建（含 TLS 握手）会进一步拉高延迟</td><td>熔断期间业务要有降级路径，否则只是把超时换成了报错</td></tr>
+        <tr><td>流式响应中途需要放弃（SSE、chunked、大文件）</td><td>在协议内发一个错误事件或尾部标记，不要直接 return</td><td>已写出的状态码与头部无法撤回，客户端只会拿到截断的数据</td><td>客户端必须能识别不完整数据，双方要约定格式</td></tr>
+        <tr><td>长耗时批处理或纯计算</td><td>自己在循环里按批 <code>select ctx.Done()</code></td><td>传了 ctx 不会让纯计算变得可中断，取消是协作式的</td><td>检查频率要权衡：太密有开销，太疏则取消延迟大</td></tr>
+        <tr><td>请求结束后仍必须完成的副作用</td><td><code>WithoutCancel</code> 再套一个独立超时</td><td>原 ctx 已取消，任何带它的调用都会立即失败并报 context canceled</td><td>这部分工作不再受请求超时约束，必须自己给上限，否则会变成隐形的长尾</td></tr>
+        <tr><td>后台任务需要请求里的 traceID</td><td>手工把元数据拷进从 <code>Background</code> 派生的新 ctx</td><td>请求 ctx 一结束就取消，任务会表现成「看起来没执行」</td><td>要维护一份拷贝逻辑，新增元数据时容易漏</td></tr>
+    </tbody>
+</table>
+<p><strong>不适用边界</strong>：context 不是限流器也不是重试框架，它只表达「还要不要继续」；并发结构、限流与 fan-out 收敛在 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>。连接池大小、事务边界与 ORM 层参数在 <a href="../../../database/">数据库系列</a>。一次请求的耗时到底花在哪、超时阈值该定多少要靠数据说话，方法在 <a href="../../../observability/">可观测系列</a>。goroutine 泄漏与 GC 表现在 <a href="../">Go 运行时模型</a>。日志里怎么带上 traceID 并保证每条都有，见 <a href="../slog/">结构化日志与 log/slog</a>；框架层把 ctx 交到 handler 手上的方式差异见 <a href="../iris/">Go Web 框架选型方法论</a>；ctx 相关行为怎么写成可靠的测试见 <a href="../../testing/">测试策略与可测性设计</a>。</p>
+<p>这条路径上，上一篇解决「并发结构怎么搭」，本篇解决「这些并发单元什么时候该停」。下一篇换一个维度：怎么让一段逻辑服务多种类型而不退化成 <code>interface{}</code> 加断言。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../concurrency/">← 上一步：Go 并发原语与常见并发 bug</a> · <a href="../generics/">下一步：Go 泛型的机制与约束设计 →</a></p>
 
 <h2>最容易踩的坑</h2>
 <div class="callout callout-danger">

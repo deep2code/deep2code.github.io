@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 服务端出图的完整分层：image 与 image/draw 负责像素合成，x/image 的 sfnt 与 opentype 负责解析字体表并把轮廓光栅化成 alpha 掩码，而断行、对齐、禁则、字体回退这一层库根本不提供。本文讲清 point 与 pixel 的换算、fixed.Int26_6 定点数的 1/64 像素刻度、Drawer.Dot 是基线而不是左上角、MeasureString 与 BoundString 的区别、hinting 三档的取舍、只有 GPOS 的字体为什么 Kern 恒为 0、缺字为什么不报错、Face 不是并发安全的，以及验证码、分享图、水印、报表导出各自的真实约束。">
+        <meta name="description" content="后端出图最终都会落到「把文字画到位图上」，而渲染库只负责画字形，不负责排版。本文按用法、原理、场景三段组织：先给一份能直接跑的生成图片代码（字体 go:embed 加一次解析、按字号建 Face 池、度量与基线定位、断行与 PNG 编码），一张「要画什么 → 用哪个库或接口」对照表，以及中文字体与 DPI 速查；再讲像素层、字形层、排版层的责任边界、字体格式与 GPOS 的支持天花板、26.6 定点数与 Size 加 DPI 的换算、Ascent 与 Height 的区别、hinting 取舍、字体回退与并发安全；最后给四类出图需求的真实约束与选型。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/image-text/">
     <!-- Open Graph -->
     <meta property="og:title" content="Go 里的图像与文字渲染：字形、排版与踩坑 - 资深码农">
-    <meta property="og:description" content="Go 服务端出图的完整分层：image 与 image/draw 负责像素合成，x/image 的 sfnt 与 opentype 负责解析字体表并把轮廓光栅化成 alpha 掩码，而断行、对齐、禁则、字体回退这一层库根本不提供。本文讲清 point 与 pixel 的换算、fixed.Int26_6 定点数的 1/64 像素刻度、Drawer.Dot 是基线而不是左上角、MeasureString 与 BoundString 的区别、hinting 三档的取舍、只有 GPOS 的字体为什么 Kern 恒为 0、缺字为什么不报错、Face 不是并发安全的，以及验证码、分享图、水印、报表导出各自的真实约束。">
+    <meta property="og:description" content="后端出图最终都会落到「把文字画到位图上」，而渲染库只负责画字形，不负责排版。本文按用法、原理、场景三段组织：先给一份能直接跑的生成图片代码（字体 go:embed 加一次解析、按字号建 Face 池、度量与基线定位、断行与 PNG 编码），一张「要画什么 → 用哪个库或接口」对照表，以及中文字体与 DPI 速查；再讲像素层、字形层、排版层的责任边界、字体格式与 GPOS 的支持天花板、26.6 定点数与 Size 加 DPI 的换算、Ascent 与 Height 的区别、hinting 取舍、字体回退与并发安全；最后给四类出图需求的真实约束与选型。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/image-text/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Go 里的图像与文字渲染：字形、排版与踩坑 - 资深码农">
-    <meta name="twitter:description" content="Go 服务端出图的完整分层：image 与 image/draw 负责像素合成，x/image 的 sfnt 与 opentype 负责解析字体表并把轮廓光栅化成 alpha 掩码，而断行、对齐、禁则、字体回退这一层库根本不提供。本文讲清 point 与 pixel 的换算、fixed.Int26_6 定点数的 1/64 像素刻度、Drawer.Dot 是基线而不是左上角、MeasureString 与 BoundString 的区别、hinting 三档的取舍、只有 GPOS 的字体为什么 Kern 恒为 0、缺字为什么不报错、Face 不是并发安全的，以及验证码、分享图、水印、报表导出各自的真实约束。">
+    <meta name="twitter:description" content="后端出图最终都会落到「把文字画到位图上」，而渲染库只负责画字形，不负责排版。本文按用法、原理、场景三段组织：先给一份能直接跑的生成图片代码（字体 go:embed 加一次解析、按字号建 Face 池、度量与基线定位、断行与 PNG 编码），一张「要画什么 → 用哪个库或接口」对照表，以及中文字体与 DPI 速查；再讲像素层、字形层、排版层的责任边界、字体格式与 GPOS 的支持天花板、26.6 定点数与 Size 加 DPI 的换算、Ascent 与 Height 的区别、hinting 取舍、字体回退与并发安全；最后给四类出图需求的真实约束与选型。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 里的图像与文字渲染：字形、排版与踩坑","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Go 服务端出图的完整分层：image 与 image/draw 负责像素合成，x/image 的 sfnt 与 opentype 负责解析字体表并把轮廓光栅化成 alpha 掩码，而断行、对齐、禁则、字体回退这一层库根本不提供。本文讲清 point 与 pixel 的换算、fixed.Int26_6 定点数的 1/64 像素刻度、Drawer.Dot 是基线而不是左上角、MeasureString 与 BoundString 的区别、hinting 三档的取舍、只有 GPOS 的字体为什么 Kern 恒为 0、缺字为什么不报错、Face 不是并发安全的，以及验证码、分享图、水印、报表导出各自的真实约束。","url":"https://www.yijunjun.asia/programming/go/image-text/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/image-text/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 里的图像与文字渲染：字形、排版与踩坑","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"后端出图最终都会落到「把文字画到位图上」，而渲染库只负责画字形，不负责排版。本文按用法、原理、场景三段组织：先给一份能直接跑的生成图片代码（字体 go:embed 加一次解析、按字号建 Face 池、度量与基线定位、断行与 PNG 编码），一张「要画什么 → 用哪个库或接口」对照表，以及中文字体与 DPI 速查；再讲像素层、字形层、排版层的责任边界、字体格式与 GPOS 的支持天花板、26.6 定点数与 Size 加 DPI 的换算、Ascent 与 Height 的区别、hinting 取舍、字体回退与并发安全；最后给四类出图需求的真实约束与选型。","url":"https://www.yijunjun.asia/programming/go/image-text/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/image-text/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go 字体渲染", "item": "https://www.yijunjun.asia/programming/go/image-text/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,113 +90,20 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>后端做图片生成——验证码、分享卡片、水印、报表导出、图表出图——最终都会落到「把文字画到位图上」这件事。它看起来只是几行 API 调用，实际上踩坑密度极高：文字总是偏半行、小字号发虚、英文字距有空洞、某些字变成空心方框、并发一上来图就花了、内存涨得莫名其妙。根源是<strong>大家默认渲染库会顺带帮你做排版，而它只负责画字形</strong>。这篇把分层、单位、度量、性能几件事讲透。</p>
+<p>后端做图片生成——验证码、分享卡片、水印、报表导出、图表出图——最终都会落到「把文字画到位图上」这件事。它看起来只是几行 API 调用，实际上踩坑密度极高：文字总是偏半行、小字号发虚、英文字距有空洞、某些字变成空心方框、并发一上来图就花了、内存涨得莫名其妙。根源是<strong>大家默认渲染库会顺带帮你做排版，而它只负责画字形</strong>。这篇先给能跑的代码，再把分层、单位、度量、性能几件事讲透。</p>
 
-<h2>分层：谁负责像素，谁负责字形，谁负责排版</h2>
-<p>先把责任边界画清楚。标准库的 <code>image</code> 与 <code>image/draw</code> 只管像素与 alpha 合成；<code>golang.org/x/image</code> 下的 <code>sfnt</code> 解析字体表结构、<code>opentype</code> 把轮廓光栅化成灰度掩码、<code>font.Face</code> 提供「给一个 rune，返回掩码和步进」的能力；而<strong>断行、对齐、行高、禁则、字体回退、复杂文字整形这一整层，没有任何一个包提供</strong>——要么你自己写，要么换一条带整形能力的栈。</p>
-<div class="mermaid">
-flowchart TB
-    subgraph STD["Go 标准库：像素与合成"]
-        A["image：Image 接口与 RGBA、Alpha、Gray 等具体类型"]
-        B["image/draw：DrawMask 做 alpha 合成"]
-        C["image/png 与 image/jpeg：编码输出"]
-    end
-    subgraph FONT["x/image：字形层"]
-        E["font/sfnt：解析字体表结构与轮廓"]
-        F["font/opentype：把轮廓缩放并光栅化"]
-        G["vector：扫描线填充，输出抗锯齿掩码"]
-        D["font.Face：按 rune 给出掩码与步进"]
-    end
-    subgraph SHAPE["排版层：库不提供"]
-        H["断行、对齐、行高、禁则"]
-        I["字体回退与缺字兜底"]
-        J["复杂书写系统整形，需要 GSUB 与 GPOS"]
-    end
-    K["font.Drawer：把一串 rune 逐个画上去"]
-    E --> F
-    F --> G
-    F --> D
-    D --> K
-    K --> B
-    B --> A
-    A --> C
-    H --> K
-    I --> D
-    J --> I
-</div>
-<p>一次 <code>DrawString</code> 内部的往返长这样，看懂它就知道性能开销和并发限制分别卡在哪：</p>
-<div class="mermaid">
-sequenceDiagram
-    participant U as 你的代码
-    participant DR as font.Drawer
-    participant FA as font.Face
-    participant SF as sfnt 解析层
-    participant RA as 光栅化器
-    participant DM as image/draw
-    U->>DR: DrawString 传入一行文本
-    loop 对每个 rune
-        DR->>FA: 请求字形掩码与步进
-        FA->>SF: 用码点查字形索引
-        SF-->>FA: 字形索引，缺字时是 0
-        FA->>SF: 读取轮廓并按字号缩放
-        FA->>RA: 填充轮廓，输出灰度掩码
-        RA-->>FA: 掩码与它的绘制矩形
-        FA-->>DR: 掩码、位置、步进
-        DR->>DM: DrawMask 按掩码把前景色合成上去
-        DR->>DR: Dot 的 X 累加步进
-    end
-    Note over FA,RA: Face 内部复用掩码缓冲，所以它不是并发安全的
-    Note over DR,DM: 目标图与掩码不是具体类型时，draw 会走逐像素通用慢路径
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一份从字体加载到 PNG 输出的完整代码（<code>go:embed</code> 加一次解析、按字号建 <code>Face</code> 池、基线定位、行距、断行调用、编码参数），一张「要画什么 → 用哪个库或接口」对照表，以及中文字体与 DPI 的九项速查。</li>
+        <li><strong>② 原理</strong>：像素层、字形层、排版层各自负责什么；字体格式与 GPOS 的支持天花板；26.6 定点数与 <code>Size</code> 加 DPI 的换算；<code>Ascent</code>、<code>Height</code>、墨迹边界与步进的区别；hinting 三档的取舍；断行与字体回退怎么自己实现；Face 为什么不能共享。</li>
+        <li><strong>③ 场景</strong>：验证码、分享图、水印、报表、图表五类需求各自真正的约束在哪，以及什么时候该换掉这条栈。</li>
+    </ul>
 </div>
 
-<h2>字体文件与字形：支持到哪一层</h2>
-<p>历史包袱先交代清楚：老的 <code>github.com/golang/freetype</code> 已归档，它只认 TrueType 的 glyf 轮廓，加载 CFF 轮廓的 OTF 直接失败——这是「为什么我的 otf 字体报解析错误」的标准答案。现在的事实标准是 <code>golang.org/x/image</code> 下的 <code>font/sfnt</code> 与 <code>font/opentype</code>，两种轮廓都吃。但它的支持面有明确天花板：</p>
-<table>
-<thead><tr><th>格式或特性</th><th>x/image 的支持情况</th><th>后果与对策</th></tr></thead>
-<tbody>
-<tr><td>TrueType 轮廓（二次贝塞尔）</td><td>支持</td><td>主力路径</td></tr>
-<tr><td>OpenType CFF 轮廓（三次贝塞尔）</td><td>支持</td><td>已归档的老包做不到，这是必须迁移的理由</td></tr>
-<tr><td>字体集合文件（ttc、otc）</td><td>支持，但要按索引取其中一个</td><td>系统自带中文字体常是集合，直接当单字体解析会失败</td></tr>
-<tr><td>WOFF 与 WOFF2</td><td>不支持</td><td>构建期转成 TTF 或 OTF 再嵌入</td></tr>
-<tr><td>可变字体的字重轴</td><td>不做实例化</td><td>只能拿到默认实例；需要特定字重就用静态字重文件</td></tr>
-<tr><td>彩色字形表</td><td>不支持</td><td>彩色 emoji 出不来，服务端改用预渲染的图片素材贴上去</td></tr>
-<tr><td>传统 kern 表</td><td>支持</td><td>可用</td></tr>
-<tr><td>GPOS 字距与 GSUB 连字</td><td><strong>不支持</strong></td><td>只带 GPOS 的现代字体，Kern 恒为 0，拉丁字距会出现空洞</td></tr>
-<tr><td>复杂书写系统整形</td><td>不支持</td><td>阿拉伯文、印地文必须换带纯 Go 整形实现的栈</td></tr>
-<tr><td>缺失字形</td><td>返回字形索引 0，<strong>不报错</strong></td><td>画出 .notdef（多为空心方框）或什么都不画，必须自己检测并回退</td></tr>
-</tbody>
-</table>
-<p>两个高频误解要纠正。第一，<strong>豆腐块不是渲染库的 bug，而是字体缺字的正常表现</strong>：码点查不到字形时返回索引 0，多数字体把 0 号字形设计成空心方框。<strong>x/image 完全没有字体回退机制</strong>，多语言混排必须自己包一层按字符挑字体的 <code>Face</code>。第二，<strong>英文字距不对往往不是你写错了</strong>：<code>Face.Kern</code> 只读传统 kern 表，而很多现代字体把字距全放进 GPOS，于是 Kern 返回 0。</p>
-
-<h2>字号、DPI 与 26.6 定点数</h2>
-<p>这一节的坑全部来自单位。所有度量都是 <code>fixed.Int26_6</code>——26 位整数加 6 位小数的定点数，最小刻度是 1/64 像素。把它当整数像素直接比较，误差会被放大 64 倍。</p>
-<table>
-<thead><tr><th>概念</th><th>含义</th><th>换算关系</th><th>踩坑点</th></tr></thead>
-<tbody>
-<tr><td>em 与 unitsPerEm</td><td>字体设计坐标系的方格边长</td><td>轮廓坐标都是这个空间里的整数</td><td>不同字体取值不同，不能硬编码</td></tr>
-<tr><td><code>FaceOptions.Size</code></td><td>字号，单位是 <strong>point</strong></td><td>像素高 = Size × DPI ÷ 72</td><td>当成像素用；也不等于墨迹高度，它对应 em 方格边长</td></tr>
-<tr><td><code>FaceOptions.DPI</code></td><td>每英寸点数，零值默认 72</td><td>DPI 为 72 时 1 point 正好 1 像素</td><td>为适配高清屏把 DPI 翻倍，所有字号一起变大</td></tr>
-<tr><td><code>fixed.Int26_6</code></td><td>定点数</td><td><code>fixed.I(n)</code> 等价于 n 左移 6 位</td><td>与整数混算忘了转换，偏移变成 1/64</td></tr>
-<tr><td>advance（步进）</td><td>画完一个字形后光标前进量</td><td>同为 26.6 定点</td><td>每个字都取整会让长行累计误差可见</td></tr>
-<tr><td><code>Metrics.Height</code></td><td>字体建议行高</td><td>不等于 Ascent 加 Descent</td><td>自己用 Ascent 加 Descent 当行距，行间会偏紧</td></tr>
-</tbody>
-</table>
-
-<h2>度量与基线：文字为什么总是画偏</h2>
-<p>最经典的错误只有一个：<strong><code>Drawer.Dot</code> 是基线的左端点，不是文字外框的左上角。</strong> 把它当左上角用，整行文字会往上跑掉接近一个 Ascent 的高度。</p>
-<table>
-<thead><tr><th>字段或方法</th><th>含义</th><th>拿来做什么</th><th>常见错误</th></tr></thead>
-<tbody>
-<tr><td><code>Metrics().Ascent</code></td><td>基线到字体上沿，向上为正</td><td>已知顶边 top 时，基线 Y = top + Ascent</td><td>当成左上角直接用，整行上移</td></tr>
-<tr><td><code>Metrics().Descent</code></td><td>基线到字体下沿，向下为正</td><td>算单行外框高度</td><td>以为它是负数，符号搞反</td></tr>
-<tr><td><code>Metrics().Height</code></td><td>建议行高，含行间距</td><td>多行排版的行距基准</td><td>用 Ascent 加 Descent 替代，行距偏紧</td></tr>
-<tr><td><code>CapHeight</code> 与 <code>XHeight</code></td><td>大写字母高、小写 x 高</td><td>视觉垂直居中</td><td>按 Ascent 居中，视觉上偏上</td></tr>
-<tr><td><code>font.MeasureString</code></td><td>整串步进之和</td><td>布局占位、断行判断</td><td>当墨迹宽度用，斜体或有侧伸的字形会被切边</td></tr>
-<tr><td><code>font.BoundString</code></td><td>墨迹边界加步进</td><td>描边、背景框、精确裁剪</td><td>用步进算背景框，边缘被裁</td></tr>
-<tr><td><code>Face.Kern</code></td><td>传统 kern 表的字距调整</td><td>拉丁文字距微调</td><td>现代字体多只有 GPOS，这里恒返回 0</td></tr>
-</tbody>
-</table>
-<p>下面这段把「加载一次、按字号建池、按基线定位」三件事一起解决：</p>
+<h2>① 用法 · 生成一张带文字的图：能直接跑的最小实现</h2>
+<p>下面这段把「字体只解析一次、按字号建池、按基线定位、按 <code>Height</code> 走行距、编码时别用最高压缩」这几件事一起解决。<code>wrap</code> 的实现见原理层——断行没有任何库替你做：</p>
 <pre><code class="language-go">//go:embed fonts/NotoSansSC-subset.ttf
 var fontBytes []byte
 
@@ -252,15 +159,180 @@ func (fp *facePool) With(fn func(font.Face)) {
 func drawLine(dst *image.RGBA, f font.Face, s string, left, top fixed.Int26_6) {
     m := f.Metrics()
     d := &amp;font.Drawer{
-        Dst:  dst,                                              // 用 *image.RGBA 才能命中 draw 的快路径
+        Dst:  dst, // 用 *image.RGBA 才能命中 draw 的快路径
         Src:  image.NewUniform(color.RGBA{0x22, 0x22, 0x22, 0xff}),
         Face: f,
         Dot:  fixed.Point26_6{X: left, Y: top + m.Ascent},
     }
     d.DrawString(s) // 会把 Dot.X 推进整行的步进总和
-}</code></pre>
+}
 
-<h2>抗锯齿与 hinting 的取舍</h2>
+var cardPool = newFacePool(28, 72) // 进程内复用，别每请求 new
+
+// RenderCard 端到端出一张固定尺寸的卡片。
+func RenderCard(title string, w, h, pad int) ([]byte, error) {
+    dst := image.NewRGBA(image.Rect(0, 0, w, h))
+    // 先铺底色：draw.Src 是覆盖，draw.Over 才是按 alpha 合成
+    draw.Draw(dst, dst.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+
+    cardPool.With(func(f font.Face) {
+        m := f.Metrics()
+        top := fixed.I(pad)
+        // 断行必须自己做，Drawer 不换行也不在超宽时停下
+        for _, line := range wrap(f, title, fixed.I(w-2*pad)) {
+            drawLine(dst, f, line, fixed.I(pad), top)
+            top += m.Height // 行距用 Height，Ascent 加 Descent 会偏紧
+        }
+    })
+
+    var buf bytes.Buffer
+    // 文字图的编码耗时常常超过渲染耗时，压缩级别按需调低
+    enc := png.Encoder{CompressionLevel: png.BestSpeed}
+    if err := enc.Encode(&amp;buf, dst); err != nil {
+        return nil, err
+    }
+    return buf.Bytes(), nil
+}</code></pre>
+<p>要画的东西超出「文字加矩形加图片」的范围时，先查下表再决定引什么库，别硬撑在一层里：</p>
+<table>
+<thead><tr><th>要画什么</th><th>用哪个库或接口</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>纯色背景、色块、圆角以外的矩形</td><td><code>image.NewRGBA</code> 加 <code>draw.Draw</code> 配 <code>image.NewUniform</code></td><td><code>draw.Src</code> 是覆盖，<code>draw.Over</code> 才按 alpha 合成，水印要用后者</td></tr>
+<tr><td>一行文字</td><td><code>font.Drawer</code> 的 <code>DrawString</code></td><td><code>Dot</code> 是基线左端点，不是外框左上角</td></tr>
+<tr><td>测量文字占多宽</td><td><code>font.MeasureString</code> 或 <code>font.BoundString</code></td><td>前者是步进之和用于布局，后者是墨迹边界用于描边与裁剪</td></tr>
+<tr><td>多行、对齐、省略号、竖排</td><td>没有现成接口，自己实现</td><td>排版层完全不存在，见原理层的最小实现</td></tr>
+<tr><td>贴一张图片并缩放</td><td>合成用 <code>image/draw</code>，缩放用 <code>x/image/draw</code> 的 Scaler</td><td>标准库的 draw 不做缩放；缩放算法按「照片选双三次、图标选最近邻」挑</td></tr>
+<tr><td>旋转、倾斜、透视这类变换</td><td><code>x/image/draw</code> 的 Transform</td><td>验证码的扭曲就靠它，别去改字形轮廓</td></tr>
+<tr><td>路径、渐变、描边、圆角</td><td>在 <code>x/image</code> 之上套一层矢量绘图库</td><td><code>x/image/vector</code> 只做扫描线填充，不是绘图 API</td></tr>
+<tr><td>彩色 emoji</td><td>预渲染好的图片素材贴上去</td><td>彩色字形表不支持，走字形路径出来是黑白或缺字</td></tr>
+<tr><td>编码输出</td><td><code>image/png</code> 或 <code>image/jpeg</code></td><td>文字图走 PNG，照片走 JPEG；PNG 压缩级别调低能明显省 CPU</td></tr>
+<tr><td>最终产物是 PDF</td><td>换 PDF 库</td><td>中文必须嵌入并子集化字体，复杂度在分页不在字形</td></tr>
+</tbody>
+</table>
+<p>中文场景的坑集中在字体文件和单位上，这九条是上线前的检查清单：</p>
+<table>
+<thead><tr><th>要点</th><th>怎么做</th><th>为什么</th><th>做错的症状</th></tr></thead>
+<tbody>
+<tr><td>字体来源</td><td><code>go:embed</code> 一份 TTF 或 OTF 进二进制</td><td>容器与不同操作系统里的字体路径完全不同</td><td>写死系统字体路径，换平台或换基础镜像就报文件不存在</td></tr>
+<tr><td>字体集合文件</td><td>ttc 与 otc 必须按索引取其中一个</td><td>系统自带中文字体常常是集合</td><td>当成单字体解析，直接报解析失败</td></tr>
+<tr><td>字重</td><td>需要特定字重就用静态字重文件</td><td>可变字体的字重轴不做实例化</td><td>指定粗体没有效果，拿到的始终是默认实例</td></tr>
+<tr><td>子集化</td><td>静态文案用小子集，动态文本另配覆盖面广的字体挂回退链</td><td>CJK 全字族体积大且常驻内存</td><td>用户昵称里的生僻字全变方框，只在少量用户身上出现</td></tr>
+<tr><td>DPI</td><td>服务端按 CSS 像素思考就固定 72</td><td>DPI 为 72 时 1 point 正好 1 像素</td><td>为适配高清屏改成 144，所有字号连带变大</td></tr>
+<tr><td>Size</td><td>记住像素高等于 Size 乘 DPI 除以 72</td><td>它的单位是 point，且对应 em 方格而非墨迹高度</td><td>当像素用，出图字号明显偏小</td></tr>
+<tr><td>Hinting</td><td>小字号正文与验证码用 <code>HintingFull</code></td><td>零值 <code>HintingNone</code> 不做网格对齐</td><td>小字发虚；反过来大标题用 Full 会字宽量化、字距不匀</td></tr>
+<tr><td>基线位置</td><td>基线 Y 取整到整像素</td><td>掩码不再跨半个像素铺开</td><td>整体发虚；若保留 X 亚像素偏移，缓存键必须带上它</td></tr>
+<tr><td>缺字</td><td>挂回退字体链并对缺字计数打点</td><td>库没有任何字体回退机制</td><td>出空心方框却全程没有 error</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 分层：谁负责像素，谁负责字形，谁负责排版</h2>
+<p>搞清这三层的边界，就知道哪些问题该去查 API、哪些问题注定得自己写。</p>
+<p>标准库的 <code>image</code> 与 <code>image/draw</code> 只管像素与 alpha 合成；<code>golang.org/x/image</code> 下的 <code>sfnt</code> 解析字体表结构、<code>opentype</code> 把轮廓光栅化成灰度掩码、<code>font.Face</code> 提供「给一个 rune，返回掩码和步进」的能力；而<strong>断行、对齐、行高、禁则、字体回退、复杂文字整形这一整层，没有任何一个包提供</strong>——要么你自己写，要么换一条带整形能力的栈。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph STD["Go 标准库：像素与合成"]
+        A["image：Image 接口与 RGBA、Alpha、Gray 等具体类型"]
+        B["image/draw：DrawMask 做 alpha 合成"]
+        C["image/png 与 image/jpeg：编码输出"]
+    end
+    subgraph FONT["x/image：字形层"]
+        E["font/sfnt：解析字体表结构与轮廓"]
+        F["font/opentype：把轮廓缩放并光栅化"]
+        G["vector：扫描线填充，输出抗锯齿掩码"]
+        D["font.Face：按 rune 给出掩码与步进"]
+    end
+    subgraph SHAPE["排版层：库不提供"]
+        H["断行、对齐、行高、禁则"]
+        I["字体回退与缺字兜底"]
+        J["复杂书写系统整形，需要 GSUB 与 GPOS"]
+    end
+    K["font.Drawer：把一串 rune 逐个画上去"]
+    E --> F
+    F --> G
+    F --> D
+    D --> K
+    K --> B
+    B --> A
+    A --> C
+    H --> K
+    I --> D
+    J --> I
+</div>
+<p>一次 <code>DrawString</code> 内部的往返长这样，看懂它就知道性能开销和并发限制分别卡在哪：</p>
+<div class="mermaid">
+sequenceDiagram
+    participant U as 你的代码
+    participant DR as font.Drawer
+    participant FA as font.Face
+    participant SF as sfnt 解析层
+    participant RA as 光栅化器
+    participant DM as image/draw
+    U->>DR: DrawString 传入一行文本
+    loop 对每个 rune
+        DR->>FA: 请求字形掩码与步进
+        FA->>SF: 用码点查字形索引
+        SF-->>FA: 字形索引，缺字时是 0
+        FA->>SF: 读取轮廓并按字号缩放
+        FA->>RA: 填充轮廓，输出灰度掩码
+        RA-->>FA: 掩码与它的绘制矩形
+        FA-->>DR: 掩码、位置、步进
+        DR->>DM: DrawMask 按掩码把前景色合成上去
+        DR->>DR: Dot 的 X 累加步进
+    end
+    Note over FA,RA: Face 内部复用掩码缓冲，所以它不是并发安全的
+    Note over DR,DM: 目标图与掩码不是具体类型时，draw 会走逐像素通用慢路径
+</div>
+
+<h2>② 原理 · 字体文件与字形：支持到哪一层</h2>
+<p>这一节解决两类报错：otf 字体加载失败，以及某些字画不出来。</p>
+<p>历史包袱先交代清楚：老的 <code>github.com/golang/freetype</code> 已归档，它只认 TrueType 的 glyf 轮廓，加载 CFF 轮廓的 OTF 直接失败——这是「为什么我的 otf 字体报解析错误」的标准答案。现在的事实标准是 <code>golang.org/x/image</code> 下的 <code>font/sfnt</code> 与 <code>font/opentype</code>，两种轮廓都吃。但它的支持面有明确天花板：</p>
+<table>
+<thead><tr><th>格式或特性</th><th>x/image 的支持情况</th><th>后果与对策</th></tr></thead>
+<tbody>
+<tr><td>TrueType 轮廓（二次贝塞尔）</td><td>支持</td><td>主力路径</td></tr>
+<tr><td>OpenType CFF 轮廓（三次贝塞尔）</td><td>支持</td><td>已归档的老包做不到，这是必须迁移的理由</td></tr>
+<tr><td>字体集合文件（ttc、otc）</td><td>支持，但要按索引取其中一个</td><td>系统自带中文字体常是集合，直接当单字体解析会失败</td></tr>
+<tr><td>WOFF 与 WOFF2</td><td>不支持</td><td>构建期转成 TTF 或 OTF 再嵌入</td></tr>
+<tr><td>可变字体的字重轴</td><td>不做实例化</td><td>只能拿到默认实例；需要特定字重就用静态字重文件</td></tr>
+<tr><td>彩色字形表</td><td>不支持</td><td>彩色 emoji 出不来，服务端改用预渲染的图片素材贴上去</td></tr>
+<tr><td>传统 kern 表</td><td>支持</td><td>可用</td></tr>
+<tr><td>GPOS 字距与 GSUB 连字</td><td><strong>不支持</strong></td><td>只带 GPOS 的现代字体，Kern 恒为 0，拉丁字距会出现空洞</td></tr>
+<tr><td>复杂书写系统整形</td><td>不支持</td><td>阿拉伯文、印地文必须换带纯 Go 整形实现的栈</td></tr>
+<tr><td>缺失字形</td><td>返回字形索引 0，<strong>不报错</strong></td><td>画出 .notdef（多为空心方框）或什么都不画，必须自己检测并回退</td></tr>
+</tbody>
+</table>
+<p>两个高频误解要纠正。第一，<strong>豆腐块不是渲染库的 bug，而是字体缺字的正常表现</strong>：码点查不到字形时返回索引 0，多数字体把 0 号字形设计成空心方框。<strong>x/image 完全没有字体回退机制</strong>，多语言混排必须自己包一层按字符挑字体的 <code>Face</code>。第二，<strong>英文字距不对往往不是你写错了</strong>：<code>Face.Kern</code> 只读传统 kern 表，而很多现代字体把字距全放进 GPOS，于是 Kern 返回 0。</p>
+
+<h2>② 原理 · 单位与度量：字号、DPI、定点数与基线</h2>
+<p>这一节的坑全部来自单位。所有度量都是 <code>fixed.Int26_6</code>——26 位整数加 6 位小数的定点数，最小刻度是 1/64 像素。把它当整数像素直接比较，误差会被放大 64 倍。</p>
+<table>
+<thead><tr><th>概念</th><th>含义</th><th>换算关系</th><th>踩坑点</th></tr></thead>
+<tbody>
+<tr><td>em 与 unitsPerEm</td><td>字体设计坐标系的方格边长</td><td>轮廓坐标都是这个空间里的整数</td><td>不同字体取值不同，不能硬编码</td></tr>
+<tr><td><code>FaceOptions.Size</code></td><td>字号，单位是 <strong>point</strong></td><td>像素高 = Size × DPI ÷ 72</td><td>当成像素用；也不等于墨迹高度，它对应 em 方格边长</td></tr>
+<tr><td><code>FaceOptions.DPI</code></td><td>每英寸点数，零值默认 72</td><td>DPI 为 72 时 1 point 正好 1 像素</td><td>为适配高清屏把 DPI 翻倍，所有字号一起变大</td></tr>
+<tr><td><code>fixed.Int26_6</code></td><td>定点数</td><td><code>fixed.I(n)</code> 等价于 n 左移 6 位</td><td>与整数混算忘了转换，偏移变成 1/64</td></tr>
+<tr><td>advance（步进）</td><td>画完一个字形后光标前进量</td><td>同为 26.6 定点</td><td>每个字都取整会让长行累计误差可见</td></tr>
+<tr><td><code>Metrics.Height</code></td><td>字体建议行高</td><td>不等于 Ascent 加 Descent</td><td>自己用 Ascent 加 Descent 当行距，行间会偏紧</td></tr>
+</tbody>
+</table>
+
+<h3>基线与墨迹：为什么文字总是画偏半行</h3>
+<p>最经典的错误只有一个：<strong><code>Drawer.Dot</code> 是基线的左端点，不是文字外框的左上角。</strong> 把它当左上角用，整行文字会往上跑掉接近一个 Ascent 的高度。</p>
+<table>
+<thead><tr><th>字段或方法</th><th>含义</th><th>拿来做什么</th><th>常见错误</th></tr></thead>
+<tbody>
+<tr><td><code>Metrics().Ascent</code></td><td>基线到字体上沿，向上为正</td><td>已知顶边 top 时，基线 Y = top + Ascent</td><td>当成左上角直接用，整行上移</td></tr>
+<tr><td><code>Metrics().Descent</code></td><td>基线到字体下沿，向下为正</td><td>算单行外框高度</td><td>以为它是负数，符号搞反</td></tr>
+<tr><td><code>Metrics().Height</code></td><td>建议行高，含行间距</td><td>多行排版的行距基准</td><td>用 Ascent 加 Descent 替代，行距偏紧</td></tr>
+<tr><td><code>CapHeight</code> 与 <code>XHeight</code></td><td>大写字母高、小写 x 高</td><td>视觉垂直居中</td><td>按 Ascent 居中，视觉上偏上</td></tr>
+<tr><td><code>font.MeasureString</code></td><td>整串步进之和</td><td>布局占位、断行判断</td><td>当墨迹宽度用，斜体或有侧伸的字形会被切边</td></tr>
+<tr><td><code>font.BoundString</code></td><td>墨迹边界加步进</td><td>描边、背景框、精确裁剪</td><td>用步进算背景框，边缘被裁</td></tr>
+<tr><td><code>Face.Kern</code></td><td>传统 kern 表的字距调整</td><td>拉丁文字距微调</td><td>现代字体多只有 GPOS，这里恒返回 0</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 抗锯齿与 hinting 的取舍</h2>
 <p>光栅化的输出是 0 到 255 的灰度掩码，<strong>抗锯齿是常开的，没有关闭开关</strong>；想要硬边效果只能自己对掩码做阈值化。可调的是 hinting——把轮廓对齐到像素网格的程度：</p>
 <table>
 <thead><tr><th>Hinting 取值</th><th>做什么</th><th>小字号清晰度</th><th>字形保真</th><th>适合</th></tr></thead>
@@ -272,7 +344,7 @@ func drawLine(dst *image.RGBA, f font.Face, s string, left, top fixed.Int26_6) {
 </table>
 <p>另外两点容易忽略：把基线 Y 取整到<strong>整像素</strong>能显著提升清晰度，因为掩码不再跨半个像素铺开；反过来，如果你保留了 X 方向的小数偏移（亚像素定位，长行排版更均匀），那么字形掩码缓存的键必须包含这个偏移，否则缓存永远不命中。</p>
 
-<h2>排版是你自己的事</h2>
+<h2>② 原理 · 排版是你自己的事</h2>
 <p><code>Drawer</code> 的语义就是「按顺序把 rune 画出去，Dot 一路右移」，它不换行、不对齐、不处理禁则、遇到宽度超限也不会停。中英混排的断行规则还不一样：汉字可以在任意两字之间断，拉丁单词必须整体挪行。加上标点不能出现在行首、前引号不能留在行尾这类禁则，最小可用的实现大概是下面这个样子。</p>
 <div class="mermaid">
 stateDiagram-v2
@@ -416,34 +488,12 @@ func (ff *fallbackFace) Close() error {
     return last
 }</code></pre>
 
-<h2>服务端出图的四类场景与各自的真实约束</h2>
-<table>
-<thead><tr><th>场景</th><th>真正的约束在哪</th><th>对应的技术选择</th></tr></thead>
-<tbody>
-<tr><td>图形验证码</td><td>对现代 OCR 几乎无效，只能挡最原始的脚本；答案必须服务端保管</td><td>随机源用密码学安全的，扭曲靠仿射变换；答案绝不进 URL 或前端可解的 cookie，并限制尝试次数</td></tr>
-<tr><td>社交分享图</td><td>文本完全用户可控：emoji、生僻字、超长昵称、零宽字符</td><td>字体回退链 + 缺字打点 + 断行截断加省略号；画布尺寸固定，先测量再决定字号</td></tr>
-<tr><td>图片水印</td><td>每次重新解码再编码会累积有损压缩，画质逐轮下降</td><td>上传时渲染一次并缓存结果；平铺水印用低 alpha 合成，别改动原图</td></tr>
-<tr><td>报表与票据导出</td><td>中文必须嵌入字体并子集化，否则对方打开就是乱码或方框</td><td>走 PDF 路线；主要复杂度在分页与字体子集，不在字形</td></tr>
-<tr><td>图表与仪表出图</td><td>大量小字形加编码，编码耗时常常超过渲染</td><td>字形掩码缓存 + 降低 PNG 压缩级别 + 复用编码缓冲</td></tr>
-</tbody>
-</table>
-<div class="mermaid">
-flowchart TB
-    Q1{"文本里有阿拉伯文、印地文这类需要整形的书写系统吗"}
-    Q1 -->|"有"| A1["换 go-text 那条栈，它带纯 Go 的整形实现"]
-    Q1 -->|"没有"| Q2{"是 GUI 或游戏，需要每帧重绘吗"}
-    Q2 -->|"是"| A2["用 Gio、Fyne、Ebitengine 自带的字体栈，别自己搭"]
-    Q2 -->|"否，是服务端批量出图"| Q3{"需要路径、渐变、矩阵变换吗"}
-    Q3 -->|"需要"| A3["在 x/image 之上套一层矢量绘图库"]
-    Q3 -->|"只画文字、矩形和图片"| A4["x/image 的 font 与 opentype 直接够用"]
-    Q3 -->|"最终产物是 PDF"| A5["换 PDF 库，字体必须嵌入并子集化"]
-</div>
-
-<h2>性能、并发与内存</h2>
+<h2>② 原理 · 性能、并发与内存</h2>
+<p>这一节回答压测里最常见的两个现象：图并不复杂但 CPU 打满，以及并发一上来图就花了。</p>
 <table>
 <thead><tr><th>开销项</th><th>一次性还是每次</th><th>正确做法</th><th>做错的症状</th></tr></thead>
 <tbody>
-<tr><td>字体文件解析</td><td>进程内一次</td><td><code>go:embed</code> + <code>sync.Once</code> 解析一次长期共享</td><td>CPU 全花在重复解析字体表上</td></tr>
+<tr><td>字体文件解析</td><td>进程内一次</td><td><code>go:embed</code> 加 <code>sync.Once</code> 解析一次长期共享</td><td>CPU 全花在重复解析字体表上</td></tr>
 <tr><td>Face 创建</td><td>每个字号一次</td><td>按「字体 + 字号 + hinting」缓存</td><td>每请求新建，分配与 GC 压力显著</td></tr>
 <tr><td>Face 并发使用</td><td><strong>不可共享</strong></td><td>每 goroutine 一个，用 <code>sync.Pool</code> 借还</td><td>偶发字形错位、串色，竞态检测器报警</td></tr>
 <tr><td>底层解析缓冲</td><td>每 goroutine 一个</td><td>不跨 goroutine 复用</td><td>同上，且更难复现</td></tr>
@@ -453,12 +503,40 @@ flowchart TB
 <tr><td>字体体积</td><td>构建期</td><td>只保留会用到的码点做子集</td><td>CJK 全字族常驻内存，镜像也被撑大</td></tr>
 </tbody>
 </table>
-<p>最后提醒一句子集化的边界：<strong>内容动态的场景不能盲目子集化</strong>。用户昵称、评论里一定会出现生僻字和异体字，子集化之后全变缺字。务实做法是静态文案用小子集、动态文本另配一份覆盖面广的字体并挂在回退链上，同时对渲染结果里的缺字数量打点报警。</p>
+<p>最后提醒一句子集化的边界：<strong>内容动态的场景不能盲目子集化</strong>。用户昵称、评论里一定会出现生僻字和异体字，子集化之后全变缺字。务实做法是静态文案用小子集、动态文本另配一份覆盖面广的字体并挂在回退链上，同时对渲染结果里的缺字数量打点报警——指标怎么埋见 <a href="../../../observability/logging/">日志与指标</a>。并发方面，<code>Face</code> 池的借还本身就是并发原语的应用，取舍见 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>。</p>
 
+<h2>③ 场景 · 五类出图需求的真实约束</h2>
+<p>同一套渲染栈，不同业务形态的真正难点完全不在一处。下表左列是需求，重点看第二列——它决定你该在哪里投入时间：</p>
+<table>
+<thead><tr><th>场景</th><th>真正的约束在哪</th><th>对应的技术选择</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>图形验证码</td><td>对现代 OCR 几乎无效，只能挡最原始的脚本；答案必须服务端保管</td><td>随机源用密码学安全的，扭曲靠仿射变换；答案绝不进 URL 或前端可解的 cookie，并限制尝试次数</td><td>可用性下降且防护有限，高风险入口应改用其他验证手段</td></tr>
+<tr><td>社交分享图</td><td>文本完全用户可控：emoji、生僻字、超长昵称、零宽字符</td><td>字体回退链加缺字打点，断行截断加省略号；画布尺寸固定，先测量再决定字号</td><td>回退链让字体常驻内存变大；测量与重排增加一次遍历</td></tr>
+<tr><td>图片水印</td><td>每次重新解码再编码会累积有损压缩，画质逐轮下降</td><td>上传时渲染一次并缓存结果；平铺水印用低 alpha 的 <code>draw.Over</code>，别改动原图</td><td>要多存一份渲染结果；水印策略变更需要批量重跑</td></tr>
+<tr><td>报表与票据导出</td><td>中文必须嵌入并子集化字体，否则对方打开就是乱码或方框</td><td>走 PDF 路线；主要复杂度在分页与字体子集，不在字形</td><td>换一整条栈，本文的 Face 与 Drawer 那套用不上</td></tr>
+<tr><td>图表与仪表出图</td><td>大量小字形加编码，编码耗时常常超过渲染</td><td>字形掩码缓存加降低 PNG 压缩级别加复用编码缓冲</td><td>缓存键设计错（漏亚像素偏移）会让优化完全失效</td></tr>
+<tr><td>GUI 或游戏里每帧重绘文字</td><td>帧预算只有十几毫秒，不能每帧重新光栅化</td><td>用 Gio、Fyne、Ebitengine 自带的字体栈，别自己搭</td><td>接受各自框架的渲染模型与资源管理方式</td></tr>
+<tr><td>阿拉伯文、印地文等需要整形的书写系统</td><td>字形选择与位置依赖 GSUB 与 GPOS，逐 rune 画必然错</td><td>换带纯 Go 整形实现的文本栈</td><td>依赖变重，API 与本文这套不通用</td></tr>
+</tbody>
+</table>
+<div class="mermaid">
+flowchart TB
+    Q1{"文本里有阿拉伯文、印地文这类需要整形的书写系统吗"}
+    Q1 -->|"有"| A1["换带纯 Go 整形实现的文本栈"]
+    Q1 -->|"没有"| Q2{"是 GUI 或游戏，需要每帧重绘吗"}
+    Q2 -->|"是"| A2["用 Gio、Fyne、Ebitengine 自带的字体栈，别自己搭"]
+    Q2 -->|"否，是服务端批量出图"| Q3{"需要路径、渐变、矩阵变换吗"}
+    Q3 -->|"需要"| A3["在 x/image 之上套一层矢量绘图库"]
+    Q3 -->|"只画文字、矩形和图片"| A4["x/image 的 font 与 opentype 直接够用"]
+    Q3 -->|"最终产物是 PDF"| A5["换 PDF 库，字体必须嵌入并子集化"]
+</div>
+<p><strong>不适用边界</strong>：这条栈只解决「服务端把文字与图片合成成位图」。要做真正的富文本排版（双向文字、复杂整形、CSS 级别的盒模型）就换栈，不要在 <code>Drawer</code> 上加补丁；视频帧上叠字幕与水印属于另一条流水线，见 <a href="../../../media/basics/">音视频基础</a>；用户上传图片的体积、格式与解码炸弹防护属于上传链路的安全问题，见 <a href="../../../api/security/">接口安全</a>；图片的缓存与分发策略不在这里，属于存储与 CDN 的话题。</p>
+<p>这条路径上，上一篇是「库能力边界清楚、越界就回落」的 go-git，本篇是同一种性质的另一个题目——库只画字形，排版是你的事；下一篇转向工程手法本身：用代码生成把重复声明交给工具写。</p>
+
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
-    <p>每条都能直接复现：</p>
+    <div class="callout-title">避坑清单</div>
     <ul>
     <li><strong>把 <code>Dot</code> 当文字左上角</strong>：它是基线左端点，整行会上移接近一个 Ascent。顶边对齐要写 <code>top + Ascent</code>。</li>
     <li><strong>把 <code>Size</code> 当像素</strong>：它的单位是 point，像素高等于 Size 乘 DPI 除以 72。DPI 零值是 72，改成 144 所有字号跟着翻倍。</li>
@@ -471,11 +549,14 @@ flowchart TB
     <li><strong>以为库会自动做字体回退</strong>：x/image 完全没有这个机制，多语言混排必须自己实现按字符挑字体的 Face。</li>
     <li><strong>以为 <code>Kern</code> 一定有效</strong>：只读传统 kern 表，很多现代字体的字距只在 GPOS 里，这时恒返回 0，拉丁文字距会出现空洞。</li>
     <li><strong>指望画出彩色 emoji</strong>：彩色字形表不支持，出来是黑白或缺字，服务端应改用预渲染图片素材。</li>
+    <li><strong>用 <code>draw.Src</code> 画半透明水印</strong>：<code>Src</code> 是直接覆盖，alpha 不参与合成，水印会变成实心色块。要用 <code>draw.Over</code>。</li>
     <li><strong>直接解析系统字体集合文件</strong>：ttc 是多个字体的集合，必须按索引取其中一个，否则解析直接失败；而且写死系统路径在换平台时必挂，字体应当 <code>go:embed</code> 进二进制。</li>
     <li><strong>保留亚像素偏移却不把它放进缓存键</strong>：字形缓存命中率会低到接近零，性能优化白做。</li>
     <li><strong>对动态文本用子集化字体</strong>：用户输入里的生僻字全变缺字，而且这种问题只在少量用户身上出现，很难从监控里看出来。</li>
     </ul>
 </div>
+
+<p class="cluster-nav">同主题路径：<a href="../go-git/">← 上一步：用 Go 操作 Git 仓库：go-git 的能力与边界</a> · <a href="../codegen/">下一步：代码生成与 go:generate 工程实践 →</a></p>
                     </div>
                 </article>
 

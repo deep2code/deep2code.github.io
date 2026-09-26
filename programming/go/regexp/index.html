@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 的 regexp 用 RE2，不支持回溯因此没有反向引用与前后向断言，换来的是线性时间保证与对 ReDoS 的免疫。本文对照两类引擎的能力与复杂度，讲清为什么 MustCompile 必须提到包级、strings 的 Contains 与 Cut 为什么快一个量级、常用 API 的语义差异与分组引用陷阱，以及用户可控正则的限长防护。">
+        <meta name="description" content="Go 正则三段式：先给「要不要用正则」的判断图与 strings 替代速查、包级预编译定式（命名分组配 SubexpIndex、替换模板里的分组引用要写花括号、ReplaceAllStringFunc 不展开分组、批量扫描先用 Contains 预筛）以及不可信模式的四层限制（模式长度、重复次数、分组数量、输入长度）；再讲 RE2 与 PCRE 的取舍为什么对服务端正确、编译开销的量级、容易混淆的 API 语义、RE2 免疫回溯却不免疫资源耗尽、匹配无法真正被取消；最后给按需求选工具的决策矩阵、迁移 PCRE 模式时的检查项与不适用边界。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/regexp/">
     <!-- Open Graph -->
     <meta property="og:title" content="正则在 Go 里的性能、边界与替代 - 资深码农">
-    <meta property="og:description" content="Go 的 regexp 用 RE2，不支持回溯因此没有反向引用与前后向断言，换来的是线性时间保证与对 ReDoS 的免疫。本文对照两类引擎的能力与复杂度，讲清为什么 MustCompile 必须提到包级、strings 的 Contains 与 Cut 为什么快一个量级、常用 API 的语义差异与分组引用陷阱，以及用户可控正则的限长防护。">
+    <meta property="og:description" content="Go 正则三段式：先给「要不要用正则」的判断图与 strings 替代速查、包级预编译定式（命名分组配 SubexpIndex、替换模板里的分组引用要写花括号、ReplaceAllStringFunc 不展开分组、批量扫描先用 Contains 预筛）以及不可信模式的四层限制（模式长度、重复次数、分组数量、输入长度）；再讲 RE2 与 PCRE 的取舍为什么对服务端正确、编译开销的量级、容易混淆的 API 语义、RE2 免疫回溯却不免疫资源耗尽、匹配无法真正被取消；最后给按需求选工具的决策矩阵、迁移 PCRE 模式时的检查项与不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/regexp/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="正则在 Go 里的性能、边界与替代 - 资深码农">
-    <meta name="twitter:description" content="Go 的 regexp 用 RE2，不支持回溯因此没有反向引用与前后向断言，换来的是线性时间保证与对 ReDoS 的免疫。本文对照两类引擎的能力与复杂度，讲清为什么 MustCompile 必须提到包级、strings 的 Contains 与 Cut 为什么快一个量级、常用 API 的语义差异与分组引用陷阱，以及用户可控正则的限长防护。">
+    <meta name="twitter:description" content="Go 正则三段式：先给「要不要用正则」的判断图与 strings 替代速查、包级预编译定式（命名分组配 SubexpIndex、替换模板里的分组引用要写花括号、ReplaceAllStringFunc 不展开分组、批量扫描先用 Contains 预筛）以及不可信模式的四层限制（模式长度、重复次数、分组数量、输入长度）；再讲 RE2 与 PCRE 的取舍为什么对服务端正确、编译开销的量级、容易混淆的 API 语义、RE2 免疫回溯却不免疫资源耗尽、匹配无法真正被取消；最后给按需求选工具的决策矩阵、迁移 PCRE 模式时的检查项与不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "正则在 Go 里的性能、边界与替代", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 的 regexp 用 RE2，不支持回溯因此没有反向引用与前后向断言，换来的是线性时间保证与对 ReDoS 的免疫。本文对照两类引擎的能力与复杂度，讲清为什么 MustCompile 必须提到包级、strings 的 Contains 与 Cut 为什么快一个量级、常用 API 的语义差异与分组引用陷阱，以及用户可控正则的限长防护。", "url": "https://www.yijunjun.asia/programming/go/regexp/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/regexp/"}, "articleSection": "后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "正则在 Go 里的性能、边界与替代", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 正则三段式：先给「要不要用正则」的判断图与 strings 替代速查、包级预编译定式（命名分组配 SubexpIndex、替换模板里的分组引用要写花括号、ReplaceAllStringFunc 不展开分组、批量扫描先用 Contains 预筛）以及不可信模式的四层限制（模式长度、重复次数、分组数量、输入长度）；再讲 RE2 与 PCRE 的取舍为什么对服务端正确、编译开销的量级、容易混淆的 API 语义、RE2 免疫回溯却不免疫资源耗尽、匹配无法真正被取消；最后给按需求选工具的决策矩阵、迁移 PCRE 模式时的检查项与不适用边界。", "url": "https://www.yijunjun.asia/programming/go/regexp/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/regexp/"}, "articleSection": "后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go 正则表达式", "item": "https://www.yijunjun.asia/programming/go/regexp/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,138 +90,19 @@
                         </div>
                     </header>
                     <div class="article-content">
-<h2>Go 的 regexp 用 RE2：这是一个刻意的取舍</h2>
-<p>从 Python、Java、JavaScript 过来的人写 Go 正则，第一个撞到的墙通常是<strong>前后向断言和反向引用都不支持</strong>。这不是标准库没做完，而是引擎选择的必然结果：Go 用的是 RE2，它把模式编译成自动机，同时跟踪所有可能的匹配状态，输入的每个字符只处理一次。回头看已处理位置的能力，和这个一次扫描的模型不兼容。</p>
-<p>换来的东西是：<strong>匹配耗时对输入长度严格线性，任何输入都不可能让 CPU 打满</strong>。PCRE 系引擎靠回溯工作，遇到嵌套量词时分支数会指数增长，一个几十字节的精心构造的输入就能让单核跑满几分钟——这就是 ReDoS。</p>
-<div class="mermaid">
-flowchart TB
-    subgraph re2["RE2 Go 的 regexp 采用"]
-        A1["把模式编译成自动机"]
-        A2["同时跟踪所有可能的匹配状态"]
-        A3["输入的每个字符只处理一次"]
-        A4["时间复杂度 模式规模 乘 输入长度 严格线性"]
-        A1 --> A2 --> A3 --> A4
-    end
-    subgraph pcre["PCRE 系 Perl Java JavaScript Python"]
-        B1["按模式逐步尝试匹配"]
-        B2["失败就回溯到上一个分支点重试"]
-        B3["嵌套量词让待试分支数指数增长"]
-        B4["最坏时间复杂度指数级 即灾难性回溯"]
-        B1 --> B2 --> B3 --> B4
-    end
-    subgraph trade["这个取舍的两面"]
-        C1["RE2 放弃 反向引用 与 前后向断言 与 原子组"]
-        C2["换来 任何输入都不会让匹配耗时失控"]
-        C3["服务端要处理不可信输入 所以取舍是对的"]
-        C1 --> C2 --> C3
-    end
-    re2 --> trade
-    pcre --> trade
-</div>
-<table>
-<thead><tr><th>能力或性质</th><th>Go 的 RE2</th><th>PCRE 系 如 Java 与 JavaScript</th><th>在 Go 里怎么绕</th></tr></thead>
-<tbody>
-<tr><td>反向引用</td><td>不支持</td><td>支持</td><td>先匹配出分组 再用代码比较是否相同</td></tr>
-<tr><td>前向断言与后向断言</td><td>不支持</td><td>支持</td><td>拆成两次匹配 或匹配后用代码判断上下文</td></tr>
-<tr><td>原子组与固化分组</td><td>不支持 也不需要</td><td>支持 用于抑制回溯</td><td>RE2 本来就不回溯 这个特性没有意义</td></tr>
-<tr><td>递归与条件模式</td><td>不支持</td><td>部分支持</td><td>嵌套结构该用真正的解析器而不是正则</td></tr>
-<tr><td>命名分组</td><td>支持 用问号 P 尖括号语法</td><td>支持 语法略有差异</td><td>直接用 配 SubexpIndex 取值</td></tr>
-<tr><td>Unicode 字符类</td><td>支持 含脚本与属性</td><td>支持</td><td>直接用</td></tr>
-<tr><td>时间复杂度保证</td><td>对输入长度线性</td><td>最坏指数级</td><td>无需处理</td></tr>
-<tr><td>ReDoS 风险</td><td>免疫回溯型 ReDoS</td><td>存在 且是常见漏洞类型</td><td>但仍要防超大模式导致的资源耗尽</td></tr>
-<tr><td>匹配语义</td><td>默认最左最先 可切最左最长</td><td>最左最先</td><td>需要最长匹配时调 Longest 方法</td></tr>
-</tbody>
-</table>
+<p>这篇的靶子是三件事：<strong>一半的 Go 正则本来就不该存在</strong>（「以 Bearer 开头」用 <code>strings.HasPrefix</code> 就够）、<strong>剩下的一半有一半写在了函数内部</strong>（每请求重新编译一次，热路径上慢一个量级）、<strong>还有少数直接编译了用户提交的模式</strong>（RE2 不会回溯，但照样能被一个模式吃光内存）。这三件事都能在动手前用一张判断图和四条限制挡掉。</p>
+
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
-    <div class="callout-title">这个取舍为什么对服务端是正确的</div>
-    <p>反向引用和断言解决的是「表达能力不够」的问题，而这类问题几乎总有另一条路：多匹配一次、或者写几行代码。ReDoS 解决的是「一个请求打挂整个服务」的问题，这条路没有替代方案。<strong>拿一部分表达能力换一个复杂度上界，在要处理不可信输入的场景里是明显划算的交易。</strong></p>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：先过「这里真的需要正则吗」的判断图与 <code>strings</code> 替代速查表，再给包级预编译定式（命名分组取值、替换模板的花括号写法、批量扫描先预筛）与不可信模式的四层限制模板。</li>
+        <li><strong>② 原理</strong>：RE2 放弃断言与反向引用换来线性复杂度上界的取舍、编译开销为什么比匹配高一个量级、容易混淆的几组 API 语义、RE2 免疫回溯型 ReDoS 却不免疫资源耗尽、以及为什么匹配无法真正被取消。</li>
+        <li><strong>③ 场景</strong>：按需求选工具的决策矩阵、从 PCRE 迁移模式时的检查项，以及什么情况下应该换成真正的解析器或外部工具。</li>
+    </ul>
 </div>
 
-<h2>编译必须提到包级：这是最常见的性能问题</h2>
-<p><code>regexp.MustCompile</code> 要把模式解析、优化、构造成自动机，<strong>它的开销比用编译好的对象匹配一次短字符串高一个量级以上</strong>。写在每请求都会走到的函数里，就是把一笔本该只付一次的成本按 QPS 重复支付。</p>
-<table>
-<thead><tr><th>写法</th><th>每次调用做了什么</th><th>相对开销量级</th><th>额外影响</th></tr></thead>
-<tbody>
-<tr><td>包级 var 加 MustCompile</td><td>只做匹配</td><td>基准</td><td>模式写错时进程启动即 panic 问题立刻暴露</td></tr>
-<tr><td>函数内 MustCompile</td><td>每次解析加构造自动机 再匹配</td><td>慢一个量级到几十倍</td><td>还会产生大量临时分配 加重 GC</td></tr>
-<tr><td>函数内 Compile 并处理 error</td><td>同上 外加一次错误判断</td><td>同上</td><td>错误分支基本永远不会走到 纯噪音</td></tr>
-<tr><td>用 sync.Once 或 sync.Map 缓存</td><td>首次编译 之后查缓存</td><td>接近基准 多一次查表</td><td>模式集合动态时才需要这么写</td></tr>
-<tr><td>能用 strings 却用了正则</td><td>匹配自动机</td><td>比 strings 慢一个量级</td><td>可读性也更差</td></tr>
-</tbody>
-</table>
-<pre><code class="language-go">// 包级变量：进程启动时编译一次。*regexp.Regexp 是并发安全的，
-// 多个 goroutine 共用同一个对象没有任何问题
-var (
-    // 命名分组用 (?P 尖括号 name 尖括号 ...) 语法，比记 $1 $2 的顺序可靠
-    logLine = regexp.MustCompile(
-        `^(?P&lt;ts&gt;\d{4}-\d{2}-\d{2}T\S+)\s+(?P&lt;level&gt;[A-Z]+)\s+(?P&lt;msg&gt;.*)$`)
-    // MustCompile 在包初始化时 panic：正则写错在启动瞬间暴露，
-    // 而不是等到线上某个冷路径第一次被走到
-    skuPattern = regexp.MustCompile(`^SKU-[0-9]{6}$`)
-)
-
-// 反例：每次调用都重新编译，热路径上这是很常见的性能问题
-func badParse(line string) string {
-    re := regexp.MustCompile(`^(\S+)\s+([A-Z]+)\s+(.*)$`) // 每请求付一次编译成本
-    m := re.FindStringSubmatch(line)
-    if m == nil {
-        return ""
-    }
-    return m[2]
-}
-
-// 正例：用预编译对象，并用命名分组按名字取值
-func parseLine(line string) (ts, level, msg string, ok bool) {
-    m := logLine.FindStringSubmatch(line)
-    if m == nil {
-        return "", "", "", false
-    }
-    // SubexpIndex 按名字返回下标：以后加分组、改顺序都不会错位
-    return m[logLine.SubexpIndex("ts")],
-        m[logLine.SubexpIndex("level")],
-        m[logLine.SubexpIndex("msg")], true
-}
-
-// 分组引用的坑：模板里的美元符号加数字会被贪心解析成尽可能长的名字
-func rewriteURL(s string) string {
-    re := regexp.MustCompile(`/users/(\d+)/orders`)
-    // 错：$1st 被整体当成名为 1st 的分组，不存在，于是替换成空串，
-    // 结果里那一段直接消失，而且没有任何报错
-    _ = re.ReplaceAllString(s, "/v2/u/$1st")
-    // 对：花括号把名字边界划清楚
-    return re.ReplaceAllString(s, "/v2/u/${1}st")
-}
-
-// ReplaceAllStringFunc 不做分组展开：函数收到的是整个匹配文本，
-// 返回值原样使用，在返回值里写 $1 不会生效
-func maskPhones(s string) string {
-    re := regexp.MustCompile(`1[3-9]\d{9}`)
-    return re.ReplaceAllStringFunc(s, func(m string) string {
-        return m[:3] + "****" + m[7:]
-    })
-}</code></pre>
-
-<h2>API 的语义差异：容易混的几组</h2>
-<table>
-<thead><tr><th>方法</th><th>返回什么</th><th>最容易混淆的点</th></tr></thead>
-<tbody>
-<tr><td>MatchString</td><td>是否存在匹配 bool</td><td>只判存在时用它 比 FindString 少一次分配</td></tr>
-<tr><td>FindString</td><td>第一个匹配的文本</td><td>没匹配到返回空串 无法区分空匹配与未匹配 要判存在用 MatchString</td></tr>
-<tr><td>FindStringSubmatch</td><td>切片 第零个是整个匹配 之后是各分组</td><td>没匹配到返回 nil 不是空切片 索引从 1 开始才是分组</td></tr>
-<tr><td>FindAllString</td><td>所有匹配的文本 第二个参数是上限</td><td>要全部必须传负一 传 0 会返回 nil</td></tr>
-<tr><td>FindAllStringSubmatch</td><td>每个匹配一组分组</td><td>是二维切片 容易和上一个搞混</td></tr>
-<tr><td>FindStringIndex</td><td>起止字节下标</td><td>是字节下标不是字符下标 含中文时不能直接当字符位置用</td></tr>
-<tr><td>ReplaceAllString</td><td>替换后的字符串 支持分组引用</td><td>美元符号加数字要写成花括号形式</td></tr>
-<tr><td>ReplaceAllLiteralString</td><td>替换后的字符串 不做任何展开</td><td>替换文本里含美元符号时必须用它</td></tr>
-<tr><td>ReplaceAllStringFunc</td><td>由函数决定替换内容</td><td>函数收到整个匹配 不是分组 且返回值不展开</td></tr>
-<tr><td>Split</td><td>按匹配切分</td><td>第二个参数同样要传负一才是全部</td></tr>
-<tr><td>SubexpNames 与 SubexpIndex</td><td>分组名与下标</td><td>SubexpNames 的第零个元素永远是空串</td></tr>
-<tr><td>Longest</td><td>切换成最左最长语义</td><td>它会修改 Regexp 对象状态 只能在编译后立刻调 不能并发调</td></tr>
-</tbody>
-</table>
-
-<h2>绝大多数场景不需要正则</h2>
+<h2>① 用法 · 第一步：判断要不要用正则</h2>
 <p><strong>判断标准是模式里有没有真正的不确定性。</strong>「以 Bearer 开头」「取等号两边」「按逗号切分」都是确定的，用 <code>strings</code> 更快也更好读；只有出现字符类、可变次数重复、多个分支，并且写成代码会明显更长时，正则才划算。</p>
 <div class="mermaid">
 flowchart TB
@@ -309,26 +190,75 @@ func validHTTPURL(s string) bool {
     return err == nil &amp;&amp; (u.Scheme == "http" || u.Scheme == "https") &amp;&amp; u.Host != ""
 }</code></pre>
 
-<h2>用户可控的正则是安全风险</h2>
-<p>RE2 免疫回溯型 ReDoS，但<strong>不免疫资源耗尽</strong>。它保证的是耗时对输入长度线性，而那个线性系数取决于自动机规模，自动机规模取决于模式。嵌套的大次数重复能让状态数暴涨，攻击者甚至不需要提交长输入，只要提交一个模式就能在编译阶段吃掉大量 CPU 和内存。</p>
-<div class="mermaid">
-sequenceDiagram
-    participant A as 攻击者
-    participant S as 服务端
-    participant R as 正则引擎
-    participant C as CPU 与内存
-    A->>S: 提交精心构造的长字符串
-    S->>R: 用已有正则去匹配这段输入
-    R->>R: PCRE 系引擎开始回溯 待试分支随长度指数增长
-    R->>C: 单个请求就能占死一核数秒到数分钟
-    C-->>S: 这就是回溯型 ReDoS 服务整体不可用
-    Note over R,C: Go 的 RE2 在这一步只会线性耗时<br/>所以同样的攻击载荷对 Go 服务无效
-    A->>S: 换招 提交自定义的超长正则作为搜索规则
-    S->>R: 编译这个用户提供的模式
-    R->>C: 嵌套大次数重复让自动机状态数暴涨 编译期就吃光内存
-    C-->>S: 没有回溯 资源照样被耗尽
-    Note over S,R: 结论 RE2 免疫回溯 不免疫资源耗尽<br/>用户可控的模式必须限长度 限重复次数 限分组数量
-</div>
+<h2>① 用法 · 预编译定式与不可信模式的限制</h2>
+<p>判断完之后确实需要正则，那么只有一种写法是对的：<strong>模式写成包级变量，用 <code>MustCompile</code> 在进程启动时编译一次</strong>。<code>*regexp.Regexp</code> 是并发安全的，多个 goroutine 共用同一个对象没有任何问题。</p>
+<pre><code class="language-go">// 包级变量：进程启动时编译一次。*regexp.Regexp 是并发安全的，
+// 多个 goroutine 共用同一个对象没有任何问题
+var (
+    // 命名分组用 (?P 尖括号 name 尖括号 ...) 语法，比记 $1 $2 的顺序可靠
+    logLine = regexp.MustCompile(
+        `^(?P&lt;ts&gt;\d{4}-\d{2}-\d{2}T\S+)\s+(?P&lt;level&gt;[A-Z]+)\s+(?P&lt;msg&gt;.*)$`)
+    // MustCompile 在包初始化时 panic：正则写错在启动瞬间暴露，
+    // 而不是等到线上某个冷路径第一次被走到
+    skuPattern = regexp.MustCompile(`^SKU-[0-9]{6}$`)
+)
+
+// 反例：每次调用都重新编译，热路径上这是很常见的性能问题
+func badParse(line string) string {
+    re := regexp.MustCompile(`^(\S+)\s+([A-Z]+)\s+(.*)$`) // 每请求付一次编译成本
+    m := re.FindStringSubmatch(line)
+    if m == nil {
+        return ""
+    }
+    return m[2]
+}
+
+// 正例：用预编译对象，并用命名分组按名字取值
+func parseLine(line string) (ts, level, msg string, ok bool) {
+    m := logLine.FindStringSubmatch(line)
+    if m == nil {
+        return "", "", "", false
+    }
+    // SubexpIndex 按名字返回下标：以后加分组、改顺序都不会错位
+    return m[logLine.SubexpIndex("ts")],
+        m[logLine.SubexpIndex("level")],
+        m[logLine.SubexpIndex("msg")], true
+}
+
+// 定式：批量扫描先用 strings.Contains 做便宜的预筛，再跑正则。
+// 绝大多数行根本不含关键字，这一步能把正则调用次数降一到两个数量级
+func errorLines(lines []string) []string {
+    out := make([]string, 0, 64)
+    for _, ln := range lines {
+        if !strings.Contains(ln, "ERROR") { // 纯字节扫描，比自动机便宜得多
+            continue
+        }
+        if _, level, _, ok := parseLine(ln); ok &amp;&amp; level == "ERROR" {
+            out = append(out, ln)
+        }
+    }
+    return out
+}
+
+// 分组引用的坑：模板里的美元符号加数字会被贪心解析成尽可能长的名字
+func rewriteURL(s string) string {
+    re := regexp.MustCompile(`/users/(\d+)/orders`)
+    // 错：$1st 被整体当成名为 1st 的分组，不存在，于是替换成空串，
+    // 结果里那一段直接消失，而且没有任何报错
+    _ = re.ReplaceAllString(s, "/v2/u/$1st")
+    // 对：花括号把名字边界划清楚
+    return re.ReplaceAllString(s, "/v2/u/${1}st")
+}
+
+// ReplaceAllStringFunc 不做分组展开：函数收到的是整个匹配文本，
+// 返回值原样使用，在返回值里写 $1 不会生效
+func maskPhones(s string) string {
+    re := regexp.MustCompile(`1[3-9]\d{9}`)
+    return re.ReplaceAllStringFunc(s, func(m string) string {
+        return m[:3] + "****" + m[7:]
+    })
+}</code></pre>
+<p>如果模式来自用户（搜索规则、告警关键字、自定义清洗规则），就必须加限制再编译。RE2 保证耗时对输入长度线性，但<strong>那个线性系数取决于自动机规模，而自动机规模由模式决定</strong>，所以四层限制一个都不能省：</p>
 <pre><code class="language-go">const (
     maxPatternLen = 256      // 模式字符串长度上限
     maxInputLen   = 64 &lt;&lt; 10 // 单次匹配的输入长度上限
@@ -378,13 +308,136 @@ func matchWithBudget(ctx context.Context, re *regexp.Regexp, input string) (bool
         return false, ctx.Err()
     }
 }</code></pre>
+<p>下面这张表是干活时查的，第三列用来确认自己有没有正在犯那个错。</p>
+<table>
+<thead><tr><th>要做什么</th><th>怎么写</th><th>用错的后果</th></tr></thead>
+<tbody>
+<tr><td>在热路径上匹配</td><td>包级 <code>var re = regexp.MustCompile(...)</code></td><td>写在函数里：每次调用重新解析并构造自动机，慢一个量级并制造大量临时分配</td></tr>
+<tr><td>取出分组的值</td><td>命名分组配 <code>SubexpIndex("name")</code></td><td>写死 <code>m[2]</code>：以后加一个分组，全部取值静默错位</td></tr>
+<tr><td>只判断有没有匹配</td><td><code>MatchString</code></td><td>用 <code>FindString</code> 比空串：空匹配与未匹配都是空串，区分不了</td></tr>
+<tr><td>取全部匹配</td><td>第二个参数传 <code>-1</code></td><td>传 0：直接返回 nil，表现成「明明有匹配却一个都没找到」</td></tr>
+<tr><td>替换里引用分组</td><td><code>${1}</code> 带花括号</td><td>写 <code>$1st</code>：被当成名为 <code>1st</code> 的分组，替换成空串且不报错</td></tr>
+<tr><td>替换文本里含美元符号字面量</td><td><code>ReplaceAllLiteralString</code></td><td>用 <code>ReplaceAllString</code>：金额里的美元符号被当成分组引用</td></tr>
+<tr><td>替换内容需要计算</td><td><code>ReplaceAllStringFunc</code></td><td>在返回值里写 <code>$1</code>：它不展开，会原样输出</td></tr>
+<tr><td>模式来自用户输入</td><td><code>Compile</code> 加四层限制</td><td>用 <code>MustCompile</code>：一个非法模式让进程 panic；不限重复次数则编译期就能吃光内存</td></tr>
+<tr><td>大批量扫描日志或文本</td><td>先 <code>strings.Contains</code> 预筛，命中的行才跑正则</td><td>每行都跑正则：绝大多数行本来一眼就能排除</td></tr>
+<tr><td>需要最左最长语义</td><td>编译后立刻调 <code>Longest()</code></td><td>运行期再调：它修改对象状态，并发下是数据竞争</td></tr>
+<tr><td>模式集合是动态的但可枚举</td><td><code>sync.Map</code> 或 <code>sync.Once</code> 缓存编译结果</td><td>每次请求编译：等同于把编译成本按 QPS 支付</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · Go 的 regexp 用 RE2：这是一个刻意的取舍</h2>
+<p>搞清这一节，能解释两件事：为什么从其他语言抄来的正则在 Go 里编译失败，以及为什么 Go 服务不会被 ReDoS 打挂。</p>
+<p>从 Python、Java、JavaScript 过来的人写 Go 正则，第一个撞到的墙通常是<strong>前后向断言和反向引用都不支持</strong>。这不是标准库没做完，而是引擎选择的必然结果：Go 用的是 RE2，它把模式编译成自动机，同时跟踪所有可能的匹配状态，输入的每个字符只处理一次。回头看已处理位置的能力，和这个一次扫描的模型不兼容。</p>
+<p>换来的东西是：<strong>匹配耗时对输入长度严格线性，任何输入都不可能让 CPU 打满</strong>。PCRE 系引擎靠回溯工作，遇到嵌套量词时分支数会指数增长，一个几十字节的精心构造的输入就能让单核跑满几分钟——这就是 ReDoS。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph re2["RE2 Go 的 regexp 采用"]
+        A1["把模式编译成自动机"]
+        A2["同时跟踪所有可能的匹配状态"]
+        A3["输入的每个字符只处理一次"]
+        A4["时间复杂度 模式规模 乘 输入长度 严格线性"]
+        A1 --> A2 --> A3 --> A4
+    end
+    subgraph pcre["PCRE 系 Perl Java JavaScript Python"]
+        B1["按模式逐步尝试匹配"]
+        B2["失败就回溯到上一个分支点重试"]
+        B3["嵌套量词让待试分支数指数增长"]
+        B4["最坏时间复杂度指数级 即灾难性回溯"]
+        B1 --> B2 --> B3 --> B4
+    end
+    subgraph trade["这个取舍的两面"]
+        C1["RE2 放弃 反向引用 与 前后向断言 与 原子组"]
+        C2["换来 任何输入都不会让匹配耗时失控"]
+        C3["服务端要处理不可信输入 所以取舍是对的"]
+        C1 --> C2 --> C3
+    end
+    re2 --> trade
+    pcre --> trade
+</div>
+<table>
+<thead><tr><th>能力或性质</th><th>Go 的 RE2</th><th>PCRE 系 如 Java 与 JavaScript</th><th>在 Go 里怎么绕</th></tr></thead>
+<tbody>
+<tr><td>反向引用</td><td>不支持</td><td>支持</td><td>先匹配出分组 再用代码比较是否相同</td></tr>
+<tr><td>前向断言与后向断言</td><td>不支持</td><td>支持</td><td>拆成两次匹配 或匹配后用代码判断上下文</td></tr>
+<tr><td>原子组与固化分组</td><td>不支持 也不需要</td><td>支持 用于抑制回溯</td><td>RE2 本来就不回溯 这个特性没有意义</td></tr>
+<tr><td>递归与条件模式</td><td>不支持</td><td>部分支持</td><td>嵌套结构该用真正的解析器而不是正则</td></tr>
+<tr><td>命名分组</td><td>支持 用问号 P 尖括号语法</td><td>支持 语法略有差异</td><td>直接用 配 SubexpIndex 取值</td></tr>
+<tr><td>Unicode 字符类</td><td>支持 含脚本与属性</td><td>支持</td><td>直接用</td></tr>
+<tr><td>时间复杂度保证</td><td>对输入长度线性</td><td>最坏指数级</td><td>无需处理</td></tr>
+<tr><td>ReDoS 风险</td><td>免疫回溯型 ReDoS</td><td>存在 且是常见漏洞类型</td><td>但仍要防超大模式导致的资源耗尽</td></tr>
+<tr><td>匹配语义</td><td>默认最左最先 可切最左最长</td><td>最左最先</td><td>需要最长匹配时调 Longest 方法</td></tr>
+</tbody>
+</table>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这个取舍为什么对服务端是正确的</div>
+    <p>反向引用和断言解决的是「表达能力不够」的问题，而这类问题几乎总有另一条路：多匹配一次、或者写几行代码。ReDoS 解决的是「一个请求打挂整个服务」的问题，这条路没有替代方案。<strong>拿一部分表达能力换一个复杂度上界，在要处理不可信输入的场景里是明显划算的交易。</strong>不可信输入的一般性处理原则见 <a href="../../../api/security/">Web 安全总览：威胁建模、SSRF、上传漏洞与纵深防御</a>。</p>
+</div>
+
+<h2>② 原理 · 编译为什么必须提到包级</h2>
+<p>搞清这一节，能解决「CPU 火焰图上 <code>regexp.compile</code> 占了可观一块」这个具体现象。</p>
+<p><code>regexp.MustCompile</code> 要把模式解析、优化、构造成自动机，<strong>它的开销比用编译好的对象匹配一次短字符串高一个量级以上</strong>。写在每请求都会走到的函数里，就是把一笔本该只付一次的成本按 QPS 重复支付。</p>
+<table>
+<thead><tr><th>写法</th><th>每次调用做了什么</th><th>相对开销量级</th><th>额外影响</th></tr></thead>
+<tbody>
+<tr><td>包级 var 加 MustCompile</td><td>只做匹配</td><td>基准</td><td>模式写错时进程启动即 panic 问题立刻暴露</td></tr>
+<tr><td>函数内 MustCompile</td><td>每次解析加构造自动机 再匹配</td><td>慢一个量级到几十倍</td><td>还会产生大量临时分配 加重 GC</td></tr>
+<tr><td>函数内 Compile 并处理 error</td><td>同上 外加一次错误判断</td><td>同上</td><td>错误分支基本永远不会走到 纯噪音</td></tr>
+<tr><td>用 sync.Once 或 sync.Map 缓存</td><td>首次编译 之后查缓存</td><td>接近基准 多一次查表</td><td>模式集合动态时才需要这么写</td></tr>
+<tr><td>能用 strings 却用了正则</td><td>匹配自动机</td><td>比 strings 慢一个量级</td><td>可读性也更差</td></tr>
+</tbody>
+</table>
+<p><code>MustCompile</code> 放包级还有一个常被忽略的好处：<strong>模式写错会在进程启动的瞬间 panic</strong>，而不是等到线上某个冷路径第一次被走到。用 <code>Compile</code> 加错误分支在包级反而更差——那个错误分支永远不会被触发，只是噪音。真正该用 <code>Compile</code> 的场合只有一个：模式来自外部输入。具体量级请在自己的机器上用 <code>go test -bench</code> 量，方法见 <a href="../../../observability/performance/">后端性能优化的度量与方法论</a>。</p>
+
+<h2>② 原理 · API 的语义差异：容易混的几组</h2>
+<p>搞清这一节，能解决「明明有匹配却返回空」和「分组取值错位」这两类问题——它们基本都来自下面这张表里某一行的误解。</p>
+<table>
+<thead><tr><th>方法</th><th>返回什么</th><th>最容易混淆的点</th></tr></thead>
+<tbody>
+<tr><td>MatchString</td><td>是否存在匹配 bool</td><td>只判存在时用它 比 FindString 少一次分配</td></tr>
+<tr><td>FindString</td><td>第一个匹配的文本</td><td>没匹配到返回空串 无法区分空匹配与未匹配 要判存在用 MatchString</td></tr>
+<tr><td>FindStringSubmatch</td><td>切片 第零个是整个匹配 之后是各分组</td><td>没匹配到返回 nil 不是空切片 索引从 1 开始才是分组</td></tr>
+<tr><td>FindAllString</td><td>所有匹配的文本 第二个参数是上限</td><td>要全部必须传负一 传 0 会返回 nil</td></tr>
+<tr><td>FindAllStringSubmatch</td><td>每个匹配一组分组</td><td>是二维切片 容易和上一个搞混</td></tr>
+<tr><td>FindStringIndex</td><td>起止字节下标</td><td>是字节下标不是字符下标 含中文时不能直接当字符位置用</td></tr>
+<tr><td>ReplaceAllString</td><td>替换后的字符串 支持分组引用</td><td>美元符号加数字要写成花括号形式</td></tr>
+<tr><td>ReplaceAllLiteralString</td><td>替换后的字符串 不做任何展开</td><td>替换文本里含美元符号时必须用它</td></tr>
+<tr><td>ReplaceAllStringFunc</td><td>由函数决定替换内容</td><td>函数收到整个匹配 不是分组 且返回值不展开</td></tr>
+<tr><td>Split</td><td>按匹配切分</td><td>第二个参数同样要传负一才是全部</td></tr>
+<tr><td>SubexpNames 与 SubexpIndex</td><td>分组名与下标</td><td>SubexpNames 的第零个元素永远是空串</td></tr>
+<tr><td>Longest</td><td>切换成最左最长语义</td><td>它会修改 Regexp 对象状态 只能在编译后立刻调 不能并发调</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 用户可控的正则是资源耗尽风险</h2>
+<p>搞清这一节，能解释用法层那四层限制为什么一个都不能省。</p>
+<p>RE2 免疫回溯型 ReDoS，但<strong>不免疫资源耗尽</strong>。它保证的是耗时对输入长度线性，而那个线性系数取决于自动机规模，自动机规模取决于模式。嵌套的大次数重复能让状态数暴涨，攻击者甚至不需要提交长输入，只要提交一个模式就能在编译阶段吃掉大量 CPU 和内存。</p>
+<div class="mermaid">
+sequenceDiagram
+    participant A as 攻击者
+    participant S as 服务端
+    participant R as 正则引擎
+    participant C as CPU 与内存
+    A->>S: 提交精心构造的长字符串
+    S->>R: 用已有正则去匹配这段输入
+    R->>R: PCRE 系引擎开始回溯 待试分支随长度指数增长
+    R->>C: 单个请求就能占死一核数秒到数分钟
+    C-->>S: 这就是回溯型 ReDoS 服务整体不可用
+    Note over R,C: Go 的 RE2 在这一步只会线性耗时<br/>所以同样的攻击载荷对 Go 服务无效
+    A->>S: 换招 提交自定义的超长正则作为搜索规则
+    S->>R: 编译这个用户提供的模式
+    R->>C: 嵌套大次数重复让自动机状态数暴涨 编译期就吃光内存
+    C-->>S: 没有回溯 资源照样被耗尽
+    Note over S,R: 结论 RE2 免疫回溯 不免疫资源耗尽<br/>用户可控的模式必须限长度 限重复次数 限分组数量
+</div>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">匹配无法真正被取消</div>
-    <p>上面那段 <code>select</code> 只是让调用方不再等待，<strong>那个跑正则的 goroutine 不会停下来</strong>，它会一直占着 CPU 直到匹配结束。所以它保护的是单个请求的响应时间，不是进程的整体资源。真正的防线永远是<strong>在输入进来之前把规模限制住</strong>：限模式长度、限重复次数、限分组数量、限输入长度。</p>
+    <p>用法层那段 <code>select</code> 只是让调用方不再等待，<strong>那个跑正则的 goroutine 不会停下来</strong>，它会一直占着 CPU 直到匹配结束。所以它保护的是单个请求的响应时间，不是进程的整体资源。真正的防线永远是<strong>在输入进来之前把规模限制住</strong>：限模式长度、限重复次数、限分组数量、限输入长度。</p>
 </div>
 
-<h2>常用模式与调试手段</h2>
+<h2>② 原理 · 常用模式的细节与调试手段</h2>
 <p>真的要写正则时，下面这几个模式是我实际项目里反复用到的，每一条都附了那些不写进模式就会出问题的细节。</p>
 <table>
 <thead><tr><th>用途</th><th>模式要点</th><th>必须注意的细节</th></tr></thead>
@@ -411,29 +464,69 @@ func matchWithBudget(ctx context.Context, re *regexp.Regexp, input string) (bool
 <tr><td>用超长与畸形输入压一遍</td><td>构造边界长度与非法 UTF-8 输入</td><td>是否存在资源消耗异常 是否 panic</td></tr>
 </tbody>
 </table>
-<p>最后一条值得特别做：<strong>把预期之外的输入喂进去</strong>——空串、只有分隔符、超长、非法 UTF-8、包含零字节。正则的 bug 几乎都藏在这些输入上，而正常路径的测试一条都发现不了。</p>
+<p>最后一条值得特别做：<strong>把预期之外的输入喂进去</strong>——空串、只有分隔符、超长、非法 UTF-8、包含零字节。正则的 bug 几乎都藏在这些输入上，而正常路径的测试一条都发现不了。表驱动测试与模糊测试怎么组织见 <a href="../../testing/">测试策略与可测性设计</a>。</p>
 
-<div class="callout callout-warning">
-    <div class="callout-icon">⚠️</div>
-    <div class="callout-title">最容易踩的坑</div>
-    <p>1. 在函数里 <code>MustCompile</code>：热路径上比预编译慢一个量级到几十倍，还制造大量临时分配。一律提到包级变量。</p>
-    <p>2. 替换模板里写美元符号加数字紧跟字母：会被当成一个长名字，分组不存在于是替换成空串，整段内容悄悄消失且不报错。用花括号形式。</p>
-    <p>3. 在 <code>ReplaceAllStringFunc</code> 的返回值里写分组引用：它不做展开，会原样输出。要分组只能在函数里再匹配一次。</p>
-    <p>4. <code>FindAllString</code> 忘了传负一：传 0 直接返回 nil，表现是「明明有匹配却一个都没找到」。</p>
-    <p>5. 用 <code>FindString</code> 判断是否匹配：空匹配和未匹配都返回空串，区分不了。判存在用 <code>MatchString</code>。</p>
-    <p>6. 把 <code>FindStringIndex</code> 的返回值当字符下标：它是字节下标，含中文时切出来的是乱码。</p>
-    <p>7. 用正则解析 JSON、HTML、XML：嵌套结构在原理上就不是正则能表达的，写出来的东西必然在某些输入上出错。</p>
-    <p>8. 用正则校验邮箱：RFC 5322 的语法正则写不对，用 <code>net/mail.ParseAddress</code>。</p>
-    <p>9. 直接编译用户提供的正则：必须限模式长度、重复次数、分组数量，并且用 <code>Compile</code> 而不是 <code>MustCompile</code>，否则一个坏模式就能让进程挂掉。</p>
-    <p>10. 以为给匹配加了 <code>select</code> 超时就安全了：goroutine 不会被取消，CPU 照样被占满。防线必须在输入规模上。</p>
-    <p>11. 在并发环境里调 <code>Longest()</code>：它修改 Regexp 对象状态，必须在编译后立刻调完，之后不能再改。</p>
-    <p>12. 移植 PCRE 正则时没注意断言被静默丢弃：Go 里断言语法会直接编译报错还算好，某些看似能过的模式语义已经变了，必须补测试。</p>
-    <p>13. 能用 <code>strings</code> 却用正则：不只是慢一个量级，更大的代价是半年后没人看得懂那条正则想表达什么。</p>
+<h2>③ 场景 · 按需求选工具</h2>
+<p>把常见需求摊开看，正则真正划算的区间比想象中窄很多。</p>
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>校验固定格式的编号、验证码、订单号</td><td>手写长度与字符范围检查，或包级预编译一条带首尾锚点的短正则</td><td>手写版快数倍，且能报出「第几位不合法」</td><td>规则变更时要改代码；正则版可读性更好但错误信息很粗</td></tr>
+<tr><td>解析自家服务的结构化日志行</td><td>包级预编译加命名分组，<code>SubexpIndex</code> 取值</td><td>格式稳定且字段位置固定，一条正则胜过一串切片操作</td><td>日志格式变了正则要跟着改；更好的出路是一开始就输出 JSON</td></tr>
+<tr><td>解析别人的、格式多变的文本</td><td>先用 <code>strings.Cut</code> 分段，再对不确定的那一段用正则</td><td>把确定的部分交给便宜操作，正则只处理真正不确定的片段</td><td>代码比单条大正则长，但每一步的失败原因都能定位</td></tr>
+<tr><td>邮箱、URL、时间、IP 与网段</td><td>用 <code>net/mail</code>、<code>net/url</code>、<code>time.Parse</code>、<code>net/netip</code></td><td>这些格式的语法复杂度超出正则能正确表达的范围</td><td>解析器比正则严格，会拒掉一些线上历史脏数据，需要单独兼容</td></tr>
+<tr><td>JSON、HTML、XML 等嵌套结构</td><td>用对应的解析包，绝不用正则</td><td>嵌套在原理上不是正则能表达的，任何写法都会在某些输入上错</td><td>要处理解析错误与部分数据缺失，但这是唯一正确的路</td></tr>
+<tr><td>用户可配置的搜索或过滤规则</td><td>四层限制加 <code>Compile</code>，并把编译结果缓存起来</td><td>模式来自外部时，编译本身就是攻击面</td><td>要给用户明确的错误提示，还要维护一份缓存与淘汰策略</td></tr>
+<tr><td>扫描 GB 级日志文件找几条记录</td><td>先按关键字 <code>strings.Contains</code> 预筛，或直接用 <code>grep</code> 类工具</td><td>字节扫描比自动机便宜一到两个数量级</td><td>预筛关键字选错会漏数据，需要和正则的语义对齐</td></tr>
+<tr><td>路由匹配、前缀匹配这类高频判断</td><td>用前缀树或框架自带的路由，不要用正则列表逐条试</td><td>逐条试正则的成本随规则条数线性增长</td><td>需要引入一个数据结构，或接受框架的路由语法限制</td></tr>
+</tbody>
+</table>
+<p>大规模文本扫描的工具侧选择（<code>grep</code> 与 <code>ripgrep</code> 的取舍、管道组合）见 <a href="../../../tools/shell/">Shell 脚本的工程化：可靠性优先</a>。</p>
+
+<h2>③ 场景 · 迁移 PCRE 模式与不适用边界</h2>
+<p>从其他语言搬正则过来时，编译失败反而是好事——它会立刻告诉你哪里用了不支持的特性。真正危险的是那些能编译通过但语义变了的模式。</p>
+<table>
+<thead><tr><th>原模式里的特性</th><th>在 Go 里的表现</th><th>怎么改</th></tr></thead>
+<tbody>
+<tr><td>反向引用</td><td>编译报错 立刻暴露</td><td>先匹配出分组 再用代码比较两段是否相同</td></tr>
+<tr><td>前向或后向断言</td><td>编译报错 立刻暴露</td><td>拆成两次匹配 或匹配后用代码判断上下文</td></tr>
+<tr><td>原子组与固化分组</td><td>编译报错</td><td>直接删掉 RE2 不回溯 这个特性没有意义</td></tr>
+<tr><td>依赖最左最长语义的模式</td><td>能编译 但默认取最左最先 结果可能不同</td><td>编译后立刻调 Longest 并补测试</td></tr>
+<tr><td>依赖点号匹配换行的写法</td><td>能编译 但默认点号不匹配换行</td><td>模式开头加 问号 s 并用多行输入测一遍</td></tr>
+<tr><td>依赖行锚点的多行模式</td><td>能编译 但插入符号只匹配整个输入开头</td><td>模式开头加 问号 m</td></tr>
+<tr><td>用字节区间表示中文范围</td><td>能编译 但会切断 UTF-8 多字节字符</td><td>改用 Unicode 脚本类 Han</td></tr>
+<tr><td>替换模板里的美元符号写法</td><td>能编译 但分组名解析规则不同</td><td>一律写成花括号形式 并对含美元符号的字面量改用 Literal 版本</td></tr>
+</tbody>
+</table>
+<p><strong>不适用边界</strong>：三类需求不该交给正则。一是嵌套结构（JSON、HTML、XML、括号配对），这是形式语言层面的不可能，不是写得好不好的问题；二是有标准解析器的格式（邮箱、URL、时间、IP），解析器在边界上比任何手写正则都正确；三是高频的确定性判断（前缀、包含、切分），<code>strings</code> 快一个量级而且半年后还看得懂。反过来，真正属于正则的区间是：模式里有实打实的不确定性、格式相对稳定、并且写成代码会明显更长。</p>
+<p>回到最上面两个事实：<strong>Go 的正则基于 RE2，所以没有断言和反向引用，但也没有灾难性回溯；编译很贵，所以 <code>MustCompile</code> 永远放包级变量。</strong>再加一个习惯——把正则翻译成中文说一遍，如果说出来是「判断是不是以某个词开头」，那它就该是 <code>strings.HasPrefix</code>。</p>
+<p>本篇在簇里的位置：上一步把日志变成了结构化输出，这一步处理文本时最容易被滥用的工具；下一步离开进程内部，去调用外部命令。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../slog/">← 上一步：结构化日志与 log/slog</a> · <a href="../exec/">下一步：Go 中执行外部命令的正确姿势 →</a></p>
+
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+        <li><strong>在函数里 <code>MustCompile</code></strong>：热路径上比预编译慢一个量级到几十倍，还制造大量临时分配。一律提到包级变量。</li>
+        <li><strong>替换模板里写美元符号加数字紧跟字母</strong>：会被当成一个长名字，分组不存在于是替换成空串，整段内容悄悄消失且不报错。用花括号形式。</li>
+        <li><strong>替换文本里含美元符号字面量却用 <code>ReplaceAllString</code></strong>：金额、模板变量被当成分组引用吃掉，要用 <code>ReplaceAllLiteralString</code>。</li>
+        <li><strong>在 <code>ReplaceAllStringFunc</code> 的返回值里写分组引用</strong>：它不做展开，会原样输出。要分组只能在函数里再匹配一次。</li>
+        <li><strong><code>FindAllString</code> 忘了传负一</strong>：传 0 直接返回 nil，表现是「明明有匹配却一个都没找到」。</li>
+        <li><strong>用 <code>FindString</code> 判断是否匹配</strong>：空匹配和未匹配都返回空串，区分不了。判存在用 <code>MatchString</code>。</li>
+        <li><strong>把 <code>FindStringIndex</code> 的返回值当字符下标</strong>：它是字节下标，含中文时切出来的是乱码。</li>
+        <li><strong>分组取值写死数字下标</strong>：以后在前面加一个分组，全部取值静默错位。用命名分组配 <code>SubexpIndex</code>。</li>
+        <li><strong>用正则解析 JSON、HTML、XML</strong>：嵌套结构在原理上就不是正则能表达的，写出来的东西必然在某些输入上出错。</li>
+        <li><strong>用正则校验邮箱</strong>：RFC 5322 的语法正则写不对，用 <code>net/mail.ParseAddress</code>。</li>
+        <li><strong>直接编译用户提供的正则</strong>：必须限模式长度、重复次数、分组数量，并且用 <code>Compile</code> 而不是 <code>MustCompile</code>，否则一个坏模式就能让进程挂掉。</li>
+        <li><strong>以为给匹配加了 <code>select</code> 超时就安全了</strong>：goroutine 不会被取消，CPU 照样被占满。防线必须在输入规模上。</li>
+        <li><strong>在并发环境里调 <code>Longest()</code></strong>：它修改 Regexp 对象状态，必须在编译后立刻调完，之后不能再改。</li>
+        <li><strong>移植 PCRE 正则时没注意断言被静默丢弃</strong>：Go 里断言语法会直接编译报错还算好，某些看似能过的模式语义已经变了，必须补测试。</li>
+        <li><strong>逐条试一长串正则做路由或规则匹配</strong>：成本随规则条数线性增长，该换前缀树或框架路由。</li>
+        <li><strong>能用 <code>strings</code> 却用正则</strong>：不只是慢一个量级，更大的代价是半年后没人看得懂那条正则想表达什么。</li>
+    </ul>
 </div>
-
-<h2>结论</h2>
-<p>Go 的正则有两个必须记住的事实：<strong>它基于 RE2，所以没有断言和反向引用，但也没有灾难性回溯</strong>；<strong>编译很贵，所以 <code>MustCompile</code> 永远放包级变量</strong>。这两条解释了绝大多数关于 Go 正则的疑问。</p>
-<p>更值得建立的习惯是先问「这里真的需要正则吗」。把正则翻译成中文说一遍——如果说出来是「判断是不是以某个词开头」，那就用 <code>strings.HasPrefix</code>；如果是「取等号两边」，用 <code>strings.Cut</code>；如果是标准格式，找对应的解析包。留给正则的只剩下那些确实充满不确定性、写成代码会明显更啰嗦的场景，而在那些场景里，它依然是最好的工具。</p>
                     </div>
                 </article>
                 <nav class="article-nav">

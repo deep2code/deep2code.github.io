@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Bun 换掉的不只是包管理器，而是整个引擎与系统调用层。本文讲清 JavaScriptCore 与 V8 在启动时间、JIT 分层、内存特征和调试协议上的差异，Bun.serve、Bun.file、bun:sqlite 这些原生 API 为什么快以及为什么会锁死退路，node 兼容层的实现方式与当前已知缺口（cluster、vm、部分 async_hooks 与 native addon），怎么用真实测试套件而不是兼容性列表来验证依赖，以及 APM 与 profiler 生态这块最容易被忽略的短板。">
+    <meta name="description" content="Bun 运行时三段式：先给一份能直接跑的兼容性探针脚本与验证流程（模块能不能加载、AsyncLocalStorage 跨异步边界会不会丢上下文、优雅关闭与调试手段）、一张「要验证什么 → 怎么验 → 判读标准」表和原生 API 可移植性对照表，再讲 JavaScriptCore 与 V8 在启动、JIT 分层、内存特征与调试协议上的差异、Bun 不用 libuv 的结构性后果、node 兼容层的实现方式与已知缺口、模块互操作的细节差异，最后给「哪种服务能把运行时切过去」的决策矩阵与可观测性前置条件。">
     <meta name="keywords" content="Bun,Bun 运行时特性,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/programming/node/bun-runtime/">
     <meta property="og:title" content="Bun 运行时机制：JavaScriptCore、原生 API 与 Node 兼容层的边界 - Bun - 资深码农">
-    <meta property="og:description" content="Bun 换掉的不只是包管理器，而是整个引擎与系统调用层。本文讲清 JavaScriptCore 与 V8 在启动时间、JIT 分层、内存特征和调试协议上的差异，Bun.serve、Bun.file、bun:sqlite 这些原生 API 为什么快以及为什么会锁死退路，node 兼容层的实现方式与当前已知缺口（cluster、vm、部分 async_hooks 与 native addon），怎么用真实测试套件而不是兼容性列表来验证依赖，以及 APM 与 profiler 生态这块最容易被忽略的短板。">
+    <meta property="og:description" content="Bun 运行时三段式：先给一份能直接跑的兼容性探针脚本与验证流程（模块能不能加载、AsyncLocalStorage 跨异步边界会不会丢上下文、优雅关闭与调试手段）、一张「要验证什么 → 怎么验 → 判读标准」表和原生 API 可移植性对照表，再讲 JavaScriptCore 与 V8 在启动、JIT 分层、内存特征与调试协议上的差异、Bun 不用 libuv 的结构性后果、node 兼容层的实现方式与已知缺口、模块互操作的细节差异，最后给「哪种服务能把运行时切过去」的决策矩阵与可观测性前置条件。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/node/bun-runtime/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Bun 运行时机制：JavaScriptCore、原生 API 与 Node 兼容层的边界 - Bun">
-    <meta name="twitter:description" content="Bun 换掉的不只是包管理器，而是整个引擎与系统调用层。本文讲清 JavaScriptCore 与 V8 在启动时间、JIT 分层、内存特征和调试协议上的差异，Bun.serve、Bun.file、bun:sqlite 这些原生 API 为什么快以及为什么会锁死退路，node 兼容层的实现方式与当前已知缺口（cluster、vm、部分 async_hooks 与 native addon），怎么用真实测试套件而不是兼容性列表来验证依赖，以及 APM 与 profiler 生态这块最容易被忽略的短板。">
+    <meta name="twitter:description" content="Bun 运行时三段式：先给一份能直接跑的兼容性探针脚本与验证流程（模块能不能加载、AsyncLocalStorage 跨异步边界会不会丢上下文、优雅关闭与调试手段）、一张「要验证什么 → 怎么验 → 判读标准」表和原生 API 可移植性对照表，再讲 JavaScriptCore 与 V8 在启动、JIT 分层、内存特征与调试协议上的差异、Bun 不用 libuv 的结构性后果、node 兼容层的实现方式与已知缺口、模块互操作的细节差异，最后给「哪种服务能把运行时切过去」的决策矩阵与可观测性前置条件。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,8 +68,116 @@
                     <div class="article-content">
 <p>把运行时从 Node 换成 Bun，换掉的不只是一个命令，而是<strong>引擎、事件循环实现、系统调用封装、调试协议这一整套底座</strong>。这篇讲的就是这套底座：JSC 和 V8 差在哪、原生 API 快在哪以及代价是什么、node 兼容层是怎么实现的、边界在哪、怎么验证。工具链用法见 <a href="../bun-intro/">Bun 工具链上手</a>，整体选型判断见 <a href="../bun/">Bun 总览</a>，迁移步骤见 <a href="../bun-migration/">从 Node.js 迁移</a>。</p>
 
-<h2>Bun 的内部分层</h2>
-<p>理解兼容性问题，先要知道你的每一行代码最终走的是哪条路径。<strong>Bun 里存在三套并列的 API 表面：Bun 专有 API、Web 标准 API、node 前缀的兼容层</strong>，它们最终都落到 Zig 实现的原生层和 JSC 上。选哪一套写代码，直接决定了你还能不能退回 Node。</p>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一份能直接跑的兼容性探针脚本（哪个 <code>node:*</code> 模块根本加载不了、<code>AsyncLocalStorage</code> 跨过 <code>Promise.all</code> 与 <code>setImmediate</code> 会不会丢上下文）、一条按顺序执行的验证流程、一张「要验证什么 → 怎么验 → 判读标准」表，以及原生 API 的可移植性对照表。</li>
+        <li><strong>② 原理</strong>：Bun 的三套 API 表面与 Zig 原生层怎么分层、它为什么不用 libuv、JSC 与 V8 在启动与 JIT 分层与内存特征上的差异、<code>Bun.serve</code> 与 <code>node:http</code> 两条请求路径的区别、兼容层是重新实现而不是转发所带来的后果、模块互操作的细节差异。</li>
+        <li><strong>③ 场景</strong>：哪种服务现在就能把运行时切过去、哪种必须等，可观测性为什么是硬前置条件，以及想保留双运行时能力时的写法纪律。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 先用动手方法验证依赖能不能在 Bun 下跑</h2>
+<p>「我的项目能不能在 Bun 下跑」不能靠查兼容性列表回答，因为列表只说明模块存在。可行的做法是三层：先探模块能不能加载（几十秒），再对真正关心的行为点名检查（几分钟），最后用完整测试套件和真实流量兜底（几小时到几天）。下面这个探针脚本负责前两层，保存成 <code>compat-probe.ts</code> 直接 <code>bun compat-probe.ts</code> 跑。</p>
+<pre><code class="language-typescript">// compat-probe.ts —— 先定位「哪个模块根本用不了」，再点名检查真正在意的行为
+// 注意它回答不了「行为是否完全一致」，那一层只能靠你自己的测试套件
+
+const modules = [
+  'node:fs', 'node:http', 'node:net', 'node:stream', 'node:crypto',
+  'node:cluster', 'node:worker_threads', 'node:async_hooks', 'node:vm', 'node:v8',
+];
+
+for (const name of modules) {
+  try {
+    const m = await import(name);
+    // 光看「能 import」不够：兼容层常见形态是模块能加载但某个方法是空实现，
+    // 所以顺手打印导出符号数量，数量明显偏少的那个就是要重点怀疑的
+    const keys = Object.keys((m as Record&lt;string, unknown&gt;).default ?? m).length;
+    console.log('OK  ', name.padEnd(22), '导出', keys, '个符号');
+  } catch (e) {
+    console.log('FAIL', name.padEnd(22), (e as Error).message);
+  }
+}
+
+// 点名检查一：链路追踪真正依赖的不是「async_hooks 存在」，而是跨异步边界后上下文还在
+const { AsyncLocalStorage } = await import('node:async_hooks');
+const als = new AsyncLocalStorage&lt;string&gt;();
+await als.run('trace-1', async () =&gt; {
+  await Promise.all([Promise.resolve(), new Promise((r) =&gt; setImmediate(r))]);
+  console.log('ALS 跨 Promise.all 与 setImmediate 之后:', als.getStore() ?? '上下文丢失');
+});
+
+// 点名检查二：优雅关闭是发布期错误率的直接来源，必须确认信号真的被处理
+process.on('SIGTERM', () =&gt; {
+  console.log('收到 SIGTERM，执行清理');
+  process.exit(0);        // 生产代码这里要先让就绪探针失败再停止接新连接
+});
+
+// 点名检查三：进程自称兼容的 node 版本号，决定了依赖的 engines 字段还成不成立
+console.log('process.versions:', process.versions);
+console.log('pid:', process.pid, '—— 另开一个终端 kill -TERM 这个 pid 验证上面的处理逻辑');</code></pre>
+<p>探针只是第一步，完整的验证流程顺序不要乱：<strong>先扫硬阻塞，再跑测试，再看真实流量，最后确认出事时有没有抓手。</strong>前面任一步不过，后面几步就不用做了。</p>
+<pre><code class="language-bash"># ---- 依赖与兼容性的真实验证流程，顺序不要乱 ----
+
+# 1) 扫 native addon：有 .node 二进制或 gypfile 的包是最硬的阻塞点
+find node_modules -name '*.node' -not -path '*/test/*' | head -30
+grep -l '"gypfile": *true' node_modules/*/package.json node_modules/@*/*/package.json 2&gt;/dev/null
+
+# 2) 探针先跑一遍，几十秒就能定位加载失败的模块
+bun compat-probe.ts
+
+# 3) 完整测试套件在两个运行时各跑一遍，比对失败用例（不是只看通过率）
+bun test 2&gt;&amp;1 | tee /tmp/bun-test.log
+npx jest 2&gt;&amp;1 | tee /tmp/node-test.log
+
+# 4) 启动一遍真实服务，重点看启动日志里的告警与缺失模块提示
+bun --print 'process.versions' src/main.ts    # 确认 versions 里 node 兼容版本号
+bun src/main.ts                               # 关注任何 "not implemented" 类告警
+
+# 5) 同一份压测脚本打两个运行时，对比 p99 与 RSS，而不只是 QPS
+npx autocannon -c 50 -d 60 -w 5000 http://127.0.0.1:8080/api/orders/123
+
+# 6) 验证最容易被测试漏掉的三条路径：优雅关闭、定时任务、未捕获异常
+kill -TERM $(pgrep -f 'bun src/main.ts')      # 观察是否执行清理逻辑并正常退出
+
+# 7) 确认调试手段可用，否则线上出问题没有抓手
+bun --inspect src/main.ts                     # 协议是 WebKit Inspector，不是 V8 CDP</code></pre>
+<table>
+    <thead>
+        <tr><th>要验证什么</th><th>怎么验</th><th>判读标准</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>有没有硬阻塞依赖</td><td>扫 <code>.node</code> 与 <code>gypfile</code>，逐个确认包名</td><td>存在且不可替代 → 运行时迁移直接终止，只用工具链</td></tr>
+        <tr><td>模块能不能加载</td><td>跑 <code>compat-probe.ts</code></td><td>出现 FAIL 的行就是硬缺口；导出符号数明显偏少的要重点怀疑</td></tr>
+        <tr><td>行为是否一致</td><td>完整测试套件两边各跑一遍，保留两份日志</td><td>逐条比对失败用例，通过数相同不等于行为相同</td></tr>
+        <tr><td>启动期有无能力缺失</td><td>直接 <code>bun src/main.ts</code> 看启动日志</td><td>出现 not implemented 一类字样即视为阻塞，不要忽略</td></tr>
+        <tr><td>异步上下文传播</td><td>探针里 <code>AsyncLocalStorage</code> 的点名检查</td><td>打印「上下文丢失」→ 链路追踪必须改手工埋点</td></tr>
+        <tr><td>优雅关闭</td><td><code>kill -TERM</code> 后看清理日志与退出码</td><td>退出码非 0、或连接被强断 → 必须显式实现信号处理</td></tr>
+        <tr><td>调试与剖析手段</td><td><code>bun --inspect</code> 并真的连上一次</td><td>连不上或工具读不了产出 → 核心服务不要切</td></tr>
+        <tr><td>延迟与内存特征</td><td>同一压测脚本打两边，看 p99 与 RSS 曲线</td><td>p99 抬高或 RSS 持续上涨 → 容量要重新核算，不要直接上线</td></tr>
+    </tbody>
+</table>
+<p>写代码时的选择比验证更重要：同一个能力往往有「Bun 专有」和「两边都能跑」两种写法，选错了，上面所有验证都白做，因为你已经回不去了。下表按可移植性排序，<strong>想保留退路就只用最后一类</strong>。</p>
+<table>
+    <thead>
+        <tr><th>Bun 原生 API</th><th>它替代了什么</th><th>Node 上的对应写法</th><th>可移植性</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>Bun.serve</code></td><td><code>node:http</code> 加 Express/Fastify</td><td><code>http.createServer</code>，或用 Hono 这类支持多运行时的框架</td><td><strong>不可移植</strong>，除非套一层适配</td></tr>
+        <tr><td><code>Bun.file</code></td><td><code>fs.createReadStream</code></td><td><code>fs.promises</code> 与 <code>stream</code></td><td>不可移植</td></tr>
+        <tr><td><code>bun:sqlite</code></td><td><code>better-sqlite3</code>（需编译）</td><td><code>node:sqlite</code>（新版本内置，仍在演进）或 better-sqlite3</td><td>不可移植，但两边都有替代</td></tr>
+        <tr><td><code>Bun.password</code></td><td><code>bcrypt</code>、<code>argon2</code></td><td><code>node:crypto</code> 的 <code>scrypt</code>，或 npm 包</td><td>不可移植</td></tr>
+        <tr><td><code>Bun.serve</code> 的 <code>websocket</code> 选项</td><td><code>ws</code> 包</td><td><code>ws</code> 或 <code>socket.io</code></td><td>不可移植，事件回调签名完全不同</td></tr>
+        <tr><td><code>Bun.$</code>（内置 shell）</td><td><code>zx</code>、<code>execa</code></td><td><code>node:child_process</code></td><td>不可移植</td></tr>
+        <tr><td><code>Bun.env</code></td><td><code>process.env</code></td><td><code>process.env</code>（Bun 也支持）</td><td>可移植：<strong>直接用 <code>process.env</code> 就行</strong></td></tr>
+        <tr><td>标准 Web API：<code>fetch</code>、<code>Request</code>、<code>Response</code>、<code>URL</code>、<code>crypto.subtle</code></td><td>各类 http 客户端与工具库</td><td>Node 18+ 原生提供</td><td>可移植：<strong>优先用这一类</strong></td></tr>
+    </tbody>
+</table>
+<p>这些边界背后的机制——为什么原生 API 快、兼容层为什么只能逐个 API 补齐——在下面两节。</p>
+
+<h2>② 原理 · Bun 的内部分层</h2>
+<p>搞清这一节能解决一个具体问题：为什么同样一段「读文件并返回」的代码，写法不同就决定了你还能不能退回 Node。<strong>Bun 里存在三套并列的 API 表面：Bun 专有 API、Web 标准 API、node 前缀的兼容层</strong>，它们最终都落到 Zig 实现的原生层和 JSC 上。</p>
 <div class="mermaid">
 flowchart TB
     subgraph APP["你的代码"]
@@ -101,9 +209,10 @@ flowchart TB
     N2 --> E1
     E1 --> E2
 </div>
-<p>这里有一个和 Node 的结构性差异：<strong>Bun 没有用 libuv</strong>，事件循环与 IO 多路复用是自己用 Zig 实现的，直接调 epoll / kqueue。所以「libuv 线程池默认 4 个」「<code>UV_THREADPOOL_SIZE</code> 调大能提升文件 IO 并发」这类 Node 经验在 Bun 上不成立，相关的调优参数也不存在。</p>
+<p>这里有一个和 Node 的结构性差异：<strong>Bun 没有用 libuv</strong>，事件循环与 IO 多路复用是自己用 Zig 实现的，直接调 epoll / kqueue。所以「libuv 线程池默认 4 个」「<code>UV_THREADPOOL_SIZE</code> 调大能提升文件 IO 并发」这类 Node 经验在 Bun 上不成立，相关的调优参数也不存在。Node 那边的事件循环阶段划分与实际影响见 <a href="../event-loop/">Node.js 事件循环的六个阶段</a>，那篇的结论不能直接搬到 Bun 上。</p>
 
-<h2>JavaScriptCore 与 V8 的差异</h2>
+<h2>② 原理 · JavaScriptCore 与 V8 的差异</h2>
+<p>搞清这一节能解决两类困惑：为什么别人的跑分你复现不出来，以及为什么换完运行时之后内存规划手段忽然变少了。</p>
 <table>
     <thead>
         <tr><th>维度</th><th>V8（Node）</th><th>JavaScriptCore（Bun）</th><th>工程后果</th></tr>
@@ -135,8 +244,8 @@ stateDiagram-v2
     end note
 </div>
 
-<h2>Bun 原生 API：快，但会锁死退路</h2>
-<p>Bun 的原生 API 直接落在 Zig 实现上，少了 Node 那层 stream 抽象与 JS 到 C++ 的边界开销，所以在 hello world 级别的对比里能快出倍数。代价必须说清楚：<strong>这些 API 在 Node 里不存在，用了它们，你的代码就再也回不去了。</strong></p>
+<h2>② 原理 · Bun 原生 API 为什么快，代价是什么</h2>
+<p>搞清这一节能解释「hello world 差好几倍、业务接口差几个百分点」的机制根源：差的是每个请求跨越 JS 与原生边界的次数。</p>
 <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -201,20 +310,6 @@ Bun.serve({
     return new Response('internal error', { status: 500 });
   },
 });</code></pre>
-<table>
-    <thead>
-        <tr><th>Bun 原生 API</th><th>它替代了什么</th><th>Node 上的对应写法</th><th>可移植性</th></tr>
-    </thead>
-    <tbody>
-        <tr><td><code>Bun.serve</code></td><td><code>node:http</code> 加 Express/Fastify</td><td><code>http.createServer</code>，或用 Hono 这类支持多运行时的框架</td><td><strong>不可移植</strong>，除非套一层适配</td></tr>
-        <tr><td><code>Bun.file</code></td><td><code>fs.createReadStream</code></td><td><code>fs.promises</code> 与 <code>stream</code></td><td>不可移植</td></tr>
-        <tr><td><code>bun:sqlite</code></td><td><code>better-sqlite3</code>（需编译）</td><td><code>node:sqlite</code>（新版本内置，仍在演进）或 better-sqlite3</td><td>不可移植，但两边都有替代</td></tr>
-        <tr><td><code>Bun.password</code></td><td><code>bcrypt</code>、<code>argon2</code></td><td><code>node:crypto</code> 的 <code>scrypt</code>，或 npm 包</td><td>不可移植</td></tr>
-        <tr><td><code>Bun.serve</code> 的 <code>websocket</code> 选项</td><td><code>ws</code> 包</td><td><code>ws</code> 或 <code>socket.io</code></td><td>不可移植，事件回调签名完全不同</td></tr>
-        <tr><td><code>Bun.$</code>（内置 shell）</td><td><code>zx</code>、<code>execa</code></td><td><code>node:child_process</code></td><td>不可移植</td></tr>
-        <tr><td><code>Bun.env</code></td><td><code>process.env</code></td><td><code>process.env</code>（Bun 也支持）</td><td>可移植：<strong>直接用 <code>process.env</code> 就行</strong></td></tr>
-    </tbody>
-</table>
 <p>如果你希望「先用 Bun 提速，出问题能退回 Node」，写法上的纪律只有一条：<strong>只用标准 Web API 和 <code>node:</code> 前缀模块。</strong>下面这份等价实现两边都能跑。</p>
 <pre><code class="language-typescript">// ---- 可移植写法：同一份代码在 Bun 和 Node 22+ 下都能跑 ----
 import { createServer } from 'node:http';
@@ -252,8 +347,8 @@ const server = createServer(async (req, res) =&gt; {
 // 这行在两个运行时下行为一致，优雅关闭逻辑也可以复用
 server.listen(Number(process.env.PORT) || 3000);</code></pre>
 
-<h2>node 兼容层的实现方式与当前边界</h2>
-<p>Bun 的 <code>node:*</code> 模块不是转发给 Node，而是<strong>用 Zig 与 JS 重新实现了一遍这些接口的语义</strong>。所以兼容性是逐个 API、逐个行为细节堆出来的，「模块存在」和「你用到的那个边缘行为一致」是两件事。下面这张表列的是实践中最常撞上的几处。</p>
+<h2>② 原理 · node 兼容层的实现方式与当前边界</h2>
+<p>搞清这一节能解决一个认知偏差：兼容性不是一个开关，而是逐个 API、逐个行为细节堆出来的结果。Bun 的 <code>node:*</code> 模块不是转发给 Node，而是<strong>用 Zig 与 JS 重新实现了一遍这些接口的语义</strong>。所以「模块存在」和「你用到的那个边缘行为一致」是两件事。下面这张表列的是实践中最常撞上的几处。</p>
 <table>
     <thead>
         <tr><th>能力</th><th>当前状态</th><th>撞上时的现象</th><th>应对</th></tr>
@@ -273,33 +368,11 @@ server.listen(Number(process.env.PORT) || 3000);</code></pre>
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">不要用兼容性列表做决策</div>
-    <p>列表告诉你「<code>node:async_hooks</code> 已实现」，但你真正依赖的是「在 <code>Promise.all</code> 嵌套 <code>setImmediate</code> 之后 <code>AsyncLocalStorage</code> 还能不能拿到上下文」。<strong>唯一可靠的验证方式是把你自己的完整测试套件在 Bun 下跑一遍，再在预发环境接真实流量。</strong></p>
+    <p>列表告诉你「<code>node:async_hooks</code> 已实现」，但你真正依赖的是「在 <code>Promise.all</code> 嵌套 <code>setImmediate</code> 之后 <code>AsyncLocalStorage</code> 还能不能拿到上下文」。<strong>唯一可靠的验证方式是把你自己的完整测试套件在 Bun 下跑一遍，再在预发环境接真实流量。</strong>用法层那个探针脚本里的点名检查就是这个思路的最小版本。</p>
 </div>
-<pre><code class="language-bash"># ---- 依赖与兼容性的真实验证流程，顺序不要乱 ----
 
-# 1) 扫 native addon：有 .node 二进制或 gypfile 的包是最硬的阻塞点
-find node_modules -name '*.node' -not -path '*/test/*' | head -30
-grep -l '"gypfile": *true' node_modules/*/package.json node_modules/@*/*/package.json 2&gt;/dev/null
-
-# 2) 完整测试套件在两个运行时各跑一遍，比对失败用例（不是只看通过率）
-bun test 2&gt;&amp;1 | tee /tmp/bun-test.log
-npx jest 2&gt;&amp;1 | tee /tmp/node-test.log
-
-# 3) 启动一遍真实服务，重点看启动日志里的告警与缺失模块提示
-bun --print 'process.versions' src/main.ts    # 确认 versions 里 node 兼容版本号
-bun src/main.ts                               # 关注任何 "not implemented" 类告警
-
-# 4) 同一份压测脚本打两个运行时，对比 p99 与 RSS，而不只是 QPS
-npx autocannon -c 50 -d 60 -w 5000 http://127.0.0.1:8080/api/orders/123
-
-# 5) 验证最容易被测试漏掉的三条路径：优雅关闭、定时任务、未捕获异常
-kill -TERM $(pgrep -f 'bun src/main.ts')      # 观察是否执行清理逻辑并正常退出
-
-# 6) 确认调试手段可用，否则线上出问题没有抓手
-bun --inspect src/main.ts                     # 协议是 WebKit Inspector，不是 V8 CDP</code></pre>
-
-<h2>模块系统与全局变量的细节差异</h2>
-<p>Bun 在模块互操作上比 Node 宽松很多，这是双刃剑：<strong>它让老代码更容易跑起来，同时掩盖了真实的模块类型问题</strong>，导致「Bun 下正常、切回 Node 就炸」。</p>
+<h2>② 原理 · 模块系统与全局变量的细节差异</h2>
+<p>搞清这一节能解决一类很气人的现象：代码在 Bun 下跑得好好的，切回 Node 就炸。Bun 在模块互操作上比 Node 宽松很多，这是双刃剑：<strong>它让老代码更容易跑起来，同时掩盖了真实的模块类型问题</strong>。</p>
 <table>
     <thead>
         <tr><th>细节</th><th>Node 的行为</th><th>Bun 的行为</th><th>想保留双运行时要怎么写</th></tr>
@@ -315,8 +388,24 @@ bun --inspect src/main.ts                     # 协议是 WebKit Inspector，不
     </tbody>
 </table>
 
-<h2>可观测性：选型时最容易忽略的短板</h2>
-<p>前面所有内容都可以靠测试验证，只有这一项不行——<strong>它决定的是你在生产出事那一刻有没有抓手。</strong></p>
+<h2>③ 场景 · 哪种服务现在就能把运行时切过去</h2>
+<p>把前面的机制换算成决策：同一套兼容性现状，对不同形态的服务意味着完全不同的风险。</p>
+<table>
+    <thead>
+        <tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>内部脚本、批处理、构建工具</td><td>可以最早切</td><td>短生命周期进程，启动收益直接兑现，出问题影响面小</td><td>定时任务与退出码这些路径要人工过一遍</td></tr>
+        <tr><td>Serverless 或函数计算</td><td>值得认真评估</td><td>冷启动本身就是主要成本，JSC 的启动优势在这里最实在</td><td>平台是否官方支持、日志与追踪怎么接，都要先确认</td></tr>
+        <tr><td>无状态 HTTP 服务且依赖全是纯 JS</td><td>灰度切，先 10% 流量</td><td>兼容风险可控，回退只是改镜像 tag</td><td>APM 自动埋点可能缺，要先接受手工埋点的工作量</td></tr>
+        <tr><td>核心交易链路</td><td>暂时不切</td><td>可观测性短板会在出事那一刻把损失放大</td><td>放弃这部分收益，但它本来也最小</td></tr>
+        <tr><td>用 <code>node:cluster</code> 做多进程负载均衡</td><td>先改成多容器部署，再谈运行时</td><td>兼容层只有部分实现，行为会静默退化</td><td>部署模型改造，但这件事在编排系统上本来就该做</td></tr>
+        <tr><td>CPU 密集型服务</td><td>必须按真实负载实测，别照搬跑分</td><td>两家引擎 JIT 策略不同，互有胜负</td><td>压测与预热的时间成本</td></tr>
+        <tr><td>历史上靠堆快照定位过泄漏的服务</td><td>不要切</td><td>JSC 的堆快照格式与社区分析工具不通用</td><td>放弃收益，换取出事时仍有抓手</td></tr>
+        <tr><td>希望一份代码跑多个运行时</td><td>只写标准 Web API，框架选支持多运行时的那类</td><td>运行时被降级成可替换组件，回退成本接近零</td><td>放弃 <code>Bun.serve</code> 之类专有 API 的那部分性能</td></tr>
+    </tbody>
+</table>
+<p>上面这张表里反复出现的前置条件是可观测性——<strong>前面所有内容都可以靠测试验证，只有这一项不行，它决定的是你在生产出事那一刻有没有抓手。</strong></p>
 <table>
     <thead>
         <tr><th>能力</th><th>Node 上的常规做法</th><th>Bun 上的现状</th><th>建议</th></tr>
@@ -330,8 +419,10 @@ bun --inspect src/main.ts                     # 协议是 WebKit Inspector，不
         <tr><td>内存上限控制</td><td><code>--max-old-space-size</code> 精确限制</td><td>没有等价参数，只有粗粒度开关</td><td>靠容器 limit 加压测确定容量，预留更多余量</td></tr>
     </tbody>
 </table>
+<p><strong>不适用边界</strong>：Node 侧的诊断方法（事件循环延迟怎么测、火焰图怎么读、内存怎么定位）在 <a href="../performance/">Node.js 性能诊断</a>，它们大部分在 Bun 上不能照搬，所以这两篇要对照着看。框架层怎么抽象运行时差异、同一份代码怎么同时跑在 Node、Bun 与 Workers 上，在 <a href="../hono-edge/">Hono 的跨运行时部署</a>。装饰器元数据与依赖注入这类对编译链敏感的框架在 Bun 下的验证点，见 <a href="../nestjs/">NestJS 架构模型与取舍</a>。</p>
+<p>这条路径到这里已经走完了「机制」部分：上一篇把工具链用起来，本篇讲清运行时风险来自哪里，下一篇给分阶段迁移的可执行清单与回退预案。</p>
 
-<h2>反模式对照表</h2>
+<h2>③ 场景 · 反模式与正确做法对照</h2>
 <table>
     <thead>
         <tr><th>反模式</th><th>后果</th><th>正确做法</th></tr>
@@ -348,14 +439,16 @@ bun --inspect src/main.ts                     # 协议是 WebKit Inspector，不
     </tbody>
 </table>
 
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
         <li>用了 <code>Bun.serve</code>、<code>Bun.file</code>、<code>bun:sqlite</code> 就等于放弃退路，这些 API 在 Node 下不存在。</li>
         <li>把 V8 参数照搬到 Bun：<code>--max-old-space-size</code> 没有等价物，容器内存规划手段随之变弱。</li>
         <li>以为 Bun 也用 libuv：它自己实现了事件循环，线程池相关的 Node 调优经验全部失效。</li>
         <li>只看兼容性列表：模块存在不代表你用到的那个边缘行为一致。</li>
+        <li>探针只看「能不能 import」：模块能加载但方法是空实现的情况同样致命，要看导出符号与关键行为。</li>
         <li>忽略 <code>node:cluster</code> 只部分实现：依赖它做多进程的服务迁过去会静默退化。</li>
         <li>假设 <code>AsyncLocalStorage</code> 行为一致：复杂异步链路上 traceId 可能丢，全链路追踪要专门验证。</li>
         <li>依赖里有 native addon 却没提前扫：这是运行时迁移最常见的硬阻塞。</li>
@@ -366,6 +459,8 @@ bun --inspect src/main.ts                     # 协议是 WebKit Inspector，不
         <li>压测不预热：JIT 还在低优化层，测出来的数字既不代表 Bun 也不代表 Node。</li>
     </ul>
 </div>
+
+<p class="cluster-nav">同主题路径：<a href="../bun-intro/">← 上一步：Bun 工具链上手：install、run、test、build 的机制与边界</a> · <a href="../bun-migration/">下一步：从 Node.js 迁移到 Bun：分阶段路径、行为差异清单与回退预案 →</a></p>
 
                     </div>
 </article>

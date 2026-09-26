@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="迁移到 Bun 的正确顺序是从 CI 装依赖开始，运行时放最后。本文给出五个阶段各自要验证什么与回退成本、迁移前的依赖体检清单（native addon、node-gyp、cluster 用法、APM 探针）、锁文件差异导致依赖版本漂移的检查方法、十条高频行为差异（.env 自动加载、路径别名、错误堆栈格式、信号与优雅关闭、时区与 Intl）、可抄的多阶段 Dockerfile 与镜像选择，以及一份上线后必须逐项确认的验证清单与秒级回退预案。">
+    <meta name="description" content="迁移到 Bun 三段式：先给分阶段的可执行清单（依赖树 diff、CI 换装依赖、测试迁移、改镜像 tag 切换与回退的具体命令）和一张回退触发条件表，再讲五个阶段为什么必须是这个顺序、迁移前的依赖体检项、十一条高频行为差异（.env 自动加载、路径别名、错误堆栈格式、信号与优雅关闭、时区与 Intl）、可抄的多阶段 Dockerfile 与镜像选择、灰度与回退的动作序列，最后给「什么项目适合迁到哪一步」的决策矩阵与上线后逐项确认的验证清单。">
     <meta name="keywords" content="Bun,从 Node.js 迁移,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/programming/node/bun-migration/">
     <meta property="og:title" content="从 Node.js 迁移到 Bun：分阶段路径、行为差异清单与回退预案 - Bun - 资深码农">
-    <meta property="og:description" content="迁移到 Bun 的正确顺序是从 CI 装依赖开始，运行时放最后。本文给出五个阶段各自要验证什么与回退成本、迁移前的依赖体检清单（native addon、node-gyp、cluster 用法、APM 探针）、锁文件差异导致依赖版本漂移的检查方法、十条高频行为差异（.env 自动加载、路径别名、错误堆栈格式、信号与优雅关闭、时区与 Intl）、可抄的多阶段 Dockerfile 与镜像选择，以及一份上线后必须逐项确认的验证清单与秒级回退预案。">
+    <meta property="og:description" content="迁移到 Bun 三段式：先给分阶段的可执行清单（依赖树 diff、CI 换装依赖、测试迁移、改镜像 tag 切换与回退的具体命令）和一张回退触发条件表，再讲五个阶段为什么必须是这个顺序、迁移前的依赖体检项、十一条高频行为差异（.env 自动加载、路径别名、错误堆栈格式、信号与优雅关闭、时区与 Intl）、可抄的多阶段 Dockerfile 与镜像选择、灰度与回退的动作序列，最后给「什么项目适合迁到哪一步」的决策矩阵与上线后逐项确认的验证清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/node/bun-migration/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="从 Node.js 迁移到 Bun：分阶段路径、行为差异清单与回退预案 - Bun">
-    <meta name="twitter:description" content="迁移到 Bun 的正确顺序是从 CI 装依赖开始，运行时放最后。本文给出五个阶段各自要验证什么与回退成本、迁移前的依赖体检清单（native addon、node-gyp、cluster 用法、APM 探针）、锁文件差异导致依赖版本漂移的检查方法、十条高频行为差异（.env 自动加载、路径别名、错误堆栈格式、信号与优雅关闭、时区与 Intl）、可抄的多阶段 Dockerfile 与镜像选择，以及一份上线后必须逐项确认的验证清单与秒级回退预案。">
+    <meta name="twitter:description" content="迁移到 Bun 三段式：先给分阶段的可执行清单（依赖树 diff、CI 换装依赖、测试迁移、改镜像 tag 切换与回退的具体命令）和一张回退触发条件表，再讲五个阶段为什么必须是这个顺序、迁移前的依赖体检项、十一条高频行为差异（.env 自动加载、路径别名、错误堆栈格式、信号与优雅关闭、时区与 Intl）、可抄的多阶段 Dockerfile 与镜像选择、灰度与回退的动作序列，最后给「什么项目适合迁到哪一步」的决策矩阵与上线后逐项确认的验证清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,7 +68,85 @@
                     <div class="article-content">
 <p>迁移到 Bun 失败的项目基本都犯同一个错：<strong>把「换运行时」当成迁移的第一步。</strong>正确的顺序恰好相反——先拿走风险最低、收益最确定的部分（CI 装依赖），最后才碰生产运行时，而且每一步都要有独立的回退开关。这篇给的是可执行的清单：阶段划分、依赖体检、行为差异、Dockerfile、上线后验证项、回退预案。为什么值得迁、快多少是真的见 <a href="../bun/">Bun 总览</a>，工具链用法见 <a href="../bun-intro/">Bun 工具链上手</a>，运行时机制与兼容层边界见 <a href="../bun-runtime/">Bun 运行时机制</a>。</p>
 
-<h2>分阶段迁移路径</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：可以直接照着敲的分阶段清单（导出依赖树基线并 diff、CI 换装依赖、本地与测试迁移、改镜像 tag 完成切换与回退），一张「要做什么 → 怎么做 → 注意什么」表，以及一张回退触发条件表——什么信号出现就立刻切回去，不要犹豫。</li>
+        <li><strong>② 原理</strong>：五个阶段为什么必须是这个顺序、每阶段的准入线与回退成本、迁移前依赖体检的八个检查项、十一条「测试全绿但线上出事」的行为差异、多阶段 Dockerfile 与镜像变体的取舍、灰度与回退的完整动作序列。</li>
+        <li><strong>③ 场景</strong>：什么项目适合迁、迁到哪一步为止就该停，上线后必须逐项确认的验证清单，以及回退预案为什么必须在迁移之前就建好。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 分阶段迁移清单与回退触发条件</h2>
+<p>下面这段按阶段排好了顺序，前三个阶段今天就能执行、回退成本都极低；后两个阶段的切换与回退动作是同一条命令的两个方向。注释写的是每一步为什么不能省。</p>
+<pre><code class="language-bash"># ---- 阶段零：先留基线。没有基线，之后所有「变好了吗」都只是感觉 ----
+npm ls --all --parseable | sed 's#.*node_modules/##' | sort -u &gt; /tmp/deps-npm.txt
+npx autocannon -c 50 -d 60 -w 5000 http://127.0.0.1:8080/api/orders/123 | tee /tmp/base-node.txt
+
+# ---- 阶段一：CI 装依赖。唯一的硬要求是依赖树 diff 必须过 ----
+bun install                                   # 首次会读 package-lock.json 作为版本来源
+bun pm ls --all | sed 's/^[^a-zA-Z@]*//' | sort -u &gt; /tmp/deps-bun.txt
+diff /tmp/deps-npm.txt /tmp/deps-bun.txt      # 有差异就逐条确认，重点看驱动、日期、加密库
+bun install --frozen-lockfile                 # 确认没问题后，CI 里用这条替换 npm ci
+# 然后：提交 bun.lock，删掉 package-lock.json 之外的其他锁文件，CI 缓存 key 带上锁文件哈希
+
+# ---- 阶段二：本地开发。只改 scripts，生产启动命令保持 node ----
+bun --watch src/main.ts
+bun run typecheck                             # tsc --noEmit 永远不能被 bun 替代
+
+# ---- 阶段三：测试迁移。先拿新基线，再回去改门禁阈值 ----
+bun test --coverage 2&gt;&amp;1 | tee /tmp/bun-test.log
+grep -iE 'fail|error' /tmp/bun-test.log       # 逐条看失败用例，通过数相同不等于行为相同
+
+# ---- 阶段四与五：切换和回退是同一条命令的两个方向 ----
+# 切过去：只改镜像 tag，先让 10% 副本跑 bun 版
+kubectl -n prod set image deploy/order-api app=registry.example.com/order-api:1.8.3-bun
+kubectl -n prod rollout status deploy/order-api --timeout=120s
+
+# 回退：动作必须和上线一样简单，且不需要改任何一行代码
+kubectl -n prod set image deploy/order-api app=registry.example.com/order-api:1.8.3-node
+kubectl -n prod rollout status deploy/order-api --timeout=120s
+
+# 回退能力的前置条件，在阶段一就该加进 CI，一行 Bun 专有 API 都不许有
+grep -rn 'Bun\.\|bun:sqlite' src/ &amp;&amp; echo '存在专有 API：回退预案实际上不成立' &amp;&amp; exit 1</code></pre>
+<table>
+    <thead>
+        <tr><th>要做什么</th><th>怎么做</th><th>注意什么</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>建立对比基线</td><td>迁移前导出依赖树、压测结果、p99 与错误率快照</td><td>基线要和迁移后在同一流量比例、同一时间窗下比，否则数据没有意义</td></tr>
+        <tr><td>CI 换成 bun 装依赖</td><td><code>bun install --frozen-lockfile</code> 加全局缓存</td><td>只留一种锁文件；缓存 key 必须带锁文件哈希，否则会命中旧缓存</td></tr>
+        <tr><td>确认依赖没有静默漂移</td><td>迁移前后各导一份依赖树做 <code>diff</code></td><td>重点看数据库驱动、日期库、加密库这类行为敏感的依赖</td></tr>
+        <tr><td>本地开发换执行器</td><td>scripts 里用 <code>bun run</code> 与 <code>bun --watch</code></td><td>生产的 <code>start</code> 保持 node；带 node shebang 的 bin 要加 <code>--bun</code></td></tr>
+        <tr><td>测试迁到 bun test</td><td><code>bun test --coverage</code>，先跑一遍拿新基线</td><td>逐条比对失败用例；覆盖率口径变了，门禁阈值要重新设</td></tr>
+        <tr><td>打出两边通用的产物</td><td><code>bun build --target=node --sourcemap=external</code></td><td>选 <code>bun</code> 就等于放弃退路；sourcemap 不出，线上堆栈无法还原</td></tr>
+        <tr><td>准备两条镜像产线</td><td>同一份 <code>dist</code> 分别 <code>FROM oven/bun</code> 与 <code>FROM node</code></td><td>版本写死，不要浮动 tag，否则重建会悄悄换掉运行时</td></tr>
+        <tr><td>灰度非核心服务</td><td>10% 副本切 bun 镜像，观察窗口覆盖一个业务高峰</td><td>进程活着不算通过，要确认 APM 里真的有数据</td></tr>
+        <tr><td>验证非 HTTP 入口</td><td>定时任务、消息消费者、脚本任务逐个人工确认</td><td>这些路径基本不在测试覆盖里，是最容易漏的一类</td></tr>
+        <tr><td>随时可回退</td><td><code>set image</code> 切回 node tag</td><td>前提是代码里没有 <code>Bun.*</code>，CI 里要有这条检查</td></tr>
+    </tbody>
+</table>
+<p>灰度期间最需要的不是「继续观察」，而是<strong>提前约定好什么信号出现就立刻切回去</strong>。回退是廉价动作，犹豫才是贵的。阈值按你自己的 SLO 定，下表给的是口径与动作。</p>
+<table>
+    <thead>
+        <tr><th>触发信号</th><th>怎么判定</th><th>立即动作</th><th>回退之后先查什么</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>p99 延迟抬高</td><td>与基线在同一时间窗、同一流量比例下对比，超出约定阈值且持续两个观察周期</td><td>切回 node tag</td><td>先做依赖树 diff，再考虑引擎差异；不要先调参数</td></tr>
+        <tr><td>RSS 单调上涨</td><td>连续运行 24 小时不回落，或触及容器 limit 被杀</td><td>切回</td><td>用业务计数器定位可疑对象，Bun 的堆快照工具链帮不上忙</td></tr>
+        <tr><td>出现新的错误类型</td><td>错误分布里出现迁移前不存在的类型</td><td>切回</td><td>先确认是不是 JSC 堆栈格式变化导致错误聚合失真</td></tr>
+        <tr><td>APM 或追踪面板没数据</td><td>span 与指标为空，只有进程存活</td><td>切回</td><td>判定为不满足迁移前置条件，改手工埋点后再议</td></tr>
+        <tr><td>发布期错误率规律性抬升</td><td>每次滚动更新都出现连接被强断</td><td>可先补信号处理再决定</td><td>查 SIGTERM 处理与容器里进程是不是 PID 1</td></tr>
+        <tr><td>定时任务或消费者不执行</td><td>人工确认某个非 HTTP 入口没有执行记录</td><td>立即切回</td><td>查这些入口的启动路径与信号依赖</td></tr>
+        <tr><td>无法归因的业务 bug</td><td>行为变了但代码没动</td><td>切回</td><td>依赖版本漂移是第一嫌疑，先 diff 再看兼容层</td></tr>
+        <tr><td>排障超时</td><td>超过约定的时间盒仍无结论</td><td>切回</td><td>把复现搬到预发环境，不要在生产上继续试</td></tr>
+    </tbody>
+</table>
+<p>下面的原理层解释这五个阶段为什么必须是这个顺序，以及每一条行为差异背后的机制。</p>
+
+<h2>② 原理 · 分阶段迁移路径为什么必须是这个顺序</h2>
+<p>搞清这一节能避免最贵的一类错误：把三种风险一次性叠加，出问题之后无法归因。顺序的逻辑很简单——<strong>按「回退成本」从低到高排，每一步只引入一种新风险</strong>。</p>
 <div class="mermaid">
 stateDiagram-v2
     [*] --> 阶段一CI装依赖
@@ -98,8 +176,8 @@ stateDiagram-v2
     </tbody>
 </table>
 
-<h2>迁移前的依赖体检</h2>
-<p>这一步决定了「值不值得继续往下走」。<strong>有一个不可替代的 native addon，运行时迁移就可以直接放弃了</strong>，不要抱着「大概能跑」的心态往下推。</p>
+<h2>② 原理 · 迁移前的依赖体检</h2>
+<p>搞清这一节能在投入之前就知道「这件事有没有得谈」。<strong>有一个不可替代的 native addon，运行时迁移就可以直接放弃了</strong>，不要抱着「大概能跑」的心态往下推。</p>
 <table>
     <thead>
         <tr><th>检查项</th><th>怎么查</th><th>阻塞级别</th></tr>
@@ -137,8 +215,8 @@ diff /tmp/deps-npm.txt /tmp/deps-bun.txt | head -50
 ls -1 bun.lock bun.lockb package-lock.json 2&gt;/dev/null   # 理想情况只剩一个
 bun install --frozen-lockfile                             # 与 package.json 不一致就直接失败</code></pre>
 
-<h2>行为差异清单</h2>
-<p>下面每一条都是「测试全绿但线上出事」的典型来源，因为它们大多不在单测覆盖范围内。</p>
+<h2>② 原理 · 行为差异清单：为什么测试全绿也会出事</h2>
+<p>搞清这一节能解释一个让人措手不及的现象：CI 全绿、预发正常，上线却出问题。原因是下面这些差异大多落在单测覆盖范围之外——环境变量、构建路径、信号、时区、日志解析，没有一项是「业务逻辑」。</p>
 <table>
     <thead>
         <tr><th>现象</th><th>原因</th><th>处理</th></tr>
@@ -158,7 +236,8 @@ bun install --frozen-lockfile                             # 与 package.json 不
     </tbody>
 </table>
 
-<h2>Docker 镜像与部署</h2>
+<h2>② 原理 · Docker 镜像与部署</h2>
+<p>搞清这一节能解决「回退预案执行不了」的根因：退路是在构建阶段决定的，不是在出事那一刻决定的。关键只有两条——<strong>产物的 target 选 node，镜像版本写死。</strong></p>
 <table>
     <thead>
         <tr><th>基础镜像</th><th>体积量级</th><th>适用</th><th>注意</th></tr>
@@ -242,7 +321,8 @@ flowchart TB
     D3 -->|"任一指标劣化"| D5["改镜像 tag 回 node<br/>一次部署即完成回退"]
 </div>
 
-<h2>灰度与回退的动作序列</h2>
+<h2>② 原理 · 灰度与回退的动作序列</h2>
+<p>搞清这一节能解决「观察了两周也不知道观察了什么」的问题：每一步该由谁看、看什么、什么时候可以下结论。</p>
 <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -263,7 +343,24 @@ sequenceDiagram
     Note over CD,K8: 回退能成立的前提是代码里没有 Bun 专有 API<br/>否则这一步根本执行不了
 </div>
 
-<h2>上线后必须逐项确认的验证清单</h2>
+<h2>③ 场景 · 什么项目适合迁、迁到哪一步为止</h2>
+<p>「迁不迁」不是二选一，真正的问题是「迁到第几阶段就该停」。下表给的是怎么做、为什么、代价：</p>
+<table>
+    <thead>
+        <tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>依赖全是纯 JS 的无状态服务，团队有余力</td><td>五个阶段走完，核心服务放最后</td><td>兼容风险可控，回退只是改镜像 tag</td><td>每个阶段都要留观察期，整体周期以月计</td></tr>
+        <tr><td>只想缩短 CI，没有人力做运行时验证</td><td>停在阶段一到三</td><td>收益的大头本来就在这三步</td><td>拿不到运行时那部分收益，但它最小</td></tr>
+        <tr><td>依赖里有不可替代的 native addon</td><td>永久停在阶段三</td><td>N-API 兼容覆盖不到全部场景，这是硬阻塞</td><td>需要定期复查该依赖有没有纯 JS 替代</td></tr>
+        <tr><td>APM 供应商明确不支持 Bun</td><td>非核心服务可以试，核心服务停住</td><td>没有可观测手段，出事那一刻只能靠日志猜</td><td>手工埋点的长期维护成本</td></tr>
+        <tr><td>靠 <code>node:cluster</code> 做多进程</td><td>先改成多容器，再考虑阶段四</td><td>兼容层只有部分实现，行为会静默退化</td><td>部署模型改造，但这件事本来就该做</td></tr>
+        <tr><td>Serverless 或大量短生命周期任务</td><td>可以跳过灰度周期直接试运行时</td><td>启动开销是这类负载的主要成本，收益最直接</td><td>平台支持与日志追踪接入要先确认</td></tr>
+        <tr><td>团队第一次接触 Bun</td><td>先选一个流量小、无状态、依赖简单的服务</td><td>第一次踩坑的成本应该尽量低</td><td>推进速度慢，但这是有意为之</td></tr>
+        <tr><td>业务正在高速迭代、发布很频繁</td><td>推迟到迭代平缓期</td><td>迁移期间的问题会和业务变更互相掩盖，无法归因</td><td>延后收益，换取可归因性</td></tr>
+    </tbody>
+</table>
+<p>阶段四之后，上线不等于结束，下面这八项必须逐个有结论——<strong>任何一项没结论，就不要把流量比例继续往上调。</strong></p>
 <table>
     <thead>
         <tr><th>验证项</th><th>判定标准</th><th>不达标怎么办</th></tr>
@@ -279,11 +376,11 @@ sequenceDiagram
         <tr><td>容量与副本数</td><td>按新的内存与延迟特征重新核算</td><td>调整 limit 与副本数，不要沿用 Node 时代的配置</td></tr>
     </tbody>
 </table>
+<p>最后是回退预案。它不是「出事了再想办法」，而是<strong>三条必须提前落实的纪律</strong>：第一，业务代码一行 <code>Bun.*</code> 专有 API 都不要有，只用标准 Web API 和 <code>node:</code> 前缀模块，这样同一份源码在两个运行时上都能跑（具体清单见 <a href="../bun-runtime/">Bun 运行时机制</a>）；第二，CI 同时产出 node 与 bun 两个镜像 tag，构建时目标选 node，让产物两边通用；第三，保留 npm 锁文件或至少保留能随时重新生成它的能力，并把切换动作做成「只改镜像 tag 的一次部署」，目标是几分钟内完成且不改任何代码。</p>
+<p><strong>不适用边界</strong>：如果迁移的动机是「线上性能不行」，先回到 <a href="../bun/">Bun 总览</a> 把接口耗时构成量出来，大头在数据库或下游时这整套流程都不该启动；具体的诊断方法在 <a href="../performance/">Node.js 性能诊断</a>。如果目标是「一份代码同时跑在 Node、Bun、Workers 上」，那是框架抽象层的问题，不是迁移问题，见 <a href="../hono-edge/">Hono 的跨运行时部署</a>。只想拿工具链收益而完全不碰运行时的做法，在 <a href="../bun-intro/">Bun 工具链上手</a>。</p>
+<p>这是本簇的最后一篇，四篇连起来是一条完整路径：先判断值不值得引入，再把工具链用起来，然后理解运行时风险来自哪里，最后按阶段迁移并随时能退回去。</p>
 
-<h2>回退预案：在迁移之前就建好</h2>
-<p>回退预案不是「出事了再想办法」，而是<strong>三条必须提前落实的纪律</strong>：第一，业务代码一行 <code>Bun.*</code> 专有 API 都不要有，只用标准 Web API 和 <code>node:</code> 前缀模块，这样同一份源码在两个运行时上都能跑（具体清单见 <a href="../bun-runtime/">Bun 运行时机制</a>）；第二，CI 同时产出 node 与 bun 两个镜像 tag，构建时目标选 node，让产物两边通用；第三，保留 npm 锁文件或至少保留能随时重新生成它的能力，并把切换动作做成「只改镜像 tag 的一次部署」，目标是几分钟内完成且不改任何代码。</p>
-
-<h2>反模式对照表</h2>
+<h2>③ 场景 · 反模式与正确做法对照</h2>
 <table>
     <thead>
         <tr><th>反模式</th><th>后果</th><th>正确做法</th></tr>
@@ -296,15 +393,18 @@ sequenceDiagram
         <tr><td>镜像用浮动 tag</td><td>重新构建可能换掉运行时版本，且旧构建无法复现</td><td>镜像与 CI 都锁具体小版本，升级走独立变更</td></tr>
         <tr><td>迁移时不做依赖版本 diff</td><td>传递依赖静默漂移，业务 bug 出现后查不到根因</td><td>迁移前后各导一份依赖树做 diff，逐条确认差异</td></tr>
         <tr><td>只跑单测就上生产</td><td>优雅关闭、定时任务、消息消费这些路径没被覆盖</td><td>把非 HTTP 入口与信号处理列成独立验证项</td></tr>
+        <tr><td>灰度期没有约定回退触发条件</td><td>指标劣化时开始讨论「再观察一天」，损失被拉长</td><td>上线前就把触发信号、判定口径与动作写下来</td></tr>
         <tr><td>先迁核心服务</td><td>没有运维经验积累，第一次踩坑就发生在最贵的地方</td><td>从流量小、无状态、依赖简单的非核心服务开始</td></tr>
     </tbody>
 </table>
 
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
         <li>把换运行时当第一步：它应该最后做，前面四个阶段是用来积累信心和暴露问题的。</li>
+        <li>迁移前没留基线：依赖树、p99、内存、错误率都要有迁移前的快照，否则事后无从对比。</li>
         <li>不做依赖树 diff：两种包管理器可能解析出不同的传递依赖版本，业务 bug 会被归错因。</li>
         <li>依赖 Bun 自动加载 <code>.env</code>：本地隐式有变量，线上缺失，启动失败还算好，走进默认分支更糟。</li>
         <li>忘了 <code>trustedDependencies</code>：Prisma、Puppeteer 这类靠 <code>postinstall</code> 的包会装成半成品。</li>
@@ -315,9 +415,12 @@ sequenceDiagram
         <li>把 <code>--max-old-space-size</code> 照搬到 bun 启动命令：参数不存在，内存规划失去控制手段。</li>
         <li>迁移后不看 APM 有没有数据：进程活着不等于可观测，出事时才发现没有任何埋点。</li>
         <li>不更新日志解析规则：JSC 堆栈格式不同，错误聚合与告警会静默失效。</li>
+        <li>没约定回退触发条件：灰度期靠临场讨论决定要不要退，时间全花在犹豫上。</li>
         <li>代码里留了 <code>Bun.serve</code> 之类专有 API 却还写了回退预案：预案在紧急时刻根本执行不了。</li>
     </ul>
 </div>
+
+<p class="cluster-nav">同主题路径：<a href="../bun-runtime/">← 上一步：Bun 运行时机制：JavaScriptCore、原生 API 与 Node 兼容层的边界</a></p>
 
                     </div>
 </article>

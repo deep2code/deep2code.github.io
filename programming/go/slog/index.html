@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 1.21 把结构化日志收进标准库后选型基本尘埃落定。本文讲 slog 的正确用法：Handler 机制与自定义包装、With 派生与 slog.Group、用 LogValuer 在类型上实现一次就永不泄露敏感字段、ReplaceAttr 做全局改写、context 携带 trace_id 自动注入、LevelVar 让线上开 debug 不用重启，以及与 zap 的对照结论。">
+        <meta name="description" content="log/slog 三段式：先给可直接抄走的落地骨架（生产 JSONHandler、开发 TextHandler、LevelVar 加内网调级端点、ReplaceAttr 统一时间与裁剪 source、contextHandler 自动注入 trace_id、进程级 With 挂服务名与版本、类型实现 LogValuer 做脱敏、热路径用 LogAttrs）与字段命名规范速查表；再讲 Handler 接口带来的生态效应、Enabled 在最前的处理链路、三种脱敏方式的可靠性差距、级别约定与 log.Fatal 为什么不该进库代码、与 zap 和 zerolog 的对照；最后给选库与输出目的地的决策矩阵、十条上线检查项和不适用边界。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/slog/">
     <!-- Open Graph -->
     <meta property="og:title" content="结构化日志与 log/slog - 资深码农">
-    <meta property="og:description" content="Go 1.21 把结构化日志收进标准库后选型基本尘埃落定。本文讲 slog 的正确用法：Handler 机制与自定义包装、With 派生与 slog.Group、用 LogValuer 在类型上实现一次就永不泄露敏感字段、ReplaceAttr 做全局改写、context 携带 trace_id 自动注入、LevelVar 让线上开 debug 不用重启，以及与 zap 的对照结论。">
+    <meta property="og:description" content="log/slog 三段式：先给可直接抄走的落地骨架（生产 JSONHandler、开发 TextHandler、LevelVar 加内网调级端点、ReplaceAttr 统一时间与裁剪 source、contextHandler 自动注入 trace_id、进程级 With 挂服务名与版本、类型实现 LogValuer 做脱敏、热路径用 LogAttrs）与字段命名规范速查表；再讲 Handler 接口带来的生态效应、Enabled 在最前的处理链路、三种脱敏方式的可靠性差距、级别约定与 log.Fatal 为什么不该进库代码、与 zap 和 zerolog 的对照；最后给选库与输出目的地的决策矩阵、十条上线检查项和不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/slog/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="结构化日志与 log/slog - 资深码农">
-    <meta name="twitter:description" content="Go 1.21 把结构化日志收进标准库后选型基本尘埃落定。本文讲 slog 的正确用法：Handler 机制与自定义包装、With 派生与 slog.Group、用 LogValuer 在类型上实现一次就永不泄露敏感字段、ReplaceAttr 做全局改写、context 携带 trace_id 自动注入、LevelVar 让线上开 debug 不用重启，以及与 zap 的对照结论。">
+    <meta name="twitter:description" content="log/slog 三段式：先给可直接抄走的落地骨架（生产 JSONHandler、开发 TextHandler、LevelVar 加内网调级端点、ReplaceAttr 统一时间与裁剪 source、contextHandler 自动注入 trace_id、进程级 With 挂服务名与版本、类型实现 LogValuer 做脱敏、热路径用 LogAttrs）与字段命名规范速查表；再讲 Handler 接口带来的生态效应、Enabled 在最前的处理链路、三种脱敏方式的可靠性差距、级别约定与 log.Fatal 为什么不该进库代码、与 zap 和 zerolog 的对照；最后给选库与输出目的地的决策矩阵、十条上线检查项和不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "结构化日志与 log/slog", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 1.21 把结构化日志收进标准库后选型基本尘埃落定。本文讲 slog 的正确用法：Handler 机制与自定义包装、With 派生与 slog.Group、用 LogValuer 在类型上实现一次就永不泄露敏感字段、ReplaceAttr 做全局改写、context 携带 trace_id 自动注入、LevelVar 让线上开 debug 不用重启，以及与 zap 的对照结论。", "url": "https://www.yijunjun.asia/programming/go/slog/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/slog/"}, "articleSection": "后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "结构化日志与 log/slog", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "log/slog 三段式：先给可直接抄走的落地骨架（生产 JSONHandler、开发 TextHandler、LevelVar 加内网调级端点、ReplaceAttr 统一时间与裁剪 source、contextHandler 自动注入 trace_id、进程级 With 挂服务名与版本、类型实现 LogValuer 做脱敏、热路径用 LogAttrs）与字段命名规范速查表；再讲 Handler 接口带来的生态效应、Enabled 在最前的处理链路、三种脱敏方式的可靠性差距、级别约定与 log.Fatal 为什么不该进库代码、与 zap 和 zerolog 的对照；最后给选库与输出目的地的决策矩阵、十条上线检查项和不适用边界。", "url": "https://www.yijunjun.asia/programming/go/slog/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/slog/"}, "articleSection": "后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go slog 日志", "item": "https://www.yijunjun.asia/programming/go/slog/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,69 +90,20 @@
                         </div>
                     </header>
                     <div class="article-content">
-<h2>slog 进标准库改变了什么</h2>
-<p>Go 1.21 把 <code>log/slog</code> 收进标准库，这件事的意义不在于「官方也有一个日志库了」，而在于<strong>结构化日志终于有了全生态共用的接口</strong>。以前每个库各写各的日志：有的用 <code>log</code> 打到 stderr，有的引 logrus，有的干脆自己造。你的服务要统一日志格式，就得给每个库单独接适配器，经常接不上。</p>
-<p>现在 <code>slog.Handler</code> 是一个标准接口，库只要往 <code>slog.Default()</code> 输出，你的格式、级别、脱敏规则、trace_id 注入就自动作用到它们身上。这是标准库效应，第三方库永远做不到。</p>
-<div class="mermaid">
-flowchart TB
-    subgraph front["前端 API 业务代码只碰这一层"]
-        A1["slog.Info 包级函数 走 Default logger"]
-        A2["logger.InfoContext 带上 context"]
-        A3["logger.LogAttrs 零装箱 热路径用"]
-        A4["logger.With 派生带固定字段的子 logger"]
-    end
-    subgraph record["Record 值语义的一条记录"]
-        R1["Time Level Message 与调用位置 PC"]
-        R2["Attrs 键值对列表"]
-        R3["实现 LogValuer 的值在这一步被 Resolve"]
-    end
-    subgraph handler["Handler 层 可任意包装叠加"]
-        H1["contextHandler 从 ctx 注入 trace_id"]
-        H2["samplingHandler 对高频日志采样"]
-        H3["JSONHandler 或 TextHandler 负责编码"]
-        H1 --> H2 --> H3
-    end
-    subgraph outp["输出目的地"]
-        O1["stdout 交给采集 agent 容器环境首选"]
-        O2["文件 配合外部轮转工具"]
-        O3["多路输出用 io.MultiWriter"]
-    end
-    front --> record
-    record --> handler
-    handler --> outp
-</div>
-<table>
-<thead><tr><th>Handler</th><th>输出形态</th><th>适用场景</th><th>要注意什么</th></tr></thead>
-<tbody>
-<tr><td>slog.NewTextHandler</td><td>key 等号 value 空格分隔</td><td>本地开发 人眼阅读</td><td>值里含空格会加引号 不适合机器解析</td></tr>
-<tr><td>slog.NewJSONHandler</td><td>每行一个 JSON 对象</td><td>生产环境 交给日志平台</td><td>字段名冲突时后者不会覆盖前者 会重复出现</td></tr>
-<tr><td>自定义包装 Handler</td><td>转发给内层 Handler</td><td>注入 trace_id 采样 动态路由</td><td>必须同时实现 WithAttrs 与 WithGroup 并重新包装</td></tr>
-<tr><td>第三方彩色 Handler</td><td>带颜色的人类可读格式</td><td>本地开发体验</td><td>只在开发环境用 生产别引</td></tr>
-<tr><td>桥接到 zap 或 zerolog 的 Handler</td><td>由被桥接库决定</td><td>已有 zap 栈想统一 API</td><td>桥接层会吃掉一部分零分配优势</td></tr>
-<tr><td>多路 Handler</td><td>同一条记录发往多处</td><td>同时写本地与远端</td><td>任一路阻塞会拖慢整个日志调用 要异步化</td></tr>
-</tbody>
-</table>
+<p>这篇的靶子是：<strong>日志出问题的时候，缺的从来不是日志库，而是当初没定下来的那几条约定</strong>——trace_id 靠不靠得住、手机号会不会落盘、线上想开 debug 要不要重启、错误在哪一层记录。这些决定几乎全部集中在进程启动那几十行装配代码里，写对一次就长期有效；写漏了，事后只能靠 code review 逐个调用点去追。</p>
 
-<h2>一条日志的完整处理链路</h2>
-<p>理解这个顺序能解释很多性能和脱敏方面的疑问：级别判定在最前，所以关掉的级别几乎零开销；<code>LogValuer</code> 的解析和 <code>ReplaceAttr</code> 的改写都在 Handler 里，所以它们能拦住任何调用点写进来的值。</p>
-<div class="mermaid">
-sequenceDiagram
-    participant B as 业务代码
-    participant L as slog.Logger
-    participant H as 自定义 Handler 链
-    participant E as JSONHandler 编码器
-    participant W as io.Writer
-    B->>L: 调用 InfoContext 传 msg 与若干 attrs
-    L->>H: 先问 Enabled 当前级别要不要处理
-    H-->>L: 级别不够 直接返回 不构造 Record
-    L->>H: 级别足够 构造 Record 交给 Handle
-    H->>H: contextHandler 从 ctx 取 trace_id 追加为 Attr
-    H->>E: 转发给负责编码的 Handler
-    E->>E: 遍历 Attr 对实现 LogValuer 的值调 Resolve
-    E->>E: 每个 Attr 过一遍 ReplaceAttr 做改写与脱敏
-    E->>W: 编码成一行 并一次性写出
-    Note over L,H: Enabled 在最前 所以关闭 Debug 时开销接近零<br/>但写在参数里的函数调用仍会先求值 热路径要先判 Enabled
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一份可以直接抄的落地骨架（Handler 按环境选、<code>LevelVar</code> 加内网调级端点、<code>ReplaceAttr</code> 统一时间与裁剪 source、<code>contextHandler</code> 自动注入 trace_id、进程级 <code>With</code> 挂服务名与版本），加上字段命名规范表、Handler 速查表与类型级脱敏定式。</li>
+        <li><strong>② 原理</strong>：<code>slog.Handler</code> 作为标准接口带来的生态效应、一条日志从 <code>Enabled</code> 到编码写出的完整链路、三种脱敏方式为什么可靠性差距巨大、级别约定与 <code>log.Fatal</code> 为什么不能进库代码、和 zap 与 zerolog 的逐维度对照。</li>
+        <li><strong>③ 场景</strong>：选库与输出目的地的判断图与决策矩阵、十条上线检查项，以及什么情况下 slog 不是答案。</li>
+    </ul>
 </div>
+
+<h2>① 用法 · 结构化日志的落地骨架</h2>
+<p>下面这段是进程启动时装配日志的完整代码，六个决定（Handler、级别可变、时间格式、source 裁剪、兜底屏蔽、固定字段）全在这里做完。注释只写「为什么必须这么写」，机制原因在原理层展开。</p>
 <pre><code class="language-go">// ---- 全局装配：进程启动时一次配好 ----
 // LevelVar 的零值是 LevelInfo，内部用原子操作，可以在运行时安全地改
 var logLevel = new(slog.LevelVar)
@@ -210,24 +161,79 @@ func levelHandler(w http.ResponseWriter, r *http.Request) {
     logLevel.Set(lv)
     slog.Info("log level changed", "level", lv.String())
 }</code></pre>
-<div class="callout callout-tip">
-    <div class="callout-icon">✅</div>
-    <div class="callout-title">LevelVar 的真实价值</div>
-    <p>很多线上问题只在特定流量下偶发，<strong>重启进程等于毁掉现场</strong>。有了 <code>slog.LevelVar</code> 加一个内网管理端点，可以在问题正在发生时把级别调到 debug，看两分钟拿到关键日志，再调回 info。这个能力的成本是五行代码，收益是排查窗口从「等下次复现」变成「现在」。</p>
-</div>
+<p><strong>请求域字段怎么带</strong>：不要在业务函数签名里传 logger，而是把 trace_id 放进 <code>context</code>，由一个包装 Handler 自动注入。<code>context</code> 本来就要层层传递，logger 不该污染业务签名。</p>
+<pre><code class="language-go">type traceKey struct{}
 
-<h2>LogValuer：最可靠的脱敏方式</h2>
-<p>脱敏有三种做法，可靠性差距很大。<strong>在类型上实现 <code>slog.LogValuer</code> 是唯一一种「新人不需要知道这条规则也不会写错」的做法</strong>：敏感字段干脆不出现在 <code>LogValue()</code> 的返回值里，从源头上就不可能被打出来。</p>
+func WithTrace(ctx context.Context, id string) context.Context {
+    return context.WithValue(ctx, traceKey{}, id)
+}
+
+// contextHandler 包装任意 Handler，把 ctx 里的 trace_id 自动加到每条日志。
+// 业务代码只要用 XxxContext 系列方法，就不需要传 logger 也不需要手写 trace_id
+type contextHandler struct{ slog.Handler }
+
+func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
+    if id, ok := ctx.Value(traceKey{}).(string); ok &amp;&amp; id != "" {
+        r.AddAttrs(slog.String("trace_id", id))
+    }
+    return h.Handler.Handle(ctx, r)
+}
+
+// 这两个方法必须转发并重新包一层，否则一旦有人调 logger.With，
+// 返回的新 logger 里包装层就丢了，trace_id 从此不再注入。
+// 这是写自定义 Handler 时最常见的 bug
+func (h *contextHandler) WithAttrs(as []slog.Attr) slog.Handler {
+    return &amp;contextHandler{Handler: h.Handler.WithAttrs(as)}
+}
+
+func (h *contextHandler) WithGroup(name string) slog.Handler {
+    if name == "" {
+        return h
+    }
+    return &amp;contextHandler{Handler: h.Handler.WithGroup(name)}
+}
+
+// HTTP 中间件：生成 trace_id 并塞进 context，后面所有日志自动带上
+func TraceMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        id := r.Header.Get("X-Request-Id")
+        if id == "" {
+            id = uuid.NewString()
+        }
+        w.Header().Set("X-Request-Id", id)
+        next.ServeHTTP(w, r.WithContext(WithTrace(r.Context(), id)))
+    })
+}</code></pre>
+<p>Handler 按环境选，这张表是选的时候查的：</p>
 <table>
-<thead><tr><th>脱敏方式</th><th>规则写在哪</th><th>什么情况下会失效</th><th>可靠性</th></tr></thead>
+<thead><tr><th>Handler</th><th>输出形态</th><th>适用场景</th><th>要注意什么</th></tr></thead>
 <tbody>
-<tr><td>调用点手动 mask</td><td>每一处写日志的代码里</td><td>任何人新写一行日志忘了 mask</td><td>最低 不要依赖它</td></tr>
-<tr><td>ReplaceAttr 按 key 名匹配</td><td>全局 Handler 配置</td><td>字段名换了 或 被包在 Group 里层级变了 或 整个结构体作为一个 Attr 打出</td><td>中 适合做兜底</td></tr>
-<tr><td>类型实现 LogValuer</td><td>类型定义旁边</td><td>只在有人绕过类型直接打裸字段时失效</td><td>最高 首选</td></tr>
-<tr><td>专门的日志 DTO</td><td>转换函数里</td><td>忘记调用转换函数</td><td>中高 但要多维护一个类型</td></tr>
-<tr><td>输出后在采集侧过滤</td><td>日志平台的处理管道</td><td>敏感数据已经落到本地磁盘和容器日志里</td><td>低 属于合规意义上的补救</td></tr>
+<tr><td>slog.NewTextHandler</td><td>key 等号 value 空格分隔</td><td>本地开发 人眼阅读</td><td>值里含空格会加引号 不适合机器解析</td></tr>
+<tr><td>slog.NewJSONHandler</td><td>每行一个 JSON 对象</td><td>生产环境 交给日志平台</td><td>字段名冲突时后者不会覆盖前者 会重复出现</td></tr>
+<tr><td>自定义包装 Handler</td><td>转发给内层 Handler</td><td>注入 trace_id 采样 动态路由</td><td>必须同时实现 WithAttrs 与 WithGroup 并重新包装</td></tr>
+<tr><td>第三方彩色 Handler</td><td>带颜色的人类可读格式</td><td>本地开发体验</td><td>只在开发环境用 生产别引</td></tr>
+<tr><td>桥接到 zap 或 zerolog 的 Handler</td><td>由被桥接库决定</td><td>已有 zap 栈想统一 API</td><td>桥接层会吃掉一部分零分配优势</td></tr>
+<tr><td>多路 Handler</td><td>同一条记录发往多处</td><td>同时写本地与远端</td><td>任一路阻塞会拖慢整个日志调用 要异步化</td></tr>
 </tbody>
 </table>
+
+<h2>① 用法 · 字段规范与类型级脱敏</h2>
+<p>字段名一旦在日志平台上被检索、被做成看板，改名的成本就很高。下面这张表是团队里该统一下来的最小集合，第三列是不遵守时的具体后果。</p>
+<table>
+<thead><tr><th>字段</th><th>怎么写</th><th>什么时候带</th><th>不这么写的后果</th></tr></thead>
+<tbody>
+<tr><td><code>service</code> / <code>version</code></td><td>启动时 <code>With</code> 挂一次</td><td>每条日志</td><td>多服务日志混在一起分不清来源，发版前后的问题也对不上</td></tr>
+<tr><td><code>trace_id</code></td><td>由 <code>contextHandler</code> 从 ctx 注入</td><td>每条请求域日志</td><td>跨服务日志串不成一条链路，只能靠时间戳猜</td></tr>
+<tr><td><code>err</code></td><td><code>slog.Any("err", err)</code>，不要 <code>err.Error()</code></td><td>Warn 与 Error</td><td>丢掉 <code>fmt.Errorf</code> 包装的上下文与 <code>errors.Join</code> 的多个错误</td></tr>
+<tr><td>业务主键（<code>order_id</code> 等）</td><td>用独立字段，<strong>不要拼进 message</strong></td><td>该业务动作的全部日志</td><td>拼进 message 后无法按 id 聚合，结构化彻底失效</td></tr>
+<tr><td>耗时</td><td>统一 <code>cost_ms</code>，整数毫秒</td><td>外部调用与关键动作</td><td>一处写 <code>duration</code> 一处写 <code>elapsed</code>，看板得写三个查询</td></tr>
+<tr><td>message</td><td>固定短语，变量全进字段</td><td>每条</td><td>message 里拼变量会让「同类日志」的数量统计失去意义</td></tr>
+<tr><td>一组相关字段</td><td><code>slog.Group</code> 收成嵌套对象</td><td>字段超过三四个时</td><td>顶层字段爆炸，且不同业务的同名字段互相污染</td></tr>
+<tr><td>敏感字段（手机号、令牌、证件号）</td><td>类型实现 <code>LogValuer</code>，<code>ReplaceAttr</code> 做兜底</td><td>永远</td><td>敏感数据落进日志文件与它的全部备份，属于事故而不是缺陷</td></tr>
+<tr><td>热路径日志</td><td><code>logger.LogAttrs(ctx, level, msg, attrs...)</code></td><td>每请求都会执行的路径</td><td>可变参数 <code>any</code> 带来装箱分配，高 QPS 下能量出来</td></tr>
+</tbody>
+</table>
+<p>脱敏的定式是<strong>在类型上实现 <code>slog.LogValuer</code></strong>——敏感字段干脆不出现在返回值里，从源头上就不可能被打出来，新人不需要知道这条规则也不会写错：</p>
 <pre><code class="language-go">type User struct {
     ID    int64
     Name  string
@@ -295,54 +301,83 @@ func handleOrder(ctx context.Context, l *slog.Logger, u User, orderID int64) err
     l.LogAttrs(ctx, slog.LevelInfo, "order done", slog.Int64("cost_ms", 12))
     return nil
 }</code></pre>
+<p>记什么、不记什么、每请求记几条这类更上层的判断属于日志工程本身，见 <a href="../../../observability/logging/">应用侧日志工程：记什么、分级判据与性能开销</a>；trace_id 之上的 span 传播与采样见 <a href="../../../observability/tracing/">链路追踪落地：四类排查场景、依赖拓扑反推与关键路径分析</a>；<code>context</code> 自身的取消传播与 value 使用边界见 <a href="../context/">Go Context 的传播、取消与误用</a>。</p>
 
-<h2>用 context 携带 trace_id：自定义 Handler 的正确写法</h2>
-<p>把 trace_id 写进每条日志有两种做法：每个函数签名里传 logger，或者把 trace_id 放 context、由 Handler 自动注入。<strong>后者明显更好</strong>，因为 context 本来就要层层传递，而 logger 不该污染业务函数签名。</p>
-<pre><code class="language-go">type traceKey struct{}
+<h2>② 原理 · slog 进标准库改变了什么</h2>
+<p>搞清这一节，能解释为什么值得为了 slog 去改已有代码的日志门面：变的不是性能，是第三方库的日志能不能被你统一管住。</p>
+<p>Go 1.21 把 <code>log/slog</code> 收进标准库，这件事的意义不在于「官方也有一个日志库了」，而在于<strong>结构化日志终于有了全生态共用的接口</strong>。以前每个库各写各的日志：有的用 <code>log</code> 打到 stderr，有的引 logrus，有的干脆自己造。你的服务要统一日志格式，就得给每个库单独接适配器，经常接不上。</p>
+<p>现在 <code>slog.Handler</code> 是一个标准接口，库只要往 <code>slog.Default()</code> 输出，你的格式、级别、脱敏规则、trace_id 注入就自动作用到它们身上。这是标准库效应，第三方库永远做不到。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph front["前端 API 业务代码只碰这一层"]
+        A1["slog.Info 包级函数 走 Default logger"]
+        A2["logger.InfoContext 带上 context"]
+        A3["logger.LogAttrs 零装箱 热路径用"]
+        A4["logger.With 派生带固定字段的子 logger"]
+    end
+    subgraph record["Record 值语义的一条记录"]
+        R1["Time Level Message 与调用位置 PC"]
+        R2["Attrs 键值对列表"]
+        R3["实现 LogValuer 的值在这一步被 Resolve"]
+    end
+    subgraph handler["Handler 层 可任意包装叠加"]
+        H1["contextHandler 从 ctx 注入 trace_id"]
+        H2["samplingHandler 对高频日志采样"]
+        H3["JSONHandler 或 TextHandler 负责编码"]
+        H1 --> H2 --> H3
+    end
+    subgraph outp["输出目的地"]
+        O1["stdout 交给采集 agent 容器环境首选"]
+        O2["文件 配合外部轮转工具"]
+        O3["多路输出用 io.MultiWriter"]
+    end
+    front --> record
+    record --> handler
+    handler --> outp
+</div>
 
-func WithTrace(ctx context.Context, id string) context.Context {
-    return context.WithValue(ctx, traceKey{}, id)
-}
+<h2>② 原理 · 一条日志的完整处理链路</h2>
+<p>理解这个顺序能解释很多性能和脱敏方面的疑问：级别判定在最前，所以关掉的级别几乎零开销；<code>LogValuer</code> 的解析和 <code>ReplaceAttr</code> 的改写都在 Handler 里，所以它们能拦住任何调用点写进来的值。</p>
+<div class="mermaid">
+sequenceDiagram
+    participant B as 业务代码
+    participant L as slog.Logger
+    participant H as 自定义 Handler 链
+    participant E as JSONHandler 编码器
+    participant W as io.Writer
+    B->>L: 调用 InfoContext 传 msg 与若干 attrs
+    L->>H: 先问 Enabled 当前级别要不要处理
+    H-->>L: 级别不够 直接返回 不构造 Record
+    L->>H: 级别足够 构造 Record 交给 Handle
+    H->>H: contextHandler 从 ctx 取 trace_id 追加为 Attr
+    H->>E: 转发给负责编码的 Handler
+    E->>E: 遍历 Attr 对实现 LogValuer 的值调 Resolve
+    E->>E: 每个 Attr 过一遍 ReplaceAttr 做改写与脱敏
+    E->>W: 编码成一行 并一次性写出
+    Note over L,H: Enabled 在最前 所以关闭 Debug 时开销接近零<br/>但写在参数里的函数调用仍会先求值 热路径要先判 Enabled
+</div>
+<div class="callout callout-tip">
+    <div class="callout-icon">✅</div>
+    <div class="callout-title">LevelVar 的真实价值</div>
+    <p>很多线上问题只在特定流量下偶发，<strong>重启进程等于毁掉现场</strong>。有了 <code>slog.LevelVar</code> 加一个内网管理端点，可以在问题正在发生时把级别调到 debug，看两分钟拿到关键日志，再调回 info。这个能力的成本是五行代码，收益是排查窗口从「等下次复现」变成「现在」。</p>
+</div>
 
-// contextHandler 包装任意 Handler，把 ctx 里的 trace_id 自动加到每条日志。
-// 业务代码只要用 XxxContext 系列方法，就不需要传 logger 也不需要手写 trace_id
-type contextHandler struct{ slog.Handler }
+<h2>② 原理 · 三种脱敏方式的可靠性差距</h2>
+<p>搞清这一节，能解释用法层为什么把 <code>LogValuer</code> 当主防线、<code>ReplaceAttr</code> 只当兜底：这两者在链路上的位置不同，失效条件也完全不同。</p>
+<table>
+<thead><tr><th>脱敏方式</th><th>规则写在哪</th><th>什么情况下会失效</th><th>可靠性</th></tr></thead>
+<tbody>
+<tr><td>调用点手动 mask</td><td>每一处写日志的代码里</td><td>任何人新写一行日志忘了 mask</td><td>最低 不要依赖它</td></tr>
+<tr><td>ReplaceAttr 按 key 名匹配</td><td>全局 Handler 配置</td><td>字段名换了 或 被包在 Group 里层级变了 或 整个结构体作为一个 Attr 打出</td><td>中 适合做兜底</td></tr>
+<tr><td>类型实现 LogValuer</td><td>类型定义旁边</td><td>只在有人绕过类型直接打裸字段时失效</td><td>最高 首选</td></tr>
+<tr><td>专门的日志 DTO</td><td>转换函数里</td><td>忘记调用转换函数</td><td>中高 但要多维护一个类型</td></tr>
+<tr><td>输出后在采集侧过滤</td><td>日志平台的处理管道</td><td>敏感数据已经落到本地磁盘和容器日志里</td><td>低 属于合规意义上的补救</td></tr>
+</tbody>
+</table>
+<p><code>LogValuer</code> 还有一个常被忽略的用途：<strong>延迟求值</strong>。<code>LogValue()</code> 只在这条日志真的要被输出时才调用，所以把昂贵的统计放进 <code>LogValue</code> 里，Debug 关闭时这笔开销完全不产生。反过来，直接把 <code>expensive()</code> 的调用写在 <code>Debug(...)</code> 的参数里是没用的——参数在进入 <code>Debug</code> 之前就已经求值完毕，级别判定发生在那之后。</p>
 
-func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
-    if id, ok := ctx.Value(traceKey{}).(string); ok &amp;&amp; id != "" {
-        r.AddAttrs(slog.String("trace_id", id))
-    }
-    return h.Handler.Handle(ctx, r)
-}
-
-// 这两个方法必须转发并重新包一层，否则一旦有人调 logger.With，
-// 返回的新 logger 里包装层就丢了，trace_id 从此不再注入。
-// 这是写自定义 Handler 时最常见的 bug
-func (h *contextHandler) WithAttrs(as []slog.Attr) slog.Handler {
-    return &amp;contextHandler{Handler: h.Handler.WithAttrs(as)}
-}
-
-func (h *contextHandler) WithGroup(name string) slog.Handler {
-    if name == "" {
-        return h
-    }
-    return &amp;contextHandler{Handler: h.Handler.WithGroup(name)}
-}
-
-// HTTP 中间件：生成 trace_id 并塞进 context，后面所有日志自动带上
-func TraceMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        id := r.Header.Get("X-Request-Id")
-        if id == "" {
-            id = uuid.NewString()
-        }
-        w.Header().Set("X-Request-Id", id)
-        next.ServeHTTP(w, r.WithContext(WithTrace(r.Context(), id)))
-    })
-}</code></pre>
-<p>更完整的链路追踪（span 传播、采样、跨服务透传）属于可观测性体系的内容，本站结构化日志与链路追踪篇讲得更细，这里只说日志侧的接法。<code>context</code> 本身的取消传播与 value 使用边界，见本站 context 专篇。</p>
-
-<h2>日志级别：约定比工具重要</h2>
+<h2>② 原理 · 日志级别：约定比工具重要</h2>
+<p>搞清这一节，能解决「告警全是噪音」和「同一个失败在日志里出现三次」这两个现象。</p>
 <table>
 <thead><tr><th>级别</th><th>什么该用它</th><th>什么不该用它</th><th>线上默认是否输出</th></tr></thead>
 <tbody>
@@ -358,8 +393,10 @@ func TraceMiddleware(next http.Handler) http.Handler {
     <div class="callout-title">log.Fatal 不该出现在库代码里</div>
     <p><code>log.Fatal</code> 内部调用 <code>os.Exit(1)</code>，而 <code>os.Exit</code> <strong>不执行任何 defer</strong>：在途请求被硬切断、缓冲区数据不落盘、优雅退出逻辑完全跳过、正在写的文件可能损坏。更根本的问题是<strong>库没有权力决定进程的生死</strong>，它该做的是把 error 返回给调用方。<code>log.Fatal</code> 唯一合理的位置是 <code>main</code> 函数里的启动失败分支。</p>
 </div>
+<p>级别约定还要配一条「谁记录」的约定：<strong>错误只在最终处理它的那一层记录一次</strong>，中间层只做 <code>fmt.Errorf</code> 包装并返回。否则一次失败会在日志里出现三四条 Error，排查的人会误判成多次失败，告警条数也随调用深度翻倍。什么阈值该接告警见 <a href="../../../observability/metrics/">监控体系落地：黑盒白盒分工、分层清单与告警阈值</a>。</p>
 
-<h2>与 zap、zerolog 的对照与选型</h2>
+<h2>② 原理 · 与 zap、zerolog 的对照</h2>
+<p>搞清这一节，能在「要不要把现有日志库换成 slog」这个问题上给出有依据的答案，而不是跟风。</p>
 <table>
 <thead><tr><th>维度</th><th>slog</th><th>zap</th><th>zerolog</th><th>logrus</th></tr></thead>
 <tbody>
@@ -373,6 +410,9 @@ func TraceMiddleware(next http.Handler) http.Handler {
 <tr><td>常见坑</td><td>自定义 Handler 忘转发 WithAttrs</td><td>忘记 Sync 导致退出丢日志</td><td>忘记调 Msg 整条日志不输出</td><td>性能在高 QPS 下成为瓶颈</td></tr>
 </tbody>
 </table>
+
+<h2>③ 场景 · 选库与输出去哪里</h2>
+<p>先过这张图定库，再看下面那张表定输出目的地。</p>
 <div class="mermaid">
 flowchart TB
     S["要为服务选日志库"] --> Q1{"是新项目吗"}
@@ -385,22 +425,23 @@ flowchart TB
     Q4 -->|"可控"| SLOG
     Q4 -->|"调用点太多"| BRIDGE["先接 slog 作为新代码的门面<br/>旧代码用桥接 Handler 逐步收敛"]
 </div>
-<p>我的结论：<strong>新项目用 slog，极端性能场景用 zap 或 zerolog，已有项目不要为了换日志库而换</strong>。需要注意的是，「日志库性能」在绝大多数服务里不是瓶颈——真正把服务拖慢的是在循环里打日志、把完整请求体序列化进日志、以及同步写慢速磁盘，这三件事换任何库都救不了。</p>
-
-<h2>输出去哪里：落地方案对照</h2>
+<p>我的结论：<strong>新项目用 slog，极端性能场景用 zap 或 zerolog，已有项目不要为了换日志库而换</strong>。需要注意的是，「日志库性能」在绝大多数服务里不是瓶颈——真正把服务拖慢的是在循环里打日志、把完整请求体序列化进日志、以及同步写慢速磁盘，这三件事换任何库都救不了。性能问题该怎么定位见 <a href="../../../observability/performance/">后端性能优化的度量与方法论</a>。</p>
 <p>slog 只负责产生结构化记录，「写到哪、怎么轮转、谁来采集」是另一件事，而这件事的选择直接决定了故障时你还能不能看到日志。</p>
 <table>
-<thead><tr><th>方案</th><th>怎么做</th><th>优点</th><th>代价与风险</th></tr></thead>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价与风险</th></tr></thead>
 <tbody>
-<tr><td>写 stdout 交给采集 agent</td><td>JSONHandler 输出到 os.Stdout</td><td>容器环境标准做法 进程不管轮转 最简单</td><td>agent 挂了就丢 且 stdout 被填满时写入会阻塞</td></tr>
-<tr><td>写本地文件加轮转库</td><td>把 Writer 换成带按大小与天数轮转的实现</td><td>不依赖外部 agent 本地可直接 grep</td><td>轮转时机与文件句柄要处理好 磁盘满会写失败</td></tr>
-<tr><td>直写远端日志服务</td><td>自定义 Handler 走 HTTP 或 TCP</td><td>链路最短 无需部署 agent</td><td>网络抖动直接拖慢业务 必须异步加有界队列加丢弃策略</td></tr>
-<tr><td>异步缓冲加批量落盘</td><td>Handler 前置一个有界 channel 与后台 worker</td><td>业务线程不被 IO 阻塞 吞吐最高</td><td>进程崩溃会丢队列里的日志 退出前必须 drain</td></tr>
-<tr><td>同时写多处</td><td>io.MultiWriter 或多路 Handler</td><td>本地留一份便于应急</td><td>任一路阻塞拖慢全部 必须给每路独立超时</td></tr>
-<tr><td>按级别分流</td><td>自定义 Handler 按 Level 路由到不同 Writer</td><td>错误日志单独一份 便于告警</td><td>实现复杂度上升 要处理好 WithAttrs 转发</td></tr>
+<tr><td>容器里跑的服务</td><td>JSONHandler 输出到 os.Stdout 交给采集 agent</td><td>容器环境标准做法 进程不管轮转 最简单</td><td>agent 挂了就丢 且 stdout 被填满时写入会阻塞</td></tr>
+<tr><td>虚机或物理机部署 需要本地留档</td><td>写本地文件 配按大小与天数轮转的 Writer</td><td>不依赖外部 agent 本地可直接 grep</td><td>轮转时机与文件句柄要处理好 磁盘满会写失败</td></tr>
+<tr><td>没有采集基础设施</td><td>自定义 Handler 直写远端日志服务</td><td>链路最短 无需部署 agent</td><td>网络抖动直接拖慢业务 必须异步加有界队列加丢弃策略</td></tr>
+<tr><td>日志量极大的核心服务</td><td>Handler 前置一个有界 channel 与后台 worker 批量写</td><td>业务线程不被 IO 阻塞 吞吐最高</td><td>进程崩溃会丢队列里的日志 退出前必须 drain</td></tr>
+<tr><td>需要本地应急兜底</td><td>io.MultiWriter 或多路 Handler 同时写两处</td><td>远端不可用时本地还有一份</td><td>任一路阻塞拖慢全部 必须给每路独立超时</td></tr>
+<tr><td>错误日志要单独接告警</td><td>自定义 Handler 按 Level 路由到不同 Writer</td><td>错误流单独一份 告警链路不受海量 Info 影响</td><td>实现复杂度上升 要正确转发 WithAttrs 与 WithGroup</td></tr>
 </tbody>
 </table>
 <p>容器环境的默认答案是第一条：写 stdout，轮转和采集交给平台。但有一个细节值得注意——<strong><code>os.Stdout</code> 的写入是同步的</strong>，当采集侧读得慢、管道缓冲被填满时，写日志这行代码会阻塞，进而阻塞业务 goroutine。日志量很大的服务应该在 Handler 前加一层有界队列，队列满时按级别丢弃（先丢 Debug 和 Info，永不丢 Error），并在进程退出前把队列排空。</p>
+
+<h2>③ 场景 · 上线检查清单与不适用边界</h2>
+<p>下面十条是我在上线评审里逐条问的，每一条漏掉都有过对应的真实事故。</p>
 <table>
 <thead><tr><th>上线检查项</th><th>建议配置</th><th>漏掉的后果</th></tr></thead>
 <tbody>
@@ -416,27 +457,34 @@ flowchart TB
 <tr><td>日志量预算</td><td>估算每请求条数乘峰值 QPS</td><td>采集与存储成本失控 或把磁盘写满</td></tr>
 </tbody>
 </table>
+<p><strong>不适用边界</strong>：日志不是万能的观测手段。需要看趋势、算比率、设阈值告警的东西应该做成指标而不是日志（见 <a href="../../../observability/metrics/">监控体系落地：黑盒白盒分工、分层清单与告警阈值</a>）；需要看一次请求在多个服务间的耗时分布应该用链路追踪（见 <a href="../../../observability/tracing/">链路追踪落地：四类排查场景、依赖拓扑反推与关键路径分析</a>）；审计类需求（谁在什么时候改了什么，需要长期保存且不可篡改）应该写专门的审计表，而不是混在应用日志里靠日志平台检索。另外，极端性能场景下 slog 不是最快的选择，但「换库」的收益远小于「不在循环里打日志」。</p>
+<p>把 slog 用好只需要记住四件事：<strong>固定字段在进程启动时 <code>With</code> 一次，请求字段靠 context 加自定义 Handler 注入，敏感类型实现 <code>LogValuer</code>，级别用 <code>LevelVar</code> 以便线上动态调整。</strong>剩下的注意力放在约定上：什么该打什么级别、错误在哪一层记录、循环里绝不打日志——日志系统的价值取决于出事时能不能快速定位，而这更多由这些约定决定，而不是由你选了哪个库决定。</p>
+<p>本篇在簇里的位置：上一步把代码组织成了包与模块，这一步给它装上出事时能说话的输出；下一步转向文本处理里最容易被滥用的一件工具。</p>
 
-<div class="callout callout-warning">
-    <div class="callout-icon">⚠️</div>
-    <div class="callout-title">最容易踩的坑</div>
-    <p>1. 库代码里用 <code>log.Fatal</code>：<code>os.Exit</code> 跳过所有 defer，在途请求被切断、缓冲不落盘。库只该返回 error。</p>
-    <p>2. 自定义 Handler 只实现 <code>Handle</code> 不转发 <code>WithAttrs</code> 与 <code>WithGroup</code>：一旦有人调 <code>logger.With</code>，你的包装层就被丢掉，trace_id 悄悄不再注入。</p>
-    <p>3. 每个请求都 <code>logger.With(...)</code> 派生一个新 logger：每次都复制属性切片，高 QPS 下是可观的分配。固定字段进程级 With 一次，请求级字段走 context 注入。</p>
-    <p>4. 日志里拼字符串而不用字段：<code>slog.Info(fmt.Sprintf("user %d failed", id))</code> 让结构化彻底失效，日志平台没法按 user_id 聚合。</p>
-    <p>5. 只打 <code>err.Error()</code> 丢掉错误链：用 <code>slog.Any("err", err)</code>，否则 <code>fmt.Errorf</code> 包装的上下文和 <code>errors.Join</code> 的多个错误全没了。</p>
-    <p>6. 用 <code>Level</code> 而不是 <code>LevelVar</code> 配 HandlerOptions：级别被写死，线上想开 debug 只能重启，现场随之消失。</p>
-    <p>7. 把 <code>AddSource</code> 在超高频路径上一直开着：每条日志一次栈帧解析，量大时是实打实的开销，且默认输出的是构建机绝对路径。</p>
-    <p>8. 客户端参数错误打 Error 级别：告警被噪音淹没，真问题被埋掉。4xx 类错误用 Warn 或 Info。</p>
-    <p>9. 既打 Error 又把 error 返回上层：同一个问题在日志里出现两三次，排查时误判为多次失败。约定只在最终处理处记录。</p>
-    <p>10. 在 <code>ReplaceAttr</code> 里做正则或反射：它对每条日志的每个属性都会被调用一次，重逻辑直接变成热点。</p>
-    <p>11. 依赖 <code>ReplaceAttr</code> 按 key 名脱敏就以为安全了：整个结构体作为一个 Attr 打出时 key 名对不上，敏感字段照样落盘。类型级 <code>LogValuer</code> 才是主防线。</p>
-    <p>12. 在循环里打 Info 日志：一次请求打出几千条，日志量和采集成本双双爆炸，还会把真正有用的日志冲掉。要么降到 Debug，要么聚合后打一条。</p>
+<p class="cluster-nav">同主题路径：<a href="../modules/">← 上一步：模块、包组织与依赖管理</a> · <a href="../regexp/">下一步：正则在 Go 里的性能、边界与替代 →</a></p>
+
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+        <li><strong>库代码里用 <code>log.Fatal</code></strong>：<code>os.Exit</code> 跳过所有 defer，在途请求被切断、缓冲不落盘。库只该返回 error。</li>
+        <li><strong>自定义 Handler 只实现 <code>Handle</code> 不转发 <code>WithAttrs</code> 与 <code>WithGroup</code></strong>：一旦有人调 <code>logger.With</code>，你的包装层就被丢掉，trace_id 悄悄不再注入。</li>
+        <li><strong>每个请求都 <code>logger.With(...)</code> 派生一个新 logger</strong>：每次都复制属性切片，高 QPS 下是可观的分配。固定字段进程级 With 一次，请求级字段走 context 注入。</li>
+        <li><strong>日志里拼字符串而不用字段</strong>：<code>slog.Info(fmt.Sprintf("user %d failed", id))</code> 让结构化彻底失效，日志平台没法按 user_id 聚合。</li>
+        <li><strong>只打 <code>err.Error()</code> 丢掉错误链</strong>：用 <code>slog.Any("err", err)</code>，否则 <code>fmt.Errorf</code> 包装的上下文和 <code>errors.Join</code> 的多个错误全没了。</li>
+        <li><strong>用 <code>Level</code> 而不是 <code>LevelVar</code> 配 HandlerOptions</strong>：级别被写死，线上想开 debug 只能重启，现场随之消失。</li>
+        <li><strong>把 <code>AddSource</code> 在超高频路径上一直开着</strong>：每条日志一次栈帧解析，量大时是实打实的开销，且默认输出的是构建机绝对路径。</li>
+        <li><strong>把昂贵的计算直接写在 <code>Debug</code> 的参数里</strong>：参数先求值再判级别，关掉 Debug 也省不下来。放进 <code>LogValue</code> 或先判 <code>Enabled</code>。</li>
+        <li><strong>客户端参数错误打 Error 级别</strong>：告警被噪音淹没，真问题被埋掉。4xx 类错误用 Warn 或 Info。</li>
+        <li><strong>既打 Error 又把 error 返回上层</strong>：同一个问题在日志里出现两三次，排查时误判为多次失败。约定只在最终处理处记录。</li>
+        <li><strong>在 <code>ReplaceAttr</code> 里做正则或反射</strong>：它对每条日志的每个属性都会被调用一次，重逻辑直接变成热点。</li>
+        <li><strong>依赖 <code>ReplaceAttr</code> 按 key 名脱敏就以为安全了</strong>：整个结构体作为一个 Attr 打出时 key 名对不上，敏感字段照样落盘。类型级 <code>LogValuer</code> 才是主防线。</li>
+        <li><strong>在循环里打 Info 日志</strong>：一次请求打出几千条，日志量和采集成本双双爆炸，还会把真正有用的日志冲掉。要么降到 Debug，要么聚合后打一条。</li>
+        <li><strong>异步日志方案不在退出前 drain 队列</strong>：崩溃或滚动重启前最关键的那几条日志正好在队列里，全丢。</li>
+        <li><strong>把调级别的端点暴露到公网</strong>：任何人都能把你的服务切到 debug，日志量瞬间放大几十倍，等于一个放大器型的拒绝服务入口。</li>
+    </ul>
 </div>
-
-<h2>结论</h2>
-<p><code>slog</code> 值得作为新项目的默认选择，理由是生态打通和官方兼容承诺，不是性能。把它用好只需要记住四件事：<strong>固定字段在进程启动时 <code>With</code> 一次，请求字段靠 context 加自定义 Handler 注入，敏感类型实现 <code>LogValuer</code>，级别用 <code>LevelVar</code> 以便线上动态调整。</strong></p>
-<p>剩下的注意力放在约定上：什么该打什么级别、错误在哪一层记录、循环里绝不打日志。日志系统的价值取决于出事时能不能快速定位，而这更多由这些约定决定，而不是由你选了哪个库决定。</p>
                     </div>
                 </article>
 

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 没有宏，泛型也解决不了给枚举生成字符串方法这类需求，所以代码生成在 Go 生态里是一等公民。本文以 stringer 为例讲清生成器用法与它埋的编译期断言，给出 mockgen 与 sqlc 与 wire 的清单与代价，重点说明生成物必须提交、必须带 DO NOT EDIT 头、CI 里检查 git diff 为空这套规范，以及 go:embed 的替代场景。">
+        <meta name="description" content="Go 不给宏，于是给了 go generate 这个统一入口。本文按用法、原理、场景三段组织：先给落地定式——go:generate 指令的三条硬规则、用 go.mod 的 tool 指令锁死生成器版本、一份在 CI 里重跑生成并检查 git diff 为空的脚本，外加常见生成器用途对照表与 go generate 旗标速查；再讲 stringer 生成的代码里那个空函数为什么是编译期断言、它抓得到什么抓不到什么、四种元编程手段各自的边界、工程规范背后的机制、go:embed 与生成器的分工；最后给「什么时候生成、什么时候别生成」的决策矩阵。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/codegen/">
     <!-- Open Graph -->
     <meta property="og:title" content="代码生成与 go:generate 工程实践 - 资深码农">
-    <meta property="og:description" content="Go 没有宏，泛型也解决不了给枚举生成字符串方法这类需求，所以代码生成在 Go 生态里是一等公民。本文以 stringer 为例讲清生成器用法与它埋的编译期断言，给出 mockgen 与 sqlc 与 wire 的清单与代价，重点说明生成物必须提交、必须带 DO NOT EDIT 头、CI 里检查 git diff 为空这套规范，以及 go:embed 的替代场景。">
+    <meta property="og:description" content="Go 不给宏，于是给了 go generate 这个统一入口。本文按用法、原理、场景三段组织：先给落地定式——go:generate 指令的三条硬规则、用 go.mod 的 tool 指令锁死生成器版本、一份在 CI 里重跑生成并检查 git diff 为空的脚本，外加常见生成器用途对照表与 go generate 旗标速查；再讲 stringer 生成的代码里那个空函数为什么是编译期断言、它抓得到什么抓不到什么、四种元编程手段各自的边界、工程规范背后的机制、go:embed 与生成器的分工；最后给「什么时候生成、什么时候别生成」的决策矩阵。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/codegen/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="代码生成与 go:generate 工程实践 - 资深码农">
-    <meta name="twitter:description" content="Go 没有宏，泛型也解决不了给枚举生成字符串方法这类需求，所以代码生成在 Go 生态里是一等公民。本文以 stringer 为例讲清生成器用法与它埋的编译期断言，给出 mockgen 与 sqlc 与 wire 的清单与代价，重点说明生成物必须提交、必须带 DO NOT EDIT 头、CI 里检查 git diff 为空这套规范，以及 go:embed 的替代场景。">
+    <meta name="twitter:description" content="Go 不给宏，于是给了 go generate 这个统一入口。本文按用法、原理、场景三段组织：先给落地定式——go:generate 指令的三条硬规则、用 go.mod 的 tool 指令锁死生成器版本、一份在 CI 里重跑生成并检查 git diff 为空的脚本，外加常见生成器用途对照表与 go generate 旗标速查；再讲 stringer 生成的代码里那个空函数为什么是编译期断言、它抓得到什么抓不到什么、四种元编程手段各自的边界、工程规范背后的机制、go:embed 与生成器的分工；最后给「什么时候生成、什么时候别生成」的决策矩阵。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "代码生成与 go:generate 工程实践", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 没有宏，泛型也解决不了给枚举生成字符串方法这类需求，所以代码生成在 Go 生态里是一等公民。本文以 stringer 为例讲清生成器用法与它埋的编译期断言，给出 mockgen 与 sqlc 与 wire 的清单与代价，重点说明生成物必须提交、必须带 DO NOT EDIT 头、CI 里检查 git diff 为空这套规范，以及 go:embed 的替代场景。", "url": "https://www.yijunjun.asia/programming/go/codegen/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/codegen/"}, "articleSection": "后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "代码生成与 go:generate 工程实践", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 不给宏，于是给了 go generate 这个统一入口。本文按用法、原理、场景三段组织：先给落地定式——go:generate 指令的三条硬规则、用 go.mod 的 tool 指令锁死生成器版本、一份在 CI 里重跑生成并检查 git diff 为空的脚本，外加常见生成器用途对照表与 go generate 旗标速查；再讲 stringer 生成的代码里那个空函数为什么是编译期断言、它抓得到什么抓不到什么、四种元编程手段各自的边界、工程规范背后的机制、go:embed 与生成器的分工；最后给「什么时候生成、什么时候别生成」的决策矩阵。", "url": "https://www.yijunjun.asia/programming/go/codegen/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/codegen/"}, "articleSection": "后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go Stringer", "item": "https://www.yijunjun.asia/programming/go/codegen/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,9 +90,116 @@
                         </div>
                     </header>
                     <div class="article-content">
-<h2>为什么 Go 需要代码生成</h2>
-<p>Go 刻意不提供宏，也没有运行时反射之外的元编程能力。这让语言保持了简单，代价是有一类需求在语言内无解：<strong>需要读取标识符名字、遍历方法签名、或者从另一种语言的定义推导出 Go 代码</strong>。泛型解决不了这些，因为泛型参数化的是类型，不是代码结构。</p>
-<p>所以「构建之前先跑一个程序把代码写出来」在 Go 生态里不是权宜之计，而是<strong>一等公民</strong>：标准库的 <code>go generate</code> 命令、<code>stringer</code>、<code>protoc-gen-go</code>、<code>sqlc</code>、<code>wire</code> 都建立在这个模式上。</p>
+<p>Go 刻意不提供宏，也没有运行时反射之外的元编程能力。这让语言保持了简单，代价是有一类需求在语言内无解：<strong>需要读取标识符名字、遍历方法签名、或者从另一种语言的定义推导出 Go 代码</strong>。所以「构建之前先跑一个程序把代码写出来」在 Go 生态里不是权宜之计，而是一等公民：<code>go generate</code>、<code>stringer</code>、<code>protoc-gen-go</code>、<code>sqlc</code>、<code>wire</code> 都建立在这个模式上。这篇先给可以直接抄进项目的落地定式，再解释生成物里那些看不懂的细节，最后收拢「什么时候不该生成」。</p>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：<code>go:generate</code> 指令的三条硬规则与两个可抄的例子、用 <code>go.mod</code> 的 <code>tool</code> 指令锁死生成器版本、一份在 CI 里重跑生成并检查 <code>git diff</code> 为空的脚本，外加常见生成器用途对照表与 <code>go generate</code> 旗标速查。</li>
+        <li><strong>② 原理</strong>：四种元编程手段各自的能力边界；<code>stringer</code> 生成物里那个空函数为什么是编译期断言、它能抓到「改值」却抓不到「追加值」；四条工程规范分别防住什么；<code>go:embed</code> 与生成器的分工。</li>
+        <li><strong>③ 场景</strong>：按需求形态给出该用生成器、该用泛型、该用 <code>go:embed</code> 还是该用反射，以及每种选择的代价。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · go:generate 的落地定式</h2>
+<p><strong>第一步：把指令写对。</strong>三条规则违反任何一条都会让指令静默失效，而不是报错：</p>
+<pre><code class="language-go">// 规则一：双斜杠后面不能有空格。写成 "// go:generate" 就只是一条普通注释，
+//        不会执行，也不会有任何提示。
+// 规则二：指令紧贴它处理的声明，读代码的人才知道这个文件是怎么来的。
+// 规则三：工具名写成 go tool 前缀，版本由 go.mod 的 tool 指令锁定（Go 1.24 起），
+//        这样团队成员与 CI 用的是同一个版本，不依赖各自本地装了什么。
+
+//go:generate go tool stringer -type=OrderStatus -trimprefix=OrderStatus -output=order_status_string.go
+
+// OrderStatus 订单状态。iota 生成的是连续整数，
+// 不转字符串的话日志和接口响应里看到的就是 0 1 2 3 这种读不懂的数字
+type OrderStatus int
+
+const (
+    OrderStatusPending  OrderStatus = iota // 待支付
+    OrderStatusPaid                        // 已支付
+    OrderStatusShipped                     // 已发货
+    OrderStatusDone                        // 已完成
+    OrderStatusCanceled                    // 已取消
+)
+
+// $GOFILE 是 go generate 注入的环境变量，指当前文件名。
+// 用它可以避免把文件名写死两遍，改名时不会漏改
+//go:generate go tool mockgen -source=$GOFILE -destination=mock_order_repo_test.go -package=order
+type OrderRepo interface {
+    Get(ctx context.Context, id int64) (*Order, error)
+    Save(ctx context.Context, o *Order) error
+}</code></pre>
+<p><strong>第二步：锁死工具版本。</strong>Go 1.24 起 <code>go.mod</code> 支持 <code>tool</code> 指令记录工具依赖，这是「不同人生成结果不一致」这个老问题的官方答案：</p>
+<pre><code class="language-bash"># 一次性：把生成器登记进 go.mod 的 tool 指令，版本进 go.sum
+go get -tool golang.org/x/tools/cmd/stringer
+
+# 之后任何人、任何机器执行的都是同一个版本，不需要全局 go install
+go tool stringer -help
+
+# 升级生成器和升级普通依赖一样，走 go get 并单独提一个 PR
+go get -tool golang.org/x/tools/cmd/stringer@latest</code></pre>
+<p><strong>第三步：在 CI 里把「生成物与源文件不一致」堵死。</strong>这一步是整套规范的地基，没有它前面两步都会慢慢腐化：</p>
+<pre><code class="language-bash">#!/usr/bin/env bash
+set -euo pipefail
+
+# 1. 工具版本由 go.mod 的 tool 指令锁定，这里只需把依赖拉下来
+go mod download
+
+# 2. 全量重新生成
+go generate ./...
+
+# 3. 关键一步：检查工作区是否干净。
+#    有人改了源文件却忘记重新生成，这里就会有 diff，流水线直接失败。
+#    这是防止「生成物与源文件不一致」的唯一可靠手段
+if ! git diff --exit-code; then
+  echo "生成物与源文件不一致：请在本地执行 go generate ./... 并提交结果" &gt;&amp;2
+  exit 1
+fi
+
+# 4. 顺带校验所有生成文件都带 DO NOT EDIT 头，
+#    grep -L 列出「不含匹配内容」的文件
+files=$(git ls-files '*_string.go' '*_gen.go' '*.pb.go' 'mock_*.go')
+if [ -n "$files" ]; then
+  missing=$(grep -L 'Code generated .* DO NOT EDIT\.' $files || true)
+  if [ -n "$missing" ]; then
+    echo "以下生成文件缺少 DO NOT EDIT 头：$missing" &gt;&amp;2
+    exit 1
+  fi
+fi
+
+go build ./... &amp;&amp; go vet ./... &amp;&amp; go test ./...</code></pre>
+<p>选生成器的时候按下表查，右列是它的长期成本，值不值得就看这一列：</p>
+<table>
+<thead><tr><th>生成器</th><th>解决什么</th><th>代价是什么</th></tr></thead>
+<tbody>
+<tr><td>stringer</td><td>为整型枚举生成 String 方法</td><td>只覆盖单值枚举 位掩码与反解要自己写</td></tr>
+<tr><td>mockgen</td><td>为接口生成可设置期望的假实现</td><td>接口一改所有 mock 要重新生成 且过度 mock 会让测试变脆</td></tr>
+<tr><td>sqlc</td><td>从真实 SQL 生成类型安全的查询函数与结构体</td><td>表结构变更后必须重新生成 动态拼条件不如手写灵活</td></tr>
+<tr><td>protoc-gen-go 与 grpc 插件</td><td>从 proto 定义生成消息类型与客户端服务端桩代码</td><td>需要 protoc 工具链 插件版本要和运行时库匹配</td></tr>
+<tr><td>wire</td><td>编译期依赖注入 按类型自动拼出构造顺序</td><td>依赖图复杂时报错信息不直观 学习成本明显</td></tr>
+<tr><td>easyjson 一类序列化生成器</td><td>为结构体生成无反射的序列化代码</td><td>字段一改要重新生成 代码量膨胀 只在序列化确实是热点时才值得</td></tr>
+<tr><td>enumer 一类增强枚举生成器</td><td>同时生成 String JSON 序列化与字符串反解</td><td>比 stringer 多一个依赖 生成物更大</td></tr>
+<tr><td>oapi-codegen 一类 API 生成器</td><td>从 OpenAPI 定义生成服务端骨架与客户端</td><td>定义与实现容易漂移 需要把定义作为唯一真源</td></tr>
+</tbody>
+</table>
+<table>
+<thead><tr><th>旗标或变量</th><th>作用</th><th>默认</th><th>什么时候用</th></tr></thead>
+<tbody>
+<tr><td><code>go generate ./...</code></td><td>递归处理所有包里的指令</td><td>不递归，只处理指定包</td><td>CI 里固定用这一条，本地也建议用它避免漏包</td></tr>
+<tr><td><code>-run 正则</code></td><td>只执行匹配到的指令</td><td>全部执行</td><td>只想重跑 mock 或只想重跑 proto 时</td></tr>
+<tr><td><code>-n</code></td><td>只打印将要执行的命令，不真的执行</td><td>关</td><td>排查「为什么这条指令没跑」的第一步</td></tr>
+<tr><td><code>-x</code></td><td>执行并打印每条命令</td><td>关</td><td>CI 日志里留证，便于复现</td></tr>
+<tr><td><code>$GOFILE</code> 与 <code>$GOPACKAGE</code></td><td>当前文件名与包名</td><td>由 go generate 注入</td><td>避免把文件名、包名在指令里写死两遍</td></tr>
+<tr><td><code>$GOLINE</code></td><td>指令所在行号</td><td>同上</td><td>自己写的生成器需要定位声明位置时</td></tr>
+<tr><td><code>//go:build ignore</code></td><td>让生成脚本本身不参与正常编译</td><td>无</td><td>把生成逻辑写成同仓库的 Go 程序时必须加</td></tr>
+</tbody>
+</table>
+<p>指令为什么必须紧贴、为什么 CI 的 <code>git diff</code> 检查不可替代、生成物里那个空函数是干什么的——都在下面几节。</p>
+
+<h2>② 原理 · 四种手段的边界：为什么这类需求只能靠生成</h2>
+<p>搞清这张表能避免最常见的两种误用：该用泛型的地方上了生成器，或者指望反射拿到它拿不到的东西。</p>
 <table>
 <thead><tr><th>手段</th><th>能做什么</th><th>做不到什么</th><th>代价</th></tr></thead>
 <tbody>
@@ -118,23 +225,11 @@ flowchart TB
     RF -->|"可接受"| REF["用反射<br/>但要接受运行期才报错"]
     RF -->|"不可接受"| HAND["重新设计接口<br/>把不确定性挪到编译期"]
 </div>
+<p>关于 <strong>sqlc 为什么比 ORM 更受推崇</strong>，值得单独说一句：它让你写真实的 SQL，因此数据库的全部能力都能用，执行计划完全可预测，不存在「一个方法调用背后生成出意料之外的查询」这种问题；同时它解析 SQL 和表结构生成带具体类型的参数与返回结构体，字段名写错或类型不匹配在编译期就报错。这正好是 Go 社区偏好的组合：<strong>显式、可预测、错误尽早暴露</strong>。</p>
 
-<h2>stringer：给枚举生成 String 方法</h2>
-<p><code>stringer</code> 解决的是两个很具体的问题。第一，<strong>枚举打日志时是数字</strong>：日志里写着 <code>status=3</code>，排查时得回头翻常量定义。第二，<strong>新增枚举值时手写的 switch 忘了加 case</strong>，编译器不会提示，表现是那个新状态显示成空串。</p>
-<pre><code class="language-go">//go:generate go tool stringer -type=OrderStatus -trimprefix=OrderStatus -output=order_status_string.go
-
-// OrderStatus 订单状态。iota 生成的是连续整数，
-// 不转字符串的话日志和接口响应里看到的就是 0 1 2 3 这种读不懂的数字
-type OrderStatus int
-
-const (
-    OrderStatusPending  OrderStatus = iota // 待支付
-    OrderStatusPaid                        // 已支付
-    OrderStatusShipped                     // 已发货
-    OrderStatusDone                        // 已完成
-    OrderStatusCanceled                    // 已取消
-)</code></pre>
-<p>跑一次 <code>go generate ./...</code>，得到下面这个文件。<strong>注意里面那个空函数 <code>_()</code></strong>——这是 stringer 埋的编译期断言，很多人不知道它的作用：</p>
+<h2>② 原理 · stringer 生成了什么，那个空函数为什么重要</h2>
+<p>这一节解释一个具体现象：日志里为什么会出现 <code>OrderStatus(5)</code> 这种输出，以及什么时候编译器会替你拦下来。</p>
+<p><code>stringer</code> 解决两个很具体的问题。第一，<strong>枚举打日志时是数字</strong>：日志里写着 <code>status=3</code>，排查时得回头翻常量定义。第二，<strong>新增枚举值时手写的 switch 忘了加 case</strong>，编译器不会提示，表现是那个新状态显示成空串。跑一次 <code>go generate ./...</code> 得到下面这个文件，<strong>注意里面那个空函数 <code>_()</code></strong>：</p>
 <pre><code class="language-go">// Code generated by "stringer -type=OrderStatus -trimprefix=OrderStatus"; DO NOT EDIT.
 
 package order
@@ -167,6 +262,7 @@ func (i OrderStatus) String() string {
     }
     return _OrderStatus_name[_OrderStatus_index[i]:_OrderStatus_index[i+1]]
 }</code></pre>
+<p>「改值」与「追加值」这两种改动，一个被编译器抓住、一个只能靠 CI 抓住，这是理解那条 <code>git diff</code> 检查为什么不可替代的关键：</p>
 <div class="mermaid">
 sequenceDiagram
     participant D as 开发者
@@ -203,23 +299,8 @@ sequenceDiagram
     <p>实现了 <code>String()</code> 之后，<code>fmt</code> 和 <code>slog</code> 会输出可读名字，但 <strong><code>encoding/json</code> 不看 <code>Stringer</code> 接口</strong>，序列化出来的仍然是数字。接口响应里要返回名字必须自己实现 <code>MarshalJSON</code>，而且别忘了配套的 <code>UnmarshalJSON</code>——只做单向会导致「返回的是名字，但接收时只认数字」这种不对称。</p>
 </div>
 
-<h2>常用生成器清单</h2>
-<table>
-<thead><tr><th>生成器</th><th>解决什么</th><th>代价是什么</th></tr></thead>
-<tbody>
-<tr><td>stringer</td><td>为整型枚举生成 String 方法</td><td>只覆盖单值枚举 位掩码与反解要自己写</td></tr>
-<tr><td>mockgen</td><td>为接口生成可设置期望的假实现</td><td>接口一改所有 mock 要重新生成 且过度 mock 会让测试变脆</td></tr>
-<tr><td>sqlc</td><td>从真实 SQL 生成类型安全的查询函数与结构体</td><td>表结构变更后必须重新生成 动态拼条件不如手写灵活</td></tr>
-<tr><td>protoc-gen-go 与 grpc 插件</td><td>从 proto 定义生成消息类型与客户端服务端桩代码</td><td>需要 protoc 工具链 插件版本要和运行时库匹配</td></tr>
-<tr><td>wire</td><td>编译期依赖注入 按类型自动拼出构造顺序</td><td>依赖图复杂时报错信息不直观 学习成本明显</td></tr>
-<tr><td>easyjson 一类序列化生成器</td><td>为结构体生成无反射的序列化代码</td><td>字段一改要重新生成 代码量膨胀 只在序列化确实是热点时才值得</td></tr>
-<tr><td>enumer 一类增强枚举生成器</td><td>同时生成 String JSON 序列化与字符串反解</td><td>比 stringer 多一个依赖 生成物更大</td></tr>
-<tr><td>oapi-codegen 一类 API 生成器</td><td>从 OpenAPI 定义生成服务端骨架与客户端</td><td>定义与实现容易漂移 需要把定义作为唯一真源</td></tr>
-</tbody>
-</table>
-<p>关于 <strong>sqlc 为什么比 ORM 更受推崇</strong>，值得单独说一句：它让你写真实的 SQL，因此数据库的全部能力都能用，执行计划完全可预测，不存在「一个方法调用背后生成出意料之外的查询」这种问题；同时它解析 SQL 和表结构生成带具体类型的参数与返回结构体，字段名写错或类型不匹配在编译期就报错。这正好是 Go 社区偏好的组合：<strong>显式、可预测、错误尽早暴露</strong>。查询优化与执行计划判读本身是另一个话题，见本站数据库优化相关文章。</p>
-
-<h2>工程规范：四条不能省的规则</h2>
+<h2>② 原理 · 四条工程规范分别防住什么</h2>
+<p>规范不是洁癖，每一条都对应一种真实故障。整条链路长这样：</p>
 <div class="mermaid">
 flowchart TB
     subgraph src["源文件 手写部分"]
@@ -262,40 +343,9 @@ flowchart TB
 <tr><td>生成物不做人工修改</td><td>下次生成会被覆盖</td><td>改动悄悄消失 而且是在别人重新生成时消失 极难定位</td></tr>
 </tbody>
 </table>
-<p>工具版本锁定这一条在 Go 1.24 之后有了官方答案：<code>go.mod</code> 支持 <code>tool</code> 指令记录工具依赖，用 <code>go get -tool</code> 添加，用 <code>go tool 名字</code> 执行。这样生成器的版本和 <code>go.sum</code> 里记录的一致，团队成员和 CI 用的完全是同一个版本，不再需要在 README 里写「请先 go install 某个工具」。</p>
-<pre><code class="language-bash">#!/usr/bin/env bash
-set -euo pipefail
+<p>工具版本锁定这一条在 Go 1.24 之前只能靠在 README 里写「请先 go install 某个工具」加一份版本说明，实际上约束不住任何人；<code>go.mod</code> 的 <code>tool</code> 指令把它变成了依赖管理的一部分，版本随 <code>go.sum</code> 一起校验，规则见 <a href="../modules/">模块、包组织与依赖管理</a>。CI 侧的钩子怎么挂、缓存怎么配见 <a href="../../../devops/cicd/">CI 与 CD</a>。</p>
 
-# 1. 工具版本由 go.mod 的 tool 指令锁定（Go 1.24 起）。
-#    初始化一次：go get -tool golang.org/x/tools/cmd/stringer
-#    之后 go:generate 里写 go tool stringer 即可，无需全局安装
-go mod download
-
-# 2. 全量重新生成
-go generate ./...
-
-# 3. 关键一步：检查工作区是否干净。
-#    有人改了源文件却忘记重新生成，这里就会有 diff，流水线直接失败。
-#    这是防止「生成物与源文件不一致」的唯一可靠手段
-if ! git diff --exit-code; then
-  echo "生成物与源文件不一致：请在本地执行 go generate ./... 并提交结果" &gt;&amp;2
-  exit 1
-fi
-
-# 4. 顺带校验所有生成文件都带 DO NOT EDIT 头，
-#    grep -L 列出「不含匹配内容」的文件
-files=$(git ls-files '*_string.go' '*_gen.go' '*.pb.go' 'mock_*.go')
-if [ -n "$files" ]; then
-  missing=$(grep -L 'Code generated .* DO NOT EDIT\.' $files || true)
-  if [ -n "$missing" ]; then
-    echo "以下生成文件缺少 DO NOT EDIT 头：$missing" &gt;&amp;2
-    exit 1
-  fi
-fi
-
-go build ./... &amp;&amp; go vet ./... &amp;&amp; go test ./...</code></pre>
-
-<h2>go:embed：不需要生成器的那一档</h2>
+<h2>② 原理 · go:embed：不需要生成器的那一档</h2>
 <p>把静态文件变成 Go 代码曾经是生成器的经典用途：读文件、转义、写成一个巨大的字符串常量。<code>go:embed</code>（Go 1.16 起）让编译器直接做这件事，静态文件在仓库里保持原样，可以正常编辑、diff、被编辑器高亮。<strong>模板、前端资源、迁移脚本、默认配置这些场景一律用它，不要再写生成器。</strong></p>
 <table>
 <thead><tr><th>场景</th><th>用 go:embed</th><th>用生成器</th><th>选哪个</th></tr></thead>
@@ -337,27 +387,48 @@ var tmpl = template.Must(template.ParseFS(templateFS, "templates/*.tmpl"))
 // 路径规则：相对当前包目录，不能用两个点跳出包外，也不能是绝对路径。
 // 想嵌上层目录的文件只能在那个目录里另建一个包，或者构建前拷进来</code></pre>
 
-<div class="callout callout-warning">
-    <div class="callout-icon">⚠️</div>
-    <div class="callout-title">最容易踩的坑</div>
-    <p>1. 生成物不提交进仓库：新同事和 CI 首次构建直接失败，而且错误信息通常是「找不到某个方法」，离根因很远。</p>
-    <p>2. 手改生成文件：下次谁跑一遍 <code>go generate</code> 改动就消失，而且是在别人的提交里消失，排查极其痛苦。</p>
-    <p>3. CI 里不检查 <code>git diff</code>：这是防止生成物与源文件脱节的唯一可靠手段，少了它规范就是纸面上的。</p>
-    <p>4. 生成器版本不锁定：不同版本产出不同，每个人本地生成的结果都有 diff，git 冲突不断。用 <code>go.mod</code> 的 <code>tool</code> 指令锁住。</p>
-    <p>5. 在枚举末尾追加值后忘记重新生成：编译期断言抓不到追加，运行期表现为日志里出现 <code>OrderStatus(5)</code> 这种输出。</p>
-    <p>6. 改了已有枚举常量的值却不重新生成：这个会被编译期断言抓到直接编译失败，反而是好事——不要为了让它编译过而去删那个断言函数。</p>
-    <p>7. 以为实现了 <code>String()</code> JSON 就会输出名字：<code>encoding/json</code> 不看 <code>Stringer</code>，要自己写 <code>MarshalJSON</code> 和配套的 <code>UnmarshalJSON</code>。</p>
-    <p>8. 用 stringer 处理位掩码枚举：组合值会被当成未知值输出成数字形式，位掩码必须手写遍历 bit 的方法。</p>
-    <p>9. <code>//go:embed</code> 和变量声明之间留了空行：注释被当成普通注释，变量成了空 FS，运行时报「找不到文件」，而编译完全正常。</p>
-    <p>10. <code>//go:embed</code> 想用两个点跳出包目录：不允许，会编译报错。需要的话在那个目录另建一个包。</p>
-    <p>11. 生成文件不带 <code>DO NOT EDIT</code> 头：lint 报告和测试覆盖率统计会把它当手写代码，报告里全是无意义的噪音。</p>
-    <p>12. 把代码生成当万能解：给每个结构体都生成序列化、给每个接口都生成 mock，代码量翻几倍，构建变慢，而收益往往只在极少数热点上。</p>
-    <p>13. 过度 mock 导致测试变脆：接口一改所有 mock 要重新生成，测试改的比业务代码还多。能用真实实现或简单假实现的地方不要上 mock 框架。</p>
+<h2>③ 场景 · 什么时候生成，什么时候别生成</h2>
+<p>把前面的判断收成一张表。左列是你面对的需求，重点看最后一列——代价决定了值不值得：</p>
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>枚举要在日志与接口里可读</td><td>stringer 生成 String，需要 JSON 名字时另写 MarshalJSON 与 UnmarshalJSON</td><td>反射拿不到常量名，这是语言层面的缺口</td><td>追加枚举值后必须重新生成，只能靠 CI 的 diff 检查兜住</td></tr>
+<tr><td>单测需要接口的假实现</td><td>简单接口手写一个假实现；方法多、要断言调用次数才上 mockgen</td><td>手写假实现没有额外构建步骤，读起来也更直接</td><td>上了 mock 框架之后接口一改全部重生成，测试可能比业务代码改得还多，取舍见 <a href="../../testing/">测试策略与可测性设计</a></td></tr>
+<tr><td>数据访问层要类型安全</td><td>sqlc 从真实 SQL 生成查询函数与结构体</td><td>SQL 可预测、字段类型编译期校验，比 ORM 的隐式查询可控</td><td>表结构一变必须重新生成；动态拼条件的场景不如手写灵活</td></tr>
+<tr><td>跨语言或跨服务的接口</td><td>proto 或 OpenAPI 定义作为唯一真源，两端都从它生成</td><td>手写两端的模型必然漂移，且漂移通常在联调时才发现</td><td>定义仓库要有明确 owner；插件与运行时库版本要匹配</td></tr>
+<tr><td>静态文件要进二进制</td><td><code>go:embed</code>，不要写生成器</td><td>文件保持原样，可编辑、可 diff、可高亮</td><td>几乎没有；只有需要编译期校验内容时才换生成器</td></tr>
+<tr><td>同一套逻辑要处理多种类型</td><td>用泛型</td><td>这类重复是逻辑重复，不需要产出新声明</td><td>约束复杂时可读性下降，用法边界见 <a href="../generics-usage/">Go 泛型该用在哪</a></td></tr>
+<tr><td>结构只有运行期才知道（插件化配置、动态字段）</td><td>用反射，并接受错误在运行期暴露</td><td>没有编译期信息可供生成</td><td>有性能开销，重构工具看不见这些用法，必须靠测试覆盖</td></tr>
+<tr><td>序列化被压测证明是热点</td><td>才引入序列化生成器</td><td>去掉反射确实能省 CPU</td><td>代码量明显膨胀、字段改了要重新生成；不是热点就是净亏</td></tr>
+</tbody>
+</table>
+<p><strong>不适用边界</strong>：代码生成解决的是「必须产出新声明」这一类问题，超出这个范围就是在给自己加构建步骤和维护成本。别用它替代设计——给每个结构体都生成序列化、给每个接口都生成 mock，代码量翻几倍、构建变慢，而收益只在极少数热点上。它也不解决依赖与版本管理本身的问题（见 <a href="../modules/">模块、包组织与依赖管理</a>）、不解决测试策略问题（见 <a href="../../testing/">测试策略与可测性设计</a>）、更不是流水线设计（见 <a href="../../../devops/cicd/">CI 与 CD</a>）。</p>
+<p>这是本簇的最后一篇。整条路径从运行时与并发、语言特性，走到具体的库与框架取舍，最后落在工程手法上：<strong>把编译器能查的事交给编译器，把编译器查不了的事交给生成器加 CI</strong>。守住四条——生成物提交进仓库、带 <code>DO NOT EDIT</code> 头、工具版本用 <code>go.mod</code> 的 <code>tool</code> 指令锁住、CI 里重跑一遍并检查 <code>git diff</code> 为空，这套模式就能长期不腐化。</p>
+
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+    <li><strong><code>//go:generate</code> 的双斜杠后面多了空格</strong>：变成普通注释，指令根本不会执行，而且没有任何提示。用 <code>go generate -n ./...</code> 可以确认到底有哪些指令被识别。</li>
+    <li><strong>生成物不提交进仓库</strong>：新同事和 CI 首次构建直接失败，而且错误信息通常是「找不到某个方法」，离根因很远。</li>
+    <li><strong>手改生成文件</strong>：下次谁跑一遍 <code>go generate</code> 改动就消失，而且是在别人的提交里消失，排查极其痛苦。</li>
+    <li><strong>CI 里不检查 <code>git diff</code></strong>：这是防止生成物与源文件脱节的唯一可靠手段，少了它规范就是纸面上的。</li>
+    <li><strong>生成器版本不锁定</strong>：不同版本产出不同，每个人本地生成的结果都有 diff，git 冲突不断。用 <code>go.mod</code> 的 <code>tool</code> 指令锁住。</li>
+    <li><strong>在枚举末尾追加值后忘记重新生成</strong>：编译期断言抓不到追加，运行期表现为日志里出现 <code>OrderStatus(5)</code> 这种输出。</li>
+    <li><strong>改了已有枚举常量的值却不重新生成</strong>：这个会被编译期断言抓到直接编译失败，反而是好事——不要为了让它编译过而去删那个断言函数。</li>
+    <li><strong>以为实现了 <code>String()</code> JSON 就会输出名字</strong>：<code>encoding/json</code> 不看 <code>Stringer</code>，要自己写 <code>MarshalJSON</code> 和配套的 <code>UnmarshalJSON</code>。</li>
+    <li><strong>用 stringer 处理位掩码枚举</strong>：组合值会被当成未知值输出成数字形式，位掩码必须手写遍历 bit 的方法。</li>
+    <li><strong><code>//go:embed</code> 和变量声明之间留了空行</strong>：注释被当成普通注释，变量成了空 FS，运行时报「找不到文件」，而编译完全正常。</li>
+    <li><strong><code>//go:embed</code> 想用两个点跳出包目录</strong>：不允许，会编译报错。需要的话在那个目录另建一个包。</li>
+    <li><strong>生成文件不带 <code>DO NOT EDIT</code> 头</strong>：lint 报告和测试覆盖率统计会把它当手写代码，报告里全是无意义的噪音。</li>
+    <li><strong>把生成脚本写成同包的 Go 程序却不加 <code>//go:build ignore</code></strong>：它会参与正常编译，多一个 main 函数或一堆无用依赖。</li>
+    <li><strong>把代码生成当万能解</strong>：给每个结构体都生成序列化、给每个接口都生成 mock，代码量翻几倍，构建变慢，而收益往往只在极少数热点上。</li>
+    <li><strong>过度 mock 导致测试变脆</strong>：接口一改所有 mock 要重新生成，测试改的比业务代码还多。能用真实实现或简单假实现的地方不要上 mock 框架。</li>
+    </ul>
 </div>
 
-<h2>结论</h2>
-<p>代码生成在 Go 里不是补丁而是设计的一部分：语言不给你宏，于是给了 <code>go generate</code> 这个统一入口和一整套约定。用好它只需要守住四条——<strong>生成物提交进仓库、带 <code>DO NOT EDIT</code> 头、工具版本用 <code>go.mod</code> 的 <code>tool</code> 指令锁住、CI 里重跑一遍并检查 <code>git diff</code> 为空</strong>。最后一条是整套规范的地基，没有它前三条都会慢慢腐化。</p>
-<p>另一半的判断力在于知道什么时候不用它：静态文件用 <code>go:embed</code>，同逻辑不同类型用泛型，能接受运行期报错的简单场景用反射。<strong>生成器解决的是「必须产出新声明」这一类问题</strong>，超出这个范围就是在给自己加构建步骤和维护成本。</p>
+<p class="cluster-nav">同主题路径：<a href="../image-text/">← 上一步：Go 里的图像与文字渲染：字形、排版与踩坑</a></p>
                     </div>
                 </article>
                 <nav class="article-nav">

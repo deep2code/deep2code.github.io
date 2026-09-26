@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="从执行机制看 CPython 的性能特征：用 dis 读字节码并纠正「pyc 是编译优化」「-O 会提速」两个误解、3.11 起自适应专门化解释器与零开销异常带来的量级改进、属性访问与绑定方法为什么贵以及热路径的局部变量缓存手法、dict 紧凑布局与插入顺序从 3.7 起写进规范、list 头部 pop 的隐形二次复杂度与 deque 的对照、字符串不可变导致的拼接代价与 f-string 的编译期展开，以及 Cython、mypyc、pyo3、PyPy 与 free-threaded 构建的取舍。">
+        <meta name="description" content="CPython 执行机制三段式：先给量一段代码真实开销的动手顺序（先分清是等 IO 还是烧 CPU、cProfile 与 py-spy 定位函数、dis 带 adaptive 读字节码、timeit 的三处误用与 GC 被关掉的影响、-X importtime 看启动、sys.monitoring 的取舍与工具速查表），再讲 pyc 与 -O 都不是优化、3.11 起自适应专门化的工作方式与去优化条件、属性协议与绑定方法为什么贵、dict 紧凑布局与 list 头部 pop 的隐形二次复杂度、字符串不可变导致的拼接代价与 f-string 的编译期展开、numpy 快在哪三件事，最后给七条加速路线的取舍、free-threaded 构建的真实现状与反模式速查。">
     <meta name="keywords" content="CPython,字节码,GIL,垃圾回收,引用计数,分代GC,cProfile,py-spy,Numba,Cython">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/python/internals/">
     <!-- Open Graph -->
     <meta property="og:title" content="CPython 实现细节：字节码、解释器与性能特征 - 资深码农">
-    <meta property="og:description" content="从执行机制看 CPython 的性能特征：用 dis 读字节码并纠正「pyc 是编译优化」「-O 会提速」两个误解、3.11 起自适应专门化解释器与零开销异常带来的量级改进、属性访问与绑定方法为什么贵以及热路径的局部变量缓存手法、dict 紧凑布局与插入顺序从 3.7 起写进规范、list 头部 pop 的隐形二次复杂度与 deque 的对照、字符串不可变导致的拼接代价与 f-string 的编译期展开，以及 Cython、mypyc、pyo3、PyPy 与 free-threaded 构建的取舍。">
+    <meta property="og:description" content="CPython 执行机制三段式：先给量一段代码真实开销的动手顺序（先分清是等 IO 还是烧 CPU、cProfile 与 py-spy 定位函数、dis 带 adaptive 读字节码、timeit 的三处误用与 GC 被关掉的影响、-X importtime 看启动、sys.monitoring 的取舍与工具速查表），再讲 pyc 与 -O 都不是优化、3.11 起自适应专门化的工作方式与去优化条件、属性协议与绑定方法为什么贵、dict 紧凑布局与 list 头部 pop 的隐形二次复杂度、字符串不可变导致的拼接代价与 f-string 的编译期展开、numpy 快在哪三件事，最后给七条加速路线的取舍、free-threaded 构建的真实现状与反模式速查。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/python/internals/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="CPython 实现细节：字节码、解释器与性能特征 - 资深码农">
-    <meta name="twitter:description" content="从执行机制看 CPython 的性能特征：用 dis 读字节码并纠正「pyc 是编译优化」「-O 会提速」两个误解、3.11 起自适应专门化解释器与零开销异常带来的量级改进、属性访问与绑定方法为什么贵以及热路径的局部变量缓存手法、dict 紧凑布局与插入顺序从 3.7 起写进规范、list 头部 pop 的隐形二次复杂度与 deque 的对照、字符串不可变导致的拼接代价与 f-string 的编译期展开，以及 Cython、mypyc、pyo3、PyPy 与 free-threaded 构建的取舍。">
+    <meta name="twitter:description" content="CPython 执行机制三段式：先给量一段代码真实开销的动手顺序（先分清是等 IO 还是烧 CPU、cProfile 与 py-spy 定位函数、dis 带 adaptive 读字节码、timeit 的三处误用与 GC 被关掉的影响、-X importtime 看启动、sys.monitoring 的取舍与工具速查表），再讲 pyc 与 -O 都不是优化、3.11 起自适应专门化的工作方式与去优化条件、属性协议与绑定方法为什么贵、dict 紧凑布局与 list 头部 pop 的隐形二次复杂度、字符串不可变导致的拼接代价与 f-string 的编译期展开、numpy 快在哪三件事，最后给七条加速路线的取舍、free-threaded 构建的真实现状与反模式速查。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="Python">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"CPython 实现细节：字节码、解释器与性能特征","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"从执行机制看 CPython 的性能特征：用 dis 读字节码并纠正「pyc 是编译优化」「-O 会提速」两个误解、3.11 起自适应专门化解释器与零开销异常带来的量级改进、属性访问与绑定方法为什么贵以及热路径的局部变量缓存手法、dict 紧凑布局与插入顺序从 3.7 起写进规范、list 头部 pop 的隐形二次复杂度与 deque 的对照、字符串不可变导致的拼接代价与 f-string 的编译期展开，以及 Cython、mypyc、pyo3、PyPy 与 free-threaded 构建的取舍。","url":"https://www.yijunjun.asia/programming/python/internals/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/python/internals/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"CPython 实现细节：字节码、解释器与性能特征","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"CPython 执行机制三段式：先给量一段代码真实开销的动手顺序（先分清是等 IO 还是烧 CPU、cProfile 与 py-spy 定位函数、dis 带 adaptive 读字节码、timeit 的三处误用与 GC 被关掉的影响、-X importtime 看启动、sys.monitoring 的取舍与工具速查表），再讲 pyc 与 -O 都不是优化、3.11 起自适应专门化的工作方式与去优化条件、属性协议与绑定方法为什么贵、dict 紧凑布局与 list 头部 pop 的隐形二次复杂度、字符串不可变导致的拼接代价与 f-string 的编译期展开、numpy 快在哪三件事，最后给七条加速路线的取舍、free-threaded 构建的真实现状与反模式速查。","url":"https://www.yijunjun.asia/programming/python/internals/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/python/internals/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "CPython 内部原理与性能优化", "item": "https://www.yijunjun.asia/programming/python/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,8 +92,96 @@
                     <div class="article-content">
 <p>站内《Python 语言核心》一篇已经讲过对象模型、引用计数与分代 GC、<code>__slots__</code> 与属性查找的语义，这篇只讲<strong>执行机制</strong>：一行 Python 被编译成什么、解释器怎么跑它、3.11 之后快在哪里、以及由此推出的热路径优化手法。目标是让你在看到一段慢代码时，能说出它慢在哪条指令上，而不是只会说「Python 就是慢」。</p>
 
-<h2>字节码：能看见，但不是优化手段</h2>
-<p>Python 源码先被编译成字节码（code object），再由解释器逐条执行。<code>dis</code> 模块能把这层完全摊开，这是判断「两种写法到底有没有区别」的唯一可靠手段。</p>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：把「这段代码到底贵在哪」变成固定动作——先分清是在等 IO 还是解释器在烧 CPU，再用 cProfile 或 py-spy 定位函数，用 <code>dis</code> 对照两种写法的真实差别，用 <code>timeit</code> 量单次开销（含它最容易被用错的三处），启动慢则看 <code>-X importtime</code>，外加一张工具速查表。</li>
+        <li><strong>② 原理</strong>：字节码与 <code>.pyc</code> 的边界、3.11 起自适应专门化的工作方式与去优化条件、属性协议与绑定方法的成本、dict 紧凑布局与 list/deque 的复杂度差、字符串不可变带来的拼接代价与 f-string 的编译期展开、numpy 快在哪三件事。</li>
+        <li><strong>③ 场景</strong>：七条加速路线的取舍与 free-threaded 的真实现状、反模式速查，以及哪些问题不该在这一层解决。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 量一段代码真实开销的动手顺序</h2>
+<p>「这段代码慢」不是一个能直接动手的结论。下面四步有依赖关系：跳过第 1 步直接 profile，最常见的结果是花半天优化了一段只占总耗时 5% 的循环；跳过第 2 步直接拿 <code>timeit</code> 对比写法，量到的往往是你猜错的那个函数。先按下表确定你要回答的是哪个问题。</p>
+<table>
+<thead><tr><th>要回答什么</th><th>用什么</th><th>输出怎么读</th></tr></thead>
+<tbody>
+<tr><td>时间是花在等 IO 还是在跑 CPU</td><td><code>/usr/bin/time -p</code> 或 <code>resource.getrusage</code></td><td><code>user</code> 加 <code>sys</code> 远小于 <code>real</code> 就是在等，解释器层的优化一分钱也省不下来</td></tr>
+<tr><td>哪个函数在烧 CPU</td><td>cProfile 按 <code>tottime</code> 排序；线上进程用 py-spy</td><td><code>tottime</code> 是函数自身耗时，<code>cumtime</code> 含子调用；找优化目标看 <code>tottime</code>，判断调用链看 <code>cumtime</code></td></tr>
+<tr><td>此刻卡在哪一行（不能重启）</td><td><code>py-spy dump --pid</code></td><td>逐线程打印栈；反复 dump 几次都停在同一帧，那一帧就是嫌疑点</td></tr>
+<tr><td>两种写法有没有本质区别</td><td><code>dis.dis</code>，3.11 起带 <code>adaptive=True</code></td><td>看指令<strong>种类</strong>的差异（有没有 <code>LOAD_ATTR</code>、<code>CALL</code>），不要数条数</td></tr>
+<tr><td>一次微操作到底多贵</td><td><code>timeit</code>，波动大时换 <code>pyperf</code></td><td>取多轮的<strong>最小值</strong>：干扰只会让结果变慢，不会让它变快</td></tr>
+<tr><td>启动为什么要几秒</td><td><code>python3 -X importtime</code></td><td>输出在 stderr；<code>self</code> 列是模块自身耗时，<code>cumulative</code> 含子导入，按 <code>self</code> 找元凶</td></tr>
+<tr><td>想统计调用次数但受不了 cProfile 的开销</td><td><code>sys.monitoring</code>（3.12 起）</td><td>按事件订阅，只为订阅的事件付费；需要自己写回调</td></tr>
+<tr><td>是不是 GC 停顿造成的毛刺</td><td><code>gc.get_stats()</code> 与 <code>gc.callbacks</code></td><td>属于内存侧问题，手法见站内<a href="../core/">Python 运行时机制</a></td></tr>
+</tbody>
+</table>
+<p>对应的命令可以直接敲。注意 <code>-X importtime</code> 写在 stderr，不重定向的话管道里什么都看不到：</p>
+<pre><code class="language-bash"># 第 1 步：先分清等 IO 还是烧 CPU。user+sys 远小于 real 就别去 profile 解释器
+/usr/bin/time -p python3 -c "import myapp; myapp.run_once()"
+
+# 第 2 步：定位函数。tottime 是自身耗时，先按它排序，别被 cumtime 带到入口函数上
+python3 -m cProfile -s tottime -m myapp.cli 2&gt;&amp;1 | head -25
+
+# 生产进程不能重启时用采样剖析，直接附加到 PID（容器里需要 SYS_PTRACE 权限）
+py-spy top --pid 12345                      # 实时看谁在占 CPU
+py-spy dump --pid 12345                     # 看此刻每个线程停在哪一帧
+py-spy record -o out.svg --pid 12345 --duration 30 --native   # --native 才看得到 C 扩展里的栈
+
+# 第 3 步：两种写法有没有区别，看字节码而不是猜
+python3 -m dis mod.py                                            # 整个模块
+python3 -c "import dis; dis.dis(compile('a=1+2','x','exec'))"     # 确认常量折叠有没有生效
+python3 -c "import dis,mymod; dis.dis(mymod.hot, adaptive=True)"  # 3.11 起：看专门化之后的指令
+
+# 第 4 步：启动慢的唯一入口。importtime 输出在 stderr，必须先重定向
+python3 -X importtime -c "import myapp" 2&gt;&amp;1 | tail -20
+</code></pre>
+<p><code>timeit</code> 是这套流程里最容易给出错误结论的一环，它的三处误用比它本身更值得记：</p>
+<pre><code class="language-python">import timeit
+
+# 正确形态：被测代码放 stmt，数据构造放 setup，否则量到的是构造成本
+SETUP = "from mymod import parse; data = open('sample.json', 'rb').read()"
+t = timeit.Timer("parse(data)", setup=SETUP)
+
+n, _ = t.autorange()                  # 让它自己选一个够大的 n，避免计时器分辨率带来的误差
+best = min(t.repeat(repeat=7, number=n)) / n
+print(f"{best * 1e9:.0f} ns/op")      # 取 min 不取 mean，理由见上表
+
+# 误用一：把数据构造写进 stmt。这里量的是 dict 推导，不是 sum
+timeit.timeit("sum({i: i for i in range(1000)}.values())", number=1000)
+
+# 误用二：用 lambda 传待测代码。多一层函数调用与闭包变量查找，
+# 对本身只有几十纳秒的操作，误差可以到两三成；只在被测代码本来就不快时才这么写
+timeit.timeit(lambda: parse(data), number=1000)
+
+# 误用三：忽略「计时期间 GC 是关掉的」。对大量产生临时容器的代码，
+# timeit 给出的数字比真实运行环境乐观。要还原真实环境，在 setup 里把 GC 打开：
+no_gc = min(timeit.Timer("build_tree(n)",
+                         setup="from mymod import build_tree; n=10_000").repeat(5, 100))
+with_gc = min(timeit.Timer("build_tree(n)",
+                           setup="import gc; gc.enable(); "
+                                 "from mymod import build_tree; n=10_000").repeat(5, 100))
+print(no_gc, with_gc)                 # 两者差得多，说明这段代码的成本有相当部分在 GC 上
+</code></pre>
+<p>各手段能看到的东西不同，不是替代关系：</p>
+<table>
+<thead><tr><th>工具</th><th>看什么</th><th>开销</th><th>最容易用错的地方</th></tr></thead>
+<tbody>
+<tr><td>cProfile</td><td>每个函数的调用次数、自身耗时与累计耗时</td><td>函数调用密集的代码上可达数倍</td><td>它会放大「调用次数多」的那一段，别拿它的绝对耗时去汇报优化幅度</td></tr>
+<tr><td>py-spy</td><td>采样栈，可附加到运行中的进程</td><td>几乎无侵入，可对生产使用</td><td>默认看不到 C 扩展里的栈，要加 <code>--native</code>；容器里要放开 <code>SYS_PTRACE</code></td></tr>
+<tr><td><code>timeit</code></td><td>单个微操作的耗时</td><td>只在基准脚本里付出</td><td>计时期间默认关 GC；微基准结论不能直接外推到服务</td></tr>
+<tr><td><code>pyperf</code></td><td>更严谨的基准：多进程、校准轮数、给出标准差</td><td>比 <code>timeit</code> 高，跑得久</td><td><code>timeit</code> 多轮之间波动很大时才需要它，不必默认上</td></tr>
+<tr><td><code>dis</code></td><td>一段代码被编译成了什么指令</td><td>无</td><td>指令条数不是性能指标；3.11 起不加 <code>adaptive=True</code> 看不到专门化后的形态</td></tr>
+<tr><td><code>-X importtime</code></td><td>每个模块的导入耗时</td><td>一次启动</td><td>输出在 stderr；要看 <code>self</code> 列，<code>cumulative</code> 会把父模块显示成罪魁</td></tr>
+<tr><td><code>sys.monitoring</code>（3.12 起）</td><td>按事件订阅的低开销观测接口</td><td>只为订阅的事件付费</td><td>要自己写回调，现成工具的支持仍在跟进；不是 cProfile 的直接替代品</td></tr>
+<tr><td><code>-X dev</code></td><td>打开额外运行期检查与 <code>ResourceWarning</code></td><td>低</td><td>只用于测试与排查环境，不要带进生产启动参数</td></tr>
+</tbody>
+</table>
+<p>这一层不解释为什么，比如「为什么 <code>LOAD_ATTR</code> 比 <code>LOAD_FAST</code> 贵这么多」「为什么 <code>adaptive=True</code> 才看得到真实指令」，都在下面的原理层。</p>
+
+<h2>② 原理 · 字节码：能看见，但不是优化手段</h2>
+<p>搞清这一节能解决的现象是：有人拿「指令条数少」当性能证据，或者以为预编译 <code>.pyc</code> 和加 <code>-O</code> 就算做了优化。Python 源码先被编译成字节码（code object），再由解释器逐条执行。<code>dis</code> 模块能把这层完全摊开，这是判断「两种写法到底有没有区别」的唯一可靠手段。</p>
 
 <pre><code class="language-python">import dis
 
@@ -114,11 +202,6 @@ dis.dis(f)
           BINARY_OP               13 (+=)
           STORE_FAST               2 (total)
   5       JUMP_BACKWARD            ...           # 循环回边，每轮重复上面全部指令
-
-# 常用命令
-python3 -m dis script.py                 # 直接看整个模块的字节码
-python3 -c "import dis; dis.dis(compile('a=1+2','x','exec'))"   # 看常量折叠结果
-python3 -X importtime -c "import myapp"  # 看导入耗时，找出启动慢在哪个模块
 </code></pre>
 
 <p>三个必须纠正的认知：</p>
@@ -133,8 +216,8 @@ python3 -X importtime -c "import myapp"  # 看导入耗时，找出启动慢在�
 
 <p><code>__pycache__</code> 里的文件名带上了魔数与版本号（如 <code>mod.cpython-312.pyc</code>），所以不同小版本互不复用。默认失效判据是「源文件的 mtime 加大小」，这意味着两个坑：容器构建时如果重置了文件时间戳、或者部署工具只改内容不改 mtime，都可能让旧字节码继续生效。生产镜像里可以用 <code>python -m compileall --invalidation-mode checked-hash</code> 改成按内容哈希判断，或者干脆在构建期预编译好。</p>
 
-<h2>3.11 之后解释器快在哪：自适应专门化</h2>
-<p>3.11 起 CPython 引入了<strong>自适应专门化解释器</strong>（specializing adaptive interpreter）。思路是：同一条泛型指令（比如 <code>BINARY_OP</code> 加法）在真实代码里绝大多数时候操作的是同一种类型，于是解释器先观察几次，确认类型稳定后，把这条指令原地替换成专门化版本（例如「两个小整数相加」），跳过类型分发与通用协议查找。类型一旦变了就去优化回泛型版本。</p>
+<h2>② 原理 · 3.11 之后解释器快在哪：自适应专门化</h2>
+<p>搞清这一节能解决的现象是：升级版本白拿的性能到底从哪来，以及为什么同一个函数处理多种类型时这份收益会消失。3.11 起 CPython 引入了<strong>自适应专门化解释器</strong>（specializing adaptive interpreter）。思路是：同一条泛型指令（比如 <code>BINARY_OP</code> 加法）在真实代码里绝大多数时候操作的是同一种类型，于是解释器先观察几次，确认类型稳定后，把这条指令原地替换成专门化版本（例如「两个小整数相加」），跳过类型分发与通用协议查找。类型一旦变了就去优化回泛型版本。这也解释了用法层那条：不加 <code>adaptive=True</code>，<code>dis</code> 给你看的是替换之前的形态。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -169,11 +252,11 @@ stateDiagram-v2
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">最省力的性能优化往往是升级版本</div>
-    <p>从 3.9 或 3.10 升到 3.12，同一份代码在 CPU 侧通常能白拿 20% 到 40%，成本只是跑一遍 CI 和确认几个 C 扩展的 wheel。相比之下，花两周重写热点函数换来 30% 的收益，还引入了新 bug。先做这件事，再谈别的优化。要注意的是异常处理与 frame 相关的行为在 3.11 有变化，依赖 <code>sys._getframe</code> 或自己拼帧栈的框架代码需要单独回归。</p>
+    <p>从 3.9 或 3.10 升到 3.12，同一份代码在 CPU 侧通常能白拿 20% 到 40%，成本只是跑一遍 CI 和确认几个 C 扩展的 wheel。相比之下，花两周重写热点函数换来 30% 的收益，还引入了新 bug。先做这件事，再谈别的优化。要注意的是异常处理与 frame 相关的行为在 3.11 有变化，依赖 <code>sys._getframe</code> 或自己拼帧栈的框架代码需要单独回归。升级本身的可行性验证顺序见<a href="../ecosystem/">Python 生态的选型与演进</a>。</p>
 </div>
 
-<h2>属性访问与方法调用为什么慢</h2>
-<p>「Python 慢」的具体成本大多花在这里。<code>obj.attr</code> 不是一次内存偏移读取，而是一整套协议：先看类型的 MRO 上有没有数据描述符，再看实例字典，再看类字典里的非数据描述符（函数就是非数据描述符），最后才轮到 <code>__getattr__</code>。方法调用还要额外创建一个绑定方法对象把 <code>self</code> 绑上去。</p>
+<h2>② 原理 · 属性访问与方法调用为什么慢</h2>
+<p>搞清这一节能解决的现象是：profile 指着一个「什么都没干」的函数，耗时却排在前列。「Python 慢」的具体成本大多花在这里。<code>obj.attr</code> 不是一次内存偏移读取，而是一整套协议：先看类型的 MRO 上有没有数据描述符，再看实例字典，再看类字典里的非数据描述符（函数就是非数据描述符），最后才轮到 <code>__getattr__</code>。方法调用还要额外创建一个绑定方法对象把 <code>self</code> 绑上去。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -232,8 +315,8 @@ class Acc:
 </tbody>
 </table>
 
-<h2>容器的实现决定了复杂度</h2>
-<p>dict 自 3.6 起用<strong>紧凑布局</strong>：一个小的索引数组加一个按插入顺序追加的 entries 数组。这带来两个结果——内存比旧实现省 20% 到 25%，以及<strong>插入顺序被保留</strong>。注意这在 3.6 只是实现细节，<strong>3.7 起才写进语言规范</strong>，所以在 3.7 及以上依赖顺序是安全的，而 <code>set</code> 从来没有顺序保证。</p>
+<h2>② 原理 · 容器的实现决定了复杂度</h2>
+<p>搞清这一节能解决的现象是：算法复杂度算的是 O(n)，实测却随数据量平方增长。dict 自 3.6 起用<strong>紧凑布局</strong>：一个小的索引数组加一个按插入顺序追加的 entries 数组。这带来两个结果——内存比旧实现省 20% 到 25%，以及<strong>插入顺序被保留</strong>。注意这在 3.6 只是实现细节，<strong>3.7 起才写进语言规范</strong>，所以在 3.7 及以上依赖顺序是安全的，而 <code>set</code> 从来没有顺序保证。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -270,10 +353,10 @@ flowchart TB
 </tbody>
 </table>
 
-<p>「从 list 头部 pop」是线上最常见的隐形二次复杂度：一个十万元素的队列用 <code>lst.pop(0)</code> 消费，总搬移量是五十亿次元素移动，而换成 <code>collections.deque</code> 的 <code>popleft()</code> 就是 O(1)。同理，判断成员是否存在时把 list 换成 set，通常是一行改动换来一到三个数量级。</p>
+<p>「从 list 头部 pop」是线上最常见的隐形二次复杂度：一个十万元素的队列用 <code>lst.pop(0)</code> 消费，总搬移量是五十亿次元素移动，而换成 <code>collections.deque</code> 的 <code>popleft()</code> 就是 O(1)。同理，判断成员是否存在时把 list 换成 set，通常是一行改动换来一到三个数量级。这类问题在 cProfile 里只表现为一个不起眼的 <code>pop</code>，所以用法层第 2 步之后还要对着这张表回看一遍数据结构选型。</p>
 
-<h2>字符串：不可变带来的代价</h2>
-<p>字符串不可变，所以每次拼接都产生新对象。循环里用 <code>+=</code> 拼接在理论上是 O(n²)：第 k 次要复制已有的 k 个字符。CPython 对「引用计数为 1 的 str 做原地扩展」有一个特殊优化，让这种写法在很多情况下看起来是线性的，但<strong>这个优化不可依赖</strong>——只要那个字符串还被别处引用（比如存进了列表、传给了函数、在调试器里被观察），优化就失效，性能断崖式下跌，而且只在生产的大数据量下才暴露。</p>
+<h2>② 原理 · 字符串：不可变带来的代价</h2>
+<p>搞清这一节能解决的现象是：同一段拼接代码在开发环境线性、在生产上突然退化。字符串不可变，所以每次拼接都产生新对象。循环里用 <code>+=</code> 拼接在理论上是 O(n²)：第 k 次要复制已有的 k 个字符。CPython 对「引用计数为 1 的 str 做原地扩展」有一个特殊优化，让这种写法在很多情况下看起来是线性的，但<strong>这个优化不可依赖</strong>——只要那个字符串还被别处引用（比如存进了列表、传给了函数、在调试器里被观察），优化就失效，性能断崖式下跌，而且只在生产的大数据量下才暴露。</p>
 
 <pre><code class="language-python">import timeit
 
@@ -314,10 +397,10 @@ print(timeit.timeit(lambda: concat_good(parts), number=10))
 
 <p>日志是唯一该保留百分号风格的地方：<code>logger.debug("x=%s", x)</code> 在日志级别不够时不会执行格式化，而 <code>logger.debug(f"x={x}")</code> 无论级别都会先把字符串拼出来。热路径上的 debug 日志用 f-string，等于白付全量格式化成本。</p>
 
-<p>另外，短的、看起来像标识符的字符串字面量会被 interning（驻留），于是 <code>"abc" is "abc"</code> 可能为 True。这只是实现细节，永远不要用 <code>is</code> 比较字符串或数字——语义比较一律用 <code>==</code>，<code>is</code> 只用于 <code>None</code> 这类单例。需要高频比较大量重复字符串时，可以用 <code>sys.intern</code> 主动驻留，让比较退化成指针比较。</p>
+<p>另外，短的、看起来像标识符的字符串字面量会被 interning（驻留），于是 <code>"abc" is "abc"</code> 可能为 True。这只是实现细节，永远不要用 <code>is</code> 比较字符串或数字——语义比较一律用 <code>==</code>，<code>is</code> 只用于 <code>None</code> 这类单例（这条与其他语义陷阱一起整理在<a href="../pitfalls/">Python 的语义陷阱清单</a>）。需要高频比较大量重复字符串时，可以用 <code>sys.intern</code> 主动驻留，让比较退化成指针比较。</p>
 
-<h2>为什么 numpy 能快一两个数量级</h2>
-<p>numpy 快不是因为「C 比 Python 快」这么笼统，而是它同时省掉了三样东西：每个元素的对象头与装箱、每次运算的解释器分发、以及计算期间的 GIL。一次 <code>arr * 2</code> 只穿过解释器一次，剩下全在 C 层的连续内存上跑循环。</p>
+<h2>② 原理 · 为什么 numpy 能快一两个数量级</h2>
+<p>搞清这一节能解决的现象是：换了 numpy 却更慢。numpy 快不是因为「C 比 Python 快」这么笼统，而是它同时省掉了三样东西：每个元素的对象头与装箱、每次运算的解释器分发、以及计算期间的 GIL。一次 <code>arr * 2</code> 只穿过解释器一次，剩下全在 C 层的连续内存上跑循环。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -336,7 +419,8 @@ sequenceDiagram
 
 <p>反过来也解释了 numpy 的失效条件：<strong>逐元素用 Python 循环访问数组</strong>时，每次索引都要把 C 里的标量装箱成 Python 对象，比原生 list 更慢；dtype 是 <code>object</code> 时所有优化全部失效；小数组（几十个元素）上的固定开销可能盖过收益。</p>
 
-<h2>加速路线的取舍与 free-threaded 现状</h2>
+<h2>③ 场景 · 加速路线的取舍与 free-threaded 现状</h2>
+<p>下表的前提是你已经走完用法层那四步、手里有 profile 数据。没有数据就选路线，结果几乎总是「付了全部代价，拿到 1.1 倍」。</p>
 <table>
 <thead><tr><th>方案</th><th>适合什么</th><th>代价</th><th>什么时候不该用</th></tr></thead>
 <tbody>
@@ -350,9 +434,9 @@ sequenceDiagram
 </tbody>
 </table>
 
-<p>free-threaded 的含义要说准：它是一个<strong>独立的构建变体</strong>（可执行文件带 t 后缀），不是默认发行版的开关。用它跑的进程里 GIL 被移除，多线程可以真并行执行字节码，代价是单线程性能下降、以及所有 C 扩展都需要重新适配并声明兼容。在它稳定之前，CPU 密集仍然走多进程或下沉到 C 层。</p>
+<p>free-threaded 的含义要说准：它是一个<strong>独立的构建变体</strong>（可执行文件带 t 后缀），不是默认发行版的开关。用它跑的进程里 GIL 被移除，多线程可以真并行执行字节码，代价是单线程性能下降、以及所有 C 扩展都需要重新适配并声明兼容。在它稳定之前，CPU 密集仍然走多进程或下沉到 C 层。怎么验证某个扩展是否真的支持、轮子矩阵怎么盘点，见<a href="../ecosystem/">Python 生态的选型与演进</a>。</p>
 
-<h2>反模式速查</h2>
+<h2>③ 场景 · 反模式速查与不适用边界</h2>
 <table>
 <thead><tr><th>反模式</th><th>真实成本</th><th>正确做法</th></tr></thead>
 <tbody>
@@ -364,8 +448,13 @@ sequenceDiagram
 <tr><td>热路径的 debug 日志用 f-string</td><td>级别不够也照样完成格式化，白付成本</td><td>用 <code>logger.debug("x=%s", x)</code> 的惰性参数形式</td></tr>
 <tr><td>没测量就上 Cython 或 Rust</td><td>编译链、调试难度、构建复杂度全付了，瓶颈可能在数据库</td><td>先 profile 定位，再决定要不要下沉到 C 层</td></tr>
 <tr><td>用 <code>is</code> 比较字符串或整数</td><td>小整数与 interning 让它偶然为 True，换环境就崩</td><td>值比较用 <code>==</code>，<code>is</code> 只给 <code>None</code></td></tr>
+<tr><td>拿微基准的倍数当服务收益汇报</td><td>基准里没有 GC、没有连接池、数据全在缓存里</td><td>用真实负载量端到端的 p99，微基准只用来在两种写法之间做选择</td></tr>
 </tbody>
 </table>
+<p><strong>不适用边界</strong>：内存占用、引用计数与 GC、<code>__slots__</code> 与属性协议的语义在<a href="../core/">Python 运行时机制</a>；语义层面的坑（作用域、可变默认参数、相等与哈希）在<a href="../pitfalls/">Python 的语义陷阱清单</a>；GIL 与三条并发路线在<a href="../concurrency/">Python 并发的三条路线与选择</a>；版本升级的可行性验证、解释器与构建变体的选择在<a href="../ecosystem/">Python 生态的选型与演进</a>；worker 数量与进程模型属于部署层，在<a href="../web/">Python Web 服务的部署形态</a>；跨服务的耗时拆解与容量评估见站内<a href="../../../observability/performance/">后端性能优化专题</a>。如果你的结论是「解释器层面已经没得优化了」，那就不是这一篇能解决的问题。</p>
+<p>这条路径上，上一篇讲对象与内存的开销从哪来，本篇再往下一层解释「同一段逻辑为什么在解释器里要付这么多」，下一篇转向语义正确性——那些不影响性能、但会直接给出错误结果的写法。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../core/">← 上一步：Python 运行时机制：对象模型、内存与 GIL</a> · <a href="../pitfalls/">下一步：Python 的语义陷阱清单 →</a></p>
 
 <h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
@@ -373,6 +462,10 @@ sequenceDiagram
     <div class="callout-title">避坑清单</div>
     <ul>
         <li>把 <code>dis</code> 输出的指令条数当性能指标：指令少不等于快，一条 <code>LOAD_ATTR</code> 可能比五条 <code>LOAD_FAST</code> 都贵。</li>
+        <li>3.11 之后不加 <code>adaptive=True</code> 就下结论：你看到的是专门化之前的指令，和实际执行的不是一回事。</li>
+        <li>拿 <code>timeit</code> 的微基准结论外推到服务：计时期间 GC 是关掉的，数据也都在 CPU 缓存里，真实环境两个条件都不成立。</li>
+        <li>用 cProfile 的绝对耗时汇报「优化了多少」：它对函数调用密集的那一段放大最厉害，改完前后的比值会失真。</li>
+        <li><code>-X importtime</code> 忘了 <code>2&gt;&amp;1</code>：输出在 stderr，管道里一片空白还以为是启动很快。</li>
         <li>指望 <code>.pyc</code> 提速运行期：它只省编译，执行仍是逐条解释。</li>
         <li>用 <code>assert</code> 做参数校验：线上加 <code>-O</code> 后整条校验消失，等于没写。</li>
         <li>构建镜像时重置文件 mtime，导致旧 <code>.pyc</code> 继续生效：要么预编译，要么用按内容哈希的失效模式。</li>
@@ -386,6 +479,7 @@ sequenceDiagram
         <li>把 free-threaded 构建当成默认发行版的开关就上生产：它是独立构建，单线程有回退，C 扩展需逐个确认。</li>
     </ul>
 </div>
+
                     </div>
                 </article>
                 <nav class="article-nav">
