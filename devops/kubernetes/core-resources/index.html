@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="五种工作负载对象怎么选：Deployment、StatefulSet、DaemonSet、Job、CronJob 的判断依据与代价。本文讲清 Deployment 与 ReplicaSet 的版本化关系与 revisionHistoryLimit、StatefulSet 的三个保证与删除时不删 PVC 的行为、Job 的 backoffLimit 与 restartPolicy 交互、CronJob 默认 concurrencyPolicy 为 Allow 导致的任务重叠、initContainers 与 1.28 原生 sidecar、requests 与 limits 的填法、标签与不可变 selector 的设计，并给出生产级 Deployment 全注释模板。">
+        <meta name="description" content="工作负载对象三段式：先给「要做什么 → 选哪个对象」对照表、Deployment 与 StatefulSet 与 DaemonSet 与 Job 的最小可用 yaml、resources 与探针的必填项，再讲 ReplicaSet 如何留住版本、StatefulSet 三个保证的代价、Job 与 CronJob 的积压来源与标签设计，最后给选错对象后的迁移代价矩阵。">
     <meta name="keywords" content="K8s 核心资源,Kubernetes,云原生,Kubernetes">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/kubernetes/core-resources/">
     <!-- Open Graph -->
     <meta property="og:title" content="工作负载对象的选择与编写 - 资深码农">
-    <meta property="og:description" content="五种工作负载对象怎么选：Deployment、StatefulSet、DaemonSet、Job、CronJob 的判断依据与代价。本文讲清 Deployment 与 ReplicaSet 的版本化关系与 revisionHistoryLimit、StatefulSet 的三个保证与删除时不删 PVC 的行为、Job 的 backoffLimit 与 restartPolicy 交互、CronJob 默认 concurrencyPolicy 为 Allow 导致的任务重叠、initContainers 与 1.28 原生 sidecar、requests 与 limits 的填法、标签与不可变 selector 的设计，并给出生产级 Deployment 全注释模板。">
+    <meta property="og:description" content="工作负载对象三段式：先给「要做什么 → 选哪个对象」对照表、Deployment 与 StatefulSet 与 DaemonSet 与 Job 的最小可用 yaml、resources 与探针的必填项，再讲 ReplicaSet 如何留住版本、StatefulSet 三个保证的代价、Job 与 CronJob 的积压来源与标签设计，最后给选错对象后的迁移代价矩阵。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/kubernetes/core-resources/">
     <meta property="og:site_name" content="资深码农">
@@ -39,17 +39,17 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="工作负载对象的选择与编写 - 资深码农">
-    <meta name="twitter:description" content="五种工作负载对象怎么选：Deployment、StatefulSet、DaemonSet、Job、CronJob 的判断依据与代价。本文讲清 Deployment 与 ReplicaSet 的版本化关系与 revisionHistoryLimit、StatefulSet 的三个保证与删除时不删 PVC 的行为、Job 的 backoffLimit 与 restartPolicy 交互、CronJob 默认 concurrencyPolicy 为 Allow 导致的任务重叠、initContainers 与 1.28 原生 sidecar、requests 与 limits 的填法、标签与不可变 selector 的设计，并给出生产级 Deployment 全注释模板。">
+    <meta name="twitter:description" content="工作负载对象三段式：先给「要做什么 → 选哪个对象」对照表、Deployment 与 StatefulSet 与 DaemonSet 与 Job 的最小可用 yaml、resources 与探针的必填项，再讲 ReplicaSet 如何留住版本、StatefulSet 三个保证的代价、Job 与 CronJob 的积压来源与标签设计，最后给选错对象后的迁移代价矩阵。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
     <meta property="article:tag" content="Kubernetes,云原生">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"工作负载对象的选择与编写","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"五种工作负载对象怎么选：Deployment、StatefulSet、DaemonSet、Job、CronJob 的判断依据与代价。本文讲清 Deployment 与 ReplicaSet 的版本化关系与 revisionHistoryLimit、StatefulSet 的三个保证与删除时不删 PVC 的行为、Job 的 backoffLimit 与 restartPolicy 交互、CronJob 默认 concurrencyPolicy 为 Allow 导致的任务重叠、initContainers 与 1.28 原生 sidecar、requests 与 limits 的填法、标签与不可变 selector 的设计，并给出生产级 Deployment 全注释模板。","url":"https://www.yijunjun.asia/devops/kubernetes/core-resources/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/kubernetes/core-resources/"},"articleSection":"运维与云原生"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"工作负载对象的选择与编写","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"工作负载对象三段式：先给「要做什么 → 选哪个对象」对照表、Deployment 与 StatefulSet 与 DaemonSet 与 Job 的最小可用 yaml、resources 与探针的必填项，再讲 ReplicaSet 如何留住版本、StatefulSet 三个保证的代价、Job 与 CronJob 的积压来源与标签设计，最后给选错对象后的迁移代价矩阵。","url":"https://www.yijunjun.asia/devops/kubernetes/core-resources/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/kubernetes/core-resources/"},"articleSection":"运维与云原生"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "K8s 核心资源", "item": "https://www.yijunjun.asia/devops/kubernetes/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Deployment 和 StatefulSet 到底怎么选？", "acceptedAnswer": {"@type": "Answer", "text": "判断依据只有两条：副本之间是否需要稳定的网络标识，以及每个副本是否需要独占自己的那块存储。需要，就用 StatefulSet；不需要，Deployment 永远是更省事的选择。StatefulSet 给你有序编号的 Pod 名、配合 Headless Service 的 Pod 级 DNS、以及按序号绑定且不会跟着 Pod 漂移的 PVC；代价是滚动更新按序号逐个进行因而慢、扩缩容也是有序的、删除 StatefulSet 时它创建的 PVC 不会被删除。常见误区是把 Redis 主从或 MySQL 用 Deployment 部署，重建后每个副本的身份和数据盘对应关系全乱。"}}, {"@type": "Question", "name": "删除 StatefulSet 之后 PVC 还在，是 bug 吗？", "acceptedAnswer": {"@type": "Answer", "text": "是有意设计的保护。volumeClaimTemplates 产生的 PVC 生命周期独立于 StatefulSet，删除控制器不会删数据，这样你误删之后重建同名 StatefulSet 可以原样接回数据盘。副作用是缩容留下的 PVC 会一直计费，而且你把副本数从 5 缩到 3 再扩回 5 时，新 Pod 会挂上旧数据。清理要显式删除 PVC，或者在 1.27 之后的版本用 persistentVolumeClaimRetentionPolicy 指定 whenScaled 与 whenDeleted 的行为。"}}, {"@type": "Question", "name": "CronJob 上一次还没跑完，下一次又起来了怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "这是 concurrencyPolicy 默认值为 Allow 的直接后果，它允许同一个 CronJob 的多个 Job 并行存在。对于写数据库的任务，这意味着重复处理、重复扣款甚至死锁。改成 Forbid 会跳过本次调度并记录事件，适合幂等性没做好的任务；改成 Replace 会删掉上一个 Job 再建新的，适合只关心最新一次结果的同步类任务。另外一定要设 ttlSecondsAfterFinished，否则已完成的 Job 和 Pod 会一直堆在集群里，几个月后 kubectl get pod 能刷出上万行，etcd 对象数也跟着涨。"}}, {"@type": "Question", "name": "backoffLimit 和 restartPolicy 是什么关系？", "acceptedAnswer": {"@type": "Answer", "text": "Job 的 restartPolicy 只能是 OnFailure 或 Never，写 Always 会被 apiserver 直接拒绝。选 Never 时每次失败都会留下一个 Failed 的 Pod 并新建一个，现场可以保留下来看日志；选 OnFailure 时 kubelet 在原 Pod 内重启容器，你会丢掉之前的容器日志，但省下调度开销。backoffLimit 默认 6，是两种模式下共同的失败次数上限，重试间隔按 10 秒起指数退避，最长 6 分钟。如果任务本身不可能自己成功，把 backoffLimit 设成 0 到 2，再配 activeDeadlineSeconds 兜住总时长。"}}, {"@type": "Question", "name": "Deployment 的 selector 为什么改不了？", "acceptedAnswer": {"@type": "Answer", "text": "selector 在创建后是不可变字段，apiserver 会直接拒绝修改。原因是 selector 决定了这个 Deployment 认领哪些 ReplicaSet 和 Pod，一旦允许修改，旧的 ReplicaSet 会立刻变成没有主人的孤儿对象，副本无人回收。由此得出一条实践规则：selector 里只放永远不会变的标识键，例如 app.kubernetes.io/name；把 version、环境、commit sha 这类每次发布都变的值放在 labels 或 annotations 里，绝不要写进 selector。真要改 selector 只能新建一个 Deployment 再切流量删旧的。"}}, {"@type": "Question", "name": "1.28 的原生 sidecar 解决了什么问题？", "acceptedAnswer": {"@type": "Answer", "text": "解决了 sidecar 的启动与退出顺序都无法保证的老问题。传统写法把日志采集或网格代理和主容器并列放在 containers 里，结果是主容器可能在代理就绪之前就发起请求，而 Job 场景下代理不退出会让整个 Job 永远完不成。1.28 起可以把 sidecar 写成 initContainers 里 restartPolicy 为 Always 的容器：它会在后续 initContainer 和主容器之前启动并保持运行，在主容器全部退出之后才被终止，于是启动顺序和退出顺序都确定了。这个特性在 1.29 默认开启，1.28 需要打开 SidecarContainers 特性门控。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Deployment、StatefulSet、DaemonSet、Job 到底怎么选？", "acceptedAnswer": {"@type": "Answer", "text": "按三个问题依次判断：是不是跑完就结束的一次性任务，是就用 Job，需要按时间表触发则用 CronJob；是不是每个节点都要恰好一份，是就用 DaemonSet 并记得加容忍污点；副本之间有没有身份差异，需要稳定 DNS 名或各自独占数据盘就用 StatefulSet 加 Headless Service，否则用 Deployment。选错的代价不对称：把有状态服务写成 Deployment 时第二个副本永远挂不上卷，而把一次性任务写成 Deployment 会因为进程正常退出被当作崩溃而无限重启。"}}, {"@type": "Question", "name": "Deployment 和 StatefulSet 到底怎么选？", "acceptedAnswer": {"@type": "Answer", "text": "判断依据只有两条：副本之间是否需要稳定的网络标识，以及每个副本是否需要独占自己的那块存储。需要，就用 StatefulSet；不需要，Deployment 永远是更省事的选择。StatefulSet 给你有序编号的 Pod 名、配合 Headless Service 的 Pod 级 DNS、以及按序号绑定且不会跟着 Pod 漂移的 PVC；代价是滚动更新按序号逐个进行因而慢、扩缩容也是有序的、删除 StatefulSet 时它创建的 PVC 不会被删除。常见误区是把 Redis 主从或 MySQL 用 Deployment 部署，重建后每个副本的身份和数据盘对应关系全乱。"}}, {"@type": "Question", "name": "删除 StatefulSet 之后 PVC 还在，是 bug 吗？", "acceptedAnswer": {"@type": "Answer", "text": "是有意设计的保护。volumeClaimTemplates 产生的 PVC 生命周期独立于 StatefulSet，删除控制器不会删数据，这样你误删之后重建同名 StatefulSet 可以原样接回数据盘。副作用是缩容留下的 PVC 会一直计费，而且你把副本数从 5 缩到 3 再扩回 5 时，新 Pod 会挂上旧数据。清理要显式删除 PVC，或者在 1.27 之后的版本用 persistentVolumeClaimRetentionPolicy 指定 whenScaled 与 whenDeleted 的行为。"}}, {"@type": "Question", "name": "CronJob 上一次还没跑完，下一次又起来了怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "这是 concurrencyPolicy 默认值为 Allow 的直接后果，它允许同一个 CronJob 的多个 Job 并行存在。对于写数据库的任务，这意味着重复处理、重复扣款甚至死锁。改成 Forbid 会跳过本次调度并记录事件，适合幂等性没做好的任务；改成 Replace 会删掉上一个 Job 再建新的，适合只关心最新一次结果的同步类任务。另外一定要设 ttlSecondsAfterFinished，否则已完成的 Job 和 Pod 会一直堆在集群里，几个月后 kubectl get pod 能刷出上万行，etcd 对象数也跟着涨。"}}, {"@type": "Question", "name": "backoffLimit 和 restartPolicy 是什么关系？", "acceptedAnswer": {"@type": "Answer", "text": "Job 的 restartPolicy 只能是 OnFailure 或 Never，写 Always 会被 apiserver 直接拒绝。选 Never 时每次失败都会留下一个 Failed 的 Pod 并新建一个，现场可以保留下来看日志；选 OnFailure 时 kubelet 在原 Pod 内重启容器，你会丢掉之前的容器日志，但省下调度开销。backoffLimit 默认 6，是两种模式下共同的失败次数上限，重试间隔按 10 秒起指数退避，最长 6 分钟。如果任务本身不可能自己成功，把 backoffLimit 设成 0 到 2，再配 activeDeadlineSeconds 兜住总时长。"}}, {"@type": "Question", "name": "Deployment 的 selector 为什么改不了？", "acceptedAnswer": {"@type": "Answer", "text": "selector 在创建后是不可变字段，apiserver 会直接拒绝修改。原因是 selector 决定了这个 Deployment 认领哪些 ReplicaSet 和 Pod，一旦允许修改，旧的 ReplicaSet 会立刻变成没有主人的孤儿对象，副本无人回收。由此得出一条实践规则：selector 里只放永远不会变的标识键，例如 app.kubernetes.io/name；把 version、环境、commit sha 这类每次发布都变的值放在 labels 或 annotations 里，绝不要写进 selector。真要改 selector 只能新建一个 Deployment 再切流量删旧的。"}}, {"@type": "Question", "name": "1.28 的原生 sidecar 解决了什么问题？", "acceptedAnswer": {"@type": "Answer", "text": "解决了 sidecar 的启动与退出顺序都无法保证的老问题。传统写法把日志采集或网格代理和主容器并列放在 containers 里，结果是主容器可能在代理就绪之前就发起请求，而 Job 场景下代理不退出会让整个 Job 永远完不成。1.28 起可以把 sidecar 写成 initContainers 里 restartPolicy 为 Always 的容器：它会在后续 initContainer 和主容器之前启动并保持运行，在主容器全部退出之后才被终止，于是启动顺序和退出顺序都确定了。这个特性在 1.29 默认开启，1.28 需要打开 SidecarContainers 特性门控。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -92,7 +92,152 @@
                     <div class="article-content">
 <p>写 K8s 清单最常见的浪费，是一上手就抄一份 Deployment 然后改字段。真正决定后面半年会不会天天救火的，是在动手之前先把对象选对：这个东西是不是一次性的、是不是每个节点要一份、副本之间有没有身份差异。选错对象之后再怎么调参数都是在补窟窿。本篇只讲工作负载对象的选择与编写；控制循环、调度两阶段、探针语义、QoS 与限流、Service 的实现细节都在 <a href="../">Kubernetes 主干篇</a>。</p>
 
-<h2>五种工作负载：先选对象，再写字段</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一张「要做什么 → 选哪个对象」的对照表、四种工作负载的最小可用 yaml，以及 resources 与探针的必填项清单。</li>
+        <li><strong>② 原理</strong>：Deployment 通过 ReplicaSet 留住版本的机制、StatefulSet 三个保证各自的代价、Job 与 CronJob 的积压来源、Pod 模板里真正值得花时间的字段、requests 的填法与标签设计。</li>
+        <li><strong>③ 场景</strong>：选错对象之后的迁移代价有多大、哪些错误可以低成本改回来、哪些只能新建再切流量。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 「要做什么 → 选哪个对象」与四份最小可用 yaml</h2>
+
+<p>动手之前先查表把对象选对，这一步的错误无法靠调参数补救。下表左列是你真正要做的事，右列是选错的直接后果。</p>
+
+<table>
+<thead><tr><th>要做什么</th><th>选哪个对象</th><th>还必须一起写什么</th><th>选错会怎样</th></tr></thead>
+<tbody>
+<tr><td>跑一个对外提供 HTTP 的服务</td><td>Deployment</td><td>一个 Service；对外再加 Ingress</td><td>用 StatefulSet 会让发布变成逐个串行，慢且拿不到任何好处</td></tr>
+<tr><td>跑需要固定 DNS 名或独占数据盘的组件</td><td>StatefulSet</td><td>Headless Service 与 <code>volumeClaimTemplates</code></td><td>用 Deployment 挂 ReadWriteOnce 卷，第二个副本永远挂不上</td></tr>
+<tr><td>每个节点采日志、抓指标、配网络</td><td>DaemonSet</td><td><code>tolerations</code>，多数还要 hostPath</td><td>用 Deployment 加反亲和硬凑，节点扩容后新节点上没有实例</td></tr>
+<tr><td>做一次性数据迁移或校验</td><td>Job</td><td><code>backoffLimit</code>、<code>activeDeadlineSeconds</code>、<code>ttlSecondsAfterFinished</code></td><td>写成 Deployment，进程跑完退出会被当成崩溃而无限重启</td></tr>
+<tr><td>定时对账、清理、报表</td><td>CronJob</td><td><code>concurrencyPolicy</code>、<code>timeZone</code>，以及上面那三项</td><td>默认 Allow 会让上一次没跑完时又起一个，两个任务同时写同一份数据</td></tr>
+<tr><td>让副本分散到不同可用区</td><td>任意工作负载 + <code>topologySpreadConstraints</code></td><td><code>labelSelector</code> 要与 Pod 标签一致</td><td>用硬性 <code>podAntiAffinity</code> 且副本数大于节点数，多出来的副本永久 Pending</td></tr>
+<tr><td>配置变更时让 Pod 重启</td><td>在 <code>template.metadata.annotations</code> 放配置哈希</td><td>做法见 <a href="../config-secret/">配置与密钥篇</a></td><td>只改 ConfigMap 不动模板，Pod 不会重启，改动只对以后新建的 Pod 生效</td></tr>
+<tr><td>要求发布能一键回滚</td><td>Deployment，镜像写死 tag</td><td><code>revisionHistoryLimit</code> 至少留几个版本</td><td>用 <code>latest</code> 时回滚没有参照物，不同副本还可能跑着不同代码</td></tr>
+</tbody>
+</table>
+
+<p>选定之后照下面这四份清单起步。它们是「能直接 apply 且不会在第二周变成故障」的最小版本，注释只说明为什么要这行：</p>
+
+<pre><code class="language-yaml"># ---------- 1) Deployment：无状态服务。副本完全对等，随便杀哪个都一样 ----------
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: api}          # 只放永不变化的键，创建后不可修改
+  template:
+    metadata:
+      labels: {app: api}             # 必须能被上面的 selector 选中
+    spec:
+      containers:
+        - name: api
+          image: registry.example.com/api:9f3c2a1   # 写死 tag，回滚时你会需要它
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}    # 不填等于告诉调度器「我不占资源」
+            limits: {memory: 512Mi}                 # 内存必须设；CPU 先别设，原因见原理层
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8080}    # 没有它，滚动更新会把流量打给还没起好的副本
+---
+# ---------- 2) StatefulSet：副本有身份。必须先有 Headless Service 才有 Pod 级 DNS ----------
+apiVersion: v1
+kind: Service
+metadata: {name: cache}
+spec:
+  clusterIP: None                    # None 表示不分配虚拟 IP，DNS 直接返回 Pod IP 列表
+  selector: {app: cache}
+  ports: [{port: 6379}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: cache}
+spec:
+  serviceName: cache                 # 必须指向上面那个 Headless Service，写错就没有 Pod 级域名
+  replicas: 3
+  selector:
+    matchLabels: {app: cache}
+  template:
+    metadata:
+      labels: {app: cache}
+    spec:
+      containers:
+        - name: cache
+          image: redis:7.2-alpine
+          ports: [{containerPort: 6379}]
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {memory: 512Mi}  # 有状态组件让内存 limit 等于 requests，进 Guaranteed 档
+          volumeMounts:
+            - {name: data, mountPath: /data}
+  volumeClaimTemplates:              # 每个序号一块独立的盘，Pod 重建后挂回同一块
+    - metadata: {name: data}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: {storage: 10Gi}
+---
+# ---------- 3) DaemonSet：每个节点恰好一份 ----------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: node-agent}
+spec:
+  selector:
+    matchLabels: {app: node-agent}
+  template:
+    metadata:
+      labels: {app: node-agent}
+    spec:
+      tolerations:
+        - {operator: Exists}         # 不容忍污点就落不到控制面节点，节点级组件通常要全覆盖
+      containers:
+        - name: agent
+          image: registry.example.com/node-agent:1.2.0
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}   # 每个节点都占一份，填大了是全集群级的浪费
+            limits: {memory: 128Mi}
+---
+# ---------- 4) Job：跑完就结束。下面四个字段一个都别省 ----------
+apiVersion: batch/v1
+kind: Job
+metadata: {name: migrate}
+spec:
+  backoffLimit: 2                    # 默认 6 次指数退避能把失败拖到半小时以上
+  activeDeadlineSeconds: 1800        # backoffLimit 管不到「一次跑不完」，卡住只能靠它兜
+  ttlSecondsAfterFinished: 86400     # 不设就永久堆积已完成的 Job 与 Pod
+  template:
+    spec:
+      restartPolicy: Never           # Job 只接受 Never 或 OnFailure，写 Always 会被 apiserver 拒绝
+      containers:
+        - name: migrate
+          image: registry.example.com/migrate:9f3c2a1
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {memory: 1Gi}    # 批处理最容易吃内存，这条不设就是节点 OOM 的来源</code></pre>
+
+<p>上面四份清单里有几个字段是不分对象类型的硬性必填项，漏掉任何一项都会在某个半夜以故障形式提醒你：</p>
+
+<table>
+<thead><tr><th>字段</th><th>为什么必填</th><th>默认值</th><th>漏掉的现象</th></tr></thead>
+<tbody>
+<tr><td><code>resources.requests</code>（CPU 与内存）</td><td>调度装箱与 QoS 分级的唯一依据</td><td>不填视为 0</td><td>QoS 落到 BestEffort，节点一紧张第一批被驱逐；节点被超卖到 OOM</td></tr>
+<tr><td><code>resources.limits.memory</code></td><td>内存不可压缩，这是保护同节点其他 Pod 的唯一手段</td><td>无上限</td><td>一个泄漏的容器把整台节点吃光，无辜邻居一起被驱逐</td></tr>
+<tr><td><code>resources.limits.cpu</code></td><td>这一项恰恰不建议随手填</td><td>无上限</td><td>填了之后延迟敏感服务出现周期性毛刺，而平均 CPU 使用率看着很正常</td></tr>
+<tr><td><code>readinessProbe</code></td><td>决定「现在能不能把流量给我」</td><td>不配即视为一直就绪</td><td>滚动更新期间请求被打给还没加载完的副本，表现为发布必抖</td></tr>
+<tr><td><code>livenessProbe</code></td><td>只用来发现进程假死</td><td>不配即永不重启</td><td>探针里访问数据库时，下游抖一下所有副本同时重启，局部故障被放大</td></tr>
+<tr><td><code>startupProbe</code></td><td>给慢启动应用一个独立的宽限通道</td><td>无</td><td>用放宽 liveness 代替它，进程真假死时也要很久才被重启</td></tr>
+<tr><td><code>lifecycle.preStop</code> 与 <code>terminationGracePeriodSeconds</code></td><td>让摘流量的规则先传播完再退进程</td><td>宽限期默认 30 秒</td><td>每次滚动更新都出现一小波 502</td></tr>
+<tr><td><code>selector</code> 与 <code>template.metadata.labels</code></td><td>控制器靠它认领 Pod，Service 靠它找后端</td><td>无默认，必填</td><td>两者不匹配时 apiserver 直接拒绝创建；与 Service 不匹配则悄悄没有后端</td></tr>
+</tbody>
+</table>
+
+<p>探针与滚动更新相关字段的默认值随版本变化，落地前用 <code>kubectl explain deployment.spec.template.spec.containers.readinessProbe</code> 核对你集群的实际默认值。这些字段「为什么是这个语义」在下面几节展开。</p>
+
+<h2>② 原理 · 五种工作负载的行为差异</h2>
 
 <div class="mermaid">
 flowchart TB
@@ -126,7 +271,8 @@ flowchart TB
     <p>把 Redis 主从或 MySQL 写成 Deployment 挂一个 PVC，看起来能跑。问题在两处：<strong>多副本会抢同一个 ReadWriteOnce 卷，第二个 Pod 永远挂不上</strong>；而 Pod 重建后名字变了，配置里写死的 peer 地址全部失效，主从关系需要人工重新指定。这类需求要么用 StatefulSet，要么直接用云上的托管数据库。</p>
 </div>
 
-<h2>Deployment 与 ReplicaSet：版本是怎么被留下来的</h2>
+
+<h2>② 原理 · Deployment 与 ReplicaSet：版本是怎么被留下来的</h2>
 
 <p>Deployment 自己不管 Pod。它管的是 ReplicaSet：<strong>每次 <code>spec.template</code> 发生变化，Deployment 就按模板内容算出一个哈希，新建一个带该哈希后缀的 ReplicaSet</strong>，然后一边把新 RS 扩容、一边把旧 RS 缩容。旧 RS 副本数归零之后不会被删掉——它保存着完整的旧 Pod 模板，<code>kubectl rollout undo</code> 就是把它重新扩回来。</p>
 
@@ -164,7 +310,8 @@ stateDiagram-v2
 </tbody>
 </table>
 
-<h2>StatefulSet 的三个保证与它们的代价</h2>
+
+<h2>② 原理 · StatefulSet 的三个保证与它们的代价</h2>
 
 <table>
 <thead><tr><th>保证</th><th>具体表现</th><th>你付的代价</th><th>什么时候会咬你</th></tr></thead>
@@ -234,7 +381,8 @@ spec:
             storage: 100Gi
 </code></pre>
 
-<h2>Job 与 CronJob：最容易长期积压的两个对象</h2>
+
+<h2>② 原理 · Job 与 CronJob：最容易长期积压的两个对象</h2>
 
 <div class="mermaid">
 sequenceDiagram
@@ -299,7 +447,8 @@ spec:
                 limits: {memory: 1Gi}  # 批处理最容易吃内存，limit 必须设
 </code></pre>
 
-<h2>Pod 模板里真正值得花时间的几项</h2>
+
+<h2>② 原理 · Pod 模板里真正值得花时间的几项</h2>
 
 <div class="mermaid">
 flowchart TB
@@ -339,7 +488,8 @@ flowchart TB
 
 <p>另外两项常被跳过但性价比极高：<code>securityContext</code> 里把 <code>runAsNonRoot</code>、<code>allowPrivilegeEscalation: false</code>、<code>readOnlyRootFilesystem: true</code> 打开，等于免费拿到容器逃逸的第一道防线——注意只读根文件系统需要给临时目录单独挂 <code>emptyDir</code>，否则应用写临时文件会失败。<code>terminationGracePeriodSeconds</code> 与 <code>preStop</code> 的配合决定发布会不会掉请求，机制在 <a href="../">主干篇</a>。</p>
 
-<h2>requests 与 limits 怎么填</h2>
+
+<h2>② 原理 · requests 与 limits 怎么填</h2>
 
 <p>方法论只有一句：<strong>requests 按实际用量的 P95 填，limits 给突发留余量</strong>。观察窗口至少覆盖一个业务周期（含日峰和周峰），不要拿压测峰值当 requests，那会让节点利用率长期停在 30%。QoS 分级、CFS 限流、OOMKilled 的机制见 <a href="../">主干篇</a>，这里只给填法。</p>
 
@@ -355,7 +505,8 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>标签与选择器的设计</h2>
+
+<h2>② 原理 · 标签与选择器的设计</h2>
 
 <p>分工很清晰：<strong>labels 用来被选中，annotations 用来携带信息</strong>。凡是会出现在某个 selector 里的键，就必须是永不变化的；凡是每次发布都变的值，只能放 labels 里给人看或放 annotations，绝不能进 selector。</p>
 
@@ -372,7 +523,8 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>一份生产级 Deployment 全注释</h2>
+
+<h2>② 原理 · 一份生产级 Deployment 全注释</h2>
 
 <pre><code class="language-yaml">apiVersion: apps/v1
 kind: Deployment
@@ -469,7 +621,27 @@ spec:
           emptyDir: {}
 </code></pre>
 
-<h2>反模式与排查</h2>
+
+<h2>③ 场景 · 选错对象的后果与迁移代价</h2>
+
+<p>工作负载对象的类型是「半不可变」的：对象本身可以删了重建，但它带着的 Service 名、DNS 名、PVC 与数据一起构成了迁移成本。下表按常见的几种「当初选错了」给出现在该怎么办。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>原本无状态，现在想给每个副本一块本地盘</td><td>先问清楚是不是真需要身份；只是缓存就用 <code>emptyDir</code> 或外部 Redis</td><td>换成 StatefulSet 等于换一类对象，Pod 名与 DNS 名全变</td><td>真要迁只能新建 StatefulSet、双写迁数据再切流量，没有原地转换的路径</td></tr>
+<tr><td>用 Deployment 跑了数据库，现在要修</td><td>优先迁到云托管数据库，其次改 StatefulSet</td><td>ReadWriteOnce 卷不能多挂，Pod 重建后 peer 地址失效</td><td>迁移期间要停写或双写，PVC 里的数据得手工搬运</td></tr>
+<tr><td>一次性任务被写成常驻 Deployment</td><td>改回 Job 或 CronJob</td><td>进程正常退出会被当成崩溃而无限重启</td><td>改造成本低，但要补幂等键，避免历史上那些重复执行留下的脏数据</td></tr>
+<tr><td>selector 里放进了 version 或环境标签</td><td>新建一个 Deployment，切流量后删旧的</td><td><code>spec.selector</code> 创建后不可修改</td><td>切换窗口内 Service 会同时选中两个版本，必须保证两版兼容</td></tr>
+<tr><td>StatefulSet 缩容后想彻底释放磁盘</td><td>1.27+ 设 <code>persistentVolumeClaimRetentionPolicy.whenScaled: Delete</code>，老版本手工删 PVC</td><td>缩容与删除 StatefulSet 都不会删 PVC，这是保护而不是 bug</td><td>删错就是丢数据，执行前必须确认备份存在，取舍见 <a href="../storage/">存储抽象与有状态服务</a></td></tr>
+<tr><td>同一个 DaemonSet 要在不同节点用不同配置</td><td>拆成多个 DaemonSet，各带自己的 <code>nodeSelector</code></td><td>单个 DaemonSet 只有一份模板，无法按节点差异化</td><td>对象数量翻倍，重复部分靠模板收敛，见 <a href="../helm/">Helm</a></td></tr>
+<tr><td>一次性任务需要网格代理或日志 sidecar</td><td>1.29+ 用原生 sidecar（<code>restartPolicy: Always</code> 的 initContainer）</td><td>并列写在 containers 里的 sidecar 不退出，Job 就永远不完成</td><td>老集群只能让 sidecar 监听主容器退出后自杀，改造会侵入应用</td></tr>
+</tbody>
+</table>
+
+<p><strong>不适用边界</strong>：对象选择解决不了「要不要上集群」的问题，那一层在 <a href="../intro/">K8s 的抽象层次与该不该上</a>；镜像本身的构建与瘦身在 <a href="../../docker/">Docker</a>；上百份清单的重复消除在 <a href="../helm/">Helm</a>，多环境差异与版本化交付在 <a href="../../gitops/">GitOps 系列</a>；requests 该填多少取决于你能不能看到真实水位，指标链路在 <a href="../../../observability/">可观测性系列</a>。控制器的调和循环、调度两阶段、探针语义与 QoS 的机制都在 <a href="../">主干篇</a>，本篇只负责「选对象、写字段」。</p>
+
+<h2>③ 场景 · 反模式与排查</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>症状</th><th>后果</th><th>正确做法</th></tr></thead>
@@ -503,6 +675,10 @@ kubectl get pod -A -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.na
 # StatefulSet 缩容后遗留的 PVC（会一直计费）
 kubectl get pvc -l app.kubernetes.io/name=mysql --sort-by=.metadata.creationTimestamp
 </code></pre>
+
+<p>本篇在这条路径上负责把工作负载写对。对象选好、字段填全之后，下一步是把配置和密钥从镜像里拿出来——它直接决定改一行配置要不要重新发版。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../install/">← 上一步：Kubernetes 集群部署形态与生产化配置</a> · <a href="../config-secret/">下一步：配置与密钥在集群里的落地 →</a></p>
 
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
