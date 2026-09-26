@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="倒排索引、doc values、stored fields、BKD 树各自服务什么查询，分析器与 mapping 如何决定你能查到什么，segment 与 refresh/flush/merge 怎么影响写入吞吐和可见性（以及 search idle 让近实时失效的坑），分片数不可改与过度分片的代价，query 与 filter 的三层缓存差异，深分页与 search_after，聚合的内存风险与 circuit breaker，以及 7.0 移除 minimum_master_nodes 之后的选主机制。">
+        <meta name="description" content="Elasticsearch 三段式：先给上手必做的四件事——显式 mapping 而不是靠动态映射、分片数怎么倒推、用 _analyze 确认切分、用 profile 与 _explain 判读慢查询与排序异常，配「查询需求 → 字段类型与查询」对照表与关键设置速查；再讲倒排索引与 doc values 与 stored fields 与 BKD 树各服务什么查询、segment 的 refresh 与 flush 与 merge、search idle 让近实时失效的坑、分片数不可改的原因、三层缓存的命中条件、深分页与 search_after、聚合的内存风险与 circuit breaker、7.0 之后的选主机制；最后给什么该进 ES 什么不该进的判断。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/search/">
     <!-- Open Graph -->
     <meta property="og:title" content="Elasticsearch 的索引结构与查询代价 - 资深码农">
-    <meta property="og:description" content="倒排索引、doc values、stored fields、BKD 树各自服务什么查询，分析器与 mapping 如何决定你能查到什么，segment 与 refresh/flush/merge 怎么影响写入吞吐和可见性（以及 search idle 让近实时失效的坑），分片数不可改与过度分片的代价，query 与 filter 的三层缓存差异，深分页与 search_after，聚合的内存风险与 circuit breaker，以及 7.0 移除 minimum_master_nodes 之后的选主机制。">
+    <meta property="og:description" content="Elasticsearch 三段式：先给上手必做的四件事——显式 mapping 而不是靠动态映射、分片数怎么倒推、用 _analyze 确认切分、用 profile 与 _explain 判读慢查询与排序异常，配「查询需求 → 字段类型与查询」对照表与关键设置速查；再讲倒排索引与 doc values 与 stored fields 与 BKD 树各服务什么查询、segment 的 refresh 与 flush 与 merge、search idle 让近实时失效的坑、分片数不可改的原因、三层缓存的命中条件、深分页与 search_after、聚合的内存风险与 circuit breaker、7.0 之后的选主机制；最后给什么该进 ES 什么不该进的判断。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/search/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Elasticsearch 的索引结构与查询代价 - 资深码农">
-    <meta name="twitter:description" content="倒排索引、doc values、stored fields、BKD 树各自服务什么查询，分析器与 mapping 如何决定你能查到什么，segment 与 refresh/flush/merge 怎么影响写入吞吐和可见性（以及 search idle 让近实时失效的坑），分片数不可改与过度分片的代价，query 与 filter 的三层缓存差异，深分页与 search_after，聚合的内存风险与 circuit breaker，以及 7.0 移除 minimum_master_nodes 之后的选主机制。">
+    <meta name="twitter:description" content="Elasticsearch 三段式：先给上手必做的四件事——显式 mapping 而不是靠动态映射、分片数怎么倒推、用 _analyze 确认切分、用 profile 与 _explain 判读慢查询与排序异常，配「查询需求 → 字段类型与查询」对照表与关键设置速查；再讲倒排索引与 doc values 与 stored fields 与 BKD 树各服务什么查询、segment 的 refresh 与 flush 与 merge、search idle 让近实时失效的坑、分片数不可改的原因、三层缓存的命中条件、深分页与 search_after、聚合的内存风险与 circuit breaker、7.0 之后的选主机制；最后给什么该进 ES 什么不该进的判断。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="数据库与缓存">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Elasticsearch 的索引结构与查询代价","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"倒排索引、doc values、stored fields、BKD 树各自服务什么查询，分析器与 mapping 如何决定你能查到什么，segment 与 refresh/flush/merge 怎么影响写入吞吐和可见性（以及 search idle 让近实时失效的坑），分片数不可改与过度分片的代价，query 与 filter 的三层缓存差异，深分页与 search_after，聚合的内存风险与 circuit breaker，以及 7.0 移除 minimum_master_nodes 之后的选主机制。","url":"https://www.yijunjun.asia/database/search/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/search/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Elasticsearch 的索引结构与查询代价","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Elasticsearch 三段式：先给上手必做的四件事——显式 mapping 而不是靠动态映射、分片数怎么倒推、用 _analyze 确认切分、用 profile 与 _explain 判读慢查询与排序异常，配「查询需求 → 字段类型与查询」对照表与关键设置速查；再讲倒排索引与 doc values 与 stored fields 与 BKD 树各服务什么查询、segment 的 refresh 与 flush 与 merge、search idle 让近实时失效的坑、分片数不可改的原因、三层缓存的命中条件、深分页与 search_after、聚合的内存风险与 circuit breaker、7.0 之后的选主机制；最后给什么该进 ES 什么不该进的判断。","url":"https://www.yijunjun.asia/database/search/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/search/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "Elasticsearch 9.0 时代…", "item": "https://www.yijunjun.asia/database/search/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -91,7 +91,97 @@
     </header>
 <p>「Elasticsearch 快是因为倒排索引」这句话只对了三分之一。<strong>倒排索引只回答一个问题：哪些文档包含这个词。</strong>排序、聚合要的是反向问题——这个文档在某个字段上的值是多少；数值和日期的范围查询走的是另一套结构；把文档内容取回来又是第三套。一个查询慢在哪、为什么关掉某个 mapping 选项就报错、为什么聚合会把堆打满，全都取决于它落在哪套结构上。这篇按「结构决定代价」的顺序讲：三种存储结构、mapping 与分析器、segment 生命周期、分片规划、缓存与查询上下文、分页与聚合，最后是集群角色与选主。</p>
 
-<h2>一个分片里其实有三套存储结构</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：上手一套 ES 必须先做的四件事——显式写 mapping 而不是靠动态映射、分片数怎么倒推、用 <code>_analyze</code> 确认切分、用 <code>profile</code> 与 <code>_explain</code> 判读慢查询和排序异常，配一张「查询需求 → 用哪种字段类型与查询」对照表。</li>
+        <li><strong>② 原理</strong>：一个分片里三套存储结构各服务什么查询、mapping 与分析器如何锁定检索能力上限、segment 的 refresh 与 flush 与 merge 如何决定可见性与吞吐、分片数为什么不可改、三层缓存各自的命中条件、深分页与聚合的内存代价、7.0 之后的选主机制。</li>
+        <li><strong>③ 场景</strong>：什么数据该进 ES、什么数据不该进，以及同样的检索需求什么时候用更轻的方案就够了。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 上手一套 ES 先做这四件事</h2>
+
+<p>这四件事的共同点是：<strong>做晚了就只能 reindex</strong>。mapping、分片数、分析器都属于写入时就被锁定的决策，上线后再改都要重建索引并切别名。</p>
+
+<table>
+<thead><tr><th>要做什么</th><th>怎么做</th><th>不做的后果</th></tr></thead>
+<tbody>
+<tr><td>1. 关掉动态映射，字段逐个显式声明</td><td>建索引时设 <code>dynamic: strict</code>，未声明字段直接报错</td><td>不可枚举的业务值被当成字段名写进 mapping，字段数撞上 <code>total_fields.limit</code> 后写入整体失败；撞上之前集群状态已经被巨大的 mapping 拖慢</td></tr>
+<tr><td>2. 分片数按「单分片几十 GB」倒推，并配别名与 rollover</td><td>先估一年的数据总量除以目标单分片大小，宁少勿多；时序数据一律走别名加 rollover</td><td>主分片数创建后不可原地改，只能 split、shrink 或 reindex，三者都要求索引先置只读</td></tr>
+<tr><td>3. 写入前用 <code>_analyze</code> 确认切分结果</td><td>把一条真实文本分别按索引期与查询期的分析器切一遍，对比两边的 token</td><td>「数据明明在却查不到」的问题九成出在这里，而不是打分；改分析器不会重写历史数据</td></tr>
+<tr><td>4. 慢查询用 <code>profile</code>，排序异常用 <code>_explain</code></td><td><code>profile</code> 给出每个分片每个 query 节点的耗时归属；<code>_explain</code> 给出单个文档的打分构成</td><td>凭感觉改查询与参数，改完也无法判断到底是哪一步变快了</td></tr>
+</tbody></table>
+
+<p>第一件事落地的关键是把字段类型选对。下表是「需求 → 字段类型加查询」的对照，选错类型的代价是整索引重建：</p>
+
+<table>
+<thead><tr><th>查询需求</th><th>字段类型</th><th>用哪种查询</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>精确等值：状态、枚举、业务 ID</td><td><code>keyword</code></td><td><code>term</code> / <code>terms</code></td><td>用 <code>text</code> 存会被分词，<code>term</code> 查含空格或大写的原值一律落空</td></tr>
+<tr><td>全文检索：标题、正文</td><td><code>text</code> 加显式 <code>analyzer</code> 与 <code>search_analyzer</code></td><td><code>match</code> / <code>match_phrase</code> / <code>multi_match</code></td><td>不能排序也不能聚合；要排序就加 <code>keyword</code> 子字段，别去开 fielddata</td></tr>
+<tr><td>数值与日期范围</td><td><code>long</code> / <code>double</code> / <code>date</code></td><td><code>range</code></td><td>走 BKD 树而不是倒排；时间过滤写成 <code>now-1h/m</code> 这类取整形式才有机会命中缓存</td></tr>
+<tr><td>排序与聚合</td><td><code>keyword</code> 或对应数值类型，保留 <code>doc_values</code></td><td><code>sort</code>、<code>terms</code>、<code>date_histogram</code></td><td>关掉 <code>doc_values</code> 能省磁盘，但排序聚合会直接报错</td></tr>
+<tr><td>前缀补全</td><td><code>completion</code>，或 <code>text</code> 上挂 edge n-gram 子字段</td><td>补全接口，或在 n-gram 子字段上 <code>match</code></td><td>用通配符前缀查询做补全等于放弃倒排索引，数据一多就是最慢的查询</td></tr>
+<tr><td>只用于展示、不参与检索的大字段</td><td><code>text</code> 且 <code>index: false</code>、<code>doc_values: false</code></td><td>不查询，只从 <code>_source</code> 取回</td><td>这是最容易拿到的磁盘与缓存优化，前提是确认它真的不参与任何查询</td></tr>
+<tr><td>业务自定义的键值对（键名不可枚举）</td><td><code>flattened</code></td><td>在 <code>字段名.子键</code> 上做 <code>term</code></td><td>整个对象只占一个字段位，避免映射爆炸；代价是内容不分词、复杂查询能力受限</td></tr>
+<tr><td>地理位置</td><td><code>geo_point</code></td><td><code>geo_distance</code> / <code>geo_bounding_box</code></td><td>同样走 BKD；需要复杂业务过滤时候选集要留冗余</td></tr>
+<tr><td>语义近似召回</td><td><code>dense_vector</code></td><td><code>knn</code></td><td>是加在关键词之上的一层，不是替代；订单号、错误码这类查询上倒排永远更准</td></tr>
+</tbody></table>
+
+<pre><code class="language-bash"># 1) 先确认分词，再建索引。同一句话分别按索引期与查询期的分析器切一遍对比
+curl -s -XPOST 'http://es:9200/_analyze' -H 'Content-Type: application/json' -d '{
+  "analyzer": "ik_max_word", "text": "连接池超时"
+}'
+curl -s -XPOST 'http://es:9200/_analyze' -H 'Content-Type: application/json' -d '{
+  "analyzer": "ik_smart", "text": "连接池超时"
+}'
+# 两边输出的 token 没有交集，就不用再往下调打分了，先把分析器对齐
+
+# 2) 建索引用带序号的实名 + 别名，让分片数以后还能调。写入一律走别名
+curl -s -XPUT 'http://es:9200/orders-000001' -H 'Content-Type: application/json' -d @mapping.json
+curl -s -XPOST 'http://es:9200/_aliases' -H 'Content-Type: application/json' -d '{
+  "actions": [ { "add": { "index": "orders-000001", "alias": "orders", "is_write_index": true } } ]
+}'
+
+# 3) 慢查询定位：profile 给出每个分片每个 query 节点的耗时，size 0 先排除 fetch 阶段的干扰
+curl -s -XPOST 'http://es:9200/orders/_search?pretty' -H 'Content-Type: application/json' -d '{
+  "profile": true, "size": 0,
+  "query": { "bool": { "filter": [ { "term": { "status": "paid" } } ] } }
+}'
+
+# 4) 排序不符合预期：_explain 给的是「这一个文档为什么是这个分数」，它不是用来看耗时的
+curl -s 'http://es:9200/orders/_explain/DOC_ID?pretty' -H 'Content-Type: application/json' -d '{
+  "query": { "match": { "title": "连接池 超时" } }
+}'
+
+# 5) 确认查询被改写成了你以为的样子（同义词、模糊、前缀都会在这一步展开）
+curl -s 'http://es:9200/orders/_validate/query?explain=true&amp;rewrite=true&amp;pretty' \
+  -H 'Content-Type: application/json' -d '{
+  "query": { "match": { "title": "连接池" } }
+}'</code></pre>
+
+<p>建索引时下面这几个设置必须显式写出来，默认值随版本变化，落地前用 <code>GET /&lt;index&gt;/_settings?include_defaults=true</code> 核对你这套集群的实际默认值：</p>
+
+<table>
+<thead><tr><th>设置</th><th>建索引时该填什么</th><th>默认值</th><th>什么时候必须改</th></tr></thead>
+<tbody>
+<tr><td><code>number_of_shards</code></td><td>按「单分片几十 GB」倒推，宁少勿多</td><td>1（7.0 起）</td><td><strong>创建后不可原地修改</strong>，所以这一项必须一开始就想清楚</td></tr>
+<tr><td><code>number_of_replicas</code></td><td>生产至少 1</td><td>1</td><td>单节点集群设 0，否则集群状态长期是 yellow，掩盖真实问题</td></tr>
+<tr><td><code>refresh_interval</code></td><td>写多读少的索引设 30s；批量导入期间设 -1，导完改回</td><td>1s</td><td>追求「写完立刻可见」不要调小它，改用写入时的 <code>refresh=wait_for</code></td></tr>
+<tr><td><code>dynamic</code></td><td><code>strict</code></td><td><code>true</code></td><td>一开始就设，之后每个新字段都要显式声明，这是防映射爆炸的唯一可靠手段</td></tr>
+<tr><td><code>index.mapping.total_fields.limit</code></td><td>保持默认</td><td>1000</td><td>撞上它说明数据模型错了，要改成 <code>flattened</code> 或键值对数组，而不是调大限制</td></tr>
+<tr><td><code>ignore_above</code>（keyword 子字段）</td><td>显式写，通常 256</td><td>无默认，不写则不限制</td><td>它是<strong>静默生效</strong>的：超长值不报错也不进倒排，表现为「数据存在但精确查不到」</td></tr>
+<tr><td><code>index.max_result_window</code></td><td>保持默认</td><td>10000</td><td>不要调大。深分页改用 <code>search_after</code> 配 point in time</td></tr>
+<tr><td><code>search.max_buckets</code></td><td>保持默认</td><td>65536</td><td>撞上它说明聚合基数设计有问题，应降基数或改 <code>composite</code> 分页遍历</td></tr>
+</tbody></table>
+
+<p>这些字段各自「为什么是这个语义」，从下一节开始展开。</p>
+
+<h2>② 原理 · 一个分片里其实有三套存储结构</h2>
+
+<p>搞清这一节能解决的现象是：同一个索引上有的查询毫秒返回、有的直接打爆堆，而两者的数据量是一样的。</p>
 
 <p>一个主分片就是一个完整的 Lucene index，内部由若干<strong>不可变的 segment</strong> 组成。每个 segment 里并排放着几类用途完全不同的数据文件，理解它们的分工是读懂查询代价的前提。</p>
 
@@ -128,7 +218,9 @@ flowchart TB
 
 <p>由此可以推出两条实践结论。第一，<strong>「只用来展示、不参与检索」的大字段应该同时 <code>index: false</code> 和 <code>doc_values: false</code></strong>，它只留在 <code>_source</code> 里，磁盘和缓存压力都会明显下降。第二，<strong>永远不要为了对 text 字段排序去开 fielddata</strong>，正确做法是加一个 keyword 子字段——这也是 ES 默认动态映射会替你做的事。</p>
 
-<h2>mapping 与分析器决定了你「能查到什么」</h2>
+<h2>② 原理 · mapping 与分析器决定了你「能查到什么」</h2>
+
+<p>搞清这一节能解决的现象是：数据写进去了、用 ID 也取得到，但按词怎么都搜不出来。</p>
 
 <p>ES 里检索能力的上限在写入时就被 mapping 锁定了：<strong>查询只能查到分析器产出的 token</strong>。同一段文本，用 standard 分析器写入的中文会被切成单字，用 ik_smart 写入会切成词；而查询时如果 search_analyzer 与写入时不一致，就会出现「明明有这条数据却查不到」。索引已经建好后改分析器不会重写历史数据，只能 reindex。</p>
 
@@ -179,7 +271,9 @@ flowchart TB
 
 <p>这段 mapping 里有四个刻意的选择：<code>dynamic: strict</code> 让未声明字段直接报错而不是悄悄进 mapping；<code>raw_payload</code> 关掉索引与正排，只做展示；<code>labels</code> 用 <code>flattened</code> 承接业务自定义的键值对，整个对象只占一个字段位；<code>trace_id</code> 只做等值查询，不需要排序聚合，关掉 <code>doc_values</code> 省一份磁盘。另外 <strong><code>ignore_above: 256</code> 是静默生效的</strong>——超过 256 字节的值不会报错，只是不进倒排索引，于是「这条数据存在但用 keyword 精确查不到」。</p>
 
-<h2>segment 生命周期：近实时的来源与代价</h2>
+<h2>② 原理 · segment 生命周期：近实时的来源与代价</h2>
+
+<p>搞清这一节能解决的现象是：低流量索引上「写完立刻查」有时要等好几百毫秒，而高流量索引上不会。</p>
 
 <p>写入路径是：文档先进 in-memory buffer，同时追加到 translog；<code>refresh</code> 把 buffer 变成一个新 segment 并进入文件系统缓存，<strong>此刻它才能被搜索到</strong>；<code>flush</code> 执行 Lucene commit 与 fsync，把 segment 真正落盘并清空 translog；后台 <code>merge</code> 不断把小 segment 合并成大的，顺带真正回收被删除文档的空间。</p>
 
@@ -211,7 +305,9 @@ stateDiagram-v2
 
 <p>顺便纠正一个流传很广的说法：<strong>ES 并没有「每 30 分钟 flush 一次」的默认行为</strong>，那是很老版本文档留下的印象。现在 flush 主要由 translog 大小触发，具体的持久性保证由 <code>translog.durability</code> 决定，而不是 flush 周期。真正影响「宕机丢多少」的是 translog 策略，不是 refresh 也不是 flush 间隔。</p>
 
-<h2>分片规划：不可改的那个数字</h2>
+<h2>② 原理 · 分片规划：不可改的那个数字</h2>
+
+<p>搞清这一节能解决的现象是：磁盘水位很低、CPU 也不高，集群却频繁出现集群状态更新超时与长 GC。</p>
 
 <p>主分片数在索引创建后不能原地改，因为路由公式 <code>hash(_routing) % number_of_primary_shards</code> 直接依赖它。能做的只有 split、shrink 或 reindex，三者都有前置条件。更重要的是<strong>分片不是免费的</strong>：每个分片是一个独立 Lucene index，有自己的词典、文件句柄、segment 元数据和 merge 线程配额，还要占一份集群状态。几百个索引每个都开 5 分片 1 副本，最后压垮集群的往往不是磁盘，而是主节点上的集群状态更新和数据节点的堆。</p>
 
@@ -225,7 +321,9 @@ stateDiagram-v2
 <tr><td>单分片过热（写入或查询集中）</td><td>增加分片数并让路由分散，或用自定义 routing 聚拢</td><td>自定义 routing 后查询必须带同样的 routing</td><td>加副本试图解决写入瓶颈，副本只分担读</td></tr>
 </tbody></table>
 
-<h2>query 与 filter：打分、执行顺序与三层缓存</h2>
+<h2>② 原理 · query 与 filter：打分、执行顺序与三层缓存</h2>
+
+<p>搞清这一节能解决的现象是：把查询全改成 filter 之后延迟没有改善，缓存命中率也一直是零。</p>
 
 <p><code>bool</code> 查询里 <code>must</code>/<code>should</code> 属于 query 上下文，要算相关性分数；<code>filter</code>/<code>must_not</code> 属于 filter 上下文，只判断「是否匹配」，不打分，因此可以被缓存。这里的关键不是「filter 更快」，而是<strong>三层缓存各有各的命中条件，绝大多数人以为命中了其实没有</strong>。</p>
 
@@ -240,7 +338,9 @@ stateDiagram-v2
 
 <p>所以「按时间过滤最近一小时」的正确写法不是 <code>gte: now-1h</code>，而是 <code>gte: now-1h/m</code> 之类的取整形式：取整后同一分钟内的所有请求共享同一个缓存键，shard request cache 和 node query cache 才有机会命中。这是仪表盘类查询最便宜的一次优化。</p>
 
-<h2>深分页、search_after 与聚合的内存风险</h2>
+<h2>② 原理 · 深分页、search_after 与聚合的内存风险</h2>
+
+<p>搞清这一节能解决的现象是：接口只返回二十条，翻到第五百页却把协调节点的堆打满了。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -289,7 +389,9 @@ curl -s -XDELETE 'http://es:9200/_pit' -H 'Content-Type: application/json' -d '{
 <tr><td>in flight requests</td><td>100% 堆</td><td>正在传输中的请求体</td><td>通常是 bulk 批次过大</td></tr>
 </tbody></table>
 
-<h2>集群角色与 7.0 之后的选主机制</h2>
+<h2>② 原理 · 集群角色与 7.0 之后的选主机制</h2>
+
+<p>搞清这一节能解决的现象是：一次大聚合之后整个集群抖动、主节点切换，而查询本身并没有报错。</p>
 
 <p>节点角色要显式规划：<strong>候选主节点（master-eligible）只做集群状态管理</strong>，不该同时承担数据和聚合压力，因为一次大聚合引发的长 GC 会让它失去心跳并触发选主。协调节点（不带任何 data/master 角色）负责接请求、归并结果，是深分页和大聚合的堆压力承受者，独立出来可以保护数据节点。数据节点在 7.x 之后细分为 content/hot/warm/cold/frozen，配合 ILM 做冷热分层。</p>
 
@@ -310,6 +412,31 @@ curl -s -XPOST 'http://es:9200/orders/_search?pretty' -H 'Content-Type: applicat
   "profile": true, "size": 0,
   "query": { "bool": { "filter": [ { "term": { "status": "paid" } } ] } }
 }'</code></pre>
+
+<h2>③ 场景 · 什么该进 ES，什么不该进</h2>
+
+<p>ES 的能力边界很清楚：<strong>它是为「按内容找文档」优化的，不是为「按主键改数据」优化的</strong>。下表按需求形态给结论。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>日志与指标，写多读少，按时间查</td><td>按别名加 rollover 滚动索引，用 ILM 做冷热分层与删除</td><td>时序数据的生命周期是按时间整段淘汰的，删索引比删文档便宜得多</td><td>要维护 ILM 策略与分层节点角色，查询要带时间范围才能裁剪索引</td></tr>
+<tr><td>商品、文章这类实体的全文检索</td><td>数据库为权威源，通过同步链路写 ES，查询只走 ES</td><td>ES 没有跨文档事务，<code>_version</code> 冲突要业务自己处理</td><td>只有最终一致；同步链路中断时要有可重放的补偿与整体重建路径</td></tr>
+<tr><td>需要精确计数的对账、计费</td><td>用数据库算，不要用 ES 的聚合</td><td><code>terms</code> 聚合在多分片下本身就是近似的，<code>doc_count_error_upper_bound</code> 就是误差上界</td><td>放弃聚合的灵活性，换确定的数字</td></tr>
+<tr><td>导出全量数据、离线分析</td><td><code>search_after</code> 配 point in time 顺序拉取，或直接从数据库导</td><td>深分页的代价只与翻多深有关，与最终返回几条无关</td><td>要记得关 pit，否则它会长期持有 segment 造成慢性磁盘泄漏</td></tr>
+<tr><td>仪表盘类的固定时间窗聚合</td><td>时间过滤写成取整形式，<code>size</code> 设 0 让 shard request cache 生效</td><td>缓存键是完整请求体，带 <code>now</code> 这种每毫秒都在变的值时永远不命中</td><td>用户看到的数据有一个取整粒度的滞后</td></tr>
+<tr><td>只有几百到几千篇文档的站内搜索</td><td>不要上 ES，用更轻的实现</td><td>每个分片都是一份完整的 Lucene index，小数据量下分片开销就是纯成本</td><td>能力上限更低，具体分层与选型见下一步的 <a href="site-search/">站内搜索的实现分层与选型</a></td></tr>
+<tr><td>需要强一致的读写、事务与唯一约束</td><td>放在关系库里，ES 只做检索副本</td><td>refresh 之前写入不可见，也没有跨文档事务</td><td>两套存储要保持同步，删除与更新都要双写</td></tr>
+<tr><td>用自然语言描述意图、同一概念多种叫法</td><td>在关键词召回之上叠一层 <code>dense_vector</code> 的 knn，用排名融合合并</td><td>两路分数量纲不同，直接相加没有意义</td><td>要维护嵌入模型版本，且过滤条件与近邻搜索的交互会影响召回率</td></tr>
+</tbody></table>
+
+<p><strong>不适用边界</strong>：ES 不是主库——没有跨文档事务、refresh 前不可见、版本冲突需要业务处理，把它当唯一存储迟早要重建数据。需要主键读写与事务的部分留在关系库，索引与执行计划的取舍见 <a href="../mysql/">MySQL</a> 与 <a href="../postgresql/index-optimize/">PostgreSQL 索引优化</a>；只有几百篇文档的站内搜索用不着集群；需要按键取值的热点读走缓存，见 <a href="../cache/">缓存的收益与代价</a>；向量检索的形态与索引参数见 <a href="../vector/">向量数据库</a>。</p>
+
+<p>这一篇讲的是 ES 自身的结构与代价。把它放到具体产品里还有一层问题没解决：站内搜索到底该用哪一档实现——几百篇文档的静态站和千万级业务数据，答案完全不同。</p>
+
+<p class="cluster-nav">同主题路径：<a href="site-search/">下一步：站内搜索的实现分层与选型 →</a></p>
+
+<h2>最容易踩的坑</h2>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>

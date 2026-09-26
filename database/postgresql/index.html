@@ -10,14 +10,14 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="PG 的表是无序堆，所有索引都存 ctid，新版本直接写进堆表：这一设计决定了 HOT 更新为什么能免掉索引写入、表膨胀为什么必须靠 VACUUM 回收、autovacuum 的 scale_factor 为什么在大表上必须调小、32 位事务 ID 为什么会把库逼进单用户模式。本文讲透 8KB 页结构与元组头可见性判定、VACUUM 与 pg_repack 的边界、XID 回卷监控 SQL，以及 WAL 与 checkpoint 的参数取值。">
+    <meta name="description" content="PostgreSQL 三段式：先给接手一套 PG 必看的五个入口（pg_stat_activity、pg_stat_user_tables 的死元组与 HOT 命中率、pg_blocking_pids、EXPLAIN (ANALYZE, BUFFERS)、XID 水位与复制槽滞后）与现象到结论的映射表，再讲堆表与 ctid、元组头可见性判定、旧版本留堆内的四个后果、HOT 更新触发条件、VACUUM 与 pg_repack 的边界、XID 回卷五档水位与 WAL 参数取值，最后给七种现象的处置与代价矩阵。">
     <meta name="keywords" content="PostgreSQL,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/postgresql/">
     <meta property="og:title" content="PostgreSQL 深度原理：堆表、MVCC 与 WAL - 资深码农">
-    <meta property="og:description" content="PG 的表是无序堆，所有索引都存 ctid，新版本直接写进堆表：这一设计决定了 HOT 更新为什么能免掉索引写入、表膨胀为什么必须靠 VACUUM 回收、autovacuum 的 scale_factor 为什么在大表上必须调小、32 位事务 ID 为什么会把库逼进单用户模式。本文讲透 8KB 页结构与元组头可见性判定、VACUUM 与 pg_repack 的边界、XID 回卷监控 SQL，以及 WAL 与 checkpoint 的参数取值。">
+    <meta property="og:description" content="PostgreSQL 三段式：先给接手一套 PG 必看的五个入口（pg_stat_activity、pg_stat_user_tables 的死元组与 HOT 命中率、pg_blocking_pids、EXPLAIN (ANALYZE, BUFFERS)、XID 水位与复制槽滞后）与现象到结论的映射表，再讲堆表与 ctid、元组头可见性判定、旧版本留堆内的四个后果、HOT 更新触发条件、VACUUM 与 pg_repack 的边界、XID 回卷五档水位与 WAL 参数取值，最后给七种现象的处置与代价矩阵。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/postgresql/">
     <meta property="og:site_name" content="资深码农">
@@ -28,9 +28,9 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PostgreSQL 深度原理：堆表、MVCC 与 WAL - 资深码农">
-    <meta name="twitter:description" content="PG 的表是无序堆，所有索引都存 ctid，新版本直接写进堆表：这一设计决定了 HOT 更新为什么能免掉索引写入、表膨胀为什么必须靠 VACUUM 回收、autovacuum 的 scale_factor 为什么在大表上必须调小、32 位事务 ID 为什么会把库逼进单用户模式。本文讲透 8KB 页结构与元组头可见性判定、VACUUM 与 pg_repack 的边界、XID 回卷监控 SQL，以及 WAL 与 checkpoint 的参数取值。">
+    <meta name="twitter:description" content="PostgreSQL 三段式：先给接手一套 PG 必看的五个入口（pg_stat_activity、pg_stat_user_tables 的死元组与 HOT 命中率、pg_blocking_pids、EXPLAIN (ANALYZE, BUFFERS)、XID 水位与复制槽滞后）与现象到结论的映射表，再讲堆表与 ctid、元组头可见性判定、旧版本留堆内的四个后果、HOT 更新触发条件、VACUUM 与 pg_repack 的边界、XID 回卷五档水位与 WAL 参数取值，最后给七种现象的处置与代价矩阵。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
-    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 深度原理：堆表、MVCC 与 WAL","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"PG 的表是无序堆，所有索引都存 ctid，新版本直接写进堆表：这一设计决定了 HOT 更新为什么能免掉索引写入、表膨胀为什么必须靠 VACUUM 回收、autovacuum 的 scale_factor 为什么在大表上必须调小、32 位事务 ID 为什么会把库逼进单用户模式。本文讲透 8KB 页结构与元组头可见性判定、VACUUM 与 pg_repack 的边界、XID 回卷监控 SQL，以及 WAL 与 checkpoint 的参数取值。","url":"https://www.yijunjun.asia/database/postgresql/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/"},"articleSection":"数据库与缓存"}</script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 深度原理：堆表、MVCC 与 WAL","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"PostgreSQL 三段式：先给接手一套 PG 必看的五个入口（pg_stat_activity、pg_stat_user_tables 的死元组与 HOT 命中率、pg_blocking_pids、EXPLAIN (ANALYZE, BUFFERS)、XID 水位与复制槽滞后）与现象到结论的映射表，再讲堆表与 ctid、元组头可见性判定、旧版本留堆内的四个后果、HOT 更新触发条件、VACUUM 与 pg_repack 的边界、XID 回卷五档水位与 WAL 参数取值，最后给七种现象的处置与代价矩阵。","url":"https://www.yijunjun.asia/database/postgresql/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "PostgreSQL", "item": "https://www.yijunjun.asia/database/postgresql/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -75,7 +75,179 @@
     </header>
     <p>PostgreSQL 存储层的一切行为，都能从两个设计决定推导出来：<strong>表是无序的堆，所有索引都是二级索引</strong>；<strong>行的新版本直接追加进堆表，旧版本原地留着</strong>。这两条决定了 HOT 更新为什么存在、表膨胀为什么必须靠 VACUUM、事务 ID 为什么会回卷、以及为什么 PG 只需要一份 WAL 就同时干了 MySQL 里 redo log 加 binlog 两件事。本文只讲这条主线。</p>
 
-    <h2>堆表与 ctid：PG 没有聚簇索引</h2>
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">这篇怎么读</div>
+        <ul>
+            <li><strong>① 用法</strong>：接手一套 PG 先敲的五个入口（<code>pg_stat_activity</code>、<code>pg_stat_user_tables</code> 的死元组与 HOT 命中率、<code>pg_locks</code> 配 <code>pg_blocking_pids</code>、<code>EXPLAIN (ANALYZE, BUFFERS)</code>、XID 水位与复制槽滞后），每条都带判定线，外加一张「现象 → 入口 → 结论」映射表。</li>
+            <li><strong>② 原理</strong>：堆表与 <code>ctid</code> 为什么让 PG 没有回表也没有聚簇索引、元组头三字段与 hint bits、旧版本留堆内衍生的四个后果、HOT 更新的两个触发条件、VACUUM 三种手段与 autovacuum 触发公式、XID 回卷的五档水位、以及一份 WAL 为什么能同时干 redo 加 binlog 两件事。</li>
+            <li><strong>③ 场景</strong>：七种典型现象各自该怎么处置与代价，以及这篇的边界——索引选型、隔离级别、复制切换分别在簇内哪一篇。</li>
+        </ul>
+    </div>
+
+    <h2>① 用法 · 接手一套 PG，先敲这五个入口</h2>
+    <p>PG 的排查路径高度收敛：几乎所有现象都能从下面五个入口之一定性。按顺序敲一遍大约十分钟，就能判断这套库是「配置不对」「有人按着快照不放」还是「单纯 SQL 写得差」。每条都写了看哪个数字、什么算不正常；为什么这么判断见原理层。</p>
+    <pre><code class="language-sql">-- ① pg_stat_activity：先确认有没有人按着旧快照不放
+SELECT pid, usename, application_name, state,
+       now() - xact_start   AS 事务已开启,
+       now() - query_start  AS 当前语句已运行,
+       wait_event_type, wait_event,
+       left(query, 60)      AS 语句
+FROM   pg_stat_activity
+WHERE  backend_type = 'client backend'
+  AND  (state &lt;&gt; 'idle' OR xact_start IS NOT NULL)
+ORDER  BY xact_start NULLS LAST;
+-- 判定线：出现 state = 'idle in transaction' 且事务开了几分钟以上，就别往下查了，
+--         先处理它。它同时阻塞死元组回收与 XID 冻结，是 PG 上最高频的根因。
+
+-- ② pg_stat_user_tables：死元组占比、autovacuum 有没有跑、HOT 命中率
+SELECT relname,
+       n_live_tup, n_dead_tup,
+       round(100.0 * n_dead_tup / nullif(n_live_tup + n_dead_tup, 0), 1) AS dead_pct,
+       round(100.0 * n_tup_hot_upd / nullif(n_tup_upd, 0), 1)            AS hot_pct,
+       last_autovacuum, last_autoanalyze
+FROM   pg_stat_user_tables
+ORDER  BY n_dead_tup DESC
+LIMIT  10;
+-- 判定线：dead_pct 长期高于 20%，或 last_autovacuum 为空/很久以前 = autovacuum 追不上；
+--         高频更新表 hot_pct 低于 80% = 更新打到了索引列或页里没空位，见 HOT 一节。
+
+-- ③ pg_locks 不用自己 join，pg_blocking_pids 一步拿到阻塞链
+SELECT a.pid, a.wait_event_type, a.wait_event,
+       pg_blocking_pids(a.pid)  AS 阻塞者,
+       now() - a.query_start    AS 已等待,
+       left(a.query, 60)        AS 被挡住的语句
+FROM   pg_stat_activity a
+WHERE  cardinality(pg_blocking_pids(a.pid)) &gt; 0
+ORDER  BY 已等待 DESC;
+-- 判定线：阻塞者是一条 DDL = 锁队列，它后面的所有查询都在排队，先决定放弃 DDL 还是放弃查询；
+--         阻塞者事务很老且处于 idle in transaction = 回到 ① 的处置。
+
+-- ④ EXPLAIN 一定要带 BUFFERS，只看 cost 判断不出问题在哪
+EXPLAIN (ANALYZE, BUFFERS, VERBOSE) SELECT ... ;
+-- 只盯三件事：
+--   预估 rows 与 actual rows 差一个数量级  → 统计信息问题，先 ANALYZE，再考虑调 statistics target
+--   shared read 远大于 shared hit          → 数据不在缓存里，瓶颈是 IO 而不是 CPU
+--   Index Only Scan 的 Heap Fetches 很高   → visibility map 没建好，说明 VACUUM 没跑过（见 VACUUM 一节）
+
+-- ⑤ 两个必须进日常巡检的水位，出事前它们一定先有征兆
+SELECT datname, age(datfrozenxid) AS xid_age
+FROM   pg_database ORDER BY 2 DESC LIMIT 5;
+SELECT slot_name, active,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS 滞后量
+FROM   pg_replication_slots;
+-- 判定线：xid_age 超过 15 亿按事故处理；复制槽 active 为 false 且滞后量持续上涨，
+--         说明它正在同时撑爆 pg_wal 并阻止死元组回收。</code></pre>
+    <p>拿到输出之后按现象查表定方向。第三列写的是结论，不是猜测：</p>
+    <table>
+        <thead>
+            <tr>
+                <th>现象</th>
+                <th>先看哪个入口</th>
+                <th>看到什么就能定性</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>表越来越大，删了数据 <code>df</code> 也不见空间回来</td>
+                <td><code>pg_stat_user_tables</code> 的 <code>n_dead_tup</code> 与 <code>last_autovacuum</code></td>
+                <td>死元组高且 autovacuum 有在跑 = 这是设计如此（普通 VACUUM 不缩文件）；要缩文件走 <code>pg_repack</code></td>
+            </tr>
+            <tr>
+                <td>死元组怎么也清不掉</td>
+                <td><code>pg_stat_activity</code> 最老的 <code>xact_start</code>，再看复制槽与 <code>pg_prepared_xacts</code></td>
+                <td>存在更老的快照持有者就足以定性，调 autovacuum 参数完全无效</td>
+            </tr>
+            <tr>
+                <td>高频更新表的写入量与 WAL 量异常大</td>
+                <td><code>hot_pct</code></td>
+                <td>低于 80% 说明 HOT 失效：要么更新到了索引列，要么 <code>fillfactor</code> 太满</td>
+            </tr>
+            <tr>
+                <td>明明有索引却走 Seq Scan</td>
+                <td><code>EXPLAIN (ANALYZE, BUFFERS)</code> 的预估行数，以及 <code>random_page_cost</code></td>
+                <td>预估偏差大是统计信息问题；预估准而仍选顺扫，多半是代价参数还按机械盘假设（见部署篇）</td>
+            </tr>
+            <tr>
+                <td>覆盖索引没有预期效果</td>
+                <td>执行计划里的 <code>Heap Fetches</code></td>
+                <td>数值很高说明 visibility map 不全，Index Only Scan 退化成回堆取可见性</td>
+            </tr>
+            <tr>
+                <td>所有对某张表的请求集体卡住</td>
+                <td><code>pg_blocking_pids</code></td>
+                <td>阻塞链头部是 DDL 或 <code>VACUUM FULL</code> 就能定性，锁队列会把后来者一起挡住</td>
+            </tr>
+            <tr>
+                <td><code>pg_wal</code> 目录无限增长</td>
+                <td><code>pg_replication_slots</code> 与 <code>pg_stat_archiver</code></td>
+                <td>有不活跃的槽，或归档失败计数在涨——两者都会让 WAL 无法回收</td>
+            </tr>
+            <tr>
+                <td>刚导完数据，第一次全表查询特别慢</td>
+                <td>不用查，手工跑一次 <code>VACUUM ANALYZE</code> 再测</td>
+                <td>第一次读要写 hint bits 并建 visibility map，这是设计行为不是 bug</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>再把常用对象记成一张速查表。<strong>字段含义随大版本有变动</strong>（如统计信息在 PG 15 起进共享内存、检查点字段在 PG 17 起迁到 <code>pg_stat_checkpointer</code>），以本地 <code>\d pg_stat_*</code> 或对应版本官方文档为准：</p>
+    <table>
+        <thead>
+            <tr>
+                <th>视图或命令</th>
+                <th>看什么</th>
+                <th>什么时候用</th>
+                <th>注意</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>pg_stat_activity</code></td>
+                <td><code>state</code>、<code>xact_start</code>、<code>wait_event</code></td>
+                <td>任何现象的第一刀</td>
+                <td><code>idle in transaction</code> 比长查询更危险，它不占 CPU 所以容易被忽略</td>
+            </tr>
+            <tr>
+                <td><code>pg_stat_user_tables</code></td>
+                <td>死元组、HOT 比例、最近 vacuum 时间</td>
+                <td>膨胀与写放大排查</td>
+                <td>行数是估算值；<code>n_dead_tup</code> 归零不代表空间还给了操作系统</td>
+            </tr>
+            <tr>
+                <td><code>pg_blocking_pids(pid)</code></td>
+                <td>阻塞者 pid 数组</td>
+                <td>锁等待与卡顿</td>
+                <td>比手工 join <code>pg_locks</code> 可靠得多；它已处理好锁模式的兼容矩阵</td>
+            </tr>
+            <tr>
+                <td><code>EXPLAIN (ANALYZE, BUFFERS)</code></td>
+                <td>actual rows、shared hit 与 read、Heap Fetches</td>
+                <td>单条 SQL 慢</td>
+                <td><code>ANALYZE</code> 会真的执行语句，写操作要包在事务里再回滚</td>
+            </tr>
+            <tr>
+                <td><code>pg_replication_slots</code></td>
+                <td><code>active</code>、<code>restart_lsn</code> 滞后量、<code>catalog_xmin</code></td>
+                <td>磁盘涨、死元组清不掉</td>
+                <td>不活跃的槽是「撑爆磁盘」与「阻止回收」的双杀，下线备库必须顺手删槽</td>
+            </tr>
+            <tr>
+                <td><code>age(datfrozenxid)</code></td>
+                <td>XID 年龄</td>
+                <td>日常巡检</td>
+                <td>与数据量无关，只与消耗的事务号有关；子事务也在烧</td>
+            </tr>
+            <tr>
+                <td><code>pg_stat_statements</code></td>
+                <td>按指纹的调用次数与总耗时</td>
+                <td>找热点 SQL</td>
+                <td>需要在 <code>shared_preload_libraries</code> 里预加载并重启，事后补装拿不到历史</td>
+            </tr>
+        </tbody>
+    </table>
+    <p>这五个入口背后是同一套存储设计。下面从「表是无序堆」这一条开始，把每个判定线的来历讲清楚。</p>
+
+    <h2>② 原理 · 堆表与 ctid：PG 没有聚簇索引</h2>
     <p>PG 的表叫 heap，物理上就是一串 1GB 一个的数据文件，每个文件按 8KB 切成页。行存在哪一页、页内哪个位置，完全由插入顺序和空闲空间决定，<strong>没有任何索引能决定行的物理顺序</strong>（<code>CLUSTER</code> 只是一次性按索引顺序重排，之后的更新立刻会打破它）。</p>
     <p>行的物理地址是 <code>ctid</code>，6 字节，前 4 字节是块号，后 2 字节是页内行指针编号。所有索引的叶子节点存的都是 <code>ctid</code>，主键索引和一个普通 B-tree 索引在结构上<strong>没有任何区别</strong>。这就是 PG 与 MySQL InnoDB 最根本的分歧：InnoDB 的表本身就是主键 B+ 树，二级索引叶子存主键值，因此有回表；PG 没有回表这个概念，但代价出现在写入侧。</p>
     <div class="mermaid">
@@ -146,7 +318,7 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>元组头与可见性判定</h2>
+    <h2>② 原理 · 元组头与可见性判定</h2>
     <p>每个元组前面有 23 字节的 <code>HeapTupleHeaderData</code>，MVCC 全靠其中三个字段：<code>t_xmin</code> 是插入这个版本的事务 ID；<code>t_xmax</code> 是删除或更新它的事务 ID，0 表示还活着；<code>t_ctid</code> 正常指向自己，发生 HOT 更新时指向页内的新版本。另外 <code>t_infomask</code> 里有一组提交状态提示位（hint bits），用来避免每次可见性判断都去查 <code>pg_xact</code>（旧称 clog）。</p>
     <p>判定规则简化后是：<strong>xmin 已提交且早于我的快照，xmax 为空或其事务未提交或晚于我的快照，则这个版本对我可见</strong>。这里有个常被忽略的后果：hint bits 是第一次读到元组时才写上去的，所以<strong>一次纯 SELECT 也会产生脏页和 WAL</strong>，刚导完数据的第一次全表扫描往往慢得异常，这不是 bug。MySQL 侧的 Read View 与可见性判定细节详见站内 MySQL 深度原理，此处不展开。</p>
     <pre><code class="language-sql">-- 直接看页内元组，确认 HOT 链是否形成（需要 pageinspect 扩展）
@@ -170,7 +342,7 @@ FROM   pg_stat_user_tables
 WHERE  n_tup_upd &gt; 10000
 ORDER  BY hot_ratio_pct NULLS FIRST;</code></pre>
 
-    <h2>新版本留在堆里：两种 MVCC 设计的四个后果</h2>
+    <h2>② 原理 · 新版本留在堆里：两种 MVCC 设计的四个后果</h2>
     <p>PG 的 <code>UPDATE</code> 本质是「插入一条新元组 + 给旧元组写上 xmax」，旧版本<strong>原地保留在堆表里</strong>，和活数据混在同一批页中。InnoDB 则原地更新数据页，把旧版本写进 undo log，读旧版本时沿 roll pointer 回溯版本链。就这一个差别，衍生出四个方向完全相反的工程后果。</p>
     <table>
         <thead>
@@ -224,7 +396,7 @@ stateDiagram-v2
     end note
     </div>
 
-    <h2>HOT 更新：PG 最重要的写优化</h2>
+    <h2>② 原理 · HOT 更新：PG 最重要的写优化</h2>
     <p>Heap-Only Tuple 的思路是：如果新版本不需要被任何索引重新指向，就干脆不动索引。触发条件只有两条，<strong>必须同时满足</strong>：本次 UPDATE 没有修改任何被索引引用的列；新版本能放进旧版本所在的同一个 8KB 页。满足时旧元组的 <code>t_ctid</code> 指向页内新元组，形成 HOT 链，索引仍然指向链头，扫描时沿链往下找可见版本。</p>
     <p>这解释了两个经典现象。第一，<strong>给表加了几个索引之后 UPDATE 突然变慢</strong>——不只是索引维护本身变贵，而是被索引覆盖的列变多后，业务更新命中索引列的概率上升，HOT 命中率掉下来，一次更新从写 1 个堆页变成写 1 个堆页加 N 个索引，WAL 量同步翻几倍。第二，<strong>fillfactor 为什么要留余量</strong>——默认 100 意味着页被填满，第一次更新就因为放不下而被迫换页，HOT 直接失效；高频更新表设到 80 到 90，用一点空间换掉大量索引写入。</p>
     <div class="mermaid">
@@ -289,7 +461,7 @@ flowchart TB
         <p>HOT 链上已经没人需要的中间版本，可以在<strong>普通 SELECT 顺手触发的页内剪枝（page pruning）</strong>里就地清掉，因为这些版本从来没有索引条目指向它们，不需要先删索引再删堆。所以一张 HOT 命中率高的表，膨胀速度天然就慢。反过来说，「把不参与查询条件的列从索引里摘出去」这种看似跟膨胀无关的改动，往往能显著压低膨胀率。</p>
     </div>
 
-    <h2>VACUUM 与表膨胀</h2>
+    <h2>② 原理 · VACUUM 与表膨胀</h2>
     <p>三个必须分清的事实：<strong>普通 VACUUM 不缩文件</strong>，它只把死元组空间标记为可复用，表文件大小原样不动，膨胀出来的 200GB 不会还给操作系统，但后续插入会填进这些空洞；<strong>VACUUM FULL 会重写整表和全部索引</strong>，能真正缩小文件，但持有 ACCESS EXCLUSIVE 锁，期间连 SELECT 都进不来，还要一份等量的额外磁盘空间；<strong>生产上要缩表用 pg_repack</strong>，它建影子表加触发器在线追平，只在最后换名字时短暂加锁。</p>
     <p>VACUUM 还有两件比「清垃圾」更关键的职责：维护 <strong>visibility map</strong>（Index Only Scan 能否生效的前提）和推进<strong>冻结水位</strong>（防 XID 回卷）。所以「我们表很少删数据，不用管 VACUUM」是错的。</p>
     <table>
@@ -421,7 +593,7 @@ UNION ALL
 SELECT 'prepared_xact', gid, prepared, now() - prepared, '用 ROLLBACK PREPARED 清掉'
 FROM   pg_prepared_xacts;</code></pre>
 
-    <h2>事务 ID 回卷：PG 最危险的运维问题</h2>
+    <h2>② 原理 · 事务 ID 回卷：PG 最危险的运维问题</h2>
     <p>XID 是 32 位且循环使用的。可见性比较用的是回绕比较：当前 XID 往前 20 亿算过去、往后 20 亿算未来，因此任何元组的 xmin 都<strong>不能比当前 XID 老过 20 亿</strong>，否则会被判成「未来事务」而凭空消失。解法是冻结：VACUUM 把足够老的元组标记为 frozen，表示对所有事务永远可见，从而把水位往前推。</p>
     <p>到了 <code>autovacuum_freeze_max_age</code>（默认 2 亿）时，即使你把 autovacuum 整个关掉，PG 也会强制启动 <strong>anti-wraparound vacuum</strong>，它不给普通 DDL 让路，<code>kill</code> 掉下一轮还会起来。继续拖下去的终点是数据库拒绝写入。</p>
     <table>
@@ -487,7 +659,7 @@ VACUUM (FREEZE, VERBOSE, PARALLEL 4) orders;</code></pre>
         <p>回卷取决于<strong>消耗了多少事务号</strong>，和数据量无关。一个每秒 5000 TPS 的小库也能在几天内烧掉 20 亿 XID。更常见的翻车姿势是：每次轮询都开显式事务的框架、以及被忽略的<strong>子事务</strong>——每个 <code>SAVEPOINT</code> 和 PL/pgSQL 里的 <code>EXCEPTION</code> 块都会分配一个子事务 ID。另外冻结水位靠写事务推进，一个只读的备库自己不冻结，主库卡住水位备库也跟着卡。</p>
     </div>
 
-    <h2>WAL：一份日志干两件事</h2>
+    <h2>② 原理 · WAL：一份日志干两件事</h2>
     <p>WAL 的核心约定是 write-ahead：任何数据页的改动在刷进数据文件之前，描述这次改动的 WAL 记录必须先落盘，这样崩溃后从最近一次 checkpoint 开始重放就能恢复。WAL 按 16MB 一个段文件写在 <code>pg_wal/</code> 下，位置用 LSN 标识（形如 <code>3/AB120F80</code> 的 64 位字节偏移），页头的 <code>pd_lsn</code> 记录这一页最后被哪条 WAL 改过，回放时靠它跳过已经应用的改动。</p>
     <p><code>full_page_writes</code> 必须开着的原因是<strong>页断裂</strong>：磁盘原子写单位是 512 字节或 4KB，8KB 的页在掉电时可能只写进去一半，而 WAL 记录是增量的，往一个半新半旧的页上重放增量只会得到垃圾。所以 checkpoint 之后每个页第一次被修改时，整页镜像会被塞进 WAL 当回放基准。代价是 WAL 量显著变大，尤其在 checkpoint 刚结束那一阵——这也是 <code>checkpoint_timeout</code> 设得太短会让 WAL 量暴涨的原因。</p>
     <div class="mermaid">
@@ -604,6 +776,67 @@ FROM   pg_stat_bgwriter;</code></pre>
             </tr>
         </tbody>
     </table>
+
+    <h2>③ 场景 · 七种现象的处置与代价</h2>
+    <p>把前面所有机制收成可执行的判断。第四列的代价是这张表的重点：每种处置都在花钱，区别只是花在停机、磁盘、还是写放大上。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>场景</th>
+                <th>该怎么做</th>
+                <th>为什么</th>
+                <th>代价</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>大表膨胀到几倍，磁盘告警</td>
+                <td>先排除长事务与废弃复制槽，再用 <code>pg_repack</code> 在线重建</td>
+                <td>普通 VACUUM 只标记可复用不缩文件；有更老的快照时连标记都做不到</td>
+                <td>重建期间需要约等于表加索引的额外空间，切换瞬间有短暂排他锁；表必须有主键或唯一非空索引</td>
+            </tr>
+            <tr>
+                <td>高频更新的状态机表写放大严重</td>
+                <td>把 <code>fillfactor</code> 调到 80 到 90 并重组，同时把状态列上的全量索引换成部分索引</td>
+                <td>HOT 要同时满足「不改索引列」与「页内有空位」，这两条各对应一个动作</td>
+                <td><code>fillfactor</code> 只对之后新写入的页生效，老页要重组才落地；留空间等于牺牲一部分缓存密度</td>
+            </tr>
+            <tr>
+                <td>autovacuum 明显追不上写入</td>
+                <td>按表下调 <code>scale_factor</code> 到 0.01 量级、放开 <code>cost_limit</code>、必要时加 worker</td>
+                <td>默认公式对大表等价于「攒够几千万死元组才开始清」</td>
+                <td>VACUUM 自身要占 IO 与 CPU，调猛了会和业务抢磁盘队列</td>
+            </tr>
+            <tr>
+                <td>XID 年龄逼近阈值</td>
+                <td>清掉长事务、prepared transaction 与废弃槽，再对最老的表手工 <code>VACUUM (FREEZE)</code></td>
+                <td>冻结靠写事务推进，阻塞者不清掉，怎么跑都推不动水位</td>
+                <td>手工冻结是一轮全表扫描的 IO；拖到只剩几百万事务号就只能停库进单用户模式</td>
+            </tr>
+            <tr>
+                <td>误更新上亿行需要回退</td>
+                <td>直接 <code>ROLLBACK</code>，然后立刻安排对该表的重组</td>
+                <td>PG 回滚几乎零成本，新元组直接变死元组</td>
+                <td>留下上亿死元组等着 VACUUM，膨胀与后续扫描变慢是延迟支付的账单</td>
+            </tr>
+            <tr>
+                <td>日志类写入想换吞吐</td>
+                <td>对该类事务单独设 <code>synchronous_commit = off</code></td>
+                <td>它可以按会话或按事务设置，不必全局牺牲持久性</td>
+                <td>崩溃会丢最近几百毫秒<strong>已返回成功</strong>的事务（数据不会损坏）；业务要能接受这个语义</td>
+            </tr>
+            <tr>
+                <td>写入毛刺明显，IO 周期性尖峰</td>
+                <td>加大 <code>max_wal_size</code>、保持 <code>checkpoint_completion_target</code> 0.9，不要去缩 <code>checkpoint_timeout</code></td>
+                <td>检查点越频繁，全页镜像越反复重来，WAL 量与 IO 一起涨</td>
+                <td>检查点周期拉长意味着崩溃恢复时间变长，这是一笔明确的取舍</td>
+            </tr>
+        </tbody>
+    </table>
+    <p><strong>不适用边界</strong>：这篇只讲存储层主线（堆表、MVCC、VACUUM、WAL）。索引怎么选、<code>EXPLAIN</code> 各节点怎么逐行判读见 <a href="index-optimize/">PostgreSQL 索引选型与执行计划判读</a>；隔离级别语义、SSI 与 DDL 锁队列见 <a href="mvcc-transaction/">PostgreSQL 隔离级别与并发控制</a>；参数怎么按机器算、部署时哪些决定不可逆见 <a href="install/">生产部署与必调参数</a>；字段类型选择与改类型的代价见 <a href="datatypes/">数据类型选择与代价</a>；复制、故障切换与 <code>pg_rewind</code> 见 <a href="replication-ha/">复制与故障切换</a>；从 MySQL 过来要改哪些习惯见 <a href="intro/">PG 与 MySQL 架构差异与选型</a>；InnoDB 侧的 undo 与两阶段提交对照见 <a href="../mysql/">MySQL 深度原理</a>。</p>
+    <p>这条路径上，本篇是地基：先知道行是怎么存、旧版本去哪了、WAL 承担了什么，后面的选型、部署、类型与索引几篇才有共同的解释框架。</p>
+
+    <p class="cluster-nav">同主题路径：<a href="intro/">下一步：PostgreSQL 与 MySQL 架构差异与选型 →</a></p>
 
     <h2>最容易踩的坑</h2>
     <div class="callout callout-danger">

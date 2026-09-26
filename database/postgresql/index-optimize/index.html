@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="B-tree、Hash、GIN、GiST、BRIN 各自对应什么数据形态，部分索引与表达式索引为什么是 PG 相比 MySQL 的实在优势，INCLUDE 覆盖索引为什么依赖 VACUUM。后半篇讲透 EXPLAIN ANALYZE BUFFERS 的判读：rows 与 actual rows 差一个数量级意味着什么、actual rows 为什么要乘 loops、Bitmap 扫描的真正含义、三种 join 与 work_mem 落盘，以及优化器不走索引的九种原因与修法。">
+        <meta name="description" content="索引三段式：先给拿到一条慢 SQL 之后的判读顺序，EXPLAIN 加 ANALYZE 与 BUFFERS 只看三处（rows 与 actual rows 的比值、loops、Buffers 与 temp），再给「查询形态 → 索引类型」对照表和影响索引选择的参数速查；然后展开 B-tree、GIN、GiST、BRIN 各自的操作符类与失效条件、部分索引与表达式索引与 INCLUDE 的前提、四种扫描方式与 Bitmap 的两步结构、三种 join 与 work_mem 的分配单位、优化器不走索引的九种成因与修法、索引运维巡检 SQL；最后给按业务形态选索引组合的代价矩阵与不适用边界。">
     <meta name="keywords" content="索引原理,PostgreSQL,关系数据库,PostgreSQL">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/postgresql/index-optimize/">
     <!-- Open Graph -->
     <meta property="og:title" content="PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN - 资深码农">
-    <meta property="og:description" content="B-tree、Hash、GIN、GiST、BRIN 各自对应什么数据形态，部分索引与表达式索引为什么是 PG 相比 MySQL 的实在优势，INCLUDE 覆盖索引为什么依赖 VACUUM。后半篇讲透 EXPLAIN ANALYZE BUFFERS 的判读：rows 与 actual rows 差一个数量级意味着什么、actual rows 为什么要乘 loops、Bitmap 扫描的真正含义、三种 join 与 work_mem 落盘，以及优化器不走索引的九种原因与修法。">
+    <meta property="og:description" content="索引三段式：先给拿到一条慢 SQL 之后的判读顺序，EXPLAIN 加 ANALYZE 与 BUFFERS 只看三处（rows 与 actual rows 的比值、loops、Buffers 与 temp），再给「查询形态 → 索引类型」对照表和影响索引选择的参数速查；然后展开 B-tree、GIN、GiST、BRIN 各自的操作符类与失效条件、部分索引与表达式索引与 INCLUDE 的前提、四种扫描方式与 Bitmap 的两步结构、三种 join 与 work_mem 的分配单位、优化器不走索引的九种成因与修法、索引运维巡检 SQL；最后给按业务形态选索引组合的代价矩阵与不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/postgresql/index-optimize/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN - 资深码农">
-    <meta name="twitter:description" content="B-tree、Hash、GIN、GiST、BRIN 各自对应什么数据形态，部分索引与表达式索引为什么是 PG 相比 MySQL 的实在优势，INCLUDE 覆盖索引为什么依赖 VACUUM。后半篇讲透 EXPLAIN ANALYZE BUFFERS 的判读：rows 与 actual rows 差一个数量级意味着什么、actual rows 为什么要乘 loops、Bitmap 扫描的真正含义、三种 join 与 work_mem 落盘，以及优化器不走索引的九种原因与修法。">
+    <meta name="twitter:description" content="索引三段式：先给拿到一条慢 SQL 之后的判读顺序，EXPLAIN 加 ANALYZE 与 BUFFERS 只看三处（rows 与 actual rows 的比值、loops、Buffers 与 temp），再给「查询形态 → 索引类型」对照表和影响索引选择的参数速查；然后展开 B-tree、GIN、GiST、BRIN 各自的操作符类与失效条件、部分索引与表达式索引与 INCLUDE 的前提、四种扫描方式与 Bitmap 的两步结构、三种 join 与 work_mem 的分配单位、优化器不走索引的九种成因与修法、索引运维巡检 SQL；最后给按业务形态选索引组合的代价矩阵与不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="PostgreSQL,关系数据库">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"B-tree、Hash、GIN、GiST、BRIN 各自对应什么数据形态，部分索引与表达式索引为什么是 PG 相比 MySQL 的实在优势，INCLUDE 覆盖索引为什么依赖 VACUUM。后半篇讲透 EXPLAIN ANALYZE BUFFERS 的判读：rows 与 actual rows 差一个数量级意味着什么、actual rows 为什么要乘 loops、Bitmap 扫描的真正含义、三种 join 与 work_mem 落盘，以及优化器不走索引的九种原因与修法。","url":"https://www.yijunjun.asia/database/postgresql/index-optimize/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/index-optimize/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"索引三段式：先给拿到一条慢 SQL 之后的判读顺序，EXPLAIN 加 ANALYZE 与 BUFFERS 只看三处（rows 与 actual rows 的比值、loops、Buffers 与 temp），再给「查询形态 → 索引类型」对照表和影响索引选择的参数速查；然后展开 B-tree、GIN、GiST、BRIN 各自的操作符类与失效条件、部分索引与表达式索引与 INCLUDE 的前提、四种扫描方式与 Bitmap 的两步结构、三种 join 与 work_mem 的分配单位、优化器不走索引的九种成因与修法、索引运维巡检 SQL；最后给按业务形态选索引组合的代价矩阵与不适用边界。","url":"https://www.yijunjun.asia/database/postgresql/index-optimize/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/index-optimize/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "索引原理", "item": "https://www.yijunjun.asia/database/postgresql/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,7 +92,139 @@
                     <div class="article-content">
 <p>PG 的索引能力远超「B-tree 加几个技巧」：五种索引类型对应五种完全不同的数据形态，加上部分索引、表达式索引和 <code>INCLUDE</code> 覆盖列，很多在 MySQL 上只能靠改表结构解决的问题在 PG 上是一行 DDL。但索引选对了不等于计划走对了，所以后半篇全部用来讲 <code>EXPLAIN (ANALYZE, BUFFERS)</code> 怎么读、优化器为什么不走你建的索引。</p>
 
-<h2>五种索引类型：按数据形态选，不是按「快慢」选</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：拿到一条慢 SQL 之后的判读顺序——<code>EXPLAIN (ANALYZE, BUFFERS)</code> 只看哪三处、估行数与实际行数差多少才算统计信息问题、什么时候该建索引什么时候该改 SQL，配一张「查询形态 → 索引类型」对照表与影响索引选择的参数速查。</li>
+        <li><strong>② 原理</strong>：五种索引类型各自实现的操作符类与失效条件、部分索引与表达式索引与 <code>INCLUDE</code> 的前提、计划里每个字段的语义、四种扫描方式与 Bitmap 的两步结构、三种 join 与 <code>work_mem</code> 的分配单位、优化器不走索引的九种成因与修法、索引运维的四类巡检 SQL。</li>
+        <li><strong>③ 场景</strong>：按业务形态给出索引组合与代价矩阵，以及哪些问题不该靠索引解决、该转去站内哪一篇。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 拿到一条慢 SQL 之后的判读顺序</h2>
+<p>顺序是固定的，跳步就会得出错误结论：<strong>先确认这条语句值得优化，再判断统计信息可不可信，最后才决定是建索引还是改 SQL</strong>。下面这段可以直接照着敲，注释写的是为什么要这一步。</p>
+<pre><code class="language-sql">-- 第 0 步：先确认这条语句值得优化。按总耗时排序，不是按单次耗时排序
+--   调用量大而单次不慢的语句，优化收益往往远高于那条偶发的慢查询
+SELECT calls,
+       round(total_exec_time)    AS 总耗时ms,
+       round(mean_exec_time, 2)  AS 平均ms,
+       rows / greatest(calls, 1) AS 每次返回行数,
+       left(query, 80)           AS 语句
+FROM   pg_stat_statements
+ORDER  BY total_exec_time DESC
+LIMIT  10;
+
+-- 第 1 步：永远带 ANALYZE 与 BUFFERS。不带 ANALYZE 只有估算值，看不出优化器估错了；
+--   不带 BUFFERS 分不清是内存命中还是真的读盘。ANALYZE 会真实执行，写语句必须包在事务里回滚
+BEGIN;
+EXPLAIN (ANALYZE, BUFFERS, SETTINGS) &lt;把你要判读的语句放这里&gt;;
+ROLLBACK;
+
+-- 第 2 步：只看三处，顺序不要乱（每一处的判定标准见下表）
+--   a) 最内层节点的 rows 估算值 与 actual rows 的比值
+--   b) 每个节点的 loops，因为 actual rows 与 actual time 都是「单次平均值」
+--   c) Buffers 的 read 与 hit 比例，以及有没有 temp 的读写量
+
+-- 第 3 步：统计信息可疑就先修统计信息，别急着改 SQL 也别急着建索引
+ANALYZE orders;                                                -- 大量「选错计划」到这一步就结束了
+ALTER TABLE orders ALTER COLUMN status SET STATISTICS 1000;     -- 单列取值倾斜，直方图精度不够
+CREATE STATISTICS st_orders_city_zip (dependencies, ndistinct)  -- 多列强相关，选择率连乘导致低估
+       ON city, zipcode FROM orders;
+ANALYZE orders;
+
+-- 第 4 步：验证「到底是不是优化器估错了」。这是诊断手段，绝不要写进生产配置
+SET enable_seqscan = off;
+EXPLAIN (ANALYZE, BUFFERS) &lt;同一条语句&gt;;
+RESET enable_seqscan;
+--   强制走索引后明显更快 → 代价模型参数不对，先查 random_page_cost
+--   强制走索引后反而更慢 → 优化器判断正确，该改的是 SQL 或索引设计</code></pre>
+<div class="mermaid">
+flowchart TB
+    S["拿到一条慢 SQL"] --> Q1{"rows 估算值与 actual rows<br/>差多少"}
+    Q1 -->|"差 10 倍以上"| F1["先修统计信息<br/>ANALYZE 再考虑统计目标与扩展统计"]
+    Q1 -->|"2 倍以内 可信"| Q2{"计划里最扎眼的是哪一项"}
+    Q2 -->|"Rows Removed by Filter 远大于输出行数"| F2["建索引<br/>复合索引或部分索引"]
+    Q2 -->|"actual rows 占全表一成以上"| F3["改 SQL 或收窄业务条件<br/>顺序扫描本来就是最优解"]
+    Q2 -->|"Sort Method 出现 external merge Disk"| F4["按会话放大 work_mem<br/>全局值不要动"]
+    Q2 -->|"Nested Loop 内层 loops 上万"| F5["外层行数被低估<br/>问题其实在统计信息"]
+    Q2 -->|"Heap Fetches 很大"| F6["VACUUM 没跟上<br/>Index Only Scan 退化成回堆"]
+    F1 --> Q2
+    F5 --> F1
+</div>
+<p>第 2 步说的「只看三处」具体怎么判，照下表查。<strong>这张表是判读的骨干，看完就能决定下一步动什么</strong>：</p>
+<table>
+<thead>
+<tr><th>看哪一处</th><th>看到什么</th><th>下一步做什么</th></tr>
+</thead>
+<tbody>
+<tr><td><code>rows</code> 与 <code>actual rows</code>（从最内层节点开始看）</td><td>比值在 2 倍以内</td><td>统计信息可用，问题不在这里，继续往外层看</td></tr>
+<tr><td>同上</td><td><strong>差一个数量级以上</strong></td><td>统计信息不可信，先 <code>ANALYZE</code>；仍然差就提高该列统计目标，多列 AND 才失真就建扩展统计</td></tr>
+<tr><td><code>loops</code></td><td>Nested Loop 内层 <code>loops</code> 上万</td><td>真实耗时是 <code>actual time × loops</code>，真实行数是 <code>actual rows × loops</code>。根因通常是外层行数被低估，回到上一行</td></tr>
+<tr><td><code>Rows Removed by Filter</code></td><td>远大于该节点输出的行数</td><td>过滤条件没有下推到索引，建复合索引或部分索引把它变成 <code>Index Cond</code></td></tr>
+<tr><td><code>Buffers: shared hit / read</code></td><td><code>read</code> 远大于 <code>hit</code></td><td>先确认不是首次访问；反复如此说明扫描量太大或 <code>shared_buffers</code> 偏小</td></tr>
+<tr><td><code>Sort Method</code> 与 Hash 的 <code>Batches</code></td><td>出现 <code>external merge Disk</code> 或 <code>Batches</code> 大于 1</td><td>按计划里提示的 KB 数在<strong>会话级</strong>放大 <code>work_mem</code>，不要改全局</td></tr>
+<tr><td><code>Index Cond</code> 与 <code>Filter</code></td><td>你以为走索引的条件落在 <code>Filter</code> 上</td><td>它没用上索引：查类型是否匹配、条件是否套了函数、排序规则是否需要 <code>text_pattern_ops</code></td></tr>
+<tr><td><code>Heap Fetches</code></td><td>Index Only Scan 下这个数很大</td><td>visibility map 不是全可见，跑一次 <code>VACUUM</code> 即可，不用改索引</td></tr>
+<tr><td><code>Heap Blocks: lossy</code></td><td>Bitmap Heap Scan 里出现 <code>lossy</code></td><td>位图内存不够退化成按页复核，同样是调 <code>work_mem</code></td></tr>
+</tbody>
+</table>
+<p>判读之后最关键的一次决策是：<strong>建索引，还是改 SQL</strong>。这两条路的判据完全不同，选错就是白花一个变更窗口。</p>
+<table>
+<thead>
+<tr><th>现象</th><th>该建索引还是改 SQL</th><th>判据</th></tr>
+</thead>
+<tbody>
+<tr><td>扫了几百万行只输出几千行，条件是等值加范围</td><td><strong>建索引</strong>，按等值列在前、范围列在后</td><td><code>Rows Removed by Filter</code> 占比极高，说明过滤完全可以下推到索引里完成</td></tr>
+<tr><td><code>actual rows</code> 占表总行数一成以上</td><td><strong>改 SQL 或改业务条件</strong>（加时间窗、加分页）</td><td>这个选择率下顺序扫描加预读本来就更快，加索引只会更慢</td></tr>
+<tr><td>条件里套了函数，如 <code>lower(email) = ?</code></td><td>两条都行：建同样写法的表达式索引，或把函数挪到参数一侧</td><td>索引定义与查询里的表达式必须<strong>写法完全一致</strong>才会被匹配</td></tr>
+<tr><td><code>ORDER BY</code> 加 <code>LIMIT</code> 很慢，计划里有 Sort 节点</td><td><strong>建索引</strong>，让排序列紧跟等值列</td><td>有序索引能把整个 Sort 节点去掉，这是收益最稳定的一类索引</td></tr>
+<tr><td>一次查询往应用返回十万行</td><td><strong>改 SQL</strong></td><td>返回量本身是设计问题，索引解决不了结果集编码、网络传输与反序列化</td></tr>
+<tr><td>同一条语句只有个别参数值慢</td><td><strong>先修统计信息</strong>，两条都不是</td><td>取值分布倾斜，提高该列统计目标；也要看是不是通用计划与自定义计划的差别</td></tr>
+<tr><td><code>OFFSET 100000</code> 的深分页</td><td><strong>改 SQL</strong>，改成按上一页末尾值继续扫的游标式分页</td><td><code>OFFSET</code> 前面那十万行仍然要被扫出来再丢掉，索引救不了</td></tr>
+<tr><td>子查询里 <code>IN</code> 一个很大的列表</td><td><strong>改 SQL</strong>，改成 join 或 <code>= ANY(数组)</code></td><td>计划形态不同，前者容易退化成逐个求值</td></tr>
+</tbody>
+</table>
+<p>确定要建索引之后，<strong>类型由查询形态决定，不是由「哪个快」决定</strong>。查下表就能选对：</p>
+<table>
+<thead>
+<tr><th>查询形态（写法举例）</th><th>索引类型</th><th>怎么建</th><th>注意什么</th></tr>
+</thead>
+<tbody>
+<tr><td><code>a = ?</code>、<code>b BETWEEN ? AND ?</code>、<code>ORDER BY</code>、唯一约束</td><td><strong>B-tree</strong></td><td><code>CREATE INDEX ON t (a, b)</code>，等值列在前</td><td>覆盖绝大多数场景；唯一约束只有它能实现</td></tr>
+<tr><td><code>payload @&gt; ?</code>、数组包含、<code>tsvector @@ ?</code></td><td><strong>GIN</strong></td><td><code>USING gin (payload)</code>，或只用包含操作符时改 <code>jsonb_path_ops</code></td><td>写入放大明显；<code>fastupdate</code> 的待处理列表会让查询延迟抖动</td></tr>
+<tr><td><code>name LIKE '%中间%'</code></td><td><strong>GIN 加 pg_trgm</strong></td><td><code>USING gin (name gin_trgm_ops)</code></td><td>模式串短于 3 个字符时三元组不足，仍会退化成全表扫</td></tr>
+<tr><td>几何与地理、范围重叠 <code>&amp;&amp;</code>、最近邻 <code>&lt;-&gt;</code></td><td><strong>GiST</strong></td><td><code>USING gist (...)</code>，不许重叠用 <code>EXCLUDE</code> 约束</td><td>有损索引，需要回堆精确复核；等值查询打不过 B-tree</td></tr>
+<tr><td>超大时序表按时间过滤，且数据物理有序</td><td><strong>BRIN</strong></td><td><code>USING brin (created_at) WITH (pages_per_range = 32)</code></td><td>物理无序时完全无效；频繁更新会让它逐渐失效</td></tr>
+<tr><td>只查一小部分行：软删表、队列表、<code>status = 'pending'</code></td><td><strong>部分索引</strong></td><td><code>CREATE INDEX ... WHERE status = 'pending'</code></td><td>查询条件必须能被优化器<strong>静态判定</strong>蕴含索引的 WHERE，写成绑定参数就用不上</td></tr>
+<tr><td><code>lower(email) = ?</code>、<code>date(created_at) = ?</code></td><td><strong>表达式索引</strong></td><td><code>CREATE INDEX ON t (lower(email))</code></td><td>函数必须是 <code>IMMUTABLE</code>；查询写法要和索引定义一致</td></tr>
+<tr><td>高频查询只取少数几列，想完全不碰堆</td><td><strong>覆盖索引 INCLUDE</strong>（PG 11+）</td><td><code>CREATE INDEX ON t (a) INCLUDE (b, c)</code></td><td>要靠 VACUUM 维护 visibility map 才能进 Index Only Scan</td></tr>
+<tr><td>IP 网段 <code>inet</code>、电话号码前缀这类前缀树式数据</td><td>SP-GiST</td><td><code>USING spgist (...)</code></td><td>使用面窄，建之前先确认对应操作符类存在</td></tr>
+<tr><td>向量相似度检索</td><td>pgvector 的 HNSW 或 IVFFlat</td><td>需要装扩展，参数与召回率取舍见 <a href="../../vector/pgvector/">pgvector 能力边界与正确用法</a></td><td>不是内置索引类型，召回率与延迟要一起量</td></tr>
+<tr><td>只有等号、不需要排序也不需要唯一</td><td>仍然选 <strong>B-tree</strong></td><td>—</td><td>Hash 索引省下的空间不值得，理由见原理层</td></tr>
+</tbody>
+</table>
+<p>最后是几个真正会改变优化器判断的参数。<strong>默认值随版本与发行版变化，一律以 <code>SHOW 参数名</code> 或 <code>pg_settings</code> 的输出为准</strong>，不要照抄任何文章里的数字：</p>
+<table>
+<thead>
+<tr><th>参数</th><th>作用</th><th>默认值</th><th>什么时候需要改</th></tr>
+</thead>
+<tbody>
+<tr><td><code>random_page_cost</code></td><td>随机读一页相对顺序读的代价系数，<strong>直接决定优化器愿不愿意用索引</strong></td><td>以 <code>SHOW random_page_cost</code> 输出为准；历史出厂值是按机械盘假设设定的</td><td>SSD 与 NVMe 上调到 1.1 到 1.5，这一项常能一次性解决一批「不走索引」</td></tr>
+<tr><td><code>effective_cache_size</code></td><td>告诉优化器操作系统加 PG 一共能缓存多少，<strong>只是提示，不实际分配内存</strong></td><td>以 <code>SHOW effective_cache_size</code> 输出为准</td><td>设到物理内存的 50% 到 75%，与上一项配套使用</td></tr>
+<tr><td><code>work_mem</code></td><td><strong>每个</strong>排序或哈希节点各分配一份的内存上限</td><td>以 <code>SHOW work_mem</code> 输出为准</td><td>计划里出现 <code>external merge Disk</code> 或 <code>Batches</code> 大于 1 时，按会话或按角色放大</td></tr>
+<tr><td><code>hash_mem_multiplier</code>（PG 13+）</td><td>只放大哈希类节点可用的内存倍数</td><td>以 <code>SHOW hash_mem_multiplier</code> 输出为准</td><td>只有哈希节点落盘、又不想抬高全局 <code>work_mem</code> 时</td></tr>
+<tr><td><code>default_statistics_target</code></td><td>ANALYZE 采样与直方图的精度</td><td>以 <code>SHOW default_statistics_target</code> 输出为准</td><td>全库估算普遍偏差时才动；通常用 <code>ALTER TABLE ... SET STATISTICS</code> 按列设更划算</td></tr>
+<tr><td><code>maintenance_work_mem</code></td><td>建索引、VACUUM 可用的内存</td><td>以 <code>SHOW maintenance_work_mem</code> 输出为准</td><td>大表建索引或 <code>REINDEX</code> 很慢时按会话放大</td></tr>
+<tr><td><code>max_parallel_workers_per_gather</code></td><td>单个 Gather 节点能起几个并行工作进程</td><td>以 <code>SHOW max_parallel_workers_per_gather</code> 输出为准</td><td>大表扫描却没有 <code>Parallel</code> 节点时，先确认它不是 0</td></tr>
+<tr><td><code>min_parallel_table_scan_size</code></td><td>小于这个体积的表不考虑并行扫描</td><td>以 <code>SHOW min_parallel_table_scan_size</code> 输出为准</td><td>中等体积表想吃到并行时调低</td></tr>
+<tr><td><code>jit</code>（PG 11+）</td><td>是否为高代价查询生成机器码</td><td>以 <code>SHOW jit</code> 输出为准</td><td>短查询被误判成高代价、编译耗时反超执行耗时时关掉</td></tr>
+<tr><td><code>shared_buffers</code></td><td>PG 自己的页缓存</td><td>以 <code>SHOW shared_buffers</code> 输出为准</td><td><code>Buffers</code> 的 <code>read</code> 长期远大于 <code>hit</code> 时，与部署参数一起评估，见 <a href="../install/">生产部署与必调参数</a></td></tr>
+</tbody>
+</table>
+<p>用法层到此结束。为什么 Bitmap Heap Scan 不是问题、为什么 <code>actual rows</code> 必须乘 <code>loops</code>、为什么 GIN 的写入代价高、为什么 <code>INCLUDE</code> 依赖 VACUUM，下面的原理层逐个展开。</p>
+
+<h2>② 原理 · 五种索引类型：按数据形态选，不是按「快慢」选</h2>
 <p>先把结论说清楚：<strong>B-tree 覆盖 95% 的场景</strong>，剩下的 5% 才需要挑类型。选错的典型后果不是慢一点，而是<strong>索引根本不会被用到</strong>——因为每种索引只实现了特定的操作符类，查询里的操作符不在这个集合里，优化器就只能全表扫。</p>
 <table>
 <thead>
@@ -152,7 +284,7 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 ALTER TABLE bookings ADD CONSTRAINT no_overlap
       EXCLUDE USING gist (room_id WITH =, during WITH &amp;&amp;);</code></pre>
 
-<h2>PG 特有的三件索引利器</h2>
+<h2>② 原理 · PG 特有的三件索引利器</h2>
 <p>这三样是 PG 相比 MySQL 最实在的优势，而且都不需要改表结构。</p>
 <table>
 <thead>
@@ -172,7 +304,7 @@ ALTER TABLE bookings ADD CONSTRAINT no_overlap
 <p>一张 5 亿行的订单表里只有几万行是 <code>status = 'pending'</code>，给全表建索引要几十 GB，而 <code>CREATE INDEX ... WHERE status = 'pending'</code> 只有几 MB，能常驻内存。更关键的是它<strong>减少写放大</strong>：不满足 WHERE 条件的行插入和更新时完全不碰这个索引，等于把主干篇讲的「索引个数等于写放大倍数」这个代价也一起降下来了。唯一要注意的是查询条件必须让优化器能静态判定蕴含关系，把 <code>status</code> 做成绑定参数就废了。</p>
 </div>
 
-<h2>EXPLAIN 判读：只看 cost 是白看</h2>
+<h2>② 原理 · EXPLAIN 逐字段判读：只看 cost 是白看</h2>
 <p><strong>永远用 <code>EXPLAIN (ANALYZE, BUFFERS)</code></strong>。不带 <code>ANALYZE</code> 只有估算，看不出优化器估错；不带 <code>BUFFERS</code> 看不出是内存命中还是真的读盘。计划是一棵树，<strong>从最内层、缩进最深的节点开始往外读</strong>，每个节点的耗时都包含了它的子节点。</p>
 <div class="mermaid">
 flowchart TB
@@ -250,7 +382,7 @@ ALTER TABLE orders ALTER COLUMN status SET STATISTICS 1000;
 CREATE STATISTICS st_orders_city_zip (dependencies, ndistinct) ON city, zipcode FROM orders;
 ANALYZE orders;</code></pre>
 
-<h2>四种扫描方式与 Bitmap 的真正含义</h2>
+<h2>② 原理 · 四种扫描方式与 Bitmap 的真正含义</h2>
 <p>很多人以为「Bitmap Heap Scan 出现就是没用好索引」，恰恰相反：<strong>Bitmap 是索引命中行数中等时的最优解</strong>。它分两步——先扫索引把所有命中的<strong>块号</strong>攒成位图，再按块号从小到大<strong>顺序</strong>读堆。这样把随机 IO 变成了接近顺序的 IO，还顺带去掉了同一页被多次访问的重复读。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -283,7 +415,7 @@ sequenceDiagram
 </tbody>
 </table>
 
-<h2>三种 join 方式与 work_mem</h2>
+<h2>② 原理 · 三种 join 方式与 work_mem 的分配单位</h2>
 <p>join 方式选错的代价通常比扫描方式选错大一个数量级，而且原因几乎总是行数估算不准。</p>
 <table>
 <thead>
@@ -297,7 +429,7 @@ sequenceDiagram
 </table>
 <p><code>work_mem</code> 是<strong>每个排序或哈希节点</strong>各分配一份，不是每个查询一份。一条带三个排序节点的查询在 50 个并发下，理论峰值是 <code>work_mem × 3 × 50</code>。所以正确做法是全局设一个保守值（比如 16MB 到 64MB），再对已知的重查询按会话或按角色单独放大。PG 13 起还有 <code>hash_mem_multiplier</code>（默认 2.0），可以只给哈希类节点更多内存而不放大排序。</p>
 
-<h2>为什么优化器不走我建的索引</h2>
+<h2>② 原理 · 为什么优化器不走我建的索引</h2>
 <p>先接受一个事实：<strong>大多数情况下不走索引是对的</strong>。PG 的优化器是基于代价的，当它估计要返回表里 10% 以上的行时，顺序扫描加上预读几乎一定比几十万次随机读堆更快。真正需要修的是下面这几类。</p>
 <table>
 <thead>
@@ -328,7 +460,7 @@ ALTER SYSTEM SET random_page_cost = 1.1;          -- 默认 4.0 是机械盘假�
 ALTER SYSTEM SET effective_cache_size = '48GB';   -- 设为物理内存的 50% 到 75%，只是给优化器的提示
 SELECT pg_reload_conf();</code></pre>
 
-<h2>索引运维：找出没用的、膨胀的、最慢的</h2>
+<h2>② 原理 · 索引运维：找出没用的、膨胀的、最慢的</h2>
 <p>索引不是只有收益：每个索引都在吃写入性能（主干篇讲过，非 HOT 更新要维护<strong>全部</strong>索引）、吃内存、吃磁盘。一个跑了两年的库里通常躺着 20% 到 40% 从未被使用的索引。</p>
 <pre><code class="language-sql">-- 1. 从未被使用的索引：idx_scan = 0 且不是唯一约束的，基本可以删
 -- 前提：统计自上次 pg_stat_reset 起累计，确认已经覆盖了完整业务周期（含月末月初）
@@ -381,6 +513,29 @@ SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;</code></pre>
 <div class="callout-title">删索引之前的正确验证顺序</div>
 <p>直接 <code>DROP INDEX</code> 的风险是判断错了要重建，而大表重建索引很贵。稳妥的顺序是：先确认 <code>idx_scan</code> 的统计区间覆盖了完整业务周期（含月末结算这类低频路径）；再用 <code>pg_stat_statements</code> 里的历史语句交叉比对有没有语句依赖它；要评估「新增某个索引是否有用」可以装 <strong>HypoPG</strong> 扩展创建虚拟索引，它只影响 <code>EXPLAIN</code> 的估算、不占磁盘也不写 WAL；最后真正删除时用 <code>DROP INDEX CONCURRENTLY</code>，普通 <code>DROP INDEX</code> 会取 ACCESS EXCLUSIVE 锁。网上流传的「直接 UPDATE pg_index 把 indisvalid 改成 false 让索引假死」不要用，手改系统目录绕过了所有一致性检查，出问题无从排查。</p>
 </div>
+
+<h2>③ 场景 · 按业务形态选索引组合，以及索引解决不了的问题</h2>
+<p>前面给的是单条语句的判读与单个索引的选型。落到一张表上时，决定索引方案的是这张表在业务里的角色：它承担哪几种查询形态、写入有多密集、能不能把一部分查询分流出去。下表按常见业务形态给出组合方案与它的代价。</p>
+<table>
+<thead>
+<tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr>
+</thead>
+<tbody>
+<tr><td>C 端订单或消息列表：用户维度等值加时间倒序分页</td><td>一个 B-tree <code>(user_id, created_at DESC)</code>，返回列少时再 <code>INCLUDE</code> 补齐</td><td>等值列在前、排序列紧跟，Sort 节点直接消失；覆盖之后可进 Index Only Scan</td><td>索引变宽、写放大增加；<code>INCLUDE</code> 要靠 VACUUM 跟上才有效，否则 <code>Heap Fetches</code> 居高不下</td></tr>
+<tr><td>软删除表，绝大多数查询只看未删除的行</td><td>部分索引 <code>WHERE deleted = false</code></td><td>体积能缩到百分之几且常驻内存，还顺带减少写放大：不满足条件的行完全不碰这个索引</td><td>条件必须能被优化器静态判定蕴含，把 <code>deleted</code> 做成绑定参数就废了</td></tr>
+<tr><td>JSONB 存动态属性，按包含关系查询</td><td>GIN 加 <code>jsonb_path_ops</code>；需要存在性 <code>?</code> 操作符时才用默认的 <code>jsonb_ops</code></td><td><code>jsonb_path_ops</code> 只索引「路径加值」的哈希，体积小得多也更快</td><td>只支持 <code>@&gt;</code> 一族操作符；写入放大明显，写密集表要评估</td></tr>
+<tr><td>站内搜索、中文模糊匹配</td><td>轻量场景用 pg_trgm 加 GIN，或 <code>tsvector</code> 生成列加 GIN</td><td>只有三元组能让前缀不定的 <code>LIKE</code> 走索引；生成列避免每次查询重算 <code>tsvector</code></td><td>索引体积大、写入慢；模式串短于 3 字符仍全表扫。相关性排序与分词需求重的转 <a href="../../search/">Elasticsearch 的索引结构与查询代价</a></td></tr>
+<tr><td>时序指标表，按时间窗口过滤与聚合</td><td>BRIN 加按时间分区，两者叠加</td><td>BRIN 体积可到表的千分之一，块区间裁剪的效果接近分区裁剪</td><td>依赖物理有序，回填历史数据后要 <code>CLUSTER</code> 或重组；重聚合分析转 <a href="../../clickhouse/">ClickHouse 深度原理</a></td></tr>
+<tr><td>后台筛选器，条件是十几个字段的任意组合</td><td>给高频出现的几个字段各建单列索引，让优化器做 <code>BitmapAnd</code></td><td>PG 能把多个位图按位组合，<strong>不必为每种条件组合都建联合索引</strong></td><td>索引个数仍要管住；位图内存不足会出现 <code>lossy</code>，退化成按页复核</td></tr>
+<tr><td>房间预订、排班这类「同一资源时间段不许重叠」</td><td>范围类型加 <code>EXCLUDE USING gist</code> 约束（需要 <code>btree_gist</code>）</td><td>把不变式放在数据库层，比应用层先查后插可靠得多</td><td>写入要处理约束冲突错误；并发语义的取舍见 <a href="../mvcc-transaction/">隔离级别与并发控制</a></td></tr>
+<tr><td>报表大扫描与在线查询混在同一张表上</td><td>把报表分流到只读备库或物化视图，而不是继续给主库加索引</td><td>一次大扫描会把 <code>shared_buffers</code> 里的热页冲掉，表现是「所有查询一起变慢」</td><td>多一份延迟与运维成本，备库上还有恢复冲突要处理，见 <a href="../replication-ha/">复制与故障切换</a></td></tr>
+<tr><td>写入密集的流水表、埋点表</td><td>索引降到最少，只留主键与一个时间维度索引</td><td>每个索引都是写放大，非 HOT 更新要维护全部索引</td><td>查询能力弱，复杂查询只能走离线或列存链路</td></tr>
+</tbody>
+</table>
+<p><strong>不适用边界</strong>：索引解决不了的问题不要在索引上找答案。元组结构、<code>xmin</code> 与 <code>xmax</code>、HOT 更新、VACUUM 与 WAL 的机制在 <a href="../">PostgreSQL 主干篇</a>；字段类型本身选得对不对（<code>jsonb</code> 还是拆列、<code>numeric</code> 还是 <code>bigint</code>）在 <a href="../datatypes/">PostgreSQL 数据类型选择与代价</a>，<strong>类型选错时任何索引都救不回来</strong>；<code>shared_buffers</code> 与全局内存参数的设定在 <a href="../install/">PostgreSQL 生产部署与必调参数</a>；建索引会取什么锁、<code>CREATE INDEX CONCURRENTLY</code> 为什么会被长事务拖住在 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；索引数量怎么管住、怎么从查询模式反推一组索引的通用方法在 <a href="../../optimization/index/">索引设计与治理</a>，慢查询从发现到根治的闭环在 <a href="../../optimization/slow-query/">慢查询治理</a>，而「问题到底是不是在数据库」这一层在 <a href="../../optimization/">数据库性能优化：瓶颈定位顺序</a>；MySQL 侧的 B+ 树树高、回表与 <code>EXPLAIN</code> 判读在 <a href="../../mysql/">MySQL 深度原理</a>。</p>
+<p>在 PostgreSQL 这条路径上，上一篇把类型选对，本篇把访问路径选对并学会读计划，下一篇处理同一份数据被并发读写时的行为——隔离级别、行锁与 DDL 的锁队列。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../datatypes/">← 上一步：PostgreSQL 数据类型选择与代价</a> · <a href="../mvcc-transaction/">下一步：PostgreSQL 隔离级别与并发控制：SSI、行锁四档与 DDL 锁队列 →</a></p>
 
 <h2>最容易踩的坑</h2>
 <div class="callout callout-danger">

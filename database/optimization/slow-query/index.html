@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="慢查询治理的完整闭环：long_query_time 默认 10 秒等于没开，如何配置慢日志与 min_examined_row_limit；为什么按 SQL 模板聚合的 events_statements_summary_by_digest 比慢日志更重要，它能抓到单条不慢但调用百万次的语句；pt-query-digest 与 PG 的 pg_stat_statements、auto_explain；拿到慢 SQL 后的分析顺序、六大类根因识别特征与治法、SQL 没变却突然变慢的七种原因、改写技巧，以及 CI 卡口与告警机制。">
+    <meta name="description" content="慢查询治理三段式：先给一轮治理的六步可执行闭环——怎么把采样开到真能抓到问题、怎么按 SQL 指纹聚合而不是盯单条、拿到 Top N 后的五步判读顺序、改完怎么用数据证明改对了；再讲慢日志八个参数的默认值与配错后果、语句摘要统计为什么能抓到慢日志抓不到的大头、pt-query-digest 与 PG 的 pg_stat_statements 与 auto_explain、六大类根因的识别特征与治法、SQL 没变却突然变慢的七种原因、八种改写技巧的前提与代价；最后给同一现象在不同场景下的决策矩阵、不适用边界，以及上线卡口、周期复查、运行时告警三件套。">
     <meta name="keywords" content="数据库性能优化,慢查询优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/optimization/slow-query/">
     <meta property="og:title" content="慢查询治理：从发现到根治的完整闭环 - 数据库性能优化 - 资深码农">
-    <meta property="og:description" content="慢查询治理的完整闭环：long_query_time 默认 10 秒等于没开，如何配置慢日志与 min_examined_row_limit；为什么按 SQL 模板聚合的 events_statements_summary_by_digest 比慢日志更重要，它能抓到单条不慢但调用百万次的语句；pt-query-digest 与 PG 的 pg_stat_statements、auto_explain；拿到慢 SQL 后的分析顺序、六大类根因识别特征与治法、SQL 没变却突然变慢的七种原因、改写技巧，以及 CI 卡口与告警机制。">
+    <meta property="og:description" content="慢查询治理三段式：先给一轮治理的六步可执行闭环——怎么把采样开到真能抓到问题、怎么按 SQL 指纹聚合而不是盯单条、拿到 Top N 后的五步判读顺序、改完怎么用数据证明改对了；再讲慢日志八个参数的默认值与配错后果、语句摘要统计为什么能抓到慢日志抓不到的大头、pt-query-digest 与 PG 的 pg_stat_statements 与 auto_explain、六大类根因的识别特征与治法、SQL 没变却突然变慢的七种原因、八种改写技巧的前提与代价；最后给同一现象在不同场景下的决策矩阵、不适用边界，以及上线卡口、周期复查、运行时告警三件套。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/optimization/slow-query/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="慢查询治理：从发现到根治的完整闭环">
-    <meta name="twitter:description" content="慢查询治理的完整闭环：long_query_time 默认 10 秒等于没开，如何配置慢日志与 min_examined_row_limit；为什么按 SQL 模板聚合的 events_statements_summary_by_digest 比慢日志更重要，它能抓到单条不慢但调用百万次的语句；pt-query-digest 与 PG 的 pg_stat_statements、auto_explain；拿到慢 SQL 后的分析顺序、六大类根因识别特征与治法、SQL 没变却突然变慢的七种原因、改写技巧，以及 CI 卡口与告警机制。">
+    <meta name="twitter:description" content="慢查询治理三段式：先给一轮治理的六步可执行闭环——怎么把采样开到真能抓到问题、怎么按 SQL 指纹聚合而不是盯单条、拿到 Top N 后的五步判读顺序、改完怎么用数据证明改对了；再讲慢日志八个参数的默认值与配错后果、语句摘要统计为什么能抓到慢日志抓不到的大头、pt-query-digest 与 PG 的 pg_stat_statements 与 auto_explain、六大类根因的识别特征与治法、SQL 没变却突然变慢的七种原因、八种改写技巧的前提与代价；最后给同一现象在不同场景下的决策矩阵、不适用边界，以及上线卡口、周期复查、运行时告警三件套。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,9 +71,94 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>慢查询治理常见的做法是：收到告警、翻慢日志、找到最慢那条、加个索引、结束。这个流程有两个漏洞：慢日志看不到高频低耗时的语句，而那往往才是资源消耗的大头；修完一条不建立机制，下个季度同类问题会原样再来一次。这篇把慢查询当成一个闭环来写——发现、定级、归因、修复、回归、卡口。执行计划字段含义、索引失效场景、B+ 树这些底层原理详见站内 MySQL 深度原理篇，这里只用结论。</p>
+<p>慢查询治理常见的做法是：收到告警、翻慢日志、找到最慢那条、加个索引、结束。这个流程有两个漏洞：慢日志看不到高频低耗时的语句，而那往往才是资源消耗的大头；修完一条不建立机制，下个季度同类问题会原样再来一次。这篇把慢查询当成一个闭环来写——发现、定级、归因、修复、回归、卡口。执行计划字段含义、索引失效场景、B+ 树这些底层原理详见站内 <a href="../../mysql/">MySQL 深度原理</a>，这里只用结论。</p>
 
-<h2>慢日志的默认配置等于没开</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一轮治理的六步闭环——把采样开到真的能抓到问题、按 SQL 指纹聚合而不是盯单条、拿到 Top N 之后的五步判读顺序、改完用什么数据证明改对了。每步给可直接敲的命令与验收标准。</li>
+        <li><strong>② 原理</strong>：慢日志八个参数的默认值与配错后果、语句摘要统计为什么能抓到慢日志抓不到的大头、<code>pt-query-digest</code> 与 PG 侧 <code>pg_stat_statements</code> 与 <code>auto_explain</code>、六大类根因的识别特征与治法、语句一个字没改却突然变慢的七种原因、八种改写技巧的前提与代价、现场排查命令集的逐字段判读。</li>
+        <li><strong>③ 场景</strong>：同一个现象在不同场景下的正解并不一样，一张决策矩阵收拢；什么时候该停手（不是 SQL 的问题）；上线卡口、周期复查、运行时告警怎么落地成机制。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 一轮治理的六步闭环：命令与验收标准</h2>
+
+<p>治理慢查询是一条有固定顺序的流水线，顺序错了后面全是白工：没开对采样就没有输入，不按指纹聚合就会去修一天只跑三次的语句，不看返回行数就会给「一次返回八万行」的接口加索引。下面六步照着跑一轮，验收标准都是「做完能看到什么」，看不到就说明这步没成。</p>
+
+<table>
+<thead><tr><th>步骤</th><th>怎么做</th><th>验收标准</th><th>跳过的后果</th></tr></thead>
+<tbody>
+<tr><td>1 打开采样</td><td>打开慢日志，把 <code>long_query_time</code> 压到 1 秒以内，并用 <code>min_examined_row_limit</code> 过滤噪声</td><td><code>SHOW VARIABLES</code> 的输出等于你设的值，且日志文件在分钟级内有新行</td><td>阈值留在默认 10 秒，日志一年只有几条，等于没开</td></tr>
+<tr><td>2 确认瓶颈真在库内</td><td>对同一个接口比对「应用侧耗时」与「数据库侧执行耗时」的差值</td><td>差值小则耗时确实发生在库内；差值大先去查连接池排队与结果集回传</td><td>慢日志一条都没有却在猛调数据库参数</td></tr>
+<tr><td>3 按指纹聚合取 Top N</td><td>查 <code>events_statements_summary_by_digest</code>，按总耗时排序（PG 查 <code>pg_stat_statements</code> 的 <code>total_exec_time</code>）</td><td>拿到的是 SQL 模板加调用次数，而不是一条带参数的语句</td><td>漏掉「单次 8 毫秒、每分钟百万次」的真正大头</td></tr>
+<tr><td>4 逐条判读</td><td>按下面那张表的五步顺序走：返回行数 → 扫描与返回比 → 排序与临时表 → 等锁 → 计划与命中率</td><td>每条语句都能归进六大类根因之一，归不进去说明证据还不够</td><td>顺序反了就会加一堆索引，而真实原因是一次返回上万行</td></tr>
+<tr><td>5 改完验证</td><td>在与生产同量级的影子库上对比改前改后的访问类型、预估扫描行数、是否有排序与临时表；再看线上该指纹的总耗时占比</td><td>扫描行数下降<strong>且</strong>总耗时占比下降，两个都要看</td><td>只凭「感觉快了」收工，其实是缓存命中或流量低峰</td></tr>
+<tr><td>6 入卡口</td><td>把这条规则加进 CI 的执行计划检查，并对该指纹的延迟与慢查询增量配告警</td><td>故意提交一条退化写法时流水线会失败</td><td>三个月后新接口带来同类问题，整套流程原样重跑</td></tr>
+</tbody>
+</table>
+
+<p>第 1 步的命令。全部动态生效不需要重启，但重启会丢，改完一定同步写进配置文件：</p>
+
+<pre><code class="language-sql">-- 采样开关：目标是「日常问题能进日志，字典表的正常全表扫不要进」
+SET GLOBAL slow_query_log = ON;
+SET GLOBAL long_query_time = 0.5;          -- 支持小数；默认 10 秒只能抓到灾难级语句
+SET GLOBAL min_examined_row_limit = 1000;  -- 扫不到 1000 行的不记，这是过滤噪声的关键
+SET GLOBAL log_slow_admin_statements = ON; -- 大表 ALTER、ANALYZE 也要留证据，事后复盘要用
+
+-- 验收：这三行输出必须等于刚设的值。不等于通常是只读实例或配置管理又覆盖了一遍
+SHOW VARIABLES LIKE 'slow_query_log%';
+SHOW VARIABLES LIKE 'long_query_time';
+SHOW VARIABLES LIKE 'min_examined_row_limit';
+
+-- 只想抓「当前这条链路」的每一句时用会话级，不影响线上其他连接
+SET SESSION long_query_time = 0;</code></pre>
+
+<p>第 3 步的命令。这一步是整条流水线的输入，<strong>排序依据必须是总耗时</strong>，不是单次耗时：</p>
+
+<pre><code class="language-sql">-- 先只看这六列就能定级；带排序与临时表计数的完整版在原理层
+-- calls 乘 avg_ms 才是这个模板的真实成本；examined 与 sent 差两个数量级说明白扫了很多行
+SELECT LEFT(digest_text, 80)                      AS sql_template,
+       count_star                                 AS calls,
+       ROUND(sum_timer_wait / 1000000000000, 1)   AS total_sec,
+       ROUND(avg_timer_wait / 1000000000, 2)      AS avg_ms,
+       ROUND(sum_rows_examined / count_star)      AS examined_avg,
+       ROUND(sum_rows_sent     / count_star)      AS sent_avg
+FROM performance_schema.events_statements_summary_by_digest
+WHERE schema_name IS NOT NULL
+ORDER BY sum_timer_wait DESC
+LIMIT 10;</code></pre>
+
+<p>第 4 步的判读顺序。这个顺序不能调，越靠前的判断越可能让后面的动作全部作废：</p>
+
+<table>
+<thead><tr><th>顺序</th><th>先回答什么</th><th>看哪个字段或命令</th><th>看到什么就往哪走</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>这条语句返回了多少行</td><td>上一步的 <code>sent_avg</code>，或接口返回体大小</td><td>上万行就是接口设计问题：补分页、收窄字段、改异步导出。<strong>加索引救不了</strong></td></tr>
+<tr><td>2</td><td>扫描量与返回量的比值</td><td><code>examined_avg / sent_avg</code></td><td>比值上百倍走索引与访问方式；比值接近 1 说明就是数据量本身大，去归档或分区</td></tr>
+<tr><td>3</td><td>有没有额外排序与临时表</td><td><code>sum_sort_merge_passes</code>、<code>sum_created_tmp_disk_tables</code>，或计划里的排序与临时表标记</td><td>有就让排序列紧跟在等值条件列之后，或先把结果集收窄再排序</td></tr>
+<tr><td>4</td><td>是不是在等锁</td><td><code>information_schema.innodb_trx</code>、<code>performance_schema.data_lock_waits</code></td><td>在等锁就去治长事务与热点行，<strong>SQL 本身没问题</strong>，改它不会有任何效果</td></tr>
+<tr><td>5</td><td>计划准不准、数据在不在内存</td><td><code>EXPLAIN ANALYZE</code>（8.0.18 起）、缓冲池命中率</td><td>预估与实际差一个数量级先 <code>ANALYZE TABLE</code>；命中率低说明瓶颈是磁盘随机读</td></tr>
+</tbody>
+</table>
+
+<p>第 5 步的验证。<strong>影子库必须有接近生产的数据量</strong>，几万行的库上任何计划都很快，验证会全部通过：</p>
+
+<pre><code class="language-sql">-- 5a. 改前改后各跑一次，对比访问类型、用到的索引、预估扫描行数
+EXPLAIN FORMAT=JSON SELECT ... ;
+
+-- 5b. 8.0.18 起可以直接拿到真实行数与真实耗时，比预估可靠得多
+EXPLAIN ANALYZE SELECT ... ;
+
+-- 5c. 线上验收：清零后跑满一个完整业务周期（含定时任务），再看这个指纹还在不在前列
+TRUNCATE TABLE performance_schema.events_statements_summary_by_digest;</code></pre>
+
+<p>这六步为什么是这个顺序、每个参数背后的机制、每一类根因的识别特征，下面逐节展开。</p>
+
+<h2>② 原理 · 慢日志的默认配置等于没开</h2>
+
+<p>搞清这一节能解决「明明开了慢日志，一年只有几条记录」和「刚开就把磁盘写满」这两个相反的现象。</p>
 
 <p><code>slow_query_log</code> 打开之后还有一组参数决定它到底有没有用。最关键的是 <code>long_query_time</code>，默认 10 秒——能跑到 10 秒的语句，接口早就超时了，这个阈值只能抓到灾难，抓不到问题。</p>
 
@@ -90,6 +175,8 @@
 <tr><td><code>log_output</code></td><td>FILE</td><td>设成 TABLE 时慢日志写进 <code>mysql.slow_log</code>，本身也会产生写入放大</td><td>保持 FILE，用工具离线分析</td></tr>
 </tbody>
 </table>
+
+<p>上面这些默认值随版本与发行版会变，落地前一律以 <code>SHOW VARIABLES</code> 在你自己实例上的输出为准。</p>
 
 <pre><code class="language-sql">-- 全部可动态生效，不需要重启；改完记得同步写进配置文件，否则重启后丢失
 SET GLOBAL slow_query_log = ON;
@@ -108,10 +195,12 @@ SHOW VARIABLES LIKE 'long_query_time';</code></pre>
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">慢日志记的是执行时间，不是用户感知的耗时</div>
-    <p>慢日志的耗时不包含在连接池里的排队时间，也不包含结果集回传到客户端的网络时间。所以「慢日志里一条都没有，但接口 P99 是三秒」完全可能发生，这种情况要回到站内主干篇讲的耗时差判断法，先确认瓶颈是否在数据库之外。反过来，等锁时间是计入执行时间的，所以一条执行计划完美的语句也可能出现在慢日志里。</p>
+    <p>慢日志的耗时不包含在连接池里的排队时间，也不包含结果集回传到客户端的网络时间。所以「慢日志里一条都没有，但接口 P99 是三秒」完全可能发生，这种情况要回到站内 <a href="../">瓶颈定位顺序</a> 讲的耗时差判断法，先确认瓶颈是否在数据库之外。反过来，等锁时间是计入执行时间的，所以一条执行计划完美的语句也可能出现在慢日志里。</p>
 </div>
 
-<h2>比慢日志更重要的是语句摘要统计</h2>
+<h2>② 原理 · 比慢日志更重要的是语句摘要统计</h2>
+
+<p>搞清这一节能解决「慢日志里的语句都修完了，数据库负载一点没降」。</p>
 
 <p>慢日志按单次耗时过滤，这个过滤条件天生漏掉一整类问题：<strong>单条不慢但调用次数极高的语句</strong>。一条 8 毫秒的查询每分钟调用一百万次，总耗时是 8000 秒，比十条一秒的语句加起来还多两个数量级，但它永远不会进慢日志。这类语句几乎总是真正的资源大头，也是最容易被忽略的。</p>
 
@@ -173,7 +262,9 @@ LIMIT 20;
 -- 统计是累计值，做基线对比前先清零，跑一个业务周期后再取数
 -- TRUNCATE TABLE performance_schema.events_statements_summary_by_digest;</code></pre>
 
-<h2>慢日志分析工具与 PG 侧的对应物</h2>
+<h2>② 原理 · 慢日志分析工具与 PG 侧的对应物</h2>
+
+<p>搞清这一节能解决「几百 MB 的慢日志文件摆在面前不知道从哪看」，以及 PG 上找不到 <code>performance_schema</code> 的问题。</p>
 
 <p>慢日志原始文件不适合人肉翻，<code>pt-query-digest</code> 会按模板聚合并给出排名，输出的重点不是最慢那条，而是「总耗时占比」一列。</p>
 
@@ -219,7 +310,11 @@ LIMIT 20;
 --   auto_explain.log_nested_statements = on  -- 覆盖函数内部的语句
 --   auto_explain.sample_rate = 0.1     -- 高 QPS 环境采样，避免日志爆炸</code></pre>
 
-<h2>拿到一条慢 SQL 之后的分析路径</h2>
+<p>PG 侧的索引类型选择与计划判读细节见站内 <a href="../../postgresql/index-optimize/">PostgreSQL 索引选型与执行计划判读</a>。</p>
+
+<h2>② 原理 · 拿到一条慢 SQL 之后的分析路径</h2>
+
+<p>搞清这一节能解决「加了三个索引都没变快」——因为顺序错了，真正的原因在第一个判断里。</p>
 
 <p>大多数人的第一反应是 <code>EXPLAIN</code>，但这一步应该排在第二。第一步是看它返回多少行——如果业务真的需要一次拿十万行，那是接口设计问题，任何索引都救不了。</p>
 
@@ -242,23 +337,25 @@ flowchart TB
 
 <p>这条路径里有两个位置最容易走错。一是<strong>看到全表扫就加索引</strong>：小表全表扫比走索引更快，优化器的选择是对的，给几百行的字典表加索引没有意义。二是<strong>忽略等锁</strong>：等锁的语句执行计划完全正常，只看计划会得出「这条 SQL 没问题」的结论，然后陷入困惑。</p>
 
-<h2>六大类根因与对应治法</h2>
+<h2>② 原理 · 六大类根因与对应治法</h2>
+
+<p>搞清这一节能解决「知道慢，但说不出到底慢在哪一环」。所有慢查询都能归进这六类，归不进去说明证据还没收集够。</p>
 
 <table>
 <thead><tr><th>根因</th><th>识别特征</th><th>治法</th><th>注意</th></tr></thead>
 <tbody>
-<tr><td>无索引或索引失效</td><td>访问类型退化为全表扫，预估扫描行数接近表总行数</td><td>补索引，或消除失效写法（列上做函数、隐式类型转换、前导通配）</td><td>失效场景矩阵见站内 MySQL 深度原理篇；小表全表扫属正常</td></tr>
+<tr><td>无索引或索引失效</td><td>访问类型退化为全表扫，预估扫描行数接近表总行数</td><td>补索引，或消除失效写法（列上做函数、隐式类型转换、前导通配）</td><td>失效场景矩阵见站内 <a href="../../mysql/">MySQL 深度原理</a>；小表全表扫属正常</td></tr>
 <tr><td>返回数据量过大</td><td>返回行数上万，扫描与返回行数比值接近 1，耗时随返回量线性增长</td><td>改分页、收窄查询列、把导出类需求挪到离线链路</td><td>这类语句加索引几乎没有收益，必须改业务</td></tr>
 <tr><td>排序与分组无法利用索引</td><td>执行计划出现文件排序或临时表，<code>Created_tmp_disk_tables</code> 上升</td><td>让排序列紧跟在等值条件列之后，使索引天然有序；或收窄结果集再排序</td><td>排序方向不一致（一列升一列降）在 8.0 之前无法用同一个索引消除排序</td></tr>
 <tr><td>join 方式退化</td><td>被驱动表上没有可用索引，出现块嵌套循环；或驱动表选错导致外层行数巨大</td><td>给被驱动表的连接列建索引；用小结果集做驱动表；必要时拆成两次查询在应用层拼</td><td>8.0 的 hash join 只在无索引等值连接时生效，不是万能替代</td></tr>
-<tr><td>锁等待</td><td>执行计划正常但耗时高，活跃事务表里有长事务，行锁等待指标上升</td><td>缩短事务、把非数据库操作移出事务、拆分大批量更新、消除热点行</td><td>加锁范围与死锁复盘见站内 MySQL 深度原理篇</td></tr>
+<tr><td>锁等待</td><td>执行计划正常但耗时高，活跃事务表里有长事务，行锁等待指标上升</td><td>缩短事务、把非数据库操作移出事务、拆分大批量更新、消除热点行</td><td>加锁范围与死锁复盘见站内 <a href="../../mysql/">MySQL 深度原理</a></td></tr>
 <tr><td>优化器选错计划</td><td>同一条语句不同参数走不同索引，或统计信息中的基数与实际差很多</td><td>先 <code>ANALYZE TABLE</code> 更新统计信息；调整索引让选择唯一；最后才用索引提示锁定计划</td><td>索引提示会固化计划，数据分布变化后反而成为新的故障源，要留注释和复查计划</td></tr>
 </tbody>
 </table>
 
-<h2>SQL 没变但突然变慢</h2>
+<h2>② 原理 · SQL 没变但突然变慢</h2>
 
-<p>这是最让人困惑的一类：代码没动、索引没删、语句一个字符都没改，昨天 5 毫秒今天 3 秒。原因一定在语句之外。</p>
+<p>搞清这一节能解决「代码没动、索引没删，昨天 5 毫秒今天 3 秒」这类看起来最没道理的故障。原因一定在语句之外。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -288,7 +385,9 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>SQL 改写技巧</h2>
+<h2>② 原理 · SQL 改写技巧</h2>
+
+<p>搞清这一节能解决「索引已经最优了，但语句形态本身就贵」。每一条改写都有前提，抄之前先看最后一列。</p>
 
 <table>
 <thead><tr><th>原写法</th><th>问题</th><th>改写方向</th><th>前提与代价</th></tr></thead>
@@ -298,13 +397,87 @@ flowchart TB
 <tr><td><code>IN</code> 里塞几千个值</td><td>解析开销大，且可能超出优化器的范围优化预算而放弃索引</td><td>把候选集写入临时表再 join；或分批查询在应用层合并</td><td>分批会失去一次性排序的能力，排序要在应用层做</td></tr>
 <tr><td>大表 <code>COUNT(*)</code> 求总数</td><td>需要扫完整个索引，表越大越慢，且结果下一秒就过期</td><td>用近似值（统计表行数估算）、维护计数器表、或改成「是否还有下一页」的判断</td><td>近似值有误差；计数器表要处理并发更新与一致性</td></tr>
 <tr><td>一次性 <code>UPDATE</code> 或 <code>DELETE</code> 百万行</td><td>长事务持锁、undo 膨胀、binlog 巨大、从库延迟飙升</td><td>按主键区间分批处理，每批几千行并在批间短暂休眠</td><td>分批期间数据处于中间状态，业务要能容忍；需要记录进度以支持断点续跑</td></tr>
-<tr><td>深分页 <code>LIMIT 1000000, 20</code></td><td>需要先扫过并丢弃前一百万行</td><td>改用上一页最后一条主键作为游标条件继续取</td><td>游标法不支持跳页；具体推演见站内 MySQL 深度原理篇</td></tr>
+<tr><td>深分页 <code>LIMIT 1000000, 20</code></td><td>需要先扫过并丢弃前一百万行</td><td>改用上一页最后一条主键作为游标条件继续取</td><td>游标法不支持跳页；具体推演见站内 <a href="../../mysql/">MySQL 深度原理</a></td></tr>
 <tr><td><code>SELECT *</code></td><td>无法走覆盖索引，且把大字段读进缓冲池挤占热数据</td><td>只列出需要的列，尽量让索引覆盖查询</td><td>字段变更时要同步维护语句，ORM 场景需显式指定投影</td></tr>
 <tr><td><code>ORDER BY RAND()</code> 取随机行</td><td>给全表生成随机值再排序，必然全表扫加排序</td><td>先随机取主键范围再按主键定位；或预先维护随机序号列</td><td>随机性略有偏差，主键有空洞时要处理取不到的情况</td></tr>
 </tbody>
 </table>
 
-<h2>治理闭环：修一条不算治理</h2>
+<h2>② 原理 · 现场排查命令集与输出判读</h2>
+
+<p>搞清这一节能解决「现在就在故障中，该敲什么」。命令本身不难，难的是输出怎么判读。</p>
+
+<pre><code class="language-sql">-- A. 谁在跑、卡在哪个阶段
+SELECT id, user, db, time, state, LEFT(info, 150) AS sql_head
+FROM information_schema.processlist
+WHERE command NOT IN ('Sleep', 'Daemon')
+ORDER BY time DESC;
+
+-- B. 活跃事务：找出运行时间最长、持锁最多的那个
+SELECT trx_id, trx_state,
+       TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS run_sec,
+       trx_rows_locked, trx_rows_modified, trx_isolation_level,
+       LEFT(trx_query, 120) AS q
+FROM information_schema.innodb_trx
+ORDER BY run_sec DESC;
+
+-- C. 锁等待关系：谁在等谁（MySQL 8.0）
+--    5.7 及以前用 information_schema.innodb_lock_waits
+SELECT w.requesting_engine_thread_id AS waiter_thread,
+       w.blocking_engine_thread_id   AS blocker_thread,
+       l.object_name, l.index_name, l.lock_type, l.lock_mode, l.lock_status
+FROM performance_schema.data_lock_waits w
+JOIN performance_schema.data_locks l
+  ON l.engine_lock_id = w.blocking_engine_lock_id;
+
+-- D. 把等待线程映射回连接与语句，才能知道该找谁
+SELECT t.processlist_id, t.processlist_user, t.processlist_time,
+       LEFT(t.processlist_info, 120) AS q
+FROM performance_schema.threads t
+WHERE t.thread_id IN (
+    SELECT blocking_engine_thread_id FROM performance_schema.data_lock_waits
+);
+
+-- E. 真实执行耗时与真实行数（8.0.18 起），比 EXPLAIN 的预估可靠得多
+-- EXPLAIN ANALYZE SELECT ... ;
+
+-- F. 存储引擎全景，包含最近一次死锁的完整现场
+-- SHOW ENGINE INNODB STATUS;</code></pre>
+
+<table>
+<thead><tr><th>命令</th><th>关键字段</th><th>怎么判读</th></tr></thead>
+<tbody>
+<tr><td>A 进程列表</td><td><code>state</code></td><td><code>Sending data</code> 是在扫行读数据（不是在发网络包）；<code>Copying to tmp table</code> 说明用了临时表；<code>Waiting for table metadata lock</code> 说明被 DDL 或未提交事务挡住；<code>statistics</code> 停留久说明优化器在选计划时统计代价过高</td></tr>
+<tr><td>B 活跃事务</td><td><code>run_sec</code>、<code>trx_rows_locked</code></td><td>运行秒数大而 <code>trx_query</code> 为空，说明事务开着但当前没在执行语句，典型是应用在事务中调了外部接口；持锁行数远超业务预期，说明加锁范围被放大</td></tr>
+<tr><td>C 锁等待</td><td><code>index_name</code>、<code>lock_mode</code></td><td>索引名告诉你锁加在哪个索引上；锁在主键上通常是精确更新，锁在二级索引上要留意间隙锁范围；加锁范围推演见站内 <a href="../../mysql/">MySQL 深度原理</a></td></tr>
+<tr><td>D 线程映射</td><td><code>processlist_id</code></td><td>拿到阻塞方的连接号才能定位到具体应用实例，必要时用 <code>KILL</code> 处理；直接 kill 等待方是无效操作</td></tr>
+<tr><td>E <code>EXPLAIN ANALYZE</code></td><td>实际行数与预估行数的差距</td><td>两者差一个数量级以上，说明统计信息不准，先 <code>ANALYZE TABLE</code>；循环次数乘单次耗时才是该节点的真实成本</td></tr>
+<tr><td>F 引擎状态</td><td><code>LATEST DETECTED DEADLOCK</code>、<code>TRANSACTIONS</code>、<code>BUFFER POOL</code></td><td>死锁段只保留最近一次，出现死锁要第一时间抓取；<code>History list length</code> 持续增长说明 purge 跟不上，通常是长事务所致</td></tr>
+<tr><td><code>SHOW STATUS LIKE 'Handler%'</code></td><td><code>Handler_read_rnd_next</code></td><td>这个值增长快说明大量顺序全表扫；与 <code>Handler_read_key</code> 的比值可以粗略衡量索引利用率</td></tr>
+</tbody>
+</table>
+
+<h2>③ 场景 · 同一个现象在不同场景下的正解并不一样</h2>
+
+<p>前面的根因分类回答「是什么」，这一节回答「在你的场景里该做什么、要付什么代价」。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>OLTP 接口偶发超时，摘要统计里这个指纹平均很快但最大值很大</td><td>先查等锁与长事务，不要动索引</td><td>平均与最大差出一个数量级，差值通常来自等待而不是执行计划</td><td>要拉长观察窗口，定位周期比改一个索引长得多</td></tr>
+<tr><td>运营后台报表把主库拖慢</td><td>整体挪到从库或离线库，并单独设超时与并发上限</td><td>报表的扫描量天然大，优化只能改系数不能改数量级</td><td>数据有延迟，必须和业务确认可接受</td></tr>
+<tr><td>单条 8 毫秒但每分钟上百万次</td><td>不优化单条，先砍调用次数：批量化、消除 N 加 1、加缓存</td><td>成本等于次数乘单次，次数侧的下降空间通常大一个数量级</td><td>批量化要改调用方；加缓存要接受一致性窗口，账见 <a href="../../cache/">缓存的收益与代价</a></td></tr>
+<tr><td>历史数据把热查询拖慢</td><td>先归档或分区，最后才考虑分片</td><td>缩小热数据集合是可逆的，分片是不可逆的</td><td>归档要保留历史查询入口；分片的永久代价见 <a href="../sharding/">分库分表</a></td></tr>
+<tr><td>列表页深分页</td><td>改游标分页，把「任意跳页」这个需求砍掉</td><td>偏移量越大被丢弃的行越多，索引消除不了丢弃动作</td><td>不支持跳页，需要产品同意</td></tr>
+<tr><td>同一语句不同参数快慢差十倍</td><td>先 <code>ANALYZE TABLE</code>，再让索引选择唯一，索引提示放最后</td><td>这是统计信息与数据分布导致的计划切换</td><td>提示会固化计划，必须留注释与定期复查，否则它自己变成故障源</td></tr>
+<tr><td>慢日志是空的但接口 P99 很高</td><td>停止在数据库里找，去查连接池排队、序列化、下游调用</td><td>慢日志只统计执行时间，不含排队与结果回传</td><td>排查面变大，需要链路数据，见 <a href="../../../observability/performance/db-access/">数据库访问的可观测性</a></td></tr>
+<tr><td>从库慢、主库不慢</td><td>在从库上单独开慢日志（含复制回放语句），两边计划逐条比对</td><td>从库的规格、参数、统计信息都可能与主库不同</td><td>需要逐实例配置与集中采集</td></tr>
+</tbody>
+</table>
+
+<p><strong>不适用边界</strong>：这篇只负责「语句在库内执行慢」这一段。整体瓶颈该先看哪一层、各类优化手段的投入产出排序在 <a href="../">数据库性能优化主干篇</a>；索引该怎么从查询模式推导、索引数量怎么管住在 <a href="../index/">索引设计与治理</a>；单机容量与写入吞吐已经到顶时才进入 <a href="../sharding/">分库分表</a>；B+ 树树高、MVCC 可见性、Next-Key 加锁范围这些机制在 <a href="../../mysql/">MySQL 深度原理</a>，PG 侧在 <a href="../../postgresql/index-optimize/">PostgreSQL 索引选型与执行计划判读</a>；用缓存挡住回源的收益与代价在 <a href="../../cache/">缓存的收益与代价</a>；指标怎么采、阈值怎么定在 <a href="../../../observability/metrics/">指标与监控</a>。</p>
+
+<h2>③ 场景 · 从「修一条」到「有机制」</h2>
 
 <p>只修不建机制，同一类问题会在每个季度以不同语句的形式回来。闭环要同时具备上线前卡口、周期性复查、运行时告警三件事。</p>
 
@@ -401,61 +574,17 @@ if __name__ == '__main__':
     print('检查完成，不合格语句 %d 条' % failed)
     sys.exit(1 if failed else 0)</code></pre>
 
-<h2>现场排查命令集与输出判读</h2>
+<p>另外两件事同样不能省：<strong>周期复查</strong>是每周固定看一次总耗时前二十的指纹，把新冒头的纳入本轮；<strong>运行时告警</strong>至少要盯三个量——慢查询条数的增量、语句延迟的 P99、临时表落盘占比，阈值怎么定见 <a href="../../../observability/metrics/">指标与监控</a>。</p>
 
-<pre><code class="language-sql">-- A. 谁在跑、卡在哪个阶段
-SELECT id, user, db, time, state, LEFT(info, 150) AS sql_head
-FROM information_schema.processlist
-WHERE command NOT IN ('Sleep', 'Daemon')
-ORDER BY time DESC;
+<p>在这条路径上，上一篇给的是「索引该怎么设计与治理」，本篇把它变成一套可执行的发现与归因流程；再往下走，是当单机容量与写入吞吐真的到顶时，才需要付出的那份不可逆代价。</p>
 
--- B. 活跃事务：找出运行时间最长、持锁最多的那个
-SELECT trx_id, trx_state,
-       TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS run_sec,
-       trx_rows_locked, trx_rows_modified, trx_isolation_level,
-       LEFT(trx_query, 120) AS q
-FROM information_schema.innodb_trx
-ORDER BY run_sec DESC;
+<p class="cluster-nav">同主题路径：<a href="../index/">← 上一步：索引设计与治理：从查询模式推导索引，并管住索引数量</a> · <a href="../sharding/">下一步：分库分表：决策边界、分片键选择与扩容落地 →</a></p>
 
--- C. 锁等待关系：谁在等谁（MySQL 8.0）
---    5.7 及以前用 information_schema.innodb_lock_waits
-SELECT w.requesting_engine_thread_id AS waiter_thread,
-       w.blocking_engine_thread_id   AS blocker_thread,
-       l.object_name, l.index_name, l.lock_type, l.lock_mode, l.lock_status
-FROM performance_schema.data_lock_waits w
-JOIN performance_schema.data_locks l
-  ON l.engine_lock_id = w.blocking_engine_lock_id;
-
--- D. 把等待线程映射回连接与语句，才能知道该找谁
-SELECT t.processlist_id, t.processlist_user, t.processlist_time,
-       LEFT(t.processlist_info, 120) AS q
-FROM performance_schema.threads t
-WHERE t.thread_id IN (
-    SELECT blocking_engine_thread_id FROM performance_schema.data_lock_waits
-);
-
--- E. 真实执行耗时与真实行数（8.0.18 起），比 EXPLAIN 的预估可靠得多
--- EXPLAIN ANALYZE SELECT ... ;
-
--- F. 存储引擎全景，包含最近一次死锁的完整现场
--- SHOW ENGINE INNODB STATUS;</code></pre>
-
-<table>
-<thead><tr><th>命令</th><th>关键字段</th><th>怎么判读</th></tr></thead>
-<tbody>
-<tr><td>A 进程列表</td><td><code>state</code></td><td><code>Sending data</code> 是在扫行读数据（不是在发网络包）；<code>Copying to tmp table</code> 说明用了临时表；<code>Waiting for table metadata lock</code> 说明被 DDL 或未提交事务挡住；<code>statistics</code> 停留久说明优化器在选计划时统计代价过高</td></tr>
-<tr><td>B 活跃事务</td><td><code>run_sec</code>、<code>trx_rows_locked</code></td><td>运行秒数大而 <code>trx_query</code> 为空，说明事务开着但当前没在执行语句，典型是应用在事务中调了外部接口；持锁行数远超业务预期，说明加锁范围被放大</td></tr>
-<tr><td>C 锁等待</td><td><code>index_name</code>、<code>lock_mode</code></td><td>索引名告诉你锁加在哪个索引上；锁在主键上通常是精确更新，锁在二级索引上要留意间隙锁范围；加锁范围推演见站内 MySQL 深度原理篇</td></tr>
-<tr><td>D 线程映射</td><td><code>processlist_id</code></td><td>拿到阻塞方的连接号才能定位到具体应用实例，必要时用 <code>KILL</code> 处理；直接 kill 等待方是无效操作</td></tr>
-<tr><td>E <code>EXPLAIN ANALYZE</code></td><td>实际行数与预估行数的差距</td><td>两者差一个数量级以上，说明统计信息不准，先 <code>ANALYZE TABLE</code>；循环次数乘单次耗时才是该节点的真实成本</td></tr>
-<tr><td>F 引擎状态</td><td><code>LATEST DETECTED DEADLOCK</code>、<code>TRANSACTIONS</code>、<code>BUFFER POOL</code></td><td>死锁段只保留最近一次，出现死锁要第一时间抓取；<code>History list length</code> 持续增长说明 purge 跟不上，通常是长事务所致</td></tr>
-<tr><td><code>SHOW STATUS LIKE 'Handler%'</code></td><td><code>Handler_read_rnd_next</code></td><td>这个值增长快说明大量顺序全表扫；与 <code>Handler_read_key</code> 的比值可以粗略衡量索引利用率</td></tr>
-</tbody>
-</table>
+<h2>最容易踩的坑</h2>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
         <li><code>long_query_time</code> 留在默认 10 秒就以为开了慢日志。日志里一年只有几条，真正的问题全在阈值之下。</li>
         <li>只看慢日志不看语句摘要统计。真正的资源大头是那条 8 毫秒、每分钟百万次的语句，它永远不会出现在慢日志里。</li>
@@ -470,6 +599,8 @@ WHERE t.thread_id IN (
         <li><code>NOT IN</code> 子查询直接改成 <code>NOT EXISTS</code> 之外的写法而不管 NULL。子查询结果里只要有一个 NULL，<code>NOT IN</code> 整体返回空，改写后行为不等价。</li>
         <li>一次性 <code>DELETE</code> 上百万行。长事务持锁、undo 膨胀、binlog 暴涨、从库延迟几十分钟，一条语句引发全链路故障。</li>
         <li>统计信息从不更新。大批量导入后基数严重失真，优化器持续选错索引，表现为「没改代码却越来越慢」。</li>
+        <li>改完不做基线对比。没有改前的扫描行数与总耗时占比，只能靠感觉判断有没有变好，而流量低峰会替你「证明」优化有效。</li>
+        <li>摘要统计从不清零。累计值里混着几个月前的历史，新问题被旧数据压在后面，排名完全失真。</li>
         <li>治理完不建卡口。三个月后新上线的接口带来同类问题，全部流程原样重跑一遍。</li>
     </ul>
 </div>

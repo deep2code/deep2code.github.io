@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="索引不是遇到慢查询就加一个，而是从一张表的全部查询模式反推出来的：先收集所有 WHERE、ORDER BY、GROUP BY、JOIN 条件，再按等值列在前、范围列在后、排序列紧跟的原则设计联合索引，最后合并可被前缀覆盖的索引。文中用五条查询完整推演出两个索引，给出索引数量的量化代价、前缀索引长度选法、唯一索引无法用 change buffer 的隐藏成本、用 sys 视图找未用与冗余索引的治理 SQL，以及大表加删索引的锁影响与 Online DDL 边界。">
+    <meta name="description" content="索引设计三段式：先给从查询模式推导索引的四步动手流程，收集真实语句、量区分度与倾斜、按等值与排序与范围定列序、验证索引真的被用上，再给索引数量的清理流程，找未使用与冗余索引、用不可见索引安全预演；然后展开五条查询推演出两个索引的完整过程、列顺序决策的六条原则与例外、索引数量的量化代价、前缀索引长度选法、唯一索引无法用 change buffer 的隐藏成本、大表加删索引的锁影响与 Online DDL 边界；最后按表在业务里的角色给出索引预算矩阵与反模式清单。">
     <meta name="keywords" content="数据库性能优化,索引优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/optimization/index/">
     <meta property="og:title" content="索引设计与治理：从查询模式推导索引，并管住索引数量 - 数据库性能优化 - 资深码农">
-    <meta property="og:description" content="索引不是遇到慢查询就加一个，而是从一张表的全部查询模式反推出来的：先收集所有 WHERE、ORDER BY、GROUP BY、JOIN 条件，再按等值列在前、范围列在后、排序列紧跟的原则设计联合索引，最后合并可被前缀覆盖的索引。文中用五条查询完整推演出两个索引，给出索引数量的量化代价、前缀索引长度选法、唯一索引无法用 change buffer 的隐藏成本、用 sys 视图找未用与冗余索引的治理 SQL，以及大表加删索引的锁影响与 Online DDL 边界。">
+    <meta property="og:description" content="索引设计三段式：先给从查询模式推导索引的四步动手流程，收集真实语句、量区分度与倾斜、按等值与排序与范围定列序、验证索引真的被用上，再给索引数量的清理流程，找未使用与冗余索引、用不可见索引安全预演；然后展开五条查询推演出两个索引的完整过程、列顺序决策的六条原则与例外、索引数量的量化代价、前缀索引长度选法、唯一索引无法用 change buffer 的隐藏成本、大表加删索引的锁影响与 Online DDL 边界；最后按表在业务里的角色给出索引预算矩阵与反模式清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/optimization/index/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="索引设计与治理：从查询模式推导索引，并管住索引数量">
-    <meta name="twitter:description" content="索引不是遇到慢查询就加一个，而是从一张表的全部查询模式反推出来的：先收集所有 WHERE、ORDER BY、GROUP BY、JOIN 条件，再按等值列在前、范围列在后、排序列紧跟的原则设计联合索引，最后合并可被前缀覆盖的索引。文中用五条查询完整推演出两个索引，给出索引数量的量化代价、前缀索引长度选法、唯一索引无法用 change buffer 的隐藏成本、用 sys 视图找未用与冗余索引的治理 SQL，以及大表加删索引的锁影响与 Online DDL 边界。">
+    <meta name="twitter:description" content="索引设计三段式：先给从查询模式推导索引的四步动手流程，收集真实语句、量区分度与倾斜、按等值与排序与范围定列序、验证索引真的被用上，再给索引数量的清理流程，找未使用与冗余索引、用不可见索引安全预演；然后展开五条查询推演出两个索引的完整过程、列顺序决策的六条原则与例外、索引数量的量化代价、前缀索引长度选法、唯一索引无法用 change buffer 的隐藏成本、大表加删索引的锁影响与 Online DDL 边界；最后按表在业务里的角色给出索引预算矩阵与反模式清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -69,7 +69,127 @@
                     <div class="article-content">
 <p>「哪条查询慢就给它加个索引」是索引失控的起点。这样做出来的表最后会有十几个索引，一半从来没被用过，另一半互相冗余，写入被拖慢，优化器还时不时选错。索引应该是从<strong>一张表的全部查询模式</strong>反推出来的一组设计，而不是一条条查询的补丁。B+ 树结构、回表与覆盖索引、最左前缀判定、索引失效场景这些原理详见站内 MySQL 深度原理篇，这篇只讲设计方法和治理手段。</p>
 
-<h2>索引设计的三个步骤</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：从查询模式推导索引的四步动手流程（收集真实语句、量区分度与倾斜、定列序、验证是否被用上），以及索引数量的清理流程（找未使用、找冗余、用不可见索引安全预演再删），配 MySQL 与 PostgreSQL 的取数方式对照。</li>
+        <li><strong>② 原理</strong>：五条查询推演出两个索引的完整过程与那次关键取舍、列顺序六条原则各自的例外、索引数量在写放大与空间与优化器三处的量化代价、前缀索引为什么不能覆盖也不能排序、唯一索引为什么用不上 change buffer、大表加删索引的元数据锁与复制延迟边界。</li>
+        <li><strong>③ 场景</strong>：按表在业务里的角色给出索引预算与方案矩阵，以及九条反模式对照。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 从查询模式推导索引的四步，与索引数量的清理流程</h2>
+
+<p>索引设计是<strong>一张表一次做完</strong>的事，不是一条慢查询做一次。四步动手流程：先把这张表真实跑过的语句全部捞出来，再量候选列的区分度与倾斜，然后按「等值列在前、排序分组列紧跟、范围列在最后」定列序，最后验证新索引真的被用上了。下面这段可以直接照着敲。</p>
+
+<pre><code class="language-sql">-- 第一步：把这张表上真实发生过的语句模板全部捞出来，按频次排序
+-- 比翻代码可靠，因为它包含了框架自动生成和运维临时执行的语句
+SELECT LEFT(digest_text, 160) AS sql_template,
+       count_star AS calls,
+       ROUND(sum_timer_wait / 1000000000000, 2) AS total_sec,
+       ROUND(sum_rows_examined / count_star) AS rows_examined_avg
+FROM performance_schema.events_statements_summary_by_digest
+WHERE digest_text LIKE '%`orders`%' OR digest_text LIKE '%orders%'
+ORDER BY count_star DESC
+LIMIT 50;
+
+-- 第二步：量候选列的区分度，越接近 1 越适合做前导列
+-- 注意要在生产数据上量，测试库的分布通常完全不同
+SELECT
+    COUNT(*)                                        AS total,
+    COUNT(DISTINCT user_id) / COUNT(*)              AS sel_user_id,
+    COUNT(DISTINCT shop_id) / COUNT(*)              AS sel_shop_id,
+    COUNT(DISTINCT status)  / COUNT(*)              AS sel_status,
+    COUNT(DISTINCT DATE(create_time)) / COUNT(*)    AS sel_create_day
+FROM orders;
+
+-- 第二步补充：查倾斜。区分度平均值不错，但某个取值占了八成，索引对这个取值就是无效的
+SELECT status, COUNT(*) AS cnt,
+       ROUND(100 * COUNT(*) / (SELECT COUNT(*) FROM orders), 2) AS pct
+FROM orders GROUP BY status ORDER BY cnt DESC;
+
+-- 第三步：按等值、排序、范围的顺序定列序并建索引（推演过程见原理层）
+ALTER TABLE orders ADD KEY idx_user_time (user_id, create_time);
+
+-- 第四步：验证。两件事都要看，缺一件就不算验证过
+--   a) 计划里是否命中该索引，且扫描行数与返回行数接近、没有额外排序
+EXPLAIN SELECT id, amount, status FROM orders
+ WHERE user_id = 10086 ORDER BY create_time DESC LIMIT 20;
+--   b) 上线一段时间后，它到底有没有被真实流量用到
+SELECT index_name, count_read, count_write
+FROM performance_schema.table_io_waits_summary_by_index_usage
+WHERE object_schema = DATABASE() AND object_name = 'orders'
+ORDER BY count_read DESC;
+-- 判读：count_read 长期为 0 而 count_write 不低，说明这个索引只在收税不干活</code></pre>
+
+<table>
+<thead><tr><th>要做什么</th><th>怎么做</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>给一张新表设计索引</td><td>先列全查询条件，再找一组能覆盖最多查询的列序</td><td><strong>不要对单条查询逐个优化</strong>，那样必然做出十几个索引</td></tr>
+<tr><td>决定联合索引的列序</td><td>等值列在前、排序或分组列紧跟、范围列放最后</td><td>区分度只是第三顺位；为了让多条查询复用，经常要把区分度低但所有查询都带的列放前面</td></tr>
+<tr><td>判断要不要为一条新查询建索引</td><td>先看现有索引能不能靠最左前缀命中，再看能不能调整现有索引的列序同时服务新旧查询</td><td>低频报表与运营导出不要动主库索引，分流到从库或离线库</td></tr>
+<tr><td>消除冗余</td><td>前缀能覆盖的只留最长的那个</td><td><code>(a)</code>、<code>(a,b)</code>、<code>(a,b,c)</code> 三个都建出来时，前两个只剩写入成本</td></tr>
+<tr><td>给长字符串列建索引</td><td>前缀索引，长度用区分度试算法选</td><td>前缀索引<strong>不能用于覆盖也不能用于排序</strong>，原因见原理层</td></tr>
+<tr><td>给函数或表达式条件建索引</td><td>MySQL 8.0.13+ 直接对表达式建索引，5.7 用虚拟列；PostgreSQL 原生表达式索引</td><td>查询里的写法必须和索引定义完全一致，差一层类型转换就用不上</td></tr>
+<tr><td>加唯一索引</td><td>只在唯一性是业务正确性底线时加</td><td>唯一索引用不上 change buffer，写密集表上是实打实的吞吐损失</td></tr>
+<tr><td>大表加索引</td><td>显式写 <code>ALGORITHM=INPLACE, LOCK=NONE</code>；不满足条件或需要限速时上 gh-ost</td><td>执行前必须先确认没有长事务，否则首尾拿元数据锁时会堵住全表访问</td></tr>
+<tr><td>删索引</td><td>MySQL 8.0 先设 <code>INVISIBLE</code> 观察一两周再删</td><td>统计周期必须覆盖一个完整业务周期，含月末结算与对账</td></tr>
+</tbody>
+</table>
+
+<p>设计之外的另一半工作是<strong>把数量管住</strong>。一个跑了两年的库里通常躺着一批从没被用过的索引，它们不产生任何收益，却持续收写入税。清理流程固定五步，顺序不能乱：</p>
+
+<pre><code class="language-sql">-- 第 0 步：先确认统计周期够不够长。MySQL 的索引使用统计从实例上次启动起累计
+SELECT variable_value AS uptime_sec
+FROM performance_schema.global_status WHERE variable_name = 'Uptime';
+-- 刚重启两天就照着「未使用索引」列表删，等于赌这两天覆盖了月末对账
+
+-- 第 1 步：找从未被使用过的索引（sys 库，MySQL 5.7 起自带）
+SELECT * FROM sys.schema_unused_indexes
+WHERE object_schema = DATABASE();
+
+-- 第 2 步：找冗余索引，即被另一个索引的前缀完全覆盖的那些
+-- 这个视图会直接给出建议执行的删除语句，但不要盲目执行
+SELECT table_name, redundant_index_name, redundant_index_columns,
+       dominant_index_name, dominant_index_columns, sql_drop_index
+FROM sys.schema_redundant_indexes
+WHERE table_schema = DATABASE();
+
+-- 第 3 步：人工核对低频批量任务清单（月末结算、季度对账、年度报表、数据导出）
+--   这些任务往往是某个索引的唯一使用者，而它们不在日常流量里
+
+-- 第 4 步：不可见预演（MySQL 8.0）。优化器不再使用它，但索引仍被维护，可一秒回滚
+ALTER TABLE orders ALTER INDEX idx_shop_status_pay INVISIBLE;
+-- 观察一到两周，确认没有语句变慢与计划退化；出问题就立刻恢复
+-- ALTER TABLE orders ALTER INDEX idx_shop_status_pay VISIBLE;
+
+-- 第 5 步：确认无恙后真正删除
+ALTER TABLE orders DROP KEY idx_shop_status_pay;
+
+-- PostgreSQL 的对照写法：没有不可见索引，但删除与重建都能并发进行
+--   idx_scan = 0 且不是唯一约束的，是安全删除候选
+-- SELECT relname, indexrelname, idx_scan FROM pg_stat_user_indexes WHERE idx_scan = 0;
+-- DROP INDEX CONCURRENTLY idx_xxx;      -- 普通 DROP INDEX 会取 ACCESS EXCLUSIVE 锁
+-- 详见站内 PostgreSQL 索引篇</code></pre>
+
+<table>
+<thead><tr><th>要查什么</th><th>MySQL 怎么查</th><th>PostgreSQL 怎么查</th><th>判读要点</th></tr></thead>
+<tbody>
+<tr><td>这张表真实跑过哪些语句</td><td><code>events_statements_summary_by_digest</code></td><td><code>pg_stat_statements</code></td><td>比翻代码可靠，包含框架生成与运维临时执行的语句</td></tr>
+<tr><td>候选列的区分度</td><td><code>COUNT(DISTINCT col) / COUNT(*)</code></td><td>同样的 SQL，或 <code>pg_stats</code> 的 <code>n_distinct</code></td><td><strong>必须在生产数据上量</strong>，测试库分布通常完全不同</td></tr>
+<tr><td>取值倾斜</td><td><code>GROUP BY</code> 计数并算占比</td><td><code>pg_stats</code> 的 <code>most_common_vals</code> 与 <code>most_common_freqs</code></td><td>平均区分度不错但某个值占八成时，索引对这个值等于无效</td></tr>
+<tr><td>索引有没有被真实用上</td><td><code>table_io_waits_summary_by_index_usage</code> 的 <code>count_read</code></td><td><code>pg_stat_user_indexes</code> 的 <code>idx_scan</code></td><td>统计都是从上次重启或重置起累计，周期不够长时结论不可信</td></tr>
+<tr><td>有没有冗余索引</td><td><code>sys.schema_redundant_indexes</code></td><td>无内置视图，按 <code>pg_index</code> 的 <code>indkey</code> 前缀关系自己比对</td><td>被前缀覆盖的那个可以删，唯一约束除外</td></tr>
+<tr><td>统计信息准不准</td><td><code>information_schema.STATISTICS</code> 的 <code>cardinality</code> 对比实际值</td><td><code>EXPLAIN</code> 里 <code>rows</code> 与 <code>actual rows</code> 的比值</td><td>差一个数量级就会持续选错索引，看起来像索引失效</td></tr>
+<tr><td>删索引前的安全预演</td><td>8.0 的 <code>INVISIBLE</code></td><td>无等价特性，只能先备好重建 DDL 再删</td><td>PG 上可用 <code>CONCURRENTLY</code> 重建，但耗时约两倍且失败会留无效索引</td></tr>
+<tr><td>在线加索引</td><td><code>ALGORITHM=INPLACE, LOCK=NONE</code> 或 gh-ost</td><td><code>CREATE INDEX CONCURRENTLY</code></td><td>两者的首尾都怕长事务，执行前必须先清长事务</td></tr>
+</tbody>
+</table>
+
+<p>用法层到此结束。为什么第三步的列序取舍会牺牲区分度、为什么索引上限是五到六个、为什么唯一索引在写密集表上更贵，下面逐个展开。</p>
+
+<h2>② 原理 · 索引设计的三个步骤</h2>
 
 <div class="mermaid">
 flowchart TB
@@ -100,35 +220,9 @@ flowchart TB
     C2 --> C3
 </div>
 
-<p>第三步是最容易被跳过的一步，也是索引数量失控的根源。一个 <code>(a, b, c)</code> 索引天然能服务只用 <code>a</code> 和只用 <code>a, b</code> 的查询，所以<strong>不要把 <code>(a)</code>、<code>(a,b)</code>、<code>(a,b,c)</code> 三个都建出来</strong>，只留最长的那个。收集查询模式可以直接从语句摘要统计里捞。</p>
+<p>第三步是最容易被跳过的一步，也是索引数量失控的根源。一个 <code>(a, b, c)</code> 索引天然能服务只用 <code>a</code> 和只用 <code>a, b</code> 的查询，所以<strong>不要把 <code>(a)</code>、<code>(a,b)</code>、<code>(a,b,c)</code> 三个都建出来</strong>，只留最长的那个。收集查询模式与量区分度的具体 SQL 在用法层已经给过。</p>
 
-<pre><code class="language-sql">-- 第一步：把这张表上真实发生过的语句模板全部捞出来，按频次排序
--- 比翻代码可靠，因为它包含了框架自动生成和运维临时执行的语句
-SELECT LEFT(digest_text, 160) AS sql_template,
-       count_star AS calls,
-       ROUND(sum_timer_wait / 1000000000000, 2) AS total_sec,
-       ROUND(sum_rows_examined / count_star) AS rows_examined_avg
-FROM performance_schema.events_statements_summary_by_digest
-WHERE digest_text LIKE '%`orders`%' OR digest_text LIKE '%orders%'
-ORDER BY count_star DESC
-LIMIT 50;
-
--- 设计前先量一下候选列的区分度：越接近 1 越适合做前导列
--- 注意要在生产数据上量，测试库的分布通常完全不同
-SELECT
-    COUNT(*)                                        AS total,
-    COUNT(DISTINCT user_id) / COUNT(*)              AS sel_user_id,
-    COUNT(DISTINCT shop_id) / COUNT(*)              AS sel_shop_id,
-    COUNT(DISTINCT status)  / COUNT(*)              AS sel_status,
-    COUNT(DISTINCT DATE(create_time)) / COUNT(*)    AS sel_create_day
-FROM orders;
-
--- 检查倾斜：区分度平均值不错，但某个取值占了八成，索引对这个取值就是无效的
-SELECT status, COUNT(*) AS cnt,
-       ROUND(100 * COUNT(*) / (SELECT COUNT(*) FROM orders), 2) AS pct
-FROM orders GROUP BY status ORDER BY cnt DESC;</code></pre>
-
-<h2>完整推演：五条查询设计出两个索引</h2>
+<h2>② 原理 · 完整推演：五条查询设计出两个索引</h2>
 
 <p>假设一张订单表 <code>orders</code>，列有 <code>id</code>、<code>user_id</code>、<code>shop_id</code>、<code>status</code>、<code>amount</code>、<code>pay_time</code>、<code>create_time</code>。业务上确定只有以下五条查询。</p>
 
@@ -168,7 +262,7 @@ EXPLAIN SELECT id, user_id, amount FROM orders
     <p>给五条查询各建一个「单独最优索引」，写入成本会是两个索引方案的两倍以上，而收益只体现在 Q2 的一次排序上。索引设计的本质是<strong>在有限的索引预算内覆盖尽可能多的查询</strong>，不是让每条查询都跑在它的理论最优路径上。判断一个索引方案好不好，要同时看它服务了几条查询、以及被迫牺牲了什么。</p>
 </div>
 
-<h2>索引列顺序的决策</h2>
+<h2>② 原理 · 索引列顺序的决策原则与例外</h2>
 
 <table>
 <thead><tr><th>原则</th><th>为什么</th><th>例外与边界</th></tr></thead>
@@ -199,7 +293,7 @@ flowchart TB
     ADD --> VER
 </div>
 
-<h2>索引不是越多越好：量化代价</h2>
+<h2>② 原理 · 索引不是越多越好：量化代价</h2>
 
 <table>
 <thead><tr><th>代价维度</th><th>量级</th><th>说明</th></tr></thead>
@@ -213,7 +307,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>前缀索引、函数索引与虚拟列</h2>
+<h2>② 原理 · 前缀索引、函数索引与虚拟列</h2>
 
 <p>长字符串列直接建索引会让索引变得很宽。前缀索引只取前 n 个字符，代价是<strong>不能用于覆盖索引，也不能用于排序</strong>——索引里存的是截断值，取完整值必须回表，而前缀相同的行内部顺序也不确定。选 n 的方法是逐个试算区分度，找到能达到完整区分度九成以上的最小值。</p>
 
@@ -245,7 +339,7 @@ ALTER TABLE orders ADD KEY idx_create_day ((DATE(create_time)));
 --   ADD KEY idx_create_day (create_day);
 -- 注意：查询必须写成与索引定义完全一致的表达式，写法不一致就用不上</code></pre>
 
-<h2>唯一索引与普通索引的隐藏成本</h2>
+<h2>② 原理 · 唯一索引与普通索引的隐藏成本</h2>
 
 <table>
 <thead><tr><th>维度</th><th>唯一索引</th><th>普通索引</th></tr></thead>
@@ -261,25 +355,10 @@ ALTER TABLE orders ADD KEY idx_create_day ((DATE(create_time)));
 
 <p>结论是：<strong>「顺手加个唯一索引保险一点」不是零成本的</strong>，在写密集的表上这是实打实的性能损失。change buffer 的工作机制与它失效的条件详见站内 MySQL 深度原理篇。</p>
 
-<h2>索引治理：找出未使用与冗余的索引</h2>
+<h2>② 原理 · 索引治理：删不删怎么排优先级</h2>
 
-<pre><code class="language-sql">-- 1) 从未被使用过的索引（sys 库，MySQL 5.7 起自带）
---    统计从上次实例重启开始累计，重启时间太近的话结果不可信
-SELECT * FROM sys.schema_unused_indexes
-WHERE object_schema = DATABASE();
-
--- 2) 冗余索引：被另一个索引的前缀完全覆盖
---    视图会直接给出建议执行的删除语句
-SELECT table_name, redundant_index_name, redundant_index_columns,
-       dominant_index_name, dominant_index_columns, sql_drop_index
-FROM sys.schema_redundant_indexes
-WHERE table_schema = DATABASE();
-
--- 3) 先确认统计周期够不够长：距上次重启多久
-SELECT variable_value AS uptime_sec
-FROM performance_schema.global_status WHERE variable_name = 'Uptime';
-
--- 4) 每个索引被读取的次数，用来给「删不删」排优先级
+<pre><code class="language-sql">-- 找未使用与冗余索引的三条 SQL 在用法层已经给过，这里是给「删不删」排优先级的两条
+-- 1) 每个索引被读取与被写入的次数对比
 --    count_read 为 0 且周期覆盖了月末批量任务，才是安全的删除候选
 SELECT object_name AS tbl, index_name, count_read, count_write,
        count_fetch, count_insert, count_update, count_delete
@@ -287,7 +366,7 @@ FROM performance_schema.table_io_waits_summary_by_index_usage
 WHERE object_schema = DATABASE() AND index_name IS NOT NULL
 ORDER BY count_read ASC, count_write DESC;
 
--- 5) 统计信息是否失真：把索引记录的基数与实际值对比
+-- 2) 统计信息是否失真：把索引记录的基数与实际值对比
 --    cardinality 与实际相差一个数量级以上，优化器就会持续选错
 SELECT index_name, seq_in_index, column_name, cardinality
 FROM information_schema.STATISTICS
@@ -329,7 +408,7 @@ stateDiagram-v2
     end note
 </div>
 
-<h2>加删索引的操作风险</h2>
+<h2>② 原理 · 加删索引的操作风险</h2>
 
 <p>索引变更在小表上是瞬间完成的操作，在大表上是一次线上变更。两个最常被低估的风险是元数据锁排队和复制延迟。</p>
 
@@ -390,7 +469,27 @@ gh-ost \
 </tbody>
 </table>
 
-<h2>索引设计的反模式</h2>
+<h2>③ 场景 · 按表在业务里的角色定索引预算</h2>
+
+<p>「一张表最多几个索引」没有统一答案，因为<strong>索引预算取决于这张表在业务里承担什么角色</strong>：它被多少种形态的查询访问、写入有多密集、能不能把一部分查询分流出去。下表按常见角色给出预算与方案。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>C 端高频列表表（订单、消息、动态）</td><td>一到两个联合索引，前导列固定是用户维度</td><td>所有 C 端查询都带用户维度，复用度最高，一个索引能服务多条查询</td><td>运营维度的查询命不中它，必须分流，不能为了运营再往主库加索引</td></tr>
+<tr><td>写入密集的流水表、埋点表</td><td>索引砍到最少：主键加一个时间维度索引</td><td>每个二级索引都是写放大，索引数直接决定写入吞吐</td><td>查询能力弱，复杂查询只能走离线或列存，见 <a href="../../clickhouse/">ClickHouse 深度原理</a></td></tr>
+<tr><td>任务队列表</td><td>PostgreSQL 用部分索引；MySQL 用「状态加时间」的联合索引</td><td>只有待处理的少量行需要被索引，已完成的行索引它们毫无意义</td><td>MySQL 没有部分索引，只能靠虚拟列间接实现或接受全量索引的体积</td></tr>
+<tr><td>小体量维表、配置表</td><td><strong>只留主键，不要加索引</strong></td><td>几千行的表全表扫比走索引更快，优化器也大概率不选索引</td><td>唯一的代价是要抵抗「有索引才专业」的直觉</td></tr>
+<tr><td>后台宽条件筛选表</td><td>PostgreSQL 靠多个单列索引做位图组合；MySQL 更应该把这类查询分流</td><td>PG 能把多个索引的位图做交并，MySQL 的索引合并能力弱得多</td><td>MySQL 上硬扛会演变成给每种条件组合建联合索引，索引数量必然失控</td></tr>
+<tr><td>唯一性是正确性底线的表（支付流水、证件号）</td><td>加唯一索引，接受写入成本</td><td>数据库层的约束能兜住应用逻辑漏洞，这一条值得花钱</td><td>唯一索引用不上 change buffer；写密集时要评估能否由上游 ID 生成器保证</td></tr>
+<tr><td>长字符串检索（邮箱、URL、外部编码）</td><td>前缀索引，前缀区分度差时加反转虚拟列</td><td>索引宽度直接影响树高与内存占用</td><td>前缀索引不能覆盖也不能排序，取完整值必须回表</td></tr>
+<tr><td>历史归档表</td><td>只留查询确实需要的那一个索引，其余全删</td><td>归档表几乎不被查，索引在这里纯粹是存储与备份成本</td><td>删之前必须确认对账与审计任务不依赖它</td></tr>
+<tr><td>多租户共享表</td><td>所有联合索引的前导列放租户维度</td><td>所有查询必带租户条件，这是天然的最佳前导列</td><td>大租户会造成数据倾斜，统计信息要单独关注；数据归属策略见 <a href="../../design/sharding-strategy/">数据归属与多租户</a></td></tr>
+<tr><td>一张表已经需要七八个索引</td><td><strong>停下来，先拆查询而不是继续加索引</strong></td><td>这通常说明它承担了太多形态的查询，读写分流的收益远高于再加一个索引</td><td>分流需要改调用方，并接受从库的复制延迟</td></tr>
+</tbody>
+</table>
+
+<h2>③ 场景 · 索引设计的反模式</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>后果</th><th>正确做法</th></tr></thead>
@@ -407,9 +506,17 @@ gh-ost \
 </tbody>
 </table>
 
+<p><strong>不适用边界</strong>：索引不是万能的，也不是这条路径的全部。B+ 树结构与树高推演、回表与覆盖索引、最左前缀判定、change buffer 的工作机制、索引失效的各种场景在 <a href="../../mysql/">MySQL 深度原理</a>；PostgreSQL 的 GIN 与 GiST 与 BRIN 选型、部分索引与表达式索引、<code>EXPLAIN</code> 逐字段判读在 <a href="../../postgresql/index-optimize/">索引选型与执行计划判读</a>，建索引会取什么锁在 <a href="../../postgresql/mvcc-transaction/">并发控制</a>；「问题到底是不是索引」这一层判断在 <a href="../">数据库性能优化：瓶颈定位顺序</a>，<strong>先做完那一步再回来</strong>；单条慢语句从发现到根治的完整闭环在 <a href="../slow-query/">慢查询治理</a>；索引解决不了容量与写入上限，那一层在 <a href="../sharding/">分库分表</a>；表结构与字段类型本身选得对不对在 <a href="../../design/">范式与反范式</a>，上线之后怎么改在 <a href="../../design/index-design/">模式演进与约束设计</a>；读压力用缓存挡掉之后索引压力也会下降，取舍在 <a href="../../cache/">缓存的收益与代价</a>；索引使用率与扫描行数怎么长期采集在 <a href="../../../observability/metrics/">指标与监控</a>。</p>
+
+<p>在这条路径上，上一篇负责判断瓶颈在哪、该不该动索引，本篇把索引这一项做完整（设计加治理），下一篇处理那些索引已经建对、却依然慢的单条语句。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../">← 上一步：数据库性能优化：瓶颈定位顺序与优化手段的投入产出</a> · <a href="../slow-query/">下一步：慢查询治理：从发现到根治的完整闭环 →</a></p>
+
+<h2>最容易踩的坑</h2>
+
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
         <li>把 <code>(a)</code>、<code>(a,b)</code>、<code>(a,b,c)</code> 三个索引都建出来。前两个完全被第三个的前缀覆盖，只剩写入成本。</li>
         <li>为了 Q2 的一次排序单独加索引，忽略了它只占总调用量的百分之几。索引预算花在了收益最小的地方。</li>

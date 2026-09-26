@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="ClickHouse 建表的 ENGINE、ORDER BY、PARTITION BY 必须一次定对：MergeTree 家族七种引擎的去重与预聚合语义、ReplacingMergeTree 为什么查询还要加 FINAL、LowCardinality 与 CODEC(Delta, ZSTD) 的真实压缩收益、Nullable 的隐藏成本；写入侧讲清每次 INSERT 生成一个 part 与 Too many parts 的因果、客户端攒批与 async_insert 的取舍、Kafka 表引擎配物化视图的完整三段 SQL，以及 mutation、轻量级 DELETE 与 DROP PARTITION 改数据的代价对比。">
+        <meta name="description" content="建表与写入三段式：先给一份可抄的建表 DDL，逐行说明引擎、排序键、分区粒度、CODEC 与 TTL 为什么这么写，再给批量导入的批次区间、async_insert 的边界和导入后必须跑的三条验收命令；接着讲三项定错只能重建表的决策、MergeTree 家族的差异全部发生在 merge 那一刻、类型与编码怎么决定压缩、更新删除的真相与 TTL 三种形态；最后给需求到引擎与分区组合的落地矩阵。">
     <meta name="keywords" content="ClickHouse,建表,数据导入,MergeTree,Kafka Engine,S3,批量插入,技术博客">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/clickhouse/table-import/">
     <!-- Open Graph -->
     <meta property="og:title" content="ClickHouse 建表与写入：引擎选型、列压缩与批量导入 - 资深码农">
-    <meta property="og:description" content="ClickHouse 建表的 ENGINE、ORDER BY、PARTITION BY 必须一次定对：MergeTree 家族七种引擎的去重与预聚合语义、ReplacingMergeTree 为什么查询还要加 FINAL、LowCardinality 与 CODEC(Delta, ZSTD) 的真实压缩收益、Nullable 的隐藏成本；写入侧讲清每次 INSERT 生成一个 part 与 Too many parts 的因果、客户端攒批与 async_insert 的取舍、Kafka 表引擎配物化视图的完整三段 SQL，以及 mutation、轻量级 DELETE 与 DROP PARTITION 改数据的代价对比。">
+    <meta property="og:description" content="建表与写入三段式：先给一份可抄的建表 DDL，逐行说明引擎、排序键、分区粒度、CODEC 与 TTL 为什么这么写，再给批量导入的批次区间、async_insert 的边界和导入后必须跑的三条验收命令；接着讲三项定错只能重建表的决策、MergeTree 家族的差异全部发生在 merge 那一刻、类型与编码怎么决定压缩、更新删除的真相与 TTL 三种形态；最后给需求到引擎与分区组合的落地矩阵。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/clickhouse/table-import/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="ClickHouse 建表与写入：引擎选型、列压缩与批量导入 - 资深码农">
-    <meta name="twitter:description" content="ClickHouse 建表的 ENGINE、ORDER BY、PARTITION BY 必须一次定对：MergeTree 家族七种引擎的去重与预聚合语义、ReplacingMergeTree 为什么查询还要加 FINAL、LowCardinality 与 CODEC(Delta, ZSTD) 的真实压缩收益、Nullable 的隐藏成本；写入侧讲清每次 INSERT 生成一个 part 与 Too many parts 的因果、客户端攒批与 async_insert 的取舍、Kafka 表引擎配物化视图的完整三段 SQL，以及 mutation、轻量级 DELETE 与 DROP PARTITION 改数据的代价对比。">
+    <meta name="twitter:description" content="建表与写入三段式：先给一份可抄的建表 DDL，逐行说明引擎、排序键、分区粒度、CODEC 与 TTL 为什么这么写，再给批量导入的批次区间、async_insert 的边界和导入后必须跑的三条验收命令；接着讲三项定错只能重建表的决策、MergeTree 家族的差异全部发生在 merge 那一刻、类型与编码怎么决定压缩、更新删除的真相与 TTL 三种形态；最后给需求到引擎与分区组合的落地矩阵。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="article:author" content="资深码农">
     <meta name="article:section" content="数据库与缓存">
     <meta name="article:tag" content="ClickHouse,建表,数据导入">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 建表与写入：引擎选型、列压缩与批量导入","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"ClickHouse 建表的 ENGINE、ORDER BY、PARTITION BY 必须一次定对：MergeTree 家族七种引擎的去重与预聚合语义、ReplacingMergeTree 为什么查询还要加 FINAL、LowCardinality 与 CODEC(Delta, ZSTD) 的真实压缩收益、Nullable 的隐藏成本；写入侧讲清每次 INSERT 生成一个 part 与 Too many parts 的因果、客户端攒批与 async_insert 的取舍、Kafka 表引擎配物化视图的完整三段 SQL，以及 mutation、轻量级 DELETE 与 DROP PARTITION 改数据的代价对比。","url":"https://www.yijunjun.asia/database/clickhouse/table-import/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/table-import/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 建表与写入：引擎选型、列压缩与批量导入","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"建表与写入三段式：先给一份可抄的建表 DDL，逐行说明引擎、排序键、分区粒度、CODEC 与 TTL 为什么这么写，再给批量导入的批次区间、async_insert 的边界和导入后必须跑的三条验收命令；接着讲三项定错只能重建表的决策、MergeTree 家族的差异全部发生在 merge 那一刻、类型与编码怎么决定压缩、更新删除的真相与 TTL 三种形态；最后给需求到引擎与分区组合的落地矩阵。","url":"https://www.yijunjun.asia/database/clickhouse/table-import/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/table-import/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "ClickHouse 总览", "item": "https://www.yijunjun.asia/database/clickhouse/"}, {"position": 4, "name": "建表与数据导入", "item": "https://www.yijunjun.asia/database/clickhouse/table-import/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,7 +91,123 @@
                     <div class="article-content">
 <p>ClickHouse 的 <code>CREATE TABLE</code> 看着和 MySQL 很像，这是个陷阱。<code>ENGINE</code>、<code>ORDER BY</code>、<code>PARTITION BY</code> 这三项定错了没有 ALTER 能救，只能新建表加回灌全量数据；写入姿势错了，则会在上线第三天收到 <code>Too many parts</code>。这篇只讲建表和写入这两件最容易做错的事：列存与向量化执行、稀疏主键索引的物理布局详见站内《ClickHouse 架构与核心特性》，副本拓扑与 Distributed 表详见站内《ClickHouse 集群与分布式表》，这里只给结论不展开。</p>
 
-<h2>建表时必须一次定对的三件事</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一份可以直接抄的建表 DDL（逐行说明引擎、排序键、分区粒度、压缩编码、TTL 为什么这么写）、批量导入的正确做法与批次区间、以及导入完成后必须跑的三条验收命令。</li>
+        <li><strong>② 原理</strong>：哪三项定错了只能重建表、MergeTree 家族的差异全部发生在 merge 那一刻、类型与 CODEC 怎么影响压缩、一次 INSERT 就是一个 part 的写入模型、各类数据源的接入链路、更新与删除在物理上为什么不存在、TTL 的三种形态。</li>
+        <li><strong>③ 场景</strong>：常见需求到「引擎 + 排序键 + 分区 + 写入方式」的组合表，以及哪些需求不该在这一层解决。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 一份可抄的建表 DDL、批量导入与验收</h2>
+
+<p>建表和写入这两件事，做对的成本很低，做错的修复成本极高——前者只能重建表回灌，后者会在上线第三天以 <code>Too many parts</code> 的形式找上来。先查下面这张表把动作对上，再照后面的 DDL 起步。</p>
+
+<table>
+<thead><tr><th>要做什么</th><th>怎么做</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>建一张事件或日志明细表</td><td><code>MergeTree</code>，排序键放「低基数常过滤列 + 时间列」，按月或按天分区</td><td>分区粒度要等于你的重跑与删除粒度，定错只能重建</td></tr>
+<tr><td>要按业务主键覆盖旧值</td><td><code>ReplacingMergeTree(版本列)</code>，并保证同一主键必然落同一分区</td><td>它不是唯一键，查询侧仍要去重，原因见原理层</td></tr>
+<tr><td>要做预聚合加速看板</td><td><code>AggregatingMergeTree</code> 加物化视图，写入侧 <code>-State</code>、读取侧 <code>-Merge</code></td><td>视图只对新写入生效，历史要按分区分批回填</td></tr>
+<tr><td>批量导入本地文件或对象存储</td><td><code>clickhouse-client</code> 管道输入，或 <code>INSERT ... SELECT FROM s3(...)</code></td><td>单批 1 万到 50 万行；凭据别写在 SQL 里，它会进 <code>query_log</code></td></tr>
+<tr><td>接 Kafka 实时流</td><td>Kafka 引擎表 + 物化视图 + MergeTree 目标表，三段都要建</td><td>只建 Kafka 表去 <code>SELECT</code> 会把数据消费掉且永远不落盘</td></tr>
+<tr><td>写入方实例很多、每个流量都很小</td><td>打开 <code>async_insert</code> 让服务端按表攒批</td><td>核心数据必须保持 <code>wait_for_async_insert = 1</code>，否则宕机静默丢数</td></tr>
+<tr><td>定期删除过期数据</td><td>建表时就写 <code>TTL ... DELETE</code>，大表再打开 <code>ttl_only_drop_parts</code></td><td>用 <code>ALTER DELETE</code> 删历史是重写 part，代价高几个数量级</td></tr>
+<tr><td>改列类型或加列</td><td><code>ALTER MODIFY COLUMN</code> / <code>ADD COLUMN</code>，异步重写</td><td>改排序键前缀和分区键做不到，这两项没有 ALTER 可用</td></tr>
+</tbody></table>
+
+<p>下面这份 DDL 可以直接改字段名用。注释只回答「为什么要这一行」，机制在原理层展开：</p>
+
+<pre><code class="language-sql">CREATE TABLE events
+(
+    tenant_id   UInt32,                                -- 几乎每条查询都带它，所以它当排序键最左列
+    event_type  LowCardinality(String),                -- 基数几十到几千，字典编码后每行只占一两个字节
+    event_time  DateTime CODEC(Delta, ZSTD(1)),         -- 单调递增：先差分再压缩，比默认 LZ4 小得多
+    event_date  Date MATERIALIZED toDate(event_time),  -- 物化列专供分区表达式，写入端不用多送一个字段
+    user_id     UInt64,                                -- 高基数：不上 LowCardinality，也不进排序键前缀
+    duration_ms UInt32 CODEC(T64, ZSTD(1)),            -- 实际值域远小于类型宽度，T64 裁掉恒为零的高位
+    revenue     Decimal64(4) DEFAULT 0,                -- 金额禁用 Float；用默认值而不是 Nullable，省掉掩码列
+    props       String CODEC(ZSTD(3))                  -- 原始 JSON 读得少、冗余高，用 CPU 换磁盘
+)
+ENGINE = MergeTree                                     -- 明细表就用它；要按主键覆盖才换 ReplacingMergeTree
+PARTITION BY toYYYYMM(event_date)                      -- 分区粒度 = 重跑与删除的粒度；按月时两年也只有 24 个目录
+ORDER BY (tenant_id, event_type, event_time)           -- 低基数、常过滤的列在前，时间列收尾负责范围裁剪
+TTL event_date + INTERVAL 180 DAY DELETE               -- 保留期写进表定义，别指望以后有人手工删
+SETTINGS index_granularity = 8192;                     -- 默认值，先别动；要调先量过读放大
+
+-- 排序键之外的高基数等值过滤交给跳数索引：它只能跳过 granule，不能定位行
+ALTER TABLE events ADD INDEX idx_user user_id TYPE bloom_filter(0.01) GRANULARITY 4;
+ALTER TABLE events MATERIALIZE INDEX idx_user;   -- 存量数据必须显式物化，不做就只对新写入生效
+</code></pre>
+
+<p>表建好，写入只有一条铁律：<strong>一次 INSERT 生成一个 part，不管里面是 1 行还是 100 万行</strong>。所以要么客户端攒批，要么让服务端攒批，没有第三条路。</p>
+
+<pre><code class="language-sql">-- 客户端攒批：单批 1 万到 50 万行、10 到 100 MB，每表每秒提交不超过一次
+-- 这是长期有效的经验区间；触发限速与拒绝的具体阈值以 system.merge_tree_settings 的输出为准
+INSERT INTO events (tenant_id, event_type, event_time, user_id, duration_ms, revenue)
+FORMAT JSONEachRow
+{"tenant_id":42,"event_type":"click","event_time":"2026-09-23 10:00:01","user_id":1001,"duration_ms":32,"revenue":0}
+{"tenant_id":42,"event_type":"view","event_time":"2026-09-23 10:00:02","user_id":1002,"duration_ms":18,"revenue":0}
+
+-- 写入方实例多、单实例攒不出大批次时，把攒批交给服务端
+SET async_insert = 1,
+    wait_for_async_insert = 1,              -- 1 = 等落盘再返回，语义与同步写一致；核心数据不要设 0
+    async_insert_max_data_size = 10000000,  -- 攒够字节就刷
+    async_insert_busy_timeout_ms = 1000;    -- 或攒够时间就刷，两个条件先到先算
+
+-- 从对象存储批量导入：服务端直读，通配符可并行，比客户端搬数快一个档
+INSERT INTO events
+SELECT * FROM s3('https://my-bucket.s3.amazonaws.com/events/2026/09/*.parquet', 'Parquet');
+-- 凭据不要写进 SQL，它会原样进 query_log；用命名集合引用，或走实例角色
+</code></pre>
+
+<pre><code class="language-bash"># 本地大文件：先切块再逐块灌，让每批落成一个大 part，而不是让客户端一行行喂
+split -l 200000 events_20260901.csv chunk_
+for f in chunk_*; do
+  clickhouse-client --query "INSERT INTO events FORMAT CSVWithNames" &lt; "$f"     || echo "FAILED $f" &gt;&gt; failed.txt   # 失败的块单独记下来重跑，避免整个文件从头再来
+done
+# 用 WithNames 系列格式，列顺序由文件头决定，上游加字段时不会静默错位
+</code></pre>
+
+<p>导入脚本没报错不等于数据对了。下面三条验收要跑完再算完成：</p>
+
+<pre><code class="language-sql">-- 1) 行数、分区分布与压缩比
+SELECT partition, sum(rows) AS rows, count() AS parts,
+       round(sum(data_uncompressed_bytes) / sum(data_compressed_bytes), 2) AS ratio
+FROM system.parts
+WHERE table = 'events' AND active     -- 不加 active 会把已被合并的旧 part 算进来，行数虚高一倍
+GROUP BY partition ORDER BY partition;
+-- 通过标准：行数与源端逐分区一致；单分区 parts 在几十以内；ratio 不低于 3
+
+-- 2) 写入有没有已经被限速
+SELECT event, value FROM system.events
+WHERE event IN ('DelayedInserts', 'RejectedInserts');
+-- 通过标准：两个计数器为 0 或长期不动；只要在涨，就是批次太小，调阈值只是把问题往后推
+
+-- 3) 有没有卡住的 mutation 或没物化完的索引，它们会挡住这张表后续所有变更
+SELECT table, mutation_id, command, parts_to_do, latest_fail_reason
+FROM system.mutations WHERE NOT is_done;
+-- 通过标准：空结果
+</code></pre>
+
+<table>
+<thead><tr><th>参数或做法</th><th>作用</th><th>默认值</th><th>什么时候需要改</th></tr></thead>
+<tbody>
+<tr><td>单批行数与字节</td><td>决定 part 的大小，是写入健康的第一变量</td><td>无默认，由客户端决定</td><td>宽表按字节控制比按行数准；小于一千行的批次等于自找 <code>Too many parts</code></td></tr>
+<tr><td><code>parts_to_delay_insert</code></td><td>单分区 active part 超过它就人为延迟写入</td><td>随版本变化，以 <code>system.merge_tree_settings</code> 为准</td><td>几乎不该改，它触发是症状不是原因</td></tr>
+<tr><td><code>parts_to_throw_insert</code></td><td>再超过就直接拒绝写入</td><td>同上</td><td>同上，调大只是把崩溃推迟到查询变慢之后</td></tr>
+<tr><td><code>async_insert</code></td><td>让服务端按表攒批</td><td>默认关闭</td><td>写入实例多、单实例流量小时打开</td></tr>
+<tr><td><code>wait_for_async_insert</code></td><td>是否等真正落盘再返回成功</td><td>以 <code>system.settings</code> 为准</td><td>核心数据保持等待；可容忍丢失的埋点才考虑关</td></tr>
+<tr><td><code>ttl_only_drop_parts</code></td><td>整个 part 都过期才删目录，代价从逐行判断降为常数级</td><td>以 <code>system.merge_tree_settings</code> 为准</td><td>分区键与 TTL 表达式基于同一日期列时打开</td></tr>
+<tr><td><code>index_granularity</code></td><td>一个 granule 覆盖多少行</td><td>8192</td><td>单行特别宽或点查很多时才考虑调小，调前先量读放大</td></tr>
+<tr><td><code>max_insert_block_size</code></td><td>服务端解析时的切块行数</td><td>以 <code>system.settings</code> 为准</td><td>一般不动；单次 INSERT 过大时它会把数据拆成多块</td></tr>
+</tbody></table>
+
+<p>这些选择为什么是这样、选错之后会以什么形式暴露，下面逐节展开。</p>
+
+<h2>② 原理 · 建表时必须一次定对的三件事</h2>
 
 <p>ClickHouse 的 DDL 自由度比关系库低得多。加列、删列、改列类型都很便宜（元数据操作或后台异步重写），但 <code>ORDER BY</code> 只能在末尾追加列、不能重排已有列，<code>PARTITION BY</code> 和 <code>ENGINE</code> 完全不能改。这意味着建表评审要花的时间比写导入脚本更多。</p>
 
@@ -127,7 +243,7 @@ flowchart TB
     Q4 -->|"单机"| R2["直接建表"]
 </div>
 
-<h2>MergeTree 家族：每个引擎在解决什么问题</h2>
+<h2>② 原理 · MergeTree 家族：每个引擎在解决什么问题</h2>
 
 <p>MergeTree 家族的全部差异都发生在<strong>后台 merge 的那一刻</strong>：它们共用同样的列存布局和稀疏索引，只是在合并两个 part 时对排序键相同的行做了不同处理。理解这一点就能推导出所有引擎共同的认知坑——<strong>你永远不知道 merge 什么时候发生，所以引擎的语义在查询时不是立即成立的</strong>。</p>
 
@@ -177,7 +293,7 @@ flowchart TB
     <p>它既不拒绝重复写入，也不保证任何时刻查到的是一行。折叠只在后台 merge 时按分区内的排序键做，触发条件是 part 的大小和数量，可能几秒也可能几天。更隐蔽的是<strong>跨分区的重复永远不会折叠</strong>：如果分区键是 <code>toYYYYMM(update_time)</code>，同一个订单先后两次更新落在不同月份，它就是两行。<code>OPTIMIZE TABLE ... FINAL</code> 能强制合并，但它会重写整张表，禁止写进定时任务当日常手段。</p>
 </div>
 
-<h2>列类型选对，磁盘立刻省一半</h2>
+<h2>② 原理 · 列类型选对，磁盘立刻省一半</h2>
 
 <p>列存的压缩率几乎完全由「同一列相邻值的相似度」决定，所以类型选择在 ClickHouse 里不是洁癖而是实打实的成本。下面这张表是实际项目里最高频的几个改法。</p>
 
@@ -230,7 +346,7 @@ SETTINGS index_granularity = 8192;                             -- 默认值，�
 ALTER TABLE events ADD INDEX idx_user user_id TYPE bloom_filter(0.01) GRANULARITY 4;
 </code></pre>
 
-<h2>写入的铁律：批量，且只有批量</h2>
+<h2>② 原理 · 写入的铁律：批量，且只有批量</h2>
 
 <p>ClickHouse 的写入模型一句话就能概括：<strong>一次 INSERT 生成一个 part，不管里面是 1 行还是 100 万行</strong>。part 是一个包含每列数据文件、标记文件和索引文件的目录，创建成本固定。逐条写入意味着每秒创建上千个目录，后台 merge 线程被迫不停合并小文件，磁盘 IO 全耗在合并上，接着写入被限速，最后直接报错。</p>
 
@@ -245,7 +361,7 @@ ALTER TABLE events ADD INDEX idx_user user_id TYPE bloom_filter(0.01) GRANULARIT
 <tr><td>建议提交频率</td><td>每表每秒不超过 1 次</td><td>官方长期给出的经验上限</td><td>频率高于此，merge 追不上产生速度</td></tr>
 </tbody></table>
 
-<p>批次攒在哪里有客户端和服务端两种做法。<code>async_insert</code> 的真正价值是：当你有几百个无状态服务实例、每个实例只有零星流量时，客户端根本攒不出大批次，这时让服务端按表维度统一攒批才合理。</p>
+<p>上表里的两个 part 阈值在大版本之间调整过多次，落地前用 <code>SELECT name, value FROM system.merge_tree_settings</code> 核对你这个版本的实际值，不要照抄任何文章里的数字。批次攒在哪里有客户端和服务端两种做法。<code>async_insert</code> 的真正价值是：当你有几百个无状态服务实例、每个实例只有零星流量时，客户端根本攒不出大批次，这时让服务端按表维度统一攒批才合理。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -278,7 +394,7 @@ sequenceDiagram
 <tr><td>Buffer 表引擎</td><td>服务端内存表</td><td>最低</td><td>高，宕机全丢且查询结果会抖</td><td>低</td><td>已不推荐，用 async_insert 替代</td></tr>
 </tbody></table>
 
-<h2>从各类数据源导入的方式对照</h2>
+<h2>② 原理 · 从各类数据源导入的链路差异</h2>
 
 <table>
 <thead><tr><th>数据源</th><th>推荐方式</th><th>特点</th><th>最容易踩的点</th></tr></thead>
@@ -342,7 +458,7 @@ SELECT database, table, consumer_id, num_messages_read, last_exception
 FROM system.kafka_consumers;
 </code></pre>
 
-<h2>导入完成后必须做的核对</h2>
+<h2>② 原理 · 导入完成后必须做的核对</h2>
 
 <p>「导入脚本没报错」不等于数据对了。至少要核对行数、part 健康度和 mutation 队列这三件事，下面几条 SQL 可以直接存成日常巡检。</p>
 
@@ -379,7 +495,7 @@ SELECT event, value FROM system.events
 WHERE event IN ('DelayedInserts', 'RejectedInserts', 'InsertedRows', 'MergedRows');
 </code></pre>
 
-<h2>更新与删除的真相</h2>
+<h2>② 原理 · 更新与删除的真相</h2>
 
 <p>ClickHouse 里「改一行数据」这个动作在物理上不存在。part 里的列文件是压缩后顺序写入的，任何修改都意味着重写整个 part。<code>ALTER TABLE ... UPDATE</code> 之所以叫 mutation 而不叫 UPDATE，就是在提醒你它是一次后台的大规模数据重写：异步执行、不返回受影响行数、不保证何时可见，而且一个卡住的 mutation 会让排在后面的所有变更全部停住。</p>
 
@@ -411,7 +527,7 @@ stateDiagram-v2
 <tr><td>TTL</td><td>merge 时按表达式清理行、清空列或搬盘</td><td>由后台 merge 摊薄</td><td>不精确，到期后不一定立即删</td><td>数据生命周期管理</td></tr>
 </tbody></table>
 
-<h2>用 TTL 管住数据生命周期</h2>
+<h2>② 原理 · 用 TTL 管住数据生命周期</h2>
 
 <p>TTL 有三种形态经常被忽略：行级删除、<strong>列级清空</strong>（明细字段过期但维度继续保留）、以及配合多盘存储策略把冷数据搬到廉价介质。三者可以写在同一张表上。</p>
 
@@ -438,6 +554,27 @@ FROM system.parts WHERE table = 'events' AND active LIMIT 5;
     <div class="callout-title">ttl_only_drop_parts 的前提条件</div>
     <p>开启后 ClickHouse 只在一个 part 里<strong>所有行</strong>都过期时整目录删除，代价极低；关闭时每次 merge 都要逐行判断 TTL 并重写 part，大表上会持续占用后台线程。前提是分区键与 TTL 表达式基于同一个日期列，否则 part 里永远混着未过期的行，数据就一直删不掉。</p>
 </div>
+
+<h2>③ 场景 · 从需求到一张表的落地组合</h2>
+
+<p>前面几节把每个机制拆开讲了，落地时需要的是反过来的映射：手上这个需求，引擎、排序键、分区、写入方式该怎么组合。下表每一行都是一个完整组合，代价列是选了它就必须一起接受的东西。</p>
+
+<table>
+<thead><tr><th>需求</th><th>组合怎么定</th><th>为什么是这个组合</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>埋点、日志、监控事件明细</td><td><code>MergeTree</code> + 按月分区 + 排序键（租户, 类型, 时间）+ TTL</td><td>一次写入不再修改，查询以时间范围加少量维度过滤为主</td><td>排序键前缀之外的维度只能靠跳数索引，命中率不保证</td></tr>
+<tr><td>CDC 同步的维表或订单快照</td><td><code>ReplacingMergeTree(版本列)</code>，分区键必须保证同一主键落同一分区</td><td>折叠只在分区内按排序键做，跨分区永远不去重</td><td>查询侧必须用 <code>argMax</code> 或 <code>FINAL</code> 自己去重，报表口径要写清</td></tr>
+<tr><td>只做累加的计数类汇总表</td><td><code>SummingMergeTree</code>，排序键就是分组维度</td><td>merge 时自动把非排序键的数值列加起来</td><td>查询仍要写 <code>sum()</code>，否则未合并的行会算少</td></tr>
+<tr><td>看板要 UV 与分位数</td><td><code>AggregatingMergeTree</code> + 物化视图，写 <code>-State</code> 读 <code>-Merge</code></td><td>只有聚合中间状态才能跨时间段二次合并</td><td>历史要手工回填；忘配 <code>-Merge</code> 就读出二进制，口径全错</td></tr>
+<tr><td>账务类需要严格撤销语义</td><td><code>VersionedCollapsingMergeTree(sign, version)</code></td><td>带版本号的抵消允许乱序到达</td><td>所有聚合都要写成 <code>sum(metric * sign)</code>，SQL 复杂度上升</td></tr>
+<tr><td>每天要重跑前一天的数据</td><td>按天分区 + 临时表算好 + <code>REPLACE PARTITION</code> 原子替换</td><td>换目录是元数据操作，秒级且对查询原子可见</td><td>需要一份临时空间；分区粒度必须与重跑粒度一致</td></tr>
+<tr><td>冷数据要降存储成本</td><td>多盘存储策略 + <code>TTL ... TO VOLUME</code> 与 <code>RECOMPRESS</code></td><td>冷数据换更高压缩比与更便宜的介质</td><td>查冷数据延迟明显变高，对象存储的随机小读尤其吃亏</td></tr>
+<tr><td>按用户做合规删除</td><td>轻量级 <code>DELETE FROM</code> 打删除掩码</td><td>语句返回即可见，不需要重写整个 part</td><td>查询要多读一份掩码，真正清理仍要等 merge</td></tr>
+</tbody></table>
+
+<p><strong>不适用边界</strong>：这一篇只负责把数据正确、经济地存进去。SQL 为什么慢、granule 裁剪与 PREWHERE 怎么调是下一步的事；星型模型、大宽表与缓慢变化维属于建模层；分片副本与 <code>ON CLUSTER</code> 属于集群层；引擎为什么必须批量写、稀疏索引为什么是 8192 行，回到 <a href="../">ClickHouse 深度原理</a>。如果你还在纠结用不用 ClickHouse，那是 <a href="../compare/">OLAP 引擎选型</a> 的问题，不要靠调参数来回答。上游 Kafka 的分区设计与保留策略不在本篇范围。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../compare/">← 上一步：OLAP 引擎选型：ClickHouse vs Doris vs Trino vs 云数仓</a> · <a href="../query-optimization/">下一步：ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合 →</a></p>
 
 <h2>最容易踩的坑</h2>
 

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="pgvector 的能力边界与正确用法：vector / halfvec / sparsevec 类型选择与维度上限，三种距离操作符与 opclass 的严格对应关系（不匹配会导致索引静默失效），IVFFlat 与 HNSW 的参数取舍，用 EXPLAIN 确认索引真的生效，过滤条件与向量检索结合时的两种执行计划与迭代扫描，建索引的内存与时间估算，TOAST 外存的影响，以及模型换代时向量列的灰度迁移步骤。">
+        <meta name="description" content="pgvector 三段式：先给可直接抄的建表与建索引 SQL（维度、halfvec 取舍、HNSW 与 IVFFlat 怎么选、参数怎么定、距离操作符必须与 opclass 匹配）、带过滤条件的向量查询正确写法、索引退化成全表扫的症状对照与一组验收命令，再讲类型与版本的能力边界、操作符与 opclass 的死规矩、IVFFlat 与 HNSW 的真正差异、EXPLAIN 判读、两种执行计划与迭代扫描、建索引的内存与时间估算、TOAST 的隐形税，最后给什么时候该搬家与模型换代的灰度迁移。">
     <meta name="keywords" content="pgvector,PostgreSQL,HNSW,IVFFlat,向量索引,Embedding,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -26,7 +26,7 @@
     <meta name="Google-Extended" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/vector/pgvector/">
     <meta property="og:title" content="pgvector 能力边界与正确用法 - 资深码农">
-    <meta property="og:description" content="pgvector 的能力边界与正确用法：vector / halfvec / sparsevec 类型选择与维度上限，三种距离操作符与 opclass 的严格对应关系（不匹配会导致索引静默失效），IVFFlat 与 HNSW 的参数取舍，用 EXPLAIN 确认索引真的生效，过滤条件与向量检索结合时的两种执行计划与迭代扫描，建索引的内存与时间估算，TOAST 外存的影响，以及模型换代时向量列的灰度迁移步骤。">
+    <meta property="og:description" content="pgvector 三段式：先给可直接抄的建表与建索引 SQL（维度、halfvec 取舍、HNSW 与 IVFFlat 怎么选、参数怎么定、距离操作符必须与 opclass 匹配）、带过滤条件的向量查询正确写法、索引退化成全表扫的症状对照与一组验收命令，再讲类型与版本的能力边界、操作符与 opclass 的死规矩、IVFFlat 与 HNSW 的真正差异、EXPLAIN 判读、两种执行计划与迭代扫描、建索引的内存与时间估算、TOAST 的隐形税，最后给什么时候该搬家与模型换代的灰度迁移。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/vector/pgvector/">
     <meta property="og:site_name" content="资深码农">
@@ -36,12 +36,12 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="pgvector 能力边界与正确用法 - 资深码农">
-    <meta name="twitter:description" content="pgvector 的能力边界与正确用法：vector / halfvec / sparsevec 类型选择与维度上限，三种距离操作符与 opclass 的严格对应关系（不匹配会导致索引静默失效），IVFFlat 与 HNSW 的参数取舍，用 EXPLAIN 确认索引真的生效，过滤条件与向量检索结合时的两种执行计划与迭代扫描，建索引的内存与时间估算，TOAST 外存的影响，以及模型换代时向量列的灰度迁移步骤。">
+    <meta name="twitter:description" content="pgvector 三段式：先给可直接抄的建表与建索引 SQL（维度、halfvec 取舍、HNSW 与 IVFFlat 怎么选、参数怎么定、距离操作符必须与 opclass 匹配）、带过滤条件的向量查询正确写法、索引退化成全表扫的症状对照与一组验收命令，再讲类型与版本的能力边界、操作符与 opclass 的死规矩、IVFFlat 与 HNSW 的真正差异、EXPLAIN 判读、两种执行计划与迭代扫描、建索引的内存与时间估算、TOAST 的隐形税，最后给什么时候该搬家与模型换代的灰度迁移。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="article:author" content="资深码农">
     <meta name="article:section" content="数据库与缓存">
     <meta name="article:tag" content="pgvector,PostgreSQL,向量数据库">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"pgvector 能力边界与正确用法","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"pgvector 的能力边界与正确用法：vector / halfvec / sparsevec 类型选择与维度上限，三种距离操作符与 opclass 的严格对应关系（不匹配会导致索引静默失效），IVFFlat 与 HNSW 的参数取舍，用 EXPLAIN 确认索引真的生效，过滤条件与向量检索结合时的两种执行计划与迭代扫描，建索引的内存与时间估算，TOAST 外存的影响，以及模型换代时向量列的灰度迁移步骤。","url":"https://www.yijunjun.asia/database/vector/pgvector/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/vector/pgvector/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"pgvector 能力边界与正确用法","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"pgvector 三段式：先给可直接抄的建表与建索引 SQL（维度、halfvec 取舍、HNSW 与 IVFFlat 怎么选、参数怎么定、距离操作符必须与 opclass 匹配）、带过滤条件的向量查询正确写法、索引退化成全表扫的症状对照与一组验收命令，再讲类型与版本的能力边界、操作符与 opclass 的死规矩、IVFFlat 与 HNSW 的真正差异、EXPLAIN 判读、两种执行计划与迭代扫描、建索引的内存与时间估算、TOAST 的隐形税，最后给什么时候该搬家与模型换代的灰度迁移。","url":"https://www.yijunjun.asia/database/vector/pgvector/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/vector/pgvector/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "向量数据库总览", "item": "https://www.yijunjun.asia/database/vector/"}, {"position": 4, "name": "pgvector 实战", "item": "https://www.yijunjun.asia/database/vector/pgvector/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,7 +90,124 @@
                     <div class="article-content">
 <p>pgvector 的价值不在于「又多了一个向量库」，而在于向量列和业务表处在同一个事务、同一份备份、同一套权限体系里：一条 SQL 就能完成「向量召回 + JOIN 业务表 + 权限过滤 + 分页」。代价是它的能力边界比专用向量库窄，而且有好几个「不报错、但索引静默失效」的坑，小表上完全看不出来，数据一上量就突然慢几十倍。这篇只讲边界和正确用法：ANN 索引本身的原理与维度诅咒见站内「向量数据库总览」，与 Milvus / Qdrant 的横向选型见站内「Pinecone / Weaviate / Milvus 对比」，PG 自身的堆表与 HOT、VACUUM、EXPLAIN 判读、work_mem 这些基础见站内 PostgreSQL 系列，本文涉及时只指路不展开。</p>
 
-<h2>装什么版本，能存什么类型</h2>
+<div class="callout callout-info">
+<div class="callout-icon">💡</div>
+<div class="callout-title">这篇怎么读</div>
+<ul>
+<li><strong>① 用法</strong>：可直接抄的建表与建索引 SQL、带过滤条件的向量查询正确写法、索引静默退化成全表扫的症状对照表，以及一组上线前必须跑的验收命令。</li>
+<li><strong>② 原理</strong>：各版本与各向量类型的能力边界、操作符与 opclass 为什么必须成对出现、IVFFlat 与 HNSW 的真正分水岭是写入模式、执行计划怎么判读、带过滤时两种计划的行为差异与迭代扫描、建索引的内存与时间估算、TOAST 外存的影响。</li>
+<li><strong>③ 场景</strong>：同库同事务到底省了什么、什么信号出现时该搬去专用向量库、模型换代怎么灰度迁移。</li>
+</ul>
+</div>
+
+<h2>① 用法 · 可以直接抄的建表、建索引与查询</h2>
+
+<p>先给一份能跑通的完整流程。八个步骤里有三处「写错不报错」的地方：操作符与 opclass 不匹配、缺 <code>LIMIT</code>、<code>ef_search</code> 小于 k——它们在小表上完全测不出来，等表长到几百万行才以 P99 崩掉的形式出现。</p>
+
+<table>
+<thead><tr><th>要做什么</th><th>怎么写</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>装扩展并确认版本</td><td><code>CREATE EXTENSION IF NOT EXISTS vector;</code> 再查 <code>pg_extension.extversion</code></td><td>0.7 以下没有 <code>halfvec</code>，0.8 以下没有迭代扫描；托管云常落后社区一两个大版本</td></tr>
+<tr><td>定向量列的类型与维度</td><td>1024 维以上优先 <code>halfvec(维度)</code></td><td>维度必须等于模型输出；<code>vector</code> 的可建索引维度上限是 2000，<code>halfvec</code> 是 4000</td></tr>
+<tr><td>给过滤字段建 B-tree</td><td><code>CREATE INDEX ... (tenant_id, model_ver)</code></td><td>低选择率查询全靠它，收益常常大于调任何向量参数</td></tr>
+<tr><td>选向量索引类型</td><td>在线持续写入选 HNSW；数据一次导完且建索引窗口紧才用 IVFFlat</td><td>IVFFlat 必须在数据导完之后建，空表上建等于没建</td></tr>
+<tr><td>定索引参数</td><td><code>m = 16</code> 起步，<code>ef_construction</code> 取 128 到 200 且不小于 <code>2*m</code></td><td>这两个固化进图结构，改动等于全量重建，宁可建索引时多花时间</td></tr>
+<tr><td>写检索 SQL</td><td><code>ORDER BY 向量列 距离操作符 参数</code> 升序，配 <code>LIMIT k</code></td><td>操作符必须与索引 opclass 对应；缺 <code>LIMIT</code>、或把排序写成相似度降序，索引都会静默失效</td></tr>
+<tr><td>设会话旋钮</td><td><code>SET hnsw.ef_search</code> 取 k 的 4 到 10 倍；带 <code>WHERE</code> 时打开迭代扫描</td><td><code>ef_search</code> 小于 k 时结果必然不全，且会被误判成「数据缺失」</td></tr>
+<tr><td>验收</td><td>看 <code>EXPLAIN</code> 里是不是 <code>Index Scan using ...</code> 配 <code>Order By:</code>，并核对返回条数等于 k</td><td>必须在有数据量的表上验，小表上一切都「正常」</td></tr>
+</tbody></table>
+
+<pre><code class="language-sql">-- 0) 扩展在每个 database 里装一次；先确认版本，后面两处能力依赖它
+CREATE EXTENSION IF NOT EXISTS vector;
+SELECT extversion FROM pg_extension WHERE extname = 'vector';  -- 低于 0.7 无 halfvec，低于 0.8 无迭代扫描
+
+-- 1) 向量表故意做窄：正文和宽业务字段留在原表，检索后 JOIN 回来
+CREATE TABLE doc_chunk (
+    id        bigserial PRIMARY KEY,
+    doc_id    bigint        NOT NULL,   -- 增量更新与删除的抓手，没有它只能全量重建
+    tenant_id int           NOT NULL,   -- 过滤字段，查询时必须下推到 SQL，不能留到应用层筛
+    model_ver text          NOT NULL,   -- 换模型灰度期靠它区分新旧向量，混着比较毫无意义
+    embedding halfvec(1024) NOT NULL    -- 维度等于模型输出；halfvec 每维 2 字节，存储和索引内存砍半
+);
+
+-- 2) 过滤字段的 B-tree：低选择率查询全靠它，收益常常大于调向量参数
+CREATE INDEX doc_chunk_tenant ON doc_chunk (tenant_id, model_ver);
+
+-- 3) 向量索引：opclass 里的 cosine 必须与查询里的 &lt;=&gt; 对应，不匹配会静默退化成全表扫
+SET maintenance_work_mem = '8GB';           -- 默认 64MB 会让构图落盘，耗时差十倍以上
+SET max_parallel_maintenance_workers = 7;   -- 0.6+ 支持并行建 HNSW，通常取核数减一
+CREATE INDEX doc_chunk_emb_hnsw ON doc_chunk
+    USING hnsw (embedding halfvec_cosine_ops)
+    WITH (m = 16, ef_construction = 128);   -- 固化进图结构，事后改动等于全量重建
+
+-- 4) 只有「数据一次导完、之后基本不写、且建索引窗口很紧」才换 IVFFlat，且务必导完数据再建
+-- CREATE INDEX doc_chunk_emb_ivf ON doc_chunk
+--     USING ivfflat (embedding halfvec_cosine_ops) WITH (lists = 1000);  -- lists 按行数估算</code></pre>
+
+<p>带过滤条件的检索是最容易写错的一段，正确形态长这样。三条 <code>SET</code> 一个都别省：</p>
+
+<pre><code class="language-sql">SET hnsw.ef_search = 100;                 -- 不小于 LIMIT 的 k，默认 40；查 Top-100 时必须调大
+SET hnsw.iterative_scan = relaxed_order;  -- 0.8+：带 WHERE 时候选不够会继续扫，避免返回不足 k 条
+SET hnsw.max_scan_tuples = 40000;         -- 迭代扫描的上限，默认 20000，用它兜住最坏情况的延迟
+
+WITH hit AS MATERIALIZED (                -- MATERIALIZED 防止优化器把 LIMIT 推到奇怪的位置
+    SELECT c.id, c.doc_id, c.embedding &lt;=&gt; $1 AS dist  -- 操作符与索引 opclass 必须一致
+    FROM doc_chunk c
+    WHERE c.tenant_id = $2                -- 租户与权限一律下推，绝不留到应用层过滤
+      AND c.model_ver = 'bge-m3-v1'       -- 灰度期只比较同一个模型空间里的向量
+    ORDER BY c.embedding &lt;=&gt; $1           -- 必须按距离升序；写成相似度降序索引立刻失效
+    LIMIT 50                              -- 粗召回放大，给后面的业务过滤和重排留余量
+)
+SELECT d.id, d.title, 1 - h.dist AS similarity   -- 相似度只在投影列里算，不能出现在 ORDER BY 里
+FROM hit h
+JOIN document d ON d.id = h.doc_id        -- 业务字段 JOIN 回来，同一快照，读不到半删状态
+WHERE d.status = 'published'
+ORDER BY h.dist
+LIMIT 10;</code></pre>
+
+<p>如果上线后发现慢，按症状对照下表，八成问题在前三行。<strong>这些退化全都不报错</strong>，只体现在执行计划和延迟上。</p>
+
+<table>
+<thead><tr><th>症状</th><th>执行计划长什么样</th><th>根因</th><th>怎么改</th></tr></thead>
+<tbody>
+<tr><td>测试环境很快，线上表一大就慢几十倍</td><td><code>Seq Scan</code> 配 <code>Sort</code></td><td>查询用的距离操作符与索引 opclass 不匹配</td><td>改成索引对应的操作符，或按实际使用的操作符重建索引</td></tr>
+<tr><td>怎么写都不走索引</td><td><code>Limit</code> 之下是 <code>Sort</code> 加 <code>Seq Scan</code></td><td>缺 <code>LIMIT</code>，或距离表达式被算术运算包了一层</td><td>一律写 <code>LIMIT k</code>，并按距离升序排，相似度放投影列</td></tr>
+<tr><td>返回条数少于 k，业务以为丢数据</td><td>走了 <code>Index Scan</code> 但实际行数小于 <code>LIMIT</code></td><td>过滤把 HNSW 的候选耗尽了</td><td>打开 <code>hnsw.iterative_scan</code>，或调大 <code>ef_search</code>，或让优化器走「先过滤再精算」</td></tr>
+<tr><td>走了索引但还是慢</td><td><code>Rows Removed by Filter</code> 数值很大</td><td>过滤字段没有可用索引，候选被大量筛掉</td><td>建 B-tree、对大租户建部分索引，或直接按租户分区</td></tr>
+<tr><td>延迟抖动大，冷启动尤其明显</td><td><code>Buffers</code> 里 <code>shared read</code> 远大于 <code>hit</code></td><td>向量数据或图结构没驻留内存</td><td>换 <code>halfvec</code>、扩内存、切换索引后用 <code>pg_prewarm</code> 预热</td></tr>
+<tr><td>距离出现 NaN，或前端显示负分</td><td>计划正常</td><td>零向量用余弦距离会得到 NaN；<code>&lt;#&gt;</code> 返回的是负内积</td><td>入库拦掉零向量；负内积要取负号再当相似度展示</td></tr>
+<tr><td>召回一直上不去，调 <code>ef_search</code> 没用</td><td>计划正常</td><td><code>ef_construction</code> 或 <code>m</code> 给小了，图本身质量差</td><td>只能重建索引，先在 1% 样本上验证新参数再全量重建</td></tr>
+</tbody></table>
+
+<p>上线前把下面五条跑一遍，这是验收而不是调优——任何一条不过都不该发布。</p>
+
+<pre><code class="language-sql">-- 1) 索引真的生效了吗：必须看到 Index Scan using ... 且带 Order By
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id FROM doc_chunk WHERE tenant_id = 7
+ORDER BY embedding &lt;=&gt; $1 LIMIT 10;
+
+-- 2) 返回条数是否稳定等于 k：带过滤时这一条最容易不达标，要按选择率分档各测一次
+SELECT count(*) FROM (
+    SELECT id FROM doc_chunk WHERE tenant_id = 7
+    ORDER BY embedding &lt;=&gt; $1 LIMIT 10
+) t;
+
+-- 3) 表与索引的实际体积，拿来和实例内存对照：装不下就不是调参能解决的问题
+SELECT c.relname, pg_size_pretty(pg_relation_size(c.oid)) AS sz
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relname LIKE 'doc_chunk%'
+ORDER BY pg_relation_size(c.oid) DESC;
+
+-- 4) 有没有残留的无效索引：CONCURRENTLY 失败会留下 invalid 索引，它不会被使用
+SELECT indexrelid::regclass AS idx FROM pg_index WHERE NOT indisvalid;
+
+-- 5) 当前会话的向量旋钮，排查「参数明明设了却没生效」
+SHOW hnsw.ef_search;
+SHOW hnsw.iterative_scan;</code></pre>
+
+<p>上面每一条「为什么必须这么写」——opclass 与操作符的绑定关系、两种执行计划的选择依据、迭代扫描解决的到底是什么问题、建索引的内存从哪来——都在原理层。</p>
+
+<h2>② 原理 · 装什么版本，能存什么类型</h2>
 
 <p>pgvector 是 C 扩展，需要在每个 database 里单独 <code>CREATE EXTENSION</code>。版本差异非常大，很多网上的教程写于 0.4 时代，照抄会白白放弃这两年最重要的几项能力。上线前第一件事是查清服务端装的到底是哪个版本——托管云数据库经常落后社区一两个大版本。</p>
 
@@ -171,7 +288,7 @@ CREATE INDEX doc_chunk_emb_hnsw ON doc_chunk
 --     USING ivfflat (embedding halfvec_cosine_ops) WITH (lists = 1000);
 </code></pre>
 
-<h2>三种距离操作符与 opclass 的死规矩</h2>
+<h2>② 原理 · 三种距离操作符与 opclass 的死规矩</h2>
 
 <p>这是 pgvector 最高频的生产事故，没有第二名。<strong>查询里用的距离操作符必须和建索引时声明的 opclass 严格对应，不匹配时 PostgreSQL 不会报错、不会告警，只会安静地退化成全表精确扫描。</strong>结果是完全正确的，所以测试环境里一切正常；等到线上表长到几百万行，一次查询要扫几个 GB，P99 直接崩掉。</p>
 
@@ -191,7 +308,7 @@ CREATE INDEX doc_chunk_emb_hnsw ON doc_chunk
     <p>对 L2 归一化过的向量，余弦距离和负内积给出的<strong>排序</strong>确实一致，这部分是对的。但索引的 opclass 匹配是按操作符符号做的，跟数学等价性无关：索引建成 <code>vector_cosine_ops</code>，查询写 <code>&lt;#&gt;</code> 照样不走索引。另外 <code>&lt;#&gt;</code> 返回的是负内积，直接把它当相似度展示给前端会出现「负分」。</p>
 </div>
 
-<h2>IVFFlat 与 HNSW：真正的区别不是快慢</h2>
+<h2>② 原理 · IVFFlat 与 HNSW：真正的区别不是快慢</h2>
 
 <p>流传最广的错误说法是「IVFFlat 省内存所以大表用它」。实际上两者的原始向量都要落在同一张堆表里，IVFFlat 省掉的是图结构那部分开销和构建时间，查询时该读的向量页一样得读。<strong>真正的分水岭是：数据是不是一次性灌完、之后还写不写。</strong>IVFFlat 建索引时对现有数据做 k-means 聚类，聚类中心一旦定下来就不会再变，后续插入的新向量会被塞进最近的既有聚类里——能查到，但随着新数据占比上升，召回会持续下滑，需要周期性重建索引。HNSW 是增量构图，插入新点会真正参与建边，长期写入不掉召回。</p>
 
@@ -235,7 +352,7 @@ flowchart TB
 <tr><td><code>hnsw.iterative_scan</code></td><td>HNSW 查询，0.8+</td><td><code>off</code></td><td><code>relaxed_order</code> 解决带过滤时结果不足，延迟上升</td><td>关闭时过滤场景经常凑不满 K 条</td><td>带 WHERE 的检索一律打开</td></tr>
 </tbody></table>
 
-<h2>用 EXPLAIN 确认索引真的生效</h2>
+<h2>② 原理 · 用 EXPLAIN 确认索引真的生效</h2>
 
 <p>向量索引的触发条件很窄：<strong>只有写成「<code>ORDER BY 向量列 距离操作符 常量</code> 升序 + <code>LIMIT k</code>」的形态才可能用上。</strong>缺 <code>LIMIT</code>、把排序改写成相似度降序、在距离外面套一层算术运算、或者查询参数没有被识别成同类型的向量，都会让优化器直接放弃索引。判读方法只有一条：看计划里出现的是 <code>Index Scan using ...</code> 配 <code>Order By:</code>，还是 <code>Sort</code> 配 <code>Seq Scan</code>。</p>
 
@@ -278,7 +395,7 @@ FROM doc_chunk ORDER BY embedding &lt;=&gt; $1 LIMIT 10;
 <tr><td>Buffers 里 <code>shared read</code> 巨大</td><td>向量数据或图结构没在内存里</td><td>核对内存预算，考虑 halfvec 或换机型</td></tr>
 </tbody></table>
 
-<h2>过滤与向量检索结合：最大优势也是最大陷阱</h2>
+<h2>② 原理 · 过滤与向量检索结合：最大优势也是最大陷阱</h2>
 
 <p>这是 pgvector 相比专用向量库最实在的优势——过滤条件就是普通 SQL，优化器会真的做代价估算；也是最容易出现「结果诡异」的地方。同一条带 <code>WHERE</code> 的向量查询，PostgreSQL 可能生成两种完全不同的计划：</p>
 
@@ -334,7 +451,7 @@ LIMIT 10;
     <p>低选择率的过滤（比如单租户只占全库千分之一）最优解是让优化器走计划 A，前提是 <code>tenant_id</code> 上有可用的 B-tree 索引。再进一步，可以对大租户建<strong>部分索引</strong>（<code>CREATE INDEX ... WHERE tenant_id = 7</code>），或者直接按租户做分区表，让每次检索只面对自己那一份向量。这类改造的效果通常远超把 <code>ef_search</code> 从 40 调到 200。</p>
 </div>
 
-<h2>建索引的内存、并行度与时间</h2>
+<h2>② 原理 · 建索引的内存、并行度与时间</h2>
 
 <p>HNSW 建索引是整个 pgvector 使用过程里最容易低估的一项工程成本。构图过程需要把整张图放进 <code>maintenance_work_mem</code>，<strong>装不下时 pgvector 会在日志里提示图已不适合放在维护内存中，然后退化成基于磁盘的构建方式，耗时可能拉长十倍以上</strong>。默认的 64MB 对任何真实规模的向量表都远远不够，建索引前一定要在会话里临时放大。</p>
 
@@ -370,7 +487,7 @@ SELECT indexrelid::regclass AS idx, indisvalid
 FROM pg_index WHERE NOT indisvalid;
 </code></pre>
 
-<h2>向量列的存储布局：TOAST 是隐形税</h2>
+<h2>② 原理 · 向量列的存储布局：TOAST 是隐形税</h2>
 
 <p>一个 1536 维的 <code>vector</code> 占 6152 字节，远超 PostgreSQL 约 2KB 的行内存储阈值，因此向量列会被推到 TOAST 副表里。这意味着每取一行向量都要多一次 TOAST 表的访问；在计划 A（先过滤再精算距离）里，这个开销会乘以候选行数，是「过滤后只剩几千行却还是很慢」的常见原因。</p>
 
@@ -385,7 +502,22 @@ FROM pg_index WHERE NOT indisvalid;
 
 <p>两条实操建议。第一，把向量表做窄：只留主键、用于过滤的少量字段和向量列，业务字段 JOIN 回原表。这样堆表页里能塞进更多元组，顺序扫描和精算距离的 IO 都会明显下降。第二，如果维度不高且确实受 TOAST 拖累，可以 <code>ALTER TABLE doc_chunk ALTER COLUMN embedding SET STORAGE PLAIN</code>；注意<strong>这只对之后写入的行生效</strong>，已有数据需要重写表（比如 <code>VACUUM FULL</code> 或用新表迁移）才会改变布局，别以为执行完 ALTER 就生效了。</p>
 
-<h2>同库同事务到底省了什么</h2>
+<h2>③ 场景 · 什么情况下 pgvector 是对的，什么信号出现时该搬家</h2>
+
+<p>pgvector 的判断线不是「性能够不够」，而是「向量检索的资源消耗会不会伤到同一个实例上的业务查询」。下表按场景给出做法与代价。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>业务数据已在 PG，分块在百万到千万，向量 QPS 与业务查询同量级</td><td>直接用 pgvector 加 HNSW，向量表做窄</td><td>同库同事务，省掉同步链路、可见性延迟与对账任务</td><td>建索引与批量回填必须错峰，它们会抢业务实例的 CPU 与维护内存</td></tr>
+<tr><td>检索必须和业务条件联表（权限表、库存、发布状态）</td><td>粗召回放大后 JOIN 业务表，过滤条件全部下推</td><td>任意 SQL 条件加优化器代价估算，这是专用向量库做不到的</td><td>JOIN 会放大候选行的 TOAST 访问，向量表做宽会明显变慢</td></tr>
+<tr><td>多租户且租户体量差异极大</td><td>小租户走「先过滤再精算距离」，大租户走向量索引；必要时按租户分区或建部分索引</td><td>低选择率下先过滤的结果是精确的，反而比 ANN 更好</td><td>分区表数量上升带来管理成本，分区裁剪条件必须写对才有效</td></tr>
+<tr><td>向量检索 QPS 明显高于业务查询，已经在抢 CPU</td><td>先加只读副本把检索流量分出去，再考虑搬家</td><td>只读副本几乎零改造，而搬家要建整条同步链路</td><td>副本有复制延迟；写扩展仍然解决不了，最终还是要分库或换方案</td></tr>
+<tr><td>单表向量涨到亿级，索引装不进内存</td><td>先 <code>halfvec</code>、再按租户或时间分区；都不够就搬去专用向量库</td><td>图索引落盘后随机读会让延迟掉一个数量级，这是硬约束</td><td>搬家要背 CDC、幽灵数据对账与重建预案，取舍见<a href="../compare/">向量库选型</a></td></tr>
+<tr><td>需要关键词与语义混排</td><td>用 PG 的全文检索配向量做排名融合，或直接用已有的 Elasticsearch</td><td>混排是原生能力时边际成本最低</td><td>在 PG 里要自己写融合 SQL 并各自调权重，可维护性不如 ES 的原生接口</td></tr>
+</tbody></table>
+
+<h2>③ 场景 · 同库同事务到底省了什么</h2>
 
 <p>「一条 SQL 搞定检索加过滤」只是表面收益，更值钱的是一致性。外挂向量库最典型的数据漂移是：业务库里的文档已经删了，向量库里的分块还在，于是检索把已下线的内容召回给用户看。在 pgvector 里，删文档和删向量可以放进同一个事务，要么一起成功要么一起回滚；备份恢复到某个时间点时，向量和业务数据天然对齐；行级权限、审计日志、连接池、慢查询监控这些 PG 生态的东西也全部复用。</p>
 
@@ -400,7 +532,7 @@ FROM pg_index WHERE NOT indisvalid;
 <tr><td>运维复杂度</td><td>只多一个扩展</td><td>多一套集群、监控、升级流程</td></tr>
 </tbody></table>
 
-<h2>模型换代：向量列的灰度迁移</h2>
+<h2>③ 场景 · 模型换代：向量列的灰度迁移</h2>
 
 <p>换嵌入模型是一定会发生的事，而且<strong>不同模型产出的向量完全不可比较</strong>——不能原地 <code>UPDATE</code> 逐步替换，因为替换期间新旧向量混在一张表里，距离计算得到的是毫无意义的数字；更糟的是检索结果看起来还挺正常，只是质量莫名下降，非常难查。正确做法是双写加灰度：</p>
 
@@ -424,6 +556,13 @@ stateDiagram-v2
 
 <p>几个容易忽略的细节：回填必须分批并控制事务大小，一条 <code>UPDATE</code> 刷千万行会撑爆 WAL、阻塞 VACUUM、把复制延迟拉到天上；<code>model_ver</code> 字段要和向量一起写，检索时带上它，灰度期间才不会新旧混查；回填完成之后再建索引，IVFFlat 尤其吃这一点；<code>DROP COLUMN</code> 只是把列标记为删除，磁盘空间要等后续的表重写才能回收，别指望执行完立刻看到容量下降。成本上要提前算清楚：一次全量重算的 Embedding 调用费用按 token 计费，千万级分块的重算往往是四位数到五位数人民币量级，这笔钱要写进换代方案里。</p>
 
+<p><strong>本篇在这条路径上的位置</strong>：负责把 pgvector 写对。上一步<a href="../compare/">向量库选型</a>解释了为什么在千万级以内它常是最优解；参数怎么扫、召回怎么评、内存不够怎么办见<a href="../performance/">下一篇：向量检索性能调优</a>；分块表的元数据设计、增量更新与多租户隔离见<a href="../rag/">RAG 检索侧数据工程</a>；ANN 索引本身的机制与代价见<a href="../">向量检索的本质与代价</a>。</p>
+
+<p><strong>不适用边界</strong>：PostgreSQL 自身的堆表、MVCC、VACUUM 与 WAL 机制见<a href="../../postgresql/">PostgreSQL 深度原理</a>，索引选型与 <code>EXPLAIN</code> 判读的通用方法见<a href="../../postgresql/index-optimize/">PostgreSQL 索引选型与执行计划判读</a>；慢查询该从哪一层开始定位见<a href="../../optimization/">数据库性能优化</a>；分块与重排这些算法侧内容见<a href="../../../ai/llm/rag-engineering/">大模型 RAG</a>。亿级以上的分布式向量检索不在 pgvector 的射程内。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../compare/">← 上一步：向量库选型：四类方案的对照与决策树</a> · <a href="../performance/">下一步：向量检索性能调优：召回率、延迟与成本三角 →</a></p>
+
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">pgvector 最容易踩的坑</div>

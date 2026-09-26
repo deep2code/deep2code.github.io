@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="ClickHouse 查询优化只有一条原则：让引擎少读 granule。用 EXPLAIN indexes=1 看主键裁掉了多少 granule、用 system.query_log 的 read_rows 与 read_bytes 而不是耗时来验证效果；逐条列出主键与分区裁剪失效的写法与修法、手写 PREWHERE 的判断标准、为什么小表必须放在 JOIN 右边以及 dictGet 等五种替代手段、uniq 系列函数的误差与内存对照、物化视图作为插入触发器的真实语义与 PROJECTION 的取舍、FINAL 的代价与 argMax 替代写法。">
+        <meta name="description" content="查询优化三段式：先给拿到一条慢查询后的判读顺序，先看扫了多少 part 与 granule、再看是否走了主键前缀、再看 PREWHERE 与 JOIN 顺序，配症状到改法的对照表与会话级开关速查；接着讲五级裁剪各砍掉什么、EXPLAIN 与 query_log 判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 没有自动调序、聚合去重的内存账、物化视图与 PROJECTION 的差异；最后给什么时候该停止调 SQL 转而改建模。">
     <meta name="keywords" content="ClickHouse,查询优化,跳数索引,物化视图,Projection,分区裁剪,慢查询,技术博客">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/clickhouse/query-optimization/">
     <!-- Open Graph -->
     <meta property="og:title" content="ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合 - 资深码农">
-    <meta property="og:description" content="ClickHouse 查询优化只有一条原则：让引擎少读 granule。用 EXPLAIN indexes=1 看主键裁掉了多少 granule、用 system.query_log 的 read_rows 与 read_bytes 而不是耗时来验证效果；逐条列出主键与分区裁剪失效的写法与修法、手写 PREWHERE 的判断标准、为什么小表必须放在 JOIN 右边以及 dictGet 等五种替代手段、uniq 系列函数的误差与内存对照、物化视图作为插入触发器的真实语义与 PROJECTION 的取舍、FINAL 的代价与 argMax 替代写法。">
+    <meta property="og:description" content="查询优化三段式：先给拿到一条慢查询后的判读顺序，先看扫了多少 part 与 granule、再看是否走了主键前缀、再看 PREWHERE 与 JOIN 顺序，配症状到改法的对照表与会话级开关速查；接着讲五级裁剪各砍掉什么、EXPLAIN 与 query_log 判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 没有自动调序、聚合去重的内存账、物化视图与 PROJECTION 的差异；最后给什么时候该停止调 SQL 转而改建模。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/clickhouse/query-optimization/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合 - 资深码农">
-    <meta name="twitter:description" content="ClickHouse 查询优化只有一条原则：让引擎少读 granule。用 EXPLAIN indexes=1 看主键裁掉了多少 granule、用 system.query_log 的 read_rows 与 read_bytes 而不是耗时来验证效果；逐条列出主键与分区裁剪失效的写法与修法、手写 PREWHERE 的判断标准、为什么小表必须放在 JOIN 右边以及 dictGet 等五种替代手段、uniq 系列函数的误差与内存对照、物化视图作为插入触发器的真实语义与 PROJECTION 的取舍、FINAL 的代价与 argMax 替代写法。">
+    <meta name="twitter:description" content="查询优化三段式：先给拿到一条慢查询后的判读顺序，先看扫了多少 part 与 granule、再看是否走了主键前缀、再看 PREWHERE 与 JOIN 顺序，配症状到改法的对照表与会话级开关速查；接着讲五级裁剪各砍掉什么、EXPLAIN 与 query_log 判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 没有自动调序、聚合去重的内存账、物化视图与 PROJECTION 的差异；最后给什么时候该停止调 SQL 转而改建模。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="article:author" content="资深码农">
     <meta name="article:section" content="数据库与缓存">
     <meta name="article:tag" content="ClickHouse,查询优化,索引">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"ClickHouse 查询优化只有一条原则：让引擎少读 granule。用 EXPLAIN indexes=1 看主键裁掉了多少 granule、用 system.query_log 的 read_rows 与 read_bytes 而不是耗时来验证效果；逐条列出主键与分区裁剪失效的写法与修法、手写 PREWHERE 的判断标准、为什么小表必须放在 JOIN 右边以及 dictGet 等五种替代手段、uniq 系列函数的误差与内存对照、物化视图作为插入触发器的真实语义与 PROJECTION 的取舍、FINAL 的代价与 argMax 替代写法。","url":"https://www.yijunjun.asia/database/clickhouse/query-optimization/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/query-optimization/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"查询优化三段式：先给拿到一条慢查询后的判读顺序，先看扫了多少 part 与 granule、再看是否走了主键前缀、再看 PREWHERE 与 JOIN 顺序，配症状到改法的对照表与会话级开关速查；接着讲五级裁剪各砍掉什么、EXPLAIN 与 query_log 判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 没有自动调序、聚合去重的内存账、物化视图与 PROJECTION 的差异；最后给什么时候该停止调 SQL 转而改建模。","url":"https://www.yijunjun.asia/database/clickhouse/query-optimization/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/query-optimization/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "ClickHouse 总览", "item": "https://www.yijunjun.asia/database/clickhouse/"}, {"position": 4, "name": "查询优化与分区", "item": "https://www.yijunjun.asia/database/clickhouse/query-optimization/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,7 +91,88 @@
                     <div class="article-content">
 <p>ClickHouse 的查询优化没有一堆技巧，只有一条原则：<strong>让引擎少读 granule</strong>。一个 granule 默认覆盖 8192 行，是 ClickHouse 读取数据的最小单位——哪怕你只要一行，也要把它所在 granule 的相关列全部解压出来。后面所有手段，分区裁剪、主键前缀、跳数索引、PREWHERE、预聚合，都是这条原则的推论。至于列存为什么扫描快、稀疏索引的 mark 文件长什么样，详见站内《ClickHouse 架构与核心特性》，这里只用结论。</p>
 
-<h2>所有优化都是同一件事：少读 granule</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：拿到一条慢查询之后的固定判读顺序——先看扫了多少 part 与 granule，再看有没有走主键前缀，再看 PREWHERE 与 JOIN 顺序，配一张「症状 → 改法」表和几个会话级开关的速查。</li>
+        <li><strong>② 原理</strong>：五级裁剪各自砍掉什么、EXPLAIN 与 query_log 的字段怎么判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 为什么没有自动调序、聚合与去重的内存账、物化视图与 PROJECTION 的差异。</li>
+        <li><strong>③ 场景</strong>：常见慢查询反模式的对应改法，以及什么时候该停止调 SQL、转而改建模或换组件。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 拿到一条慢查询后的判读顺序</h2>
+
+<p>调 ClickHouse 的 SQL 不需要灵感，需要顺序。<strong>四个数按下面的次序量一遍，慢在哪一级就清楚了</strong>，而且每一级都有明确的下一步动作。顺序不能颠倒：分区裁剪不生效时，后面改 PREWHERE 毫无意义。</p>
+
+<table>
+<thead><tr><th>第几步</th><th>量什么</th><th>怎么量</th><th>健康信号</th><th>不健康时去看</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>读取量本身</td><td><code>system.query_log</code> 的 <code>read_rows</code> 与 <code>read_bytes</code></td><td>与结果规模同量级</td><td>比结果行数大几个数量级就是读放大，继续走第 2 步</td></tr>
+<tr><td>2</td><td>扫了多少个 part</td><td><code>EXPLAIN indexes = 1</code> 输出的 MinMax 段</td><td>只读到目标分区</td><td>全部 part 都读：过滤条件推不出分区表达式，把时间条件改成半开区间</td></tr>
+<tr><td>3</td><td>扫了多少个 granule</td><td>同上输出的 <code>Granules</code> 比值，或 trace 日志里的 marks</td><td>命中数只占总数的个位数百分比</td><td>分子接近分母：主键裁剪失效，看失效写法那一节</td></tr>
+<tr><td>4</td><td>有没有走主键前缀</td><td>看 <code>EXPLAIN</code> 里有没有 <code>PrimaryKey</code> 条目及它用了哪几个 <code>Keys</code></td><td>用到了排序键的最左列</td><td>没有条目就是一个前缀列都没命中，补条件或换索引策略</td></tr>
+<tr><td>5</td><td>大列有没有被提前排除</td><td>对比手写 <code>PREWHERE</code> 前后的 <code>read_bytes</code></td><td>宽列不参与初筛</td><td>差距大就手写 PREWHERE，尤其是表里有长 JSON 列时</td></tr>
+<tr><td>6</td><td>JOIN 的左右顺序与内存</td><td><code>memory_usage</code>，以及右表实际行数</td><td>右表是小表</td><td>右表是大表：ClickHouse 不会替你换顺序，改字典或打宽表</td></tr>
+</tbody></table>
+
+<p>对应的命令三条就够。注意第一条取的是「这一条查询」的真实成本，而不是排行榜：</p>
+
+<pre><code class="language-sql">-- 1) 先把这条查询的真实成本取出来。判断优化是否生效只看读取量，不看耗时
+SELECT query_duration_ms, read_rows, result_rows, formatReadableSize(read_bytes) AS read_bytes,
+       formatReadableSize(memory_usage)  AS peak_mem,
+       ProfileEvents['SelectedParts']    AS selected_parts,
+       ProfileEvents['SelectedMarks']    AS selected_marks   -- marks 就是实际读取的 granule 数
+FROM system.query_log
+WHERE type = 'QueryFinish' AND query_id = 'e2f1c0b4-0000-0000-0000-000000000000';
+-- 客户端可以自己传 query_id；老版本里 ProfileEvents 是两个数组列，要用 arrayElement 取值
+
+-- 2) 再看裁剪：Parts 与 Granules 两个比值决定了后面该改哪里
+EXPLAIN indexes = 1
+SELECT count() FROM events
+WHERE tenant_id = 42
+  AND event_time &gt;= '2026-09-01 00:00:00' AND event_time &lt; '2026-09-02 00:00:00';
+
+-- 3) 优化前后各跑一次，只对比这两列；耗时变短但读取量没变，说明你只是把数据读进了页缓存
+SELECT normalized_query_hash, count() AS cnt,
+       formatReadableQuantity(avg(read_rows)) AS avg_rows,
+       formatReadableSize(avg(read_bytes))    AS avg_bytes,
+       round(avg(query_duration_ms))          AS avg_ms
+FROM system.query_log
+WHERE type = 'QueryFinish' AND event_time &gt; now() - INTERVAL 1 HOUR
+GROUP BY normalized_query_hash ORDER BY avg_bytes DESC LIMIT 10;
+</code></pre>
+
+<p>量完之后按症状对号入座。这张表是本篇最该收藏的部分，右边两列告诉你改完怎么验证：</p>
+
+<table>
+<thead><tr><th>症状（可观测）</th><th>最可能的原因</th><th>怎么改</th><th>怎么验证改对了</th></tr></thead>
+<tbody>
+<tr><td><code>read_rows</code> 接近表总行数，<code>EXPLAIN</code> 里没有 <code>PrimaryKey</code> 条目</td><td>WHERE 一个排序键前缀列都没带</td><td>补最左列；确实补不了就给该列加跳数索引，或另建一份排序</td><td><code>Granules</code> 分子明显下降</td></tr>
+<tr><td><code>Granules</code> 分子接近分母，但 WHERE 里确实有排序键列</td><td>主键列被函数包住，或常量类型与列类型不一致</td><td>把 <code>toDate(ts) = ...</code> 换成半开区间；常量类型与列严格对齐</td><td>同一条 <code>EXPLAIN</code> 再看一次比值</td></tr>
+<tr><td>MinMax 段里 Parts 分子等于分母</td><td>过滤条件推导不出分区表达式的取值</td><td>时间条件写成半开区间，不要套 <code>toString</code> 或 <code>LIKE</code></td><td>Parts 分子下降到目标分区数</td></tr>
+<tr><td><code>read_bytes</code> 远超预期而 <code>read_rows</code> 正常</td><td><code>SELECT *</code> 或把大 JSON 列带进来了</td><td>只列需要的列；过滤列很窄时手写 <code>PREWHERE</code></td><td><code>read_bytes</code> 通常降一个数量级</td></tr>
+<tr><td><code>memory_usage</code> 接近上限或直接报内存超限</td><td>高基数 <code>GROUP BY</code>，或 JOIN 右表太大</td><td>换近似去重函数、打开外部聚合落盘、join 改 <code>dictGet</code></td><td>峰值内存下降且不再触顶</td></tr>
+<tr><td>加了 <code>FINAL</code> 之后 CPU 打满</td><td>每次查询都跨 part 做归并排序</td><td>换成 <code>GROUP BY</code> 加 <code>argMax</code> 自己取最新版本</td><td>耗时与 CPU 同时下降</td></tr>
+<tr><td>两张大表 join 直接失败</td><td>右表被整体读进内存建哈希表</td><td>小表放右边、维表做字典、或 ETL 阶段打平成宽表</td><td>右表行数与峰值内存都降下来</td></tr>
+<tr><td>单条查询不慢，但并发一上来集体变慢</td><td>单查询默认吃满 <code>max_threads</code> 个核</td><td>会话级降 <code>max_threads</code>，或改走预聚合表加缓存</td><td>并发场景下的 p99，而不是单条耗时</td></tr>
+<tr><td>聚合查询加了 <code>LIMIT</code> 仍然慢</td><td><code>LIMIT</code> 无法下推到聚合之前</td><td>先用 <code>WHERE</code> 把范围缩小，再 <code>LIMIT</code></td><td><code>read_rows</code> 下降</td></tr>
+</tbody></table>
+
+<table>
+<thead><tr><th>会话级开关</th><th>作用</th><th>默认值</th><th>什么时候用</th></tr></thead>
+<tbody>
+<tr><td><code>max_threads</code></td><td>单查询的并行读取与计算线程数</td><td>通常等于 CPU 核数，以 <code>system.settings</code> 为准</td><td>高并发场景调小，换取并发之间不抢核</td></tr>
+<tr><td><code>max_memory_usage</code></td><td>单查询内存上限</td><td>以 <code>system.settings</code> 为准</td><td>只在会话或用户档位上调，改全局等于允许一条烂 SQL 拖垮整机</td></tr>
+<tr><td><code>max_bytes_before_external_group_by</code></td><td>聚合超过阈值后落盘</td><td>0 表示不落盘</td><td>宁可慢也不要失败时打开，经验值取内存上限的一半</td></tr>
+<tr><td><code>optimize_move_to_prewhere</code></td><td>自动把部分条件搬到 PREWHERE</td><td>默认开启</td><td>保持开启；优化器搬不动的条件自己手写</td></tr>
+<tr><td><code>do_not_merge_across_partitions_select_final</code></td><td><code>FINAL</code> 时不跨分区归并</td><td>默认关闭</td><td>确实必须用 <code>FINAL</code>，且同一主键不会跨分区时</td></tr>
+<tr><td><code>max_bytes_in_join</code></td><td>join 右表的内存上限</td><td>以 <code>system.settings</code> 为准</td><td>给所有 join 兜一层，让它报错而不是把节点打爆</td></tr>
+</tbody></table>
+
+<p>下面原理层解释这几步为什么有效：granule 是怎么被逐级砍掉的、主键裁剪为什么这么挑食、PREWHERE 为什么只有列存才有。</p>
+
+<h2>② 原理 · 所有优化都是同一件事：少读 granule</h2>
 
 <p>一次 <code>SELECT</code> 到达存储层后，数据量是被逐级砍掉的。每一级砍掉的比例可以直接观测，所以优化不该靠猜：<strong>先定位是哪一级没起作用，再针对那一级改。</strong></p>
 
@@ -125,7 +206,7 @@ flowchart TB
     <p>同一条 SQL 第二次跑总是更快，因为页缓存命中了，这会让人误判优化生效。<strong>唯一可信的指标是 <code>read_rows</code> 和 <code>read_bytes</code> 的下降</strong>：这两个数字与缓存无关，只反映真实扫描量。优化前后各跑一次，从 <code>system.query_log</code> 里取这两列做对比；如果读取量没变而耗时变短了，你什么都没优化，只是把数据读进了缓存。</p>
 </div>
 
-<h2>先量化：EXPLAIN 与 query_log 怎么读</h2>
+<h2>② 原理 · 先量化：EXPLAIN 与 query_log 怎么读</h2>
 
 <pre><code class="language-sql">-- 1) 看主键到底裁掉了多少 granule，这是最有信息量的一条命令
 EXPLAIN indexes = 1
@@ -179,7 +260,7 @@ ORDER BY read_bytes DESC LIMIT 10;
 <tr><td><code>ProfileEvents</code> 里的 <code>SelectedMarks</code></td><td>同上</td><td>与 Granules 命中数吻合</td><td>比预期大很多说明跳数索引没生效</td></tr>
 </tbody></table>
 
-<h2>主键裁剪为什么失效</h2>
+<h2>② 原理 · 主键裁剪为什么失效</h2>
 
 <p>ClickHouse 的主键是稀疏索引，只能做<strong>前缀范围定位</strong>，它比关系库的 B+ 树更挑食。下面这些写法在 MySQL 里也许还能勉强走索引，在 ClickHouse 里则是直接退化成全表扫。</p>
 
@@ -212,7 +293,7 @@ flowchart TB
     E -->|"否"| E2["上预聚合<br/>物化视图或 PROJECTION"]
 </div>
 
-<h2>PREWHERE：先读便宜的列，再读贵的列</h2>
+<h2>② 原理 · PREWHERE：先读便宜的列，再读贵的列</h2>
 
 <p><code>PREWHERE</code> 是列存独有的优化：先只读过滤列判断哪些行命中，再按命中行去读其余列。ClickHouse 默认开启 <code>optimize_move_to_prewhere</code>，会自动把部分条件搬过去，但它的启发式基于列大小估算，两种场景下需要手写：<strong>一是过滤性最强的条件涉及函数或多个列</strong>，优化器不敢搬；<strong>二是表里有超大列</strong>（长 JSON、日志原文），此时哪怕过滤列筛掉的行不多，避免读大列的收益也极大。</p>
 
@@ -243,7 +324,7 @@ GROUP BY order_id
 HAVING argMax(is_deleted, version) = 0;      -- 顺带过滤掉逻辑删除的行
 </code></pre>
 
-<h2>JOIN：ClickHouse 最痛的地方</h2>
+<h2>② 原理 · JOIN：ClickHouse 最痛的地方</h2>
 
 <p>这是从关系库转过来的人踩得最惨的一点：<strong>ClickHouse 默认的 hash join 会把右表全量读进内存建哈希表，而且优化器不会替你自动调换左右顺序</strong>。在 MySQL 或 PostgreSQL 里，优化器基于统计信息选择驱动表，小表自动做内表；在 ClickHouse 里你写错顺序，就是把大表塞内存然后 OOM。记住一句话：<strong>小表永远放右边。</strong></p>
 
@@ -309,7 +390,7 @@ SELECT name, status, element_count, formatReadableSize(bytes_allocated) AS mem,
 FROM system.dictionaries;
 </code></pre>
 
-<h2>聚合与去重的内存账</h2>
+<h2>② 原理 · 聚合与去重的内存账</h2>
 
 <p><code>GROUP BY</code> 的内存占用与<strong>分组基数</strong>成正比，与扫描行数关系不大。按 <code>event_type</code> 分组只有几十组，按 <code>user_id</code> 分组就是几千万组，后者会把哈希表撑爆。两个兜底开关：<code>max_bytes_before_external_group_by</code> 允许聚合落盘（建议设为 <code>max_memory_usage</code> 的一半），<code>max_bytes_before_external_sort</code> 对排序同理。落盘意味着慢，但比查询直接失败好。</p>
 
@@ -330,7 +411,7 @@ FROM system.dictionaries;
     <p>一个日活看板显示 1023 万还是 1025 万，对决策没有任何影响，但 <code>uniqExact</code> 与 <code>uniqCombined</code> 之间可能是几 GB 内存和几十倍耗时的差距。真正需要精确值的只有对账类场景，而那类场景通常数据量也小。另外 <code>argMax</code>、<code>anyHeavy</code>、<code>quantileTDigest</code> 这类组合与近似函数也被严重低估：<code>argMax(status, version)</code> 一次聚合就替代了「取每个 key 最新一行」这种通常要写窗口函数或自连接的需求。</p>
 </div>
 
-<h2>预计算：物化视图与 PROJECTION</h2>
+<h2>② 原理 · 预计算：物化视图与 PROJECTION</h2>
 
 <p>ClickHouse 的物化视图<strong>不是定时刷新的视图，而是一个插入触发器</strong>。每次向源表写入一个数据块，物化视图的 SELECT 就在<strong>这个块</strong>上执行一次，结果追加到目标表。由此可以推出三条必然结论：它只对新写入的数据生效，历史数据必须手动回填；它看不到源表已有的数据，所以 <code>JOIN</code> 在 MV 里语义很危险；源表的 <code>DELETE</code> 和 <code>UPDATE</code> 不会传递到视图。</p>
 
@@ -412,7 +493,7 @@ GROUP BY hour ORDER BY hour;
 <tr><td>适用</td><td>跨表、复杂聚合、需要独立生命周期</td><td>同一张表换一种排序键或加一层聚合</td></tr>
 </tbody></table>
 
-<h2>常见慢查询反模式</h2>
+<h2>③ 场景 · 常见慢查询反模式与对应改法</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>发生了什么</th><th>怎么改</th></tr></thead>
@@ -426,6 +507,26 @@ GROUP BY hour ORDER BY hour;
 <tr><td>把 <code>LIMIT</code> 当优化手段</td><td>聚合查询里 <code>LIMIT</code> 不能下推，聚合仍要算全量</td><td>先用 <code>WHERE</code> 缩小范围，再 <code>LIMIT</code></td></tr>
 <tr><td>在 <code>GROUP BY</code> 里放高基数列</td><td>哈希表随基数线性膨胀直至 OOM</td><td>先过滤再聚合；或换近似函数、上预聚合表</td></tr>
 </tbody></table>
+
+<h2>③ 场景 · 什么时候该停止调 SQL</h2>
+
+<p>调 SQL 的收益是有上限的。当读取量已经降到与结果规模同量级、裁剪比值也正常，继续改写法基本没有空间了——这时候问题在建模或者在组件选择上。下表给出越界信号与该往哪一层退。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>裁剪已经正常，但每次还是要扫几亿行做聚合</td><td>上预聚合：物化视图或 PROJECTION，看板只查聚合表</td><td>查询成本挪到写入时一次性付掉</td><td>历史要回填，指标口径变更要重建</td></tr>
+<tr><td>过滤维度每次都不一样，任何一种排序键都覆盖不住</td><td>用 PROJECTION 给同一张表加第二种排序，或建几张不同排序键的视图表</td><td>一份数据只能有一种物理顺序</td><td>写放大与存储翻倍</td></tr>
+<tr><td>关联的维表越来越多、越来越大</td><td>回到建模层：ETL 打平宽表，或维表做字典</td><td>join 是 ClickHouse 的结构性短板，不是写法问题</td><td>ETL 变重，维度变更要回刷历史</td></tr>
+<tr><td>看板对外开放，并发上千</td><td>ADS 结果表加缓存层，把查询打到很小的结果集上</td><td>单查询吃满多核的模型决定了并发能力弱</td><td>多一层一致性窗口</td></tr>
+<tr><td>需求本质是按 ID 查单行、QPS 很高</td><td>迁到 MySQL 或 Redis，ClickHouse 只做分析</td><td>稀疏索引最少读一个 granule，点查天生吃亏</td><td>多一条同步链路</td></tr>
+<tr><td>需要按关键词翻查原文、要分词与打分</td><td>交给 Elasticsearch，ClickHouse 留全量与趋势</td><td>ngram 跳数索引只能做粗糙子串匹配</td><td>两套系统的运维与口径对齐</td></tr>
+<tr><td>排序键选错且无法追加列解决</td><td>新建表回灌再切流量</td><td><code>ORDER BY</code> 只能尾部追加，前缀不能重排</td><td>一次全量重写，要留出窗口与双跑</td></tr>
+</tbody></table>
+
+<p><strong>不适用边界</strong>：本篇只处理「一条 SQL 为什么慢」。排序键、分区键、codec 怎么定在 <a href="../table-import/">建表与写入</a>；宽表与星型、SCD 与分层在 <a href="../olap-practice/">OLAP 建模</a>；分布式 join 与 Distributed 表的两阶段聚合在 <a href="../architecture/">集群架构</a>；granule 与稀疏索引的物理布局在 <a href="../">ClickHouse 深度原理</a>。另外，写入侧的 part 数问题会以「查询越来越慢」的形式表现出来，但它不是查询问题，先去看写入批次。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../table-import/">← 上一步：ClickHouse 建表与写入：引擎选型、列压缩与批量导入</a> · <a href="../olap-practice/">下一步：ClickHouse OLAP 建模：星型模型、大宽表、SCD 与分层设计 →</a></p>
 
 <h2>最容易踩的坑</h2>
 

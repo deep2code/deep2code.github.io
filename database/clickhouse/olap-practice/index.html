@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="OLAP 建模与 OLTP 思路相反，它用冗余换扫描效率：星型、雪花与大宽表的存储与查询成本对照、宽表在列存里为什么可行以及维度回刷的真实代价、缓慢变化维为什么是数据正确性问题、ODS 与 DWD 与 DWS 与 ADS 四层在 ClickHouse 里的引擎选择与建表示例、指标宽表与长表的取舍、分钟小时天三级预聚合的收益权衡、用 REPLACE PARTITION 实现幂等重跑而不是 DELETE 加 INSERT，以及 windowFunnel、retention、sequenceMatch 做漏斗留存路径分析的可运行写法。">
+        <meta name="description" content="OLAP 建模三段式：先给从需求到建模的五步顺序，定查询模式、定更新口径、选宽表还是星型、定分层与粒度、定幂等与验收，配宽表与字典的判定表以及缓慢变化维用 ASOF JOIN 固化快照维度的可用写法；接着讲用冗余换扫描效率、星型为什么退化成宽表、SCD 四种类型的落地、四层分层职责、宽表与长表取舍、幂等重跑与漏斗留存路径函数；最后给需求形态到建模方案的矩阵与反模式改法。">
     <meta name="keywords" content="ClickHouse,OLAP,日志分析,埋点,Kafka,Flink,实时报表,数据仓库,技术博客">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/clickhouse/olap-practice/">
     <!-- Open Graph -->
     <meta property="og:title" content="ClickHouse OLAP 建模：星型模型、大宽表、SCD 与分层设计 - 资深码农">
-    <meta property="og:description" content="OLAP 建模与 OLTP 思路相反，它用冗余换扫描效率：星型、雪花与大宽表的存储与查询成本对照、宽表在列存里为什么可行以及维度回刷的真实代价、缓慢变化维为什么是数据正确性问题、ODS 与 DWD 与 DWS 与 ADS 四层在 ClickHouse 里的引擎选择与建表示例、指标宽表与长表的取舍、分钟小时天三级预聚合的收益权衡、用 REPLACE PARTITION 实现幂等重跑而不是 DELETE 加 INSERT，以及 windowFunnel、retention、sequenceMatch 做漏斗留存路径分析的可运行写法。">
+    <meta property="og:description" content="OLAP 建模三段式：先给从需求到建模的五步顺序，定查询模式、定更新口径、选宽表还是星型、定分层与粒度、定幂等与验收，配宽表与字典的判定表以及缓慢变化维用 ASOF JOIN 固化快照维度的可用写法；接着讲用冗余换扫描效率、星型为什么退化成宽表、SCD 四种类型的落地、四层分层职责、宽表与长表取舍、幂等重跑与漏斗留存路径函数；最后给需求形态到建模方案的矩阵与反模式改法。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/clickhouse/olap-practice/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="ClickHouse OLAP 建模：星型模型、大宽表、SCD 与分层设计 - 资深码农">
-    <meta name="twitter:description" content="OLAP 建模与 OLTP 思路相反，它用冗余换扫描效率：星型、雪花与大宽表的存储与查询成本对照、宽表在列存里为什么可行以及维度回刷的真实代价、缓慢变化维为什么是数据正确性问题、ODS 与 DWD 与 DWS 与 ADS 四层在 ClickHouse 里的引擎选择与建表示例、指标宽表与长表的取舍、分钟小时天三级预聚合的收益权衡、用 REPLACE PARTITION 实现幂等重跑而不是 DELETE 加 INSERT，以及 windowFunnel、retention、sequenceMatch 做漏斗留存路径分析的可运行写法。">
+    <meta name="twitter:description" content="OLAP 建模三段式：先给从需求到建模的五步顺序，定查询模式、定更新口径、选宽表还是星型、定分层与粒度、定幂等与验收，配宽表与字典的判定表以及缓慢变化维用 ASOF JOIN 固化快照维度的可用写法；接着讲用冗余换扫描效率、星型为什么退化成宽表、SCD 四种类型的落地、四层分层职责、宽表与长表取舍、幂等重跑与漏斗留存路径函数；最后给需求形态到建模方案的矩阵与反模式改法。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="article:author" content="资深码农">
     <meta name="article:section" content="数据库与缓存">
     <meta name="article:tag" content="ClickHouse,OLAP,实战">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse OLAP 建模：星型模型、大宽表、SCD 与分层设计","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"OLAP 建模与 OLTP 思路相反，它用冗余换扫描效率：星型、雪花与大宽表的存储与查询成本对照、宽表在列存里为什么可行以及维度回刷的真实代价、缓慢变化维为什么是数据正确性问题、ODS 与 DWD 与 DWS 与 ADS 四层在 ClickHouse 里的引擎选择与建表示例、指标宽表与长表的取舍、分钟小时天三级预聚合的收益权衡、用 REPLACE PARTITION 实现幂等重跑而不是 DELETE 加 INSERT，以及 windowFunnel、retention、sequenceMatch 做漏斗留存路径分析的可运行写法。","url":"https://www.yijunjun.asia/database/clickhouse/olap-practice/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/olap-practice/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse OLAP 建模：星型模型、大宽表、SCD 与分层设计","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"OLAP 建模三段式：先给从需求到建模的五步顺序，定查询模式、定更新口径、选宽表还是星型、定分层与粒度、定幂等与验收，配宽表与字典的判定表以及缓慢变化维用 ASOF JOIN 固化快照维度的可用写法；接着讲用冗余换扫描效率、星型为什么退化成宽表、SCD 四种类型的落地、四层分层职责、宽表与长表取舍、幂等重跑与漏斗留存路径函数；最后给需求形态到建模方案的矩阵与反模式改法。","url":"https://www.yijunjun.asia/database/clickhouse/olap-practice/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/olap-practice/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "ClickHouse 总览", "item": "https://www.yijunjun.asia/database/clickhouse/"}, {"position": 4, "name": "OLAP 场景实战", "item": "https://www.yijunjun.asia/database/clickhouse/olap-practice/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,7 +91,99 @@
                     <div class="article-content">
 <p>写 OLAP 表最反直觉的一点是：<strong>你在 OLTP 里学到的范式化训练，在这里基本要反过来用</strong>。OLTP 消除冗余是为了让单行更新安全且便宜，而分析型负载根本不更新单行，它只关心「一次查询要扫多少字节」。这篇讲数据怎么组织成能被高效扫描的形态。引擎的列存与向量化原理详见站内《ClickHouse 架构与核心特性》，分布式拓扑详见《ClickHouse 集群与分布式表》，与 Doris、Elasticsearch 的选型对比详见《ClickHouse vs Elasticsearch vs Doris》。</p>
 
-<h2>OLAP 建模的第一性原理：用冗余换扫描效率</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：从需求到一张表的五步动手顺序（先定查询模式与更新口径，再选大宽表还是星型，再定分层与粒度，最后定幂等与验收），配大宽表与字典的快速判定表，以及缓慢变化维的可直接用的 SQL 写法。</li>
+        <li><strong>② 原理</strong>：为什么 OLAP 要用冗余换扫描效率、星型与雪花在 ClickHouse 上为什么会退化成宽表、SCD 四种类型的落地差异、四层分层各自的职责与 TTL、宽表与长表的取舍、幂等重跑为什么只有分区替换一条路、漏斗留存路径函数的语义。</li>
+        <li><strong>③ 场景</strong>：需求形态到建模方案的决策矩阵、建模反模式与对应改法，以及哪些问题不该在建模层解决。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 从需求到建模的五步顺序</h2>
+
+<p>建模最常见的失败不是选错了星型或宽表，而是<strong>顺序错了</strong>：先画表结构，再回头发现查询模式对不上、重跑粒度对不上。下面五步的顺序是有依赖关系的，每一步的产出是下一步的输入。</p>
+
+<table>
+<thead><tr><th>第几步</th><th>要问清什么</th><th>产出</th><th>跳过这步的后果</th></tr></thead>
+<tbody>
+<tr><td>1 · 定查询模式</td><td>看板和报表最常按哪几个维度过滤、时间粒度是什么、要不要下钻到明细</td><td>一份查询清单，直接决定排序键的列与顺序</td><td>排序键与实际过滤条件错位，每次查询都接近全表扫</td></tr>
+<tr><td>2 · 定更新与口径</td><td>事实写完还会不会改；维度变化时历史报表要用当时的值还是当前的值</td><td>引擎选择，以及是否需要在事实表里放快照维度列</td><td>报表数字随维表变化悄悄漂移，昨天的月报今天再跑就不一样</td></tr>
+<tr><td>3 · 选宽表还是星型</td><td>维表有多少行、维度属性多久变一次</td><td>DWD 明细表的字段清单</td><td>维表又大又要频繁 join，并发一高就把内存打爆</td></tr>
+<tr><td>4 · 定分层与粒度</td><td>看板查哪一层、重跑的最小粒度是天还是小时</td><td>各层表清单、分区键、TTL</td><td>分区粒度与重跑粒度不一致，最后只能退回 <code>DELETE</code> 加 <code>INSERT</code></td></tr>
+<tr><td>5 · 定幂等与验收</td><td>失败怎么重跑、口径修正怎么重算、和上游比什么</td><td><code>REPLACE PARTITION</code> 流程加对账 SQL</td><td>重跑一次数据翻倍，而且很难发现</td></tr>
+</tbody></table>
+
+<p>第 3 步最容易纠结，用下面这张表直接判：</p>
+
+<table>
+<thead><tr><th>条件</th><th>选什么</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>维表千万行以上</td><td>必须在 ETL 阶段打平进宽表，或先聚合再关联</td><td>字典放不下，join 一定会撞内存</td></tr>
+<tr><td>维表百万行以内、属性几乎不变（地区、品类）</td><td>ETL 时打平成快照列</td><td>属性真的变了要回刷历史，这是业务口径决定的</td></tr>
+<tr><td>维表百万行以内、属性经常变，且分析要当前值</td><td>定义 Dictionary，查询里用 <code>dictGet</code></td><td>字典占常驻内存，重载期间读到的是旧值</td></tr>
+<tr><td>分析必须用事件发生时的维度值</td><td>事实表冗余快照维度列</td><td>这是 SCD 类型 2 的简化版，也是 ClickHouse 里的默认选择</td></tr>
+<tr><td>两类口径都要（当时值与当前值）</td><td>两列并存，字段名里写清 snap 与 current</td><td>比事后解释报表为什么对不上省事得多</td></tr>
+</tbody></table>
+
+<p>第 2 步和第 3 步的交集就是缓慢变化维。下面这段是可以直接用的写法：维表存生效区间，ETL 阶段用 <code>ASOF JOIN</code> 一次性把「当时的值」落进事实表。</p>
+
+<pre><code class="language-sql">-- 维表：一行一个生效区间，这是 SCD 类型 2 的标准形态
+CREATE TABLE dim_user_scd
+(
+    user_id    UInt64,
+    level      UInt8,
+    city       LowCardinality(String),
+    valid_from DateTime,
+    valid_to   DateTime DEFAULT toDateTime('2106-02-07 00:00:00')  -- 用哨兵值代替 NULL，省掉掩码列
+)
+ENGINE = ReplacingMergeTree(valid_from)
+ORDER BY (user_id, valid_from);      -- 同一用户的区间按时间排好，ASOF 才能取到「最近且不晚于」的那条
+
+-- ETL 阶段把当时的维度值固化进事实表。ASOF JOIN 就是为这件事设计的：
+-- 对每一行事实，取 valid_from 不晚于 paid_at 的那条维度记录
+INSERT INTO dwd.order_detail
+    (order_id, tenant_id, paid_at, user_id, user_level_snap, city_snap, sku_id, category_snap, amount, status, updated_at)
+SELECT o.order_id, o.tenant_id, o.paid_at, o.user_id,
+       d.level AS user_level_snap,   -- 下单当时的等级，这一列一旦写入就不再随维表变化
+       d.city  AS city_snap,
+       o.sku_id, o.category_snap, o.amount, o.status, now()
+FROM ods.order_raw AS o
+ASOF LEFT JOIN dim_user_scd AS d
+    ON o.user_id = d.user_id AND o.paid_at &gt;= d.valid_from   -- 不等式条件必须是最后一个条件
+WHERE o.paid_at &gt;= '2026-09-01 00:00:00' AND o.paid_at &lt; '2026-09-02 00:00:00';
+-- 边界：ASOF 的右表同样要进内存，维表很大时先按 user_id 过滤，或改成字典逐行取值
+
+-- 另一类口径（按当前等级看历史）不要改这张表，查询时取当前值即可，两种口径并存
+SELECT dictGet('dict_user', 'level', user_id) AS level_current,
+       user_level_snap                        AS level_at_that_time,
+       sum(amount)                            AS gmv
+FROM dwd.order_detail
+WHERE paid_at &gt;= '2026-09-01 00:00:00' AND paid_at &lt; '2026-10-01 00:00:00'
+GROUP BY level_current, level_at_that_time;
+
+-- 验收：挑一个确实变过等级的用户，它历史各天的快照等级应该不全相同
+SELECT toDate(paid_at) AS d, groupUniqArray(user_level_snap) AS levels
+FROM dwd.order_detail WHERE user_id = 1001 GROUP BY d ORDER BY d;
+</code></pre>
+
+<p>建模阶段的高频动作汇总成下面这张速查表，机制在原理层展开：</p>
+
+<table>
+<thead><tr><th>要做什么</th><th>怎么做</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>给宽表加一个新维度</td><td><code>ALTER ADD COLUMN</code>，再按分区分批回刷历史</td><td>加列本身很便宜，回刷才是成本；能不能不回刷取决于业务口径</td></tr>
+<tr><td>改一个指标的口径</td><td>只改 DWS 层的那一处定义，再按分区重算</td><td>指标定义散落在看板 SQL 里就没法改，这是分层的主要价值</td></tr>
+<tr><td>重跑昨天的数据</td><td>临时表算好、对账、<code>REPLACE PARTITION</code> 原子替换</td><td>分区粒度必须与重跑粒度一致，否则这条路走不通</td></tr>
+<tr><td>看板越来越慢</td><td>加一层聚合表，让看板查 DWS 或 ADS 而不是明细</td><td>明细层只留给排障和下钻</td></tr>
+<tr><td>实时与离线数字对不上</td><td>先对齐时间语义（事件时间还是处理时间、迟到窗口多长）</td><td>不先对齐这三个问题，比对多少次都会继续分叉</td></tr>
+<tr><td>做漏斗或留存</td><td><code>windowFunnel</code> / <code>retention</code> / <code>sequenceMatch</code> 在明细表上一次扫描算完</td><td><code>windowFunnel</code> 的 level 是「最多走到第几步」，统计要累加</td></tr>
+</tbody></table>
+
+<p>下面几节解释这些选择背后的机制：冗余为什么在列存里不贵、分层各层该放什么、幂等为什么只有分区替换一条干净的路。</p>
+
+<h2>② 原理 · OLAP 建模的第一性原理：用冗余换扫描效率</h2>
 
 <table>
 <thead><tr><th>维度</th><th>OLTP 建模</th><th>OLAP 建模</th></tr></thead>
@@ -105,7 +197,7 @@
 <tr><td>表数量</td><td>几十到上百张规范化小表</td><td>少量宽表加分层汇总表</td></tr>
 </tbody></table>
 
-<h2>星型、雪花，与最终的大宽表</h2>
+<h2>② 原理 · 星型、雪花，与最终的大宽表</h2>
 
 <p>星型模型是一张事实表（订单、事件）加一圈维度表（用户、商品、地区），维度表直接挂在事实表上；雪花模型是把维度表再规范化一层（商品挂品类，品类挂一级类目）。这套方法论来自 MPP 和数仓时代，在 ClickHouse 上会遇到一个现实问题：<strong>ClickHouse 的 join 很贵，连星型模型的单层 join 都常常慢到无法接受</strong>，所以实践里往往一路退化到大宽表（One Big Table）。</p>
 
@@ -176,7 +268,7 @@ flowchart TB
     W4 --> P
 </div>
 
-<h2>缓慢变化维：分析历史必须用当时的值</h2>
+<h2>② 原理 · 缓慢变化维：分析历史必须用当时的值</h2>
 
 <p>用户九月是青铜等级、十月升到黄金，那么「九月各等级用户的消费额」应该用哪个等级算？答案是九月的青铜。<strong>这不是性能问题，而是数据正确性问题</strong>，而且是报表口径争议里最常见的一类。用 <code>dictGet</code> 关联当前维度表的写法，会让历史报表的数字随维度变化而变动，昨天跑出来的月报今天再跑就不一样了。</p>
 
@@ -195,7 +287,7 @@ flowchart TB
     <p>「按用户当时等级统计的历史消费」和「按用户当前等级统计的历史消费」是两个不同的业务指标，都合法，但必须在表设计上区分开：前者用事实表里冗余的快照维度列（如 <code>user_level_snapshot</code>），后者用 <code>dictGet</code> 实时查当前维度。一张表同时提供两列、并在字段命名上写清 snapshot 与 current，比事后解释报表为什么对不上要省事得多。</p>
 </div>
 
-<h2>分层：ODS、DWD、DWS、ADS 在 ClickHouse 里怎么落</h2>
+<h2>② 原理 · 分层：ODS、DWD、DWS、ADS 在 ClickHouse 里怎么落</h2>
 
 <p>分层的意义在于把「解析清洗」「关联打平」「聚合汇总」三种变更频率完全不同的逻辑隔开，出问题时能定位到层、重跑时能只重跑一层。在 ClickHouse 里，前两层通常是 MergeTree 明细表加调度任务，后两层多用 AggregatingMergeTree 加物化视图。</p>
 
@@ -292,7 +384,7 @@ WHERE tenant_id = 42 AND stat_date &gt;= today() - 30
 GROUP BY stat_date ORDER BY stat_date;
 </code></pre>
 
-<h2>时间序列与指标建模：宽表还是长表</h2>
+<h2>② 原理 · 时间序列与指标建模：宽表还是长表</h2>
 
 <p>指标数据有两种组织方式：<strong>宽表</strong>每个指标一列（<code>cpu_pct</code>、<code>mem_pct</code>、<code>qps</code>），<strong>长表</strong>用 <code>metric_name</code> 加 <code>value</code> 两列装所有指标。二者不是对错问题，取决于指标集合是否稳定。</p>
 
@@ -309,7 +401,7 @@ GROUP BY stat_date ORDER BY stat_date;
 
 <p>时间粒度上，用三级汇总（分钟 / 小时 / 天）几乎是标准解法。收益的算法很直白：假设分钟级一天 1440 行每维度组合，小时级 24 行，天级 1 行。查一年的日趋势图，走天级是 365 行，走分钟级是 52 万行，差三个数量级。存储上小时级和天级加起来不到分钟级的 5%，几乎免费。<strong>关键是不要让上层直接查明细</strong>：看板固定查 DWS 或 ADS，明细层只留给排障和下钻。另外分钟级聚合表的 TTL 可以设得比天级短很多，比如分钟级留 7 天、小时级留 90 天、天级留 3 年。</p>
 
-<h2>幂等重跑是 ETL 的硬要求</h2>
+<h2>② 原理 · 幂等重跑是 ETL 的硬要求</h2>
 
 <p>任何离线任务都会失败重跑，也会因为口径修正而重算。<strong>能不能安全地重跑同一个时间段，是 ETL 设计里最硬的一条要求</strong>。在 ClickHouse 里，幂等的正确实现是「按分区整体替换」：先把数据算到临时表，再用 <code>REPLACE PARTITION</code> 原子替换目标分区。这样重跑一百次结果都一样，且切换瞬间完成。</p>
 
@@ -379,7 +471,7 @@ DROP TABLE dws.order_1d_tmp;
 
 <p>数据质量上，最少要做三件事：<strong>行数与核心指标双向对账</strong>（只比行数会漏掉金额错位这类问题）；<strong>空值语义写进字段注释</strong>（0 表示「值为零」还是「没采集到」必须约定，因为 ClickHouse 里我们用默认值替代了 Nullable，这层语义只能靠约定保留）；<strong>去重策略只选一侧</strong>——要么写入侧靠 ReplacingMergeTree 和分区替换保证幂等，要么查询侧统一用 <code>argMax</code> 去重，两边都做会互相掩盖问题，出错时无法定位。</p>
 
-<h2>实时与离线的口径一致</h2>
+<h2>② 原理 · 实时与离线的口径一致</h2>
 
 <p>Lambda 架构的经典问题不是维护两套代码累，而是<strong>两条链路的口径会悄悄分叉</strong>：实时链路为了低延迟用了近似去重，离线链路用精确去重；实时链路把退款算进当天，离线链路算进原单日期。到了月底对账，差异已经无法归因。</p>
 
@@ -394,7 +486,7 @@ DROP TABLE dws.order_1d_tmp;
 
 <p>落地的关键动作是把聚合逻辑写成一份可参数化的 SQL 模板，实时链路以分钟为窗口调用它、离线链路以天为窗口调用它，指标定义只存在一处。同时把「时间语义」显式写清：用事件时间还是处理时间、迟到数据的容忍窗口多长、超出窗口的迟到数据进哪个分区，这三个问题不明确，两条链路必然对不上。</p>
 
-<h2>漏斗、留存、路径：ClickHouse 特有的分析函数</h2>
+<h2>② 原理 · 漏斗、留存、路径：ClickHouse 特有的分析函数</h2>
 
 <p>这三类需求如果用标准 SQL 写，都要多次自连接或窗口函数，在亿级数据上基本跑不动。ClickHouse 提供了专门的聚合函数，把它们压缩成一次扫描。</p>
 
@@ -471,7 +563,24 @@ FROM
 -- sequenceCount 同样参数可以返回匹配次数；这两个函数的时间列必须与条件同一行，不能跨表
 </code></pre>
 
-<h2>建模反模式与最容易踩的坑</h2>
+<h2>③ 场景 · 需求形态到建模方案</h2>
+
+<p>把前面的机制反过来用：拿到一类需求，直接查这张表定方案。代价列必须和业务方一起确认，因为其中几条（比如历史要不要跟着维度变）是口径问题而不是技术问题。</p>
+
+<table>
+<thead><tr><th>需求形态</th><th>建模方案</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>固定几个维度的业务看板，维度几乎不变</td><td>DWD 宽表打平，DWS 做天级与小时级聚合，看板只查 DWS</td><td>查询成本在写入时一次性付掉，看板查的是很小的结果集</td><td>加维度要改表并回刷历史</td></tr>
+<tr><td>维度经常变，分析要的是当前值</td><td>维表做 Dictionary，查询里 <code>dictGet</code></td><td>字典按 LIFETIME 自动重载，不用改事实表</td><td>历史报表会随维表变化，必须和业务方说清</td></tr>
+<tr><td>分析必须用事件发生时的维度</td><td>事实表冗余快照列，ETL 用 <code>ASOF JOIN</code> 取当时值</td><td>口径固定下来，重跑多少次结果都一样</td><td>ETL 变重，存储变大，维表要维护生效区间</td></tr>
+<tr><td>指标由用户自定义、数量不可控</td><td>长表形态：<code>metric_name</code> 加 <code>value</code>，<code>metric_name</code> 进排序键</td><td>新增指标不用改表结构</td><td>多指标对比要行转列，<code>value</code> 列混量纲导致压缩率下降</td></tr>
+<tr><td>漏斗、留存、路径分析</td><td>保留明细事件表，用 <code>windowFunnel</code>、<code>retention</code>、<code>sequenceMatch</code></td><td>一次扫描替代多次自连接或窗口函数</td><td>只能在明细层跑，明细层的 TTL 决定了能回看多久</td></tr>
+<tr><td>每天重跑昨天，偶尔要重算整月</td><td>按天分区 + 临时表 + <code>REPLACE PARTITION</code></td><td>换目录是元数据操作，秒级且原子可见</td><td>需要一份临时空间，重算整月要循环执行</td></tr>
+<tr><td>实时看板与离线报表都要</td><td>一份参数化的聚合 SQL 模板，实时按分钟调用、离线按天调用</td><td>指标定义只存在一处，两条链路不会分叉</td><td>需要调度平台支持模板化与参数化</td></tr>
+<tr><td>要支撑对外产品化看板</td><td>再加一层 ADS 结果表，行数压到很小，前面挡缓存</td><td>单查询吃满多核的模型决定了并发能力弱</td><td>多一层链路与一致性窗口</td></tr>
+</tbody></table>
+
+<h2>③ 场景 · 建模反模式与对应改法</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>后果</th><th>正确做法</th></tr></thead>
@@ -484,6 +593,12 @@ FROM
 <tr><td>指标定义散落在各个看板 SQL 里</td><td>同一个 GMV 有五种算法，对不上账</td><td>指标只在 DWS 层定义一次，看板只做展示</td></tr>
 <tr><td>用 DELETE 加 INSERT 做重跑</td><td>异步 mutation 导致双倍数据窗口</td><td><code>REPLACE PARTITION</code> 原子替换</td></tr>
 </tbody></table>
+
+<p><strong>不适用边界</strong>：建模解决的是「数据怎么组织」，不解决单条 SQL 的写法问题——那在 <a href="../query-optimization/">查询优化</a>；引擎、codec 与写入批次在 <a href="../table-import/">建表与写入</a>；跨分片的 join 与两阶段聚合在 <a href="../architecture/">集群架构</a>；为什么冗余在列存里不贵，回到 <a href="../">ClickHouse 深度原理</a>。另外两件事明确不属于建模层：需要行级 upsert 的场景应该在 <a href="../compare/">选型阶段</a> 就换引擎，而上游埋点的字段规范与埋点治理是数据采集侧的问题，建模只能承接不能修补。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../query-optimization/">← 上一步：ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合</a> · <a href="../architecture/">下一步：ClickHouse 集群架构：分片、副本与 Distributed 表 →</a></p>
+
+<h2>最容易踩的坑</h2>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>

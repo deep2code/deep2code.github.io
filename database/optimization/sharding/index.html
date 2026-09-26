@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="分库分表的决策与落地：先用决策树穷尽归档、分区、读写分离、垂直拆分等替代方案，明确分片解决的是容量与写入上限而不是复杂查询；再讲分片键为什么是最难改的决策、五种分片算法的扩容代价、把用户 ID 基因编进订单 ID 的双写基因法；重点列出分片后失去的能力清单与缓解手段、全局唯一 ID 四种方案对照、双写加全量迁移加增量追平的扩容步骤、SDK 与 Proxy 中间件差异，以及分布式数据库替代路径。">
+    <meta name="description" content="分库分表三段式：先给动手前的三项自查（瓶颈是读并发还是写吞吐还是容量、垂直拆分与读写分离是否已用尽、归档与升配还有没有余量）、分片键六项检查清单与用真实查询清单验证候选键的语句、扩容九步的动作与验收标准和每步回滚点；再讲替代方案的可逆性对照、分片键为什么改不回来、五种分片算法的扩容代价、基因法的位数约束、分片后永久失去的八项能力、全局唯一 ID 四种方案与时钟回拨、双写加迁移加追平的状态机、SDK 与 Proxy 差异；最后给该分片还是换分布式数据库的决策矩阵、七类运维事项与不适用边界。">
     <meta name="keywords" content="数据库性能优化,分库分表与读写分离,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/optimization/sharding/">
     <meta property="og:title" content="分库分表：决策边界、分片键选择与扩容落地 - 数据库性能优化 - 资深码农">
-    <meta property="og:description" content="分库分表的决策与落地：先用决策树穷尽归档、分区、读写分离、垂直拆分等替代方案，明确分片解决的是容量与写入上限而不是复杂查询；再讲分片键为什么是最难改的决策、五种分片算法的扩容代价、把用户 ID 基因编进订单 ID 的双写基因法；重点列出分片后失去的能力清单与缓解手段、全局唯一 ID 四种方案对照、双写加全量迁移加增量追平的扩容步骤、SDK 与 Proxy 中间件差异，以及分布式数据库替代路径。">
+    <meta property="og:description" content="分库分表三段式：先给动手前的三项自查（瓶颈是读并发还是写吞吐还是容量、垂直拆分与读写分离是否已用尽、归档与升配还有没有余量）、分片键六项检查清单与用真实查询清单验证候选键的语句、扩容九步的动作与验收标准和每步回滚点；再讲替代方案的可逆性对照、分片键为什么改不回来、五种分片算法的扩容代价、基因法的位数约束、分片后永久失去的八项能力、全局唯一 ID 四种方案与时钟回拨、双写加迁移加追平的状态机、SDK 与 Proxy 差异；最后给该分片还是换分布式数据库的决策矩阵、七类运维事项与不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/optimization/sharding/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="分库分表：决策边界、分片键选择与扩容落地">
-    <meta name="twitter:description" content="分库分表的决策与落地：先用决策树穷尽归档、分区、读写分离、垂直拆分等替代方案，明确分片解决的是容量与写入上限而不是复杂查询；再讲分片键为什么是最难改的决策、五种分片算法的扩容代价、把用户 ID 基因编进订单 ID 的双写基因法；重点列出分片后失去的能力清单与缓解手段、全局唯一 ID 四种方案对照、双写加全量迁移加增量追平的扩容步骤、SDK 与 Proxy 中间件差异，以及分布式数据库替代路径。">
+    <meta name="twitter:description" content="分库分表三段式：先给动手前的三项自查（瓶颈是读并发还是写吞吐还是容量、垂直拆分与读写分离是否已用尽、归档与升配还有没有余量）、分片键六项检查清单与用真实查询清单验证候选键的语句、扩容九步的动作与验收标准和每步回滚点；再讲替代方案的可逆性对照、分片键为什么改不回来、五种分片算法的扩容代价、基因法的位数约束、分片后永久失去的八项能力、全局唯一 ID 四种方案与时钟回拨、双写加迁移加追平的状态机、SDK 与 Proxy 差异；最后给该分片还是换分布式数据库的决策矩阵、七类运维事项与不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -69,9 +69,119 @@
             <span class="meta-item">🏷️ 分库分表</span>
         </div>
     </header>
+
     <p>分库分表是数据库优化里唯一<strong>不可逆</strong>的一步。索引建错了删掉就行，缓存加错了摘掉就行，分片一旦落地，分片键就固化进了每一条查询，跨分片能力的缺失会永久留在业务代码里，并且被之后每一个新需求继续放大。所以这篇的重点不是「怎么分」，而是「什么时候才该分」和「分了之后要付什么代价」。一句话先摆在前面：<strong>分片解决的是单机容量和写入上限，它解决不了复杂查询</strong>。</p>
 
-    <h2>先穷尽所有替代方案</h2>
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">这篇怎么读</div>
+        <ul>
+            <li><strong>① 用法</strong>：动手前的三项自查（当前瓶颈到底是读并发、写吞吐还是容量，垂直拆分与读写分离是否已经用尽）、分片键的六项检查清单与用真实查询清单验证候选键的方法、扩容九步的动作与验收标准和每步的回滚点。</li>
+            <li><strong>② 原理</strong>：替代方案的可逆性对照、分片键为什么是最难改的决策、五种分片算法的扩容代价、把用户基因编进订单 ID 的做法与它的位数约束、分片后永久失去的八项能力、全局唯一 ID 四种方案与时钟回拨、双写加全量迁移加追平的状态机、SDK 与 Proxy 的七维差异。</li>
+            <li><strong>③ 场景</strong>：什么情况下应该直接上分布式数据库而不是自己分片、分片之后七类运维事项怎么做、以及这篇在整条优化路径里的位置与边界。</li>
+        </ul>
+    </div>
+
+    <h2>① 用法 · 动手前的三项自查：现在的瓶颈到底是什么</h2>
+
+    <p>分片是单向门，所以第一件事不是设计分片键，而是<strong>证明你真的需要它</strong>。下面三项自查每项都有可以直接敲的取数命令，任何一项的答案是「还有余量」，这一轮就不该分。</p>
+
+    <table>
+        <thead><tr><th>自查项</th><th>怎么确认</th><th>如果答案是这样，先做这件事</th></tr></thead>
+        <tbody>
+            <tr><td>瓶颈是读并发吗</td><td>按下面命令取 <code>Com_select</code> 与 <code>Com_insert</code> 等写命令的<strong>速率差值</strong>（两次采样相减），算读写比</td><td>读远多于写：先做读写分离加缓存，这是成本最低且完全可逆的一步</td></tr>
+            <tr><td>瓶颈是容量还是写吞吐</td><td>看单表数据与索引体积、增长速率；再看写入速率是否已经把磁盘 IOPS 或 binlog 写入打满</td><td>只是容量大而写入不高：先归档或分区，把热数据集合缩小</td></tr>
+            <tr><td>查询是否集中在近期数据</td><td>按时间维度做分组计数，看最近一到三个月的行数占比</td><td>集中在近期：归档历史数据或用分区表，可逆、风险最低</td></tr>
+            <tr><td>垂直拆分是否已经用尽</td><td>看单库里有几块互不相关的业务表、有没有大字段（长文本、JSON、二进制）挤在主表里</td><td>还能按业务边界或大字段拆：先做垂直拆分，它不需要改查询路由</td></tr>
+            <tr><td>SQL 与索引是否已经榨干</td><td>按总耗时排序看前二十个 SQL 指纹，确认没有全表扫、深分页、N 加 1</td><td>还有慢查询没治：先走 <a href="../slow-query/">慢查询治理</a> 与 <a href="../index/">索引治理</a>，很多「容量问题」其实是扫描量问题</td></tr>
+            <tr><td>实例规格是否已到天花板</td><td>对比当前规格与云厂商该系列的最高规格，看还有几档</td><td>还有档位：先升配。升配完全可逆，分片不可逆</td></tr>
+            <tr><td>能否用分布式数据库换掉改造量</td><td>评估成本预算与团队对新故障模式的接受度</td><td>能接受成本与运维复杂度上升：直接上分布式数据库，省掉永久的能力缺失</td></tr>
+        </tbody>
+    </table>
+
+    <pre><code class="language-sql">-- 1) 体积与行数：先把「有多大」量出来，不要凭感觉
+--    table_rows 是估算值，用于量级判断足够；要精确值再单独 COUNT(*)
+SELECT table_name,
+       table_rows,
+       ROUND(data_length  / 1024 / 1024) AS data_mb,
+       ROUND(index_length / 1024 / 1024) AS idx_mb
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+ORDER BY data_length + index_length DESC
+LIMIT 10;
+
+-- 2) 读写比：分片解决的是写吞吐与容量，读高只需要读写分离加缓存
+--    这些是累计值，必须隔一段时间采两次相减再除以间隔秒数才有意义
+SHOW GLOBAL STATUS WHERE Variable_name IN
+    ('Com_select','Com_insert','Com_update','Com_delete','Innodb_rows_inserted');
+
+-- 3) 查询是否集中在近期：决定能否用归档或分区替代分片
+SELECT DATE_FORMAT(create_time, '%Y-%m') AS ym, COUNT(*) AS rows_cnt
+FROM orders
+GROUP BY ym
+ORDER BY ym DESC
+LIMIT 12;
+
+-- 4) 候选分片键的分布：倾斜的键不能做分片键，这一步要在决策前做
+--    某个取值的占比远高于均值，就意味着分片后那一片先到顶
+SELECT user_id, COUNT(*) AS cnt
+FROM orders
+GROUP BY user_id
+ORDER BY cnt DESC
+LIMIT 20;</code></pre>
+
+    <h2>① 用法 · 分片键检查清单与扩容的可执行步骤</h2>
+
+    <p>三项自查都指向「必须分」之后，才轮到分片键。<strong>分片键是这套方案里唯一几乎改不回来的决策</strong>，所以它不该由讨论决定，而该由数据决定——把真实查询清单列全，逐条核对能不能带上候选键。</p>
+
+    <table>
+        <thead><tr><th>检查项</th><th>怎么验证</th><th>不通过怎么办</th></tr></thead>
+        <tbody>
+            <tr><td>高频查询能否带上这个键</td><td>用下面的语句按调用次数列出真实查询清单，统计「不含候选键」的那些语句的调用量占比</td><td>占比超过一成就换候选键；实在换不了，必须先设计好异构索引表</td></tr>
+            <tr><td>会不会热点或倾斜</td><td>对候选键做分组计数，看头部取值的占比；SaaS 场景重点看头部大租户</td><td>倾斜就换键；只能用这个键时，对头部账号单独路由</td></tr>
+            <tr><td>写入会不会集中在一片</td><td>如果候选键是时间或自增 ID，按范围分片时写入永远落在最后一片</td><td>改成取模或哈希；确实要范围分片就接受写入集中，并按片扩容</td></tr>
+            <tr><td>需不需要跨片聚合</td><td>列出所有 <code>COUNT</code>、<code>SUM</code>、<code>GROUP BY</code>、全局排序分页的入口，逐个判断能否收敛到单片</td><td>不能收敛的挪到离线数仓或搜索引擎，不要留在高频接口上</td></tr>
+            <tr><td>是否存在第二个高频路由入口</td><td>典型是「按用户查列表」与「按订单号查详情」并存</td><td>用基因法把主键的低位编进第二个键，两条路径命中同一片</td></tr>
+            <tr><td>分片数是否一次规划够</td><td>按「单片容量上限 ÷ 预估三年增量」反推，并取 2 的幂</td><td>不够就直接上 32 或 64 片；预留分片几乎不增加成本，事后扩容极贵</td></tr>
+        </tbody>
+    </table>
+
+    <pre><code class="language-sql">-- 用真实查询清单验证候选分片键：凭印象选键是最常见的失败原因
+-- has_shard_key = 0 的那些语句，分片后会退化成向所有分片扇出
+SELECT LEFT(digest_text, 100)                 AS sql_template,
+       count_star                             AS calls,
+       digest_text LIKE '%user_id%'           AS has_shard_key
+FROM performance_schema.events_statements_summary_by_digest
+WHERE schema_name = DATABASE()
+  AND digest_text LIKE 'SELECT%'
+ORDER BY count_star DESC
+LIMIT 30;
+
+-- 判读方法：把 has_shard_key = 0 的行的 calls 累加，除以总 calls。
+-- 这个比例就是分片后必须扇出的请求占比，它直接决定这个候选键能不能用。</code></pre>
+
+    <p>扩容（包括第一次把单库切成分片）按下面九步走。每一步都要先确认验收标准再进下一步，<strong>并且要清楚自己当前站在哪个回滚点上</strong>：</p>
+
+    <table>
+        <thead><tr><th>步骤</th><th>动作</th><th>验收标准</th><th>此刻的回滚代价</th></tr></thead>
+        <tbody>
+            <tr><td>1 冻结</td><td>冻结分片数与表结构变更，公告窗口期</td><td>变更单里只有这一项在跑</td><td>零，直接取消</td></tr>
+            <tr><td>2 上线双写</td><td>双写开关默认关，新分片写失败只告警、不阻塞主流程</td><td>灰度 1% 写流量，主流程错误率无变化</td><td>零，关开关即可</td></tr>
+            <tr><td>3 全量迁移</td><td>按主键区间分批限速拉取，进度落库以支持断点续跑</td><td>线上 P99 无变化；进程重启后能从断点继续</td><td>低，已迁数据可以整体丢弃重来</td></tr>
+            <tr><td>4 增量追平</td><td>订阅 binlog 消费到新分片，直到延迟稳定</td><td>延迟曲线平稳且不再单调增长</td><td>低，停消费即可</td></tr>
+            <tr><td>5 一致性校验</td><td>逐片对比行数<strong>与内容校验和</strong>（语句见原理层）</td><td>两边行数与校验和完全一致</td><td>低，回到第 3 步重迁差异区间</td></tr>
+            <tr><td>6 灰度切读</td><td>按用户或分片维度放量，同时做新旧双读对比</td><td>双读差异为 0，新分片延迟不高于旧分片</td><td>中，切回旧分片即可，但要留意已产生的双读告警</td></tr>
+            <tr><td>7 全量切读</td><td>读全部切到新分片，观察满一个完整业务周期</td><td>覆盖月末结算、定时任务这些低频路径后无差异</td><td>中，仍可整体切回读</td></tr>
+            <tr><td>8 切写</td><td>停止写旧分片，旧分片转只读</td><td>旧分片写入量归零，业务无报错</td><td><strong>这是最后一个低成本回滚点</strong></td></tr>
+            <tr><td>9 下线</td><td>旧分片只读保留至少一个业务周期后再下线</td><td>备份已验证可恢复</td><td>下线之后没有回滚路径，只能修数据</td></tr>
+        </tbody>
+    </table>
+
+    <p>上面这些动作为什么是这个顺序、分片键选错为什么改不回来、扩容为什么是整套方案里最危险的一步，下面逐节展开。</p>
+
+    <h2>② 原理 · 先穷尽所有替代方案</h2>
+
+    <p>搞清这一节能解决「到底该不该分」——大多数团队真正需要的是归档、分区或读写分离，而不是分片。</p>
 
     <div class="mermaid">
 flowchart TB
@@ -102,7 +212,11 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>分片键是最关键也最难改的决策</h2>
+    <p>缓存这一行的账算得对不对，直接决定要不要往下走，完整推演见 <a href="../../cache/">缓存的收益与代价</a>。</p>
+
+    <h2>② 原理 · 分片键是最关键也最难改的决策</h2>
+
+    <p>搞清这一节能解决「上线半年后发现最高频的查询必须扇出到所有分片」这类无法补救的设计错误。</p>
 
     <p>分片键的选择标准只有一条：<strong>绝大多数查询都能带上它</strong>。带不上分片键的查询会退化成向所有分片扇出再在应用层聚合，分片数越多越慢。选错之后几乎改不回来——改分片键等于把全部数据重新分布一次，同时所有查询路径重写，代价接近重做一遍分库分表。</p>
 
@@ -117,7 +231,11 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>分片算法对照与基因法</h2>
+    <p>数据归属、多租户的隔离级别与分片数据模型的更细取舍，见 <a href="../../design/sharding-strategy/">数据归属与多租户：分片的数据模型策略</a>。</p>
+
+    <h2>② 原理 · 分片算法对照与基因法</h2>
+
+    <p>搞清这一节能解决「为什么扩容那么贵」——答案全在算法选择里，取模最省心也最难扩。</p>
 
     <table>
         <thead><tr><th>算法</th><th>路由方式</th><th>扩容代价</th><th>热点风险</th><th>适用场景</th></tr></thead>
@@ -195,7 +313,7 @@ public final class OrderSharding {
     }
 }</code></pre>
 
-    <h2>分片之后失去的能力清单</h2>
+    <h2>② 原理 · 分片之后失去的能力清单</h2>
 
     <p>这是评估分片是否划算时最该读的一节，因为它描述的不是一次性的改造成本，而是<strong>永久性的能力损失</strong>。</p>
 
@@ -203,7 +321,7 @@ public final class OrderSharding {
         <thead><tr><th>失去的能力</th><th>为什么</th><th>缓解手段</th><th>缓解手段的代价</th></tr></thead>
         <tbody>
             <tr><td>跨分片 join</td><td>两张表的关联行可能落在不同物理库，数据库无法连接</td><td>把小维表做成每片一份的广播表；或冗余字段避免关联；或应用层两次查询再拼装</td><td>广播表写入要同步所有分片；冗余字段带来一致性维护成本</td></tr>
-            <tr><td>跨分片事务的原子性</td><td>涉及多个物理库，单库事务管不了</td><td>柔性事务：TCC、Saga、本地消息表；或在设计上让一个事务只落一个分片</td><td>需要业务实现补偿逻辑与幂等，细节见站内分布式事务篇</td></tr>
+            <tr><td>跨分片事务的原子性</td><td>涉及多个物理库，单库事务管不了</td><td>柔性事务：TCC、Saga、本地消息表；或在设计上让一个事务只落一个分片</td><td>需要业务实现补偿逻辑与幂等，细节见 <a href="../../../architecture/distributed/transaction/">分布式事务</a> 与 <a href="../../../architecture/distributed/idempotency/">幂等设计</a></td></tr>
             <tr><td>跨分片排序与分页</td><td>全局第 N 页无法从任一分片单独得出</td><td>每片取「偏移量加页大小」条再归并；或改成游标法只支持下一页；或把列表查询收敛到单分片</td><td>深分页时数据放大到不可接受，见下图</td></tr>
             <tr><td><code>COUNT</code> 与聚合</td><td>需要所有分片的数据才能算出全局值</td><td>扇出后应用层汇总；或维护单独的计数表；或用离线数仓出数</td><td>扇出的耗时取决于最慢的那个分片；计数表要处理并发与一致性</td></tr>
             <tr><td>全局唯一约束</td><td>唯一索引只在单个物理库内生效</td><td>唯一性字段本身作为分片键；或引入独立的唯一性校验服务</td><td>分片键只能有一个，其他字段的全局唯一需要额外组件</td></tr>
@@ -232,7 +350,9 @@ sequenceDiagram
 
     <p>缓解的方向不是优化归并算法，而是<strong>改需求</strong>：把「任意跳页」改成「只能翻下一页」的游标分页，或者在查询条件里强制要求带上分片键把范围收敛到单片，或者把这类列表需求整体搬到搜索引擎和离线数仓。</p>
 
-    <h2>全局唯一 ID 方案对照</h2>
+    <h2>② 原理 · 全局唯一 ID 方案对照</h2>
+
+    <p>搞清这一节能解决「分片后主键怎么发」，以及为什么用 UUID 图省事会在写入性能上付出最大代价。</p>
 
     <table>
         <thead><tr><th>方案</th><th>有序性</th><th>可用性风险</th><th>索引友好度</th><th>主要坑</th></tr></thead>
@@ -244,13 +364,17 @@ sequenceDiagram
         </tbody>
     </table>
 
+    <p>为什么无序主键对 InnoDB 伤害特别大（页分裂、聚簇索引与二级索引的存储放大），见 <a href="../../mysql/">MySQL 深度原理</a>；Redis 主从切换会丢未落盘写入的机制见 <a href="../../redis/">Redis 深度原理</a>。</p>
+
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">时钟回拨是雪花算法最容易被忽略的坑</div>
         <p>NTP 校时、虚拟机迁移、宿主机时钟漂移都会造成时间戳回退。一旦回退，同一毫秒内的序列号可能重复发放，产生业务上无法察觉的重复主键。可用的处理方式有三种：检测到回拨且幅度很小（几毫秒）就自旋等待时间追上；幅度较大就直接抛异常拒绝发号，让上游重试到别的实例；或者预留几位作为「时钟回拨计数」，每次回拨就递增这个值以保证不重复。绝对不要默默继续发号。</p>
     </div>
 
-    <h2>扩容是整个方案里最难的一步</h2>
+    <h2>② 原理 · 扩容是整个方案里最难的一步</h2>
+
+    <p>搞清这一节能解决「为什么老手都说一开始就多分几片」——因为事后扩容要走完下面这整个状态机。</p>
 
     <p>所以最重要的结论是：<strong>预留足够的分片数比事后扩容便宜得多</strong>。一次就分 32 或 64 片，这些分片初期可以全部放在同一个物理实例上，后续按需把部分分片整体搬到新实例——这种搬迁只移动数据、不改变路由规则，风险低一个数量级。相反，分片数不足后再改分片数，取模算法下几乎全量数据都要重新分布。</p>
 
@@ -314,7 +438,9 @@ GROUP BY user_id
 ORDER BY cnt DESC
 LIMIT 20;</code></pre>
 
-    <h2>中间件选型：SDK 还是 Proxy</h2>
+    <h2>② 原理 · 中间件选型：SDK 还是 Proxy</h2>
+
+    <p>搞清这一节能解决「路由层放在哪」——它影响的是连接数、灰度粒度和故障影响面，而不只是性能。</p>
 
     <table>
         <thead><tr><th>维度</th><th>应用层 SDK（ShardingSphere-JDBC、sharding-jdbc）</th><th>代理层 Proxy（ShardingSphere-Proxy、Vitess、MyCat）</th></tr></thead>
@@ -374,7 +500,7 @@ props:
   # 单条逻辑 SQL 允许的最大分片并发度，调太大会瞬间打满所有分片
   max-connections-size-per-query: 4</code></pre>
 
-    <h2>分布式数据库作为替代路径</h2>
+    <h2>③ 场景 · 什么时候该分片，什么时候该换数据库</h2>
 
     <p>TiDB、OceanBase、CockroachDB 这类分布式数据库把分片下沉到了存储层：数据自动按区间切分并在节点间迁移，应用看到的仍然是一张表，跨分片 join、分布式事务、全局索引由数据库自己实现。<strong>它省掉的正是分库分表最贵的那部分——业务改造和永久性的能力损失。</strong></p>
 
@@ -391,7 +517,24 @@ props:
         </tbody>
     </table>
 
-    <h2>分片之后的运维</h2>
+    <table>
+        <thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+        <tbody>
+            <tr><td>C 端订单、账单这类查询能收敛到用户维度</td><td>按 <code>user_id</code> 分片加基因法，一次分 64 片</td><td>最高频的两条路径都能命中单片，扇出比例可以压到很低</td><td>商家维度与时间维度查询要另建异构索引表或走数仓</td></tr>
+            <tr><td>查询形态复杂、经常临时加新维度</td><td>不要自己分片，上分布式数据库</td><td>分片把「新维度查询」变成扇出，而需求会持续增加</td><td>成本数倍上升，且要接受新的故障模式与调优手段</td></tr>
+            <tr><td>日志、埋点、消息这类只按时间查</td><td>按时间分表或直接换列存引擎</td><td>天然冷热分离，新周期建新表，扩容几乎零成本</td><td>点查退化；分析型负载更适合 <a href="../../clickhouse/">ClickHouse</a> 这类引擎</td></tr>
+            <tr><td>SaaS 多租户，头部租户体量悬殊</td><td>按租户分片，但给头部租户独立分片或独立库</td><td>租户维度天然隔离，但均匀取模一定会被大租户压垮</td><td>路由规则里出现例外条目，需要长期维护，策略见 <a href="../../design/sharding-strategy/">数据归属与多租户</a></td></tr>
+            <tr><td>运营后台要任意条件查询与跳页</td><td>把后台查询整体搬离分片库，走搜索引擎或数仓</td><td>任意条件与跳页在分片上必然扇出加深分页放大</td><td>数据有延迟，且多维护一条同步链路</td></tr>
+            <tr><td>只是历史数据太多</td><td>归档或分区，不要分片</td><td>缩小热数据集合可逆，分片不可逆</td><td>要保留历史数据的查询入口</td></tr>
+            <tr><td>写入吞吐已到顶且必须留在 MySQL 生态</td><td>水平分片，一次规划足够分片数</td><td>这是分片真正成立的场景：容量与写入上限随分片数扩展</td><td>接受本文第四节那份能力清单的永久缺失</td></tr>
+        </tbody>
+    </table>
+
+    <p><strong>不适用边界</strong>：分片解决不了任何「单次查询本身很贵」的问题——扫描量、排序、深分页在分片后只会更贵，这些先去 <a href="../slow-query/">慢查询治理</a> 与 <a href="../index/">索引设计与治理</a>；瓶颈到底在哪一层、各手段的投入产出排序在 <a href="../">数据库性能优化主干篇</a>；跨片事务的补偿与幂等落地在 <a href="../../../architecture/distributed/transaction/">分布式事务</a> 与 <a href="../../../architecture/distributed/idempotency/">幂等设计</a>；分析型与报表型负载在 <a href="../../clickhouse/">ClickHouse</a>；分片间指标怎么采集与对比在 <a href="../../../observability/metrics/">指标与监控</a>。</p>
+
+    <h2>③ 场景 · 分片之后的运维</h2>
+
+    <p>分片上线不是终点，下面这七件事会长期占用人力，评估方案时就该把它们算进成本。</p>
 
     <table>
         <thead><tr><th>事项</th><th>难点</th><th>做法</th></tr></thead>
@@ -400,18 +543,25 @@ props:
             <tr><td>数据倾斜</td><td>分片键分布不均或存在超级大户，单片先到瓶颈</td><td>按片采集行数与体积做对比告警，偏离均值两成即介入；头部账号单独路由</td></tr>
             <tr><td>一致性校验</td><td>双写、迁移、补偿都可能产生分片间或主从间的差异</td><td>定期跑行数与校验和比对；对账任务覆盖所有分片；差异自动生成修复单</td></tr>
             <tr><td>备份与恢复</td><td>多个物理库的备份时间点不一致，恢复后可能出现跨库不一致</td><td>用全局一致性快照或统一的位点标记；恢复演练必须按分片全量走一遍</td></tr>
-            <tr><td>慢查询治理</td><td>慢日志分散在几十个实例上</td><td>集中采集后按逻辑表聚合；重点关注扇出查询的最慢分片</td></tr>
+            <tr><td>慢查询治理</td><td>慢日志分散在几十个实例上</td><td>集中采集后按逻辑表聚合；重点关注扇出查询的最慢分片，方法见 <a href="../slow-query/">慢查询治理</a></td></tr>
             <tr><td>容量规划</td><td>单片容量到顶时扩容成本极高</td><td>按片监控增长速率并预测到顶时间，至少提前一个季度准备</td></tr>
             <tr><td>故障隔离</td><td>一个分片故障会让部分用户完全不可用</td><td>按分片做熔断与降级；扇出查询设置分片级超时，避免被最慢分片拖死</td></tr>
         </tbody>
     </table>
 
+    <p>这条路径到这里结束：主干篇给判断顺序，索引篇解决扫描量，慢查询篇把发现与归因流程化，本篇是最后一招——只有前面全部用尽时才动它，而且动之前先读完那份能力清单。</p>
+
+    <p class="cluster-nav">同主题路径：<a href="../slow-query/">← 上一步：慢查询治理：从发现到根治的完整闭环</a></p>
+
+    <h2>最容易踩的坑</h2>
+
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
-        <div class="callout-title">最容易踩的坑</div>
+        <div class="callout-title">避坑清单</div>
         <ul>
             <li>没穷尽替代方案就分片。归档、分区、读写分离、垂直拆分、升级规格都还有余量，却先付了不可逆的代价。</li>
             <li>指望分片解决复杂查询。分片只提升容量和写入上限，跨片 join、聚合、排序分页只会比单机更难。</li>
+            <li>凭印象选分片键。没有用真实查询清单统计过「带不上分片键的调用量占比」，上线后才发现最高频的查询在扇出。</li>
             <li>一次只分 4 片。两年后扩容要走完双写、全量迁移、追平、校验、灰度切换全流程，这是整个项目里最危险的一次操作；一开始分 32 或 64 片几乎不增加成本。</li>
             <li>分片键选了 <code>order_id</code>。订单详情快了，但「我的订单列表」这个最高频的 C 端查询变成全分片扇出。</li>
             <li>用了基因法但没做自检。基因位数与分片数失配后，按订单号路由到的分片和按用户路由到的不是同一个，表现为「数据丢了」。</li>
@@ -423,6 +573,7 @@ props:
             <li>跨分片 <code>COUNT</code> 放在高频接口上。每次都要扇出到所有分片，整体耗时由最慢的那一片决定。</li>
             <li>以为唯一索引还能保证全局唯一。它只在单个物理库内生效，重复数据会安静地写进不同分片。</li>
             <li>迁移校验只比行数不比内容。行数一致但某个区间的更新丢了，切读之后才暴露。</li>
+            <li>全量迁移不记进度。任务中途失败只能整体重跑，窗口期被无谓拉长。</li>
             <li>切写之后立刻下线旧分片。发现问题时已经没有回滚窗口，只能硬扛着修数据。</li>
             <li>DDL 逐片手工执行。中途失败导致部分分片有新列部分没有，之后每个查询都可能在某一片上报错。</li>
             <li>不监控数据倾斜。均值看着没问题，实际某个大租户占了一片的八成容量，那一片先到顶。</li>

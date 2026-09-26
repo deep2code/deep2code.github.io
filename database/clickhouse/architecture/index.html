@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="ClickHouse 集群怎么搭、怎么运维：为什么先把单机压到极限再考虑集群、分片与副本两个正交维度如何组合、ReplicatedMergeTree 靠 Keeper 复制 part 与 merge 任务而不是 SQL、insert_quorum 与最终一致的取舍、Distributed 表两阶段聚合中哪些算子能下推、写 Distributed 还是直连本地表、分布式 join 的三种执行方式，以及 Keeper 取代 ZooKeeper、S3 冷热分层和扩分片不会自动搬数据这些运维硬限制。">
+        <meta name="description" content="集群架构三段式：先给搭一套两分片两副本的六步与每步验收，拓扑怎么核、写入走本地表查询走分布式表、副本延迟怎么量、节点挂掉分别会看到什么现象；接着讲分片与副本两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表两阶段聚合什么时候退化、异步转发队列的代价、分布式 join 的三种执行方式、Keeper 与冷热分层；最后给该不该上集群的信号与运维盲区。">
     <meta name="keywords" content="ClickHouse,列式存储,向量化执行,MergeTree,OLAP,架构,技术博客">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/clickhouse/architecture/">
     <!-- Open Graph -->
     <meta property="og:title" content="ClickHouse 集群架构：分片、副本与 Distributed 表 - 资深码农">
-    <meta property="og:description" content="ClickHouse 集群怎么搭、怎么运维：为什么先把单机压到极限再考虑集群、分片与副本两个正交维度如何组合、ReplicatedMergeTree 靠 Keeper 复制 part 与 merge 任务而不是 SQL、insert_quorum 与最终一致的取舍、Distributed 表两阶段聚合中哪些算子能下推、写 Distributed 还是直连本地表、分布式 join 的三种执行方式，以及 Keeper 取代 ZooKeeper、S3 冷热分层和扩分片不会自动搬数据这些运维硬限制。">
+    <meta property="og:description" content="集群架构三段式：先给搭一套两分片两副本的六步与每步验收，拓扑怎么核、写入走本地表查询走分布式表、副本延迟怎么量、节点挂掉分别会看到什么现象；接着讲分片与副本两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表两阶段聚合什么时候退化、异步转发队列的代价、分布式 join 的三种执行方式、Keeper 与冷热分层；最后给该不该上集群的信号与运维盲区。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/clickhouse/architecture/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="ClickHouse 集群架构：分片、副本与 Distributed 表 - 资深码农">
-    <meta name="twitter:description" content="ClickHouse 集群怎么搭、怎么运维：为什么先把单机压到极限再考虑集群、分片与副本两个正交维度如何组合、ReplicatedMergeTree 靠 Keeper 复制 part 与 merge 任务而不是 SQL、insert_quorum 与最终一致的取舍、Distributed 表两阶段聚合中哪些算子能下推、写 Distributed 还是直连本地表、分布式 join 的三种执行方式，以及 Keeper 取代 ZooKeeper、S3 冷热分层和扩分片不会自动搬数据这些运维硬限制。">
+    <meta name="twitter:description" content="集群架构三段式：先给搭一套两分片两副本的六步与每步验收，拓扑怎么核、写入走本地表查询走分布式表、副本延迟怎么量、节点挂掉分别会看到什么现象；接着讲分片与副本两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表两阶段聚合什么时候退化、异步转发队列的代价、分布式 join 的三种执行方式、Keeper 与冷热分层；最后给该不该上集群的信号与运维盲区。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="article:author" content="资深码农">
     <meta name="article:section" content="数据库与缓存">
     <meta name="article:tag" content="ClickHouse,OLAP,列式存储">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 集群架构：分片、副本与 Distributed 表","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"ClickHouse 集群怎么搭、怎么运维：为什么先把单机压到极限再考虑集群、分片与副本两个正交维度如何组合、ReplicatedMergeTree 靠 Keeper 复制 part 与 merge 任务而不是 SQL、insert_quorum 与最终一致的取舍、Distributed 表两阶段聚合中哪些算子能下推、写 Distributed 还是直连本地表、分布式 join 的三种执行方式，以及 Keeper 取代 ZooKeeper、S3 冷热分层和扩分片不会自动搬数据这些运维硬限制。","url":"https://www.yijunjun.asia/database/clickhouse/architecture/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/architecture/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 集群架构：分片、副本与 Distributed 表","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"集群架构三段式：先给搭一套两分片两副本的六步与每步验收，拓扑怎么核、写入走本地表查询走分布式表、副本延迟怎么量、节点挂掉分别会看到什么现象；接着讲分片与副本两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表两阶段聚合什么时候退化、异步转发队列的代价、分布式 join 的三种执行方式、Keeper 与冷热分层；最后给该不该上集群的信号与运维盲区。","url":"https://www.yijunjun.asia/database/clickhouse/architecture/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/architecture/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "ClickHouse 总览", "item": "https://www.yijunjun.asia/database/clickhouse/"}, {"position": 4, "name": "ClickHouse 架构与核心特性", "item": "https://www.yijunjun.asia/database/clickhouse/architecture/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,34 +91,85 @@
                     <div class="article-content">
 <p>关于 ClickHouse 集群，最常见的错误不是配错了参数，而是<strong>太早上集群</strong>。单机 ClickHouse 能处理的数据量远超多数人的预期，而集群会把三个新问题一次性塞给你：数据分布、跨节点查询、副本一致性。这篇讲清分片与副本的关系、ReplicatedMergeTree 到底复制什么、Distributed 表的两阶段聚合为什么会突然变慢，以及扩容时那些不会自动帮你做的事。</p>
 
-<h2>先把单机压到极限，再考虑集群</h2>
-
-<p>一台 32 核 128 GB 内存、几 TB NVMe 的机器，跑压缩后 1~2 TB 的数据、单表几百亿行是很正常的事——列存的压缩比通常在 8~15 倍，原始 20 TB 的日志压完可能只有 1.5 TB。而集群化会立刻带来额外成本：查询要跨网络汇总，Keeper 成了新的单点风险，扩分片时数据不会自动搬迁。所以正确顺序是：先调 codec 和排序键、先做冷热分层、先把单机的 IO 和 CPU 跑满，确认真的到顶了再上集群。</p>
-
-<table>
-<thead><tr><th>信号</th><th>说明</th><th>上集群之前先做什么</th></tr></thead>
-<tbody>
-<tr><td>压缩后数据量接近单机盘容量的 70%</td><td>merge 期间磁盘会临时翻倍，70% 是安全水位</td><td>先做 TTL 分层把冷数据挪到对象存储或大容量 HDD</td></tr>
-<tr><td>单查询已把所有核跑满但延迟仍不达标</td><td>这是唯一真正需要「加分片换并行度」的理由</td><td>先确认不是全表扫：用 EXPLAIN indexes 看 granule 裁剪比例</td></tr>
-<tr><td>单机故障时业务不能接受查不了</td><td>这是需要副本，不是需要分片</td><td>做单分片双副本，不要顺手把数据也切开</td></tr>
-<tr><td>写入吞吐打满单机磁盘带宽</td><td>写入分散到多分片能线性放大</td><td>先确认不是小批量写导致 merge 抢 IO</td></tr>
-<tr><td>并发查询数上百且互相拖慢</td><td>ClickHouse 单查询吃满多核，本质是并发模型限制</td><td>加副本分摊读、或前置缓存与预聚合表，加分片没用</td></tr>
-</tbody></table>
-
-<div class="mermaid">
-flowchart TB
-    A["现在是一台单机 ClickHouse"] --> Q1{"压缩后的数据还塞得下吗"}
-    Q1 -->|"占盘不到 70%"| B1["先别上集群 加盘或换更高压缩的 codec 更划算"]
-    Q1 -->|"塞不下了"| Q2{"瓶颈是容量还是算力"}
-    Q2 -->|"容量"| C1["做冷热分层 冷数据落对象存储"]
-    Q2 -->|"单查询已吃满全部 CPU 但延迟不够"| C2["加分片 用更多机器的并行度换延迟"]
-    B1 --> Q3{"单机故障时必须还能查吗"}
-    Q3 -->|"必须"| D1["加副本 单分片双副本"]
-    Q3 -->|"可以停机恢复"| D2["单机加定期备份就够"]
-    C2 --> E1["加分片时必须同时配副本<br/>否则一个分片挂掉 这部分数据就查不到"]
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：搭一套两分片两副本的完整步骤与每一步的验收命令——写入该走哪张表、查询该走哪张表、副本延迟怎么量、某个节点挂掉会看到什么现象。</li>
+        <li><strong>② 原理</strong>：分片与副本为什么是两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表的两阶段聚合什么时候会退化、写 Distributed 表的异步转发队列意味着什么、分布式 join 的三种执行方式、Keeper 与冷热分层。</li>
+        <li><strong>③ 场景</strong>：什么信号才真的说明该上集群、哪些事 ClickHouse 不会替你做（扩分片不搬数据、分片级没有自动兜底），以及日常要盯的监控项。</li>
+    </ul>
 </div>
 
-<h2>分片与副本是两个正交维度</h2>
+<h2>① 用法 · 搭一套两分片两副本并验证</h2>
+
+<p>前提：你已经确认单机真的到顶了（判断信号见本篇场景层，不确定就先别动）。下面六步每一步都有验收命令，<strong>没通过不要进下一步</strong>——集群的问题几乎都是配置阶段埋下的，上线后才暴露。配置文件与建表语句的完整版在下面原理层，这里只讲顺序和怎么验。</p>
+
+<table>
+<thead><tr><th>第几步</th><th>做什么</th><th>验收看哪里</th><th>通过标准</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>起 ClickHouse Keeper，节点数取奇数，与 server 分开部署</td><td>Keeper 自身的四字命令，或 <code>system.zookeeper</code> 能读到根节点</td><td>恰好一个 leader，其余是 follower；<code>system.events</code> 里的会话过期计数不增长</td></tr>
+<tr><td>2</td><td>配 <code>remote_servers</code> 与每台不同的 <code>macros</code></td><td><code>system.clusters</code> 与 <code>system.macros</code></td><td>分片数、副本数、主机名与规划完全一致；同分片两台的 <code>shard</code> 相同、<code>replica</code> 不同</td></tr>
+<tr><td>3</td><td><code>ON CLUSTER</code> 建 ReplicatedMergeTree 本地表</td><td><code>system.replicas</code></td><td><code>is_readonly</code> 为 0；每个分片能看到两个副本；<code>absolute_delay</code> 接近 0</td></tr>
+<tr><td>4</td><td><code>ON CLUSTER</code> 建 Distributed 表，指定高基数且均匀的分片键</td><td><code>system.tables</code> 在四台上都有这张表</td><td>任意节点上 <code>SELECT count()</code> 都能返回全量</td></tr>
+<tr><td>5</td><td>写入：客户端直连各分片的本地表，按分片键自己路由</td><td>各节点本地表行数之和</td><td>与写入总量一致；各分片行数差异在 10% 以内</td></tr>
+<tr><td>6</td><td>故障演练：停掉一台机器再查</td><td>Distributed 表的查询结果与 <code>system.replicas</code></td><td>结果行数不变；恢复后队列能自己追平</td></tr>
+</tbody></table>
+
+<p>验收命令一共四条，可以直接存成巡检脚本：</p>
+
+<pre><code class="language-sql">-- 1) 拓扑是否真如你所想。这张表是唯一可信的事实来源，比读配置文件靠谱
+SELECT cluster, shard_num, replica_num, host_name, port, is_local
+FROM system.clusters WHERE cluster = 'ck_2s2r';
+
+-- 2) 写入走本地表、查询走分布式表。分布式表只是视图，它不存一个字节
+SELECT count() FROM events;          -- Distributed 表：跨分片汇总后的全量行数
+
+-- 各节点分别有多少行：clusterAllReplicas 会走到每个副本，所以同一分片会出现两行，数值应该相等
+SELECT hostName() AS host, count() AS rows
+FROM clusterAllReplicas('ck_2s2r', default.events_local)
+GROUP BY host ORDER BY host;
+-- 判读：同分片两副本行数不等 = 复制在追；不同分片行数差很多 = 分片键选错了
+
+-- 3) 量副本延迟与队列，这是集群唯一必须每天看的指标
+SELECT database, table, replica_name, is_readonly,
+       absolute_delay,        -- 秒；持续几十秒以上就要看队列头部的任务
+       queue_size, inserts_in_queue, merges_in_queue
+FROM system.replicas WHERE table = 'events_local';
+
+-- 4) 队列卡住时定位到具体任务：反复失败的那条会把后面所有任务堵住
+SELECT database, table, type, create_time, num_tries, last_exception
+FROM system.replication_queue
+WHERE num_tries &gt; 3 ORDER BY num_tries DESC LIMIT 20;
+</code></pre>
+
+<p>然后把「挂了会怎样」提前演练一遍，而不是等故障时才知道。下面四种是全部可能的形态：</p>
+
+<table>
+<thead><tr><th>挂了什么</th><th>你会看到的现象</th><th>查询结果还对吗</th><th>该做什么</th></tr></thead>
+<tbody>
+<tr><td>某个分片的一个副本</td><td>查询无感（由 <code>load_balancing</code> 挑活着的副本）；直连该副本的写入失败</td><td>完整</td><td>不用急，恢复后它自己从队列追数据；期间写入切到同分片另一个副本</td></tr>
+<tr><td>某个分片的全部副本</td><td>默认整条查询报错</td><td>不完整</td><td>恢复该分片。不要用 <code>skip_unavailable_shards</code> 当高可用方案，它会让结果静默变少</td></tr>
+<tr><td>Keeper 失去多数派</td><td>所有副本转为只读，写入全部失败；查询仍然正常</td><td>完整但不再更新</td><td>先恢复 Keeper 多数派，这是集群级故障，不要逐台重启 server</td></tr>
+<tr><td>持有 Distributed 表的入口节点</td><td>客户端连不上；如果曾用它写入，转发队列里还没送出的数据会丢</td><td>取决于入口是否有备份</td><td>准备多个查询入口并前置负载均衡；写入不要走 Distributed 表</td></tr>
+<tr><td>某台机器磁盘写满</td><td>merge 失败、写入被拒、该副本落后</td><td>完整（其他副本兜住读）</td><td>先按分区删数据或扩盘；merge 期间占用会临时翻倍，70% 是安全水位</td></tr>
+</tbody></table>
+
+<table>
+<thead><tr><th>配置或参数</th><th>作用</th><th>默认值</th><th>什么时候必须动</th></tr></thead>
+<tbody>
+<tr><td><code>internal_replication</code></td><td>写 Distributed 表时是否只写分片内一个副本</td><td>配置项，不设即为 false</td><td>用 Replicated 引擎时<strong>必须设 true</strong>，否则会写出重复数据</td></tr>
+<tr><td>Keeper 路径里的 <code>{shard}</code> 与 <code>{replica}</code></td><td>区分分片身份与副本身份</td><td>由 macros 提供</td><td>永远都要带；漏了 <code>{shard}</code> 两个分片会互相覆盖</td></tr>
+<tr><td><code>insert_quorum</code></td><td>写入要等多少个副本确认</td><td>0，以 <code>system.settings</code> 为准</td><td>不能容忍「写完在另一副本查不到」时才开，代价是可用性下降</td></tr>
+<tr><td><code>select_sequential_consistency</code></td><td>查询要求读到已达成 quorum 的数据</td><td>0</td><td>必须与 <code>insert_quorum</code> 配对使用，否则没有意义</td></tr>
+<tr><td><code>load_balancing</code></td><td>Distributed 查询挑哪个副本</td><td>以 <code>system.settings</code> 为准</td><td>跨机房部署时改成按主机名就近</td></tr>
+<tr><td><code>skip_unavailable_shards</code></td><td>分片不可用时跳过而不是报错</td><td>0</td><td>只在明确接受结果不完整的探索性查询里开</td></tr>
+<tr><td><code>distributed_foreground_insert</code></td><td>写 Distributed 表时同步转发</td><td>0（旧名 <code>insert_distributed_sync</code>）</td><td>确实只能写 Distributed 表时打开，用吞吐换确定性</td></tr>
+</tbody></table>
+
+<p>这几步为什么是这个顺序、每个参数背后的机制是什么，下面原理层逐个展开。</p>
+
+<h2>② 原理 · 分片与副本是两个正交维度</h2>
 
 <p>这两个概念经常被混着说，但它们解决的是完全不同的问题：<strong>分片决定容量和单查询并行度，副本决定可用性和读吞吐</strong>。4 台机器可以是「4 分片无副本」（容量最大，任一台挂掉就有 1/4 数据查不到）、「2 分片 2 副本」（生产最常见）、「1 分片 4 副本」（数据量小但要求高可用和高读并发）。集群拓扑写在配置文件的 remote_servers 里，ClickHouse 不会替你决定。</p>
 
@@ -199,7 +250,7 @@ macros:
   replica: ck-1        # 每台唯一，通常用主机名
 </code></pre>
 
-<h2>ReplicatedMergeTree 复制的是 part 与 merge 任务，不是 SQL</h2>
+<h2>② 原理 · ReplicatedMergeTree 复制的是 part 与 merge 任务，不是 SQL</h2>
 
 <p>这是最值得纠正的一个认知：ClickHouse 的复制<strong>不是把 INSERT 语句发给其他副本重放</strong>，也不是 binlog 那种逻辑日志。它的流程是：某个副本收到写入后，先在本地生成 part，然后把「这里多了一个名为 all_1_1_0 的 part，校验和是多少」这条信息写进 Keeper 的复制队列；其他副本监听到队列有新任务，主动通过 HTTP 从源副本把这个 part 的文件拉过来。merge 同理——merge 不是每个副本各自算一遍，而是由一个副本决策、把「把这几个 part 合成那一个」当作任务写进队列，其他副本要么执行同样的 merge，要么直接拉取合并结果。</p>
 
@@ -229,7 +280,7 @@ stateDiagram-v2
     Detached --> Recovering: 确认后 ATTACH 或丢弃并重新同步
 </div>
 
-<h2>Distributed 表：一个不存数据的视图，和它的两阶段聚合</h2>
+<h2>② 原理 · Distributed 表：一个不存数据的视图，和它的两阶段聚合</h2>
 
 <p>Distributed 表引擎本身不存一个字节的数据，它只记录「集群名、库名、本地表名、分片键」，作用是把查询改写成对各分片本地表的子查询，下发、等结果、再汇总。理解它的性能只需要抓住一个问题：<strong>回传到汇总节点的是聚合中间状态，还是明细数据？</strong>前者数据量约等于分组基数，几乎不占网络；后者会把所有分片的原始行都拉到一个节点上，这个节点立刻成为瓶颈——这是分布式查询突然变慢的头号原因。</p>
 
@@ -264,7 +315,7 @@ sequenceDiagram
 <tr><td>两张 Distributed 表 join</td><td>默认不能，右表要全量拉到每个节点</td><td>右表全量</td><td>见下一节：字典、GLOBAL JOIN 或共置分片</td></tr>
 </tbody></table>
 
-<h2>写入路径：写 Distributed 表还是直连本地表</h2>
+<h2>② 原理 · 写入路径：写 Distributed 表还是直连本地表</h2>
 
 <p>写 Distributed 表最省事：客户端只连一个地址，分片路由由服务端按分片键算。但它有一个容易吃亏的机制——异步转发。数据先落在发起节点的本地目录里排队，再由后台线程转发给目标分片。如果目标分片长时间不可用，队列会一直堆在发起节点的磁盘上；如果这台发起节点本身坏了，队列里还没转发出去的数据就丢了。这也让「写入成功」的语义变得模糊：返回成功只代表落到了中转队列。</p>
 
@@ -302,7 +353,7 @@ ENGINE = Distributed(ck_2s2r, default, events_local, cityHash64(user_id));
 --   2. 与高频 join / 去重的键对齐，这样同一个 user_id 只落一个分片，才能做本地 join 和精确去重
 </code></pre>
 
-<h2>分布式 join 为什么要尽量避免</h2>
+<h2>② 原理 · 分布式 join 为什么要尽量避免</h2>
 
 <p>ClickHouse 的 join 实现是「右表构建 hash 表放内存，左表流式探测」，这个前提在分布式下会被放大三次。三种执行方式：</p>
 
@@ -317,7 +368,7 @@ ENGINE = Distributed(ck_2s2r, default, events_local, cityHash64(user_id));
 
 <p>所以在 ClickHouse 里，join 不是查询写法问题而是建模问题：优先把维度打平成宽表（用物化视图在写入时完成），其次把维表做成字典用 <code>dictGet</code>，再不行才考虑 GLOBAL JOIN，并且一定要给它加 <code>max_bytes_in_join</code> 之类的内存上限，否则一条 SQL 能把整个节点打 OOM。</p>
 
-<h2>ClickHouse Keeper、存算分离与冷热分层</h2>
+<h2>② 原理 · ClickHouse Keeper、存算分离与冷热分层</h2>
 
 <p>早期版本必须依赖 ZooKeeper，而 ZooKeeper 在 ClickHouse 这种「高频小写入 + 大量 watch」的负载下很容易成为集群瓶颈：JVM GC 停顿、znode 数量膨胀、内存吃紧。ClickHouse Keeper 是官方用 C++ 重写的替代品，协议兼容（客户端无感）、基于 Raft、资源占用显著更低，还支持通过 <code>clickhouse-keeper-converter</code> 从 ZooKeeper 快照迁移。新集群没有理由再用 ZooKeeper。它可以和 clickhouse-server 混部，但生产上建议独立三节点部署，避免查询把 CPU 抢光导致 Raft 选举超时——<strong>Keeper 抖动会直接让所有副本变成只读</strong>，这是集群级故障。</p>
 
@@ -377,7 +428,34 @@ SELECT event, value FROM system.events
 WHERE event LIKE 'ZooKeeper%' AND value &gt; 0;
 </code></pre>
 
-<h2>集群运维与故障切换：哪些事 ClickHouse 不会替你做</h2>
+<h2>③ 场景 · 什么时候才真的该上集群</h2>
+
+<p>一台 32 核 128 GB 内存、几 TB NVMe 的机器，跑压缩后 1~2 TB 的数据、单表几百亿行是很正常的事——列存的压缩比通常在 8~15 倍，原始 20 TB 的日志压完可能只有 1.5 TB。而集群化会立刻带来额外成本：查询要跨网络汇总，Keeper 成了新的单点风险，扩分片时数据不会自动搬迁。所以正确顺序是：先调 codec 和排序键、先做冷热分层、先把单机的 IO 和 CPU 跑满，确认真的到顶了再上集群。</p>
+
+<table>
+<thead><tr><th>信号</th><th>说明</th><th>上集群之前先做什么</th></tr></thead>
+<tbody>
+<tr><td>压缩后数据量接近单机盘容量的 70%</td><td>merge 期间磁盘会临时翻倍，70% 是安全水位</td><td>先做 TTL 分层把冷数据挪到对象存储或大容量 HDD</td></tr>
+<tr><td>单查询已把所有核跑满但延迟仍不达标</td><td>这是唯一真正需要「加分片换并行度」的理由</td><td>先确认不是全表扫：用 EXPLAIN indexes 看 granule 裁剪比例</td></tr>
+<tr><td>单机故障时业务不能接受查不了</td><td>这是需要副本，不是需要分片</td><td>做单分片双副本，不要顺手把数据也切开</td></tr>
+<tr><td>写入吞吐打满单机磁盘带宽</td><td>写入分散到多分片能线性放大</td><td>先确认不是小批量写导致 merge 抢 IO</td></tr>
+<tr><td>并发查询数上百且互相拖慢</td><td>ClickHouse 单查询吃满多核，本质是并发模型限制</td><td>加副本分摊读、或前置缓存与预聚合表，加分片没用</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+flowchart TB
+    A["现在是一台单机 ClickHouse"] --> Q1{"压缩后的数据还塞得下吗"}
+    Q1 -->|"占盘不到 70%"| B1["先别上集群 加盘或换更高压缩的 codec 更划算"]
+    Q1 -->|"塞不下了"| Q2{"瓶颈是容量还是算力"}
+    Q2 -->|"容量"| C1["做冷热分层 冷数据落对象存储"]
+    Q2 -->|"单查询已吃满全部 CPU 但延迟不够"| C2["加分片 用更多机器的并行度换延迟"]
+    B1 --> Q3{"单机故障时必须还能查吗"}
+    Q3 -->|"必须"| D1["加副本 单分片双副本"]
+    Q3 -->|"可以停机恢复"| D2["单机加定期备份就够"]
+    C2 --> E1["加分片时必须同时配副本<br/>否则一个分片挂掉 这部分数据就查不到"]
+</div>
+
+<h2>③ 场景 · 集群运维与故障切换：哪些事 ClickHouse 不会替你做</h2>
 
 <p>副本层面的故障切换是自动的：Distributed 查询会跳过不可用副本（<code>load_balancing</code> 决定挑哪个），副本恢复后自己从队列追数据。但<strong>分片层面没有任何自动兜底</strong>：一个分片的所有副本都挂了，这个分片的数据就查不到，默认行为是整条查询报错；把 <code>skip_unavailable_shards</code> 设成 1 能让查询继续，但结果是不完整的——这个设置在报表场景比报错更危险，因为数字会悄悄变小。记住这条分工：<strong>副本数决定可用性，分片数决定容量与单查询并行度。</strong></p>
 
@@ -395,6 +473,12 @@ WHERE event LIKE 'ZooKeeper%' AND value &gt; 0;
 </tbody></table>
 
 <p>扩分片是整个运维里最重的动作：新增分片后，<strong>ClickHouse 不会自动搬迁存量数据</strong>，新分片只承接新写入，老数据仍然只在老分片上。Distributed 查询依然正确（它会扫所有分片），但各分片负载长期不均。常规做法是：按分区用 <code>FETCH PARTITION</code> 加 <code>ATTACH PARTITION</code> 手工搬，或者新建一套表重新导一遍再切流量。这一点与 Doris、StarRocks 的自动均衡是明显差距，选型时要算进运维成本。</p>
+
+<p><strong>不适用边界</strong>：集群解决的是容量、并行度与可用性，不解决建模和 SQL 问题。写入为什么必须批量、排序键怎么定在 <a href="../table-import/">建表与写入</a>；单条 SQL 的裁剪与 join 改写在 <a href="../query-optimization/">查询优化</a>；宽表与分层在 <a href="../olap-practice/">OLAP 建模</a>；part 与 merge 的机制在 <a href="../">ClickHouse 深度原理</a>。如果你的问题是「并发查询扛不住」，加分片没用，那是缓存与预聚合的问题；如果是「运维人力不够」，那该回到 <a href="../compare/">OLAP 引擎选型</a> 重新评估自动均衡与托管方案。本篇也不覆盖备份恢复与跨机房容灾的完整方案，那需要结合对象存储与调度体系单独设计。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../olap-practice/">← 上一步：ClickHouse OLAP 建模：星型模型、大宽表、SCD 与分层设计</a></p>
+
+<h2>最容易踩的坑</h2>
 
 <div class="callout callout-danger">
 <div class="callout-icon">❌</div>

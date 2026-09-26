@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="PostgreSQL 类型选错的真实代价：numeric 与 float8 为什么绝不能混用于金额、identity 取代 serial、text 与 varchar(n) 与 char(n) 在 PG 里性能完全相同的原因、timestamp 与 timestamptz 在跨时区与夏令时下的行为差异、json 与 jsonb 的存储与索引区别以及 jsonb_ops 与 jsonb_path_ops 两种 GIN opclass、数组与 enum 的适用边界、uuid 主键的索引写放大与 UUIDv7、inet 与 cidr 的网段运算、tstzrange 加 EXCLUDE 排它约束实现时间段不重叠，以及 ALTER COLUMN TYPE 哪些转换会锁表重写全表。">
+        <meta name="description" content="PostgreSQL 类型三段式：先给「这个字段该选什么类型」的判断表（numeric 与 float、text 与 varchar、timestamptz 与 timestamp、jsonb、数组、enum、uuid、inet、范围类型），每行写常见错误选择与迁移代价，并给一段揪出老库已选错列的体检 SQL；再讲 TOAST、浮点误差、三种字符类型底层相同、timestamptz 到底存什么、两种 GIN opclass 与 jsonb 四条硬边界、数组与 enum 的演进限制、UUID 主键写放大；最后给哪些转换会重写全表与大表改类型的迁移路线。">
     <meta name="keywords" content="PostgreSQL 数据类型,PostgreSQL,关系数据库,PostgreSQL">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/postgresql/datatypes/">
     <!-- Open Graph -->
     <meta property="og:title" content="PostgreSQL 数据类型选择与代价 - 资深码农">
-    <meta property="og:description" content="PostgreSQL 类型选错的真实代价：numeric 与 float8 为什么绝不能混用于金额、identity 取代 serial、text 与 varchar(n) 与 char(n) 在 PG 里性能完全相同的原因、timestamp 与 timestamptz 在跨时区与夏令时下的行为差异、json 与 jsonb 的存储与索引区别以及 jsonb_ops 与 jsonb_path_ops 两种 GIN opclass、数组与 enum 的适用边界、uuid 主键的索引写放大与 UUIDv7、inet 与 cidr 的网段运算、tstzrange 加 EXCLUDE 排它约束实现时间段不重叠，以及 ALTER COLUMN TYPE 哪些转换会锁表重写全表。">
+    <meta property="og:description" content="PostgreSQL 类型三段式：先给「这个字段该选什么类型」的判断表（numeric 与 float、text 与 varchar、timestamptz 与 timestamp、jsonb、数组、enum、uuid、inet、范围类型），每行写常见错误选择与迁移代价，并给一段揪出老库已选错列的体检 SQL；再讲 TOAST、浮点误差、三种字符类型底层相同、timestamptz 到底存什么、两种 GIN opclass 与 jsonb 四条硬边界、数组与 enum 的演进限制、UUID 主键写放大；最后给哪些转换会重写全表与大表改类型的迁移路线。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/postgresql/datatypes/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PostgreSQL 数据类型选择与代价 - 资深码农">
-    <meta name="twitter:description" content="PostgreSQL 类型选错的真实代价：numeric 与 float8 为什么绝不能混用于金额、identity 取代 serial、text 与 varchar(n) 与 char(n) 在 PG 里性能完全相同的原因、timestamp 与 timestamptz 在跨时区与夏令时下的行为差异、json 与 jsonb 的存储与索引区别以及 jsonb_ops 与 jsonb_path_ops 两种 GIN opclass、数组与 enum 的适用边界、uuid 主键的索引写放大与 UUIDv7、inet 与 cidr 的网段运算、tstzrange 加 EXCLUDE 排它约束实现时间段不重叠，以及 ALTER COLUMN TYPE 哪些转换会锁表重写全表。">
+    <meta name="twitter:description" content="PostgreSQL 类型三段式：先给「这个字段该选什么类型」的判断表（numeric 与 float、text 与 varchar、timestamptz 与 timestamp、jsonb、数组、enum、uuid、inet、范围类型），每行写常见错误选择与迁移代价，并给一段揪出老库已选错列的体检 SQL；再讲 TOAST、浮点误差、三种字符类型底层相同、timestamptz 到底存什么、两种 GIN opclass 与 jsonb 四条硬边界、数组与 enum 的演进限制、UUID 主键写放大；最后给哪些转换会重写全表与大表改类型的迁移路线。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="PostgreSQL,关系数据库">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 数据类型选择与代价","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"PostgreSQL 类型选错的真实代价：numeric 与 float8 为什么绝不能混用于金额、identity 取代 serial、text 与 varchar(n) 与 char(n) 在 PG 里性能完全相同的原因、timestamp 与 timestamptz 在跨时区与夏令时下的行为差异、json 与 jsonb 的存储与索引区别以及 jsonb_ops 与 jsonb_path_ops 两种 GIN opclass、数组与 enum 的适用边界、uuid 主键的索引写放大与 UUIDv7、inet 与 cidr 的网段运算、tstzrange 加 EXCLUDE 排它约束实现时间段不重叠，以及 ALTER COLUMN TYPE 哪些转换会锁表重写全表。","url":"https://www.yijunjun.asia/database/postgresql/datatypes/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/datatypes/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 数据类型选择与代价","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"PostgreSQL 类型三段式：先给「这个字段该选什么类型」的判断表（numeric 与 float、text 与 varchar、timestamptz 与 timestamp、jsonb、数组、enum、uuid、inet、范围类型），每行写常见错误选择与迁移代价，并给一段揪出老库已选错列的体检 SQL；再讲 TOAST、浮点误差、三种字符类型底层相同、timestamptz 到底存什么、两种 GIN opclass 与 jsonb 四条硬边界、数组与 enum 的演进限制、UUID 主键写放大；最后给哪些转换会重写全表与大表改类型的迁移路线。","url":"https://www.yijunjun.asia/database/postgresql/datatypes/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/datatypes/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "PostgreSQL 数据类型", "item": "https://www.yijunjun.asia/database/postgresql/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,6 +92,123 @@
                     <div class="article-content">
 <p>类型选错的代价不是「不太优雅」，而是真金白银：用 <code>float8</code> 存金额的系统迟早会在对账时差出几分钱；用 <code>timestamp</code> 存时间的系统一到跨时区或夏令时就开始错乱；把 <code>varchar(20)</code> 当性能优化写满全库，等到手机号要存国际号段时才发现改长度要 <code>ALTER TABLE</code>。这篇按「选什么、为什么、选错了迁移要付多少代价」来组织，重点是那些<strong>改起来要重写全表或者根本改不动</strong>的决定。</p>
 
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：建表时照着查的「这个字段该选什么类型」判断表（金额、时刻、标识、有限取值、半结构化、标签、网络地址、时间段），每行写清常见的错误选择与选错后的迁移代价；外加一段能揪出老库里已经选错的列的体检 SQL，和六个常见需求的标准写法。</li>
+        <li><strong>② 原理</strong>：TOAST 为什么让大 jsonb 高频更新塌陷、浮点为什么不能存钱、PG 里三种字符类型底层相同、<code>timestamptz</code> 到底存了什么、jsonb 两种 GIN opclass 的差别与四条硬边界、数组与 enum 的演进限制、UUID 主键的写放大。</li>
+        <li><strong>③ 场景</strong>：哪些类型转换会重写全表、大表改类型的几条迁移路线与各自代价。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 这个字段该选什么类型</h2>
+
+<p>建表时不需要记住所有类型，只需要按顺序问几个问题：<strong>是不是钱、是不是时刻、是不是标识、取值集合会不会变、结构稳不稳定</strong>。下面这张图与这张表就是这几个问题的答案，最后一列是选错之后的迁移代价——这才是为什么值得在建表时多花十分钟。</p>
+
+<div class="mermaid">
+flowchart TB
+    Q["要存什么"] --> A{"是不是钱或需要精确小数"}
+    A -- 是 --> A1["numeric 带精度<br/>或 bigint 存最小货币单位"]
+    A -- 否 --> B{"是不是时间"}
+    B -- "时刻" --> B1["timestamptz<br/>存 UTC，按会话时区转换"]
+    B -- "纯日期" --> B2["date"]
+    B -- "时间段" --> B3["tstzrange 配 EXCLUDE 约束"]
+    B -- "时长" --> B4["interval<br/>注意月和日不是固定长度"]
+    B -- 否 --> C{"是不是标识"}
+    C -- "单库自增" --> C1["bigint GENERATED AS IDENTITY"]
+    C -- "分布式生成" --> C2["uuid 类型，优先 UUIDv7 有序方案"]
+    C -- 否 --> D{"是不是有限取值集合"}
+    D -- 是 --> D1["text 加 CHECK 可随时改<br/>或字典关联表；enum 仅在追求紧凑时用"]
+    D -- 否 --> E{"结构是否稳定"}
+    E -- "稳定" --> E1["拆成普通列，该建索引建索引"]
+    E -- "不稳定的附加属性" --> E2["jsonb 加 GIN 索引"]
+    E -- "小集合标签" --> E3["数组加 GIN；元素是实体就建关联表"]
+    E -- "网络地址" --> E4["inet 或 cidr"]
+</div>
+
+<table>
+<thead><tr><th>用途</th><th>该用</th><th>常见的错误选择</th><th>选错的迁移代价</th></tr></thead>
+<tbody>
+<tr><td>金额</td><td>numeric(18,2) 或 bigint 存分</td><td>float8 / real</td><td>历史数据的误差无法还原，只能按业务规则重新核算，属于最贵的一类错</td></tr>
+<tr><td>时刻</td><td>timestamptz</td><td>timestamp，或用 bigint 存毫秒</td><td>改类型要重写全表，且换算依赖当初写入方的时区假设，往往需要逐批人工确认</td></tr>
+<tr><td>自增主键</td><td>bigint GENERATED AS IDENTITY</td><td>integer serial</td><td>int4 到 int8 重写全表并锁表，21 亿用尽时通常正是业务高峰</td></tr>
+<tr><td>分布式 ID</td><td>uuid（优先 v7 有序）</td><td>text 存 UUID 字符串</td><td>重写全表加重建所有索引，收益是索引空间直接减半</td></tr>
+<tr><td>变长文本</td><td>text 加 CHECK</td><td>varchar(20) 这类拍脑袋长度</td><td>放宽上限不重写表，缩短要重写；真正的痛点是每次改都要走 DDL 审批</td></tr>
+<tr><td>状态枚举</td><td>text 加 CHECK，或字典表</td><td>enum</td><td>删值和改值都不支持，只能新建类型整列迁移，重写全表</td></tr>
+<tr><td>标签集合</td><td>小集合用数组，实体化就建关联表</td><td>逗号拼接字符串</td><td>无法用索引过滤，迁移要写解析脚本并处理脏数据</td></tr>
+<tr><td>不定形附加属性</td><td>jsonb</td><td>宽表几十个可空列，或 json</td><td>json 转 jsonb 会重写全表；宽表拆 jsonb 还要改全部读写路径</td></tr>
+<tr><td>IP 地址</td><td>inet 或 cidr</td><td>varchar(15)</td><td>迁移不难，但期间所有网段判断都得靠应用层，逻辑会散落各处</td></tr>
+<tr><td>时间段不重叠约束</td><td>tstzrange 加 EXCLUDE</td><td>两个时间列加应用层先查后插</td><td>并发下必然出现重叠脏数据，清洗历史冲突记录往往需要业务介入</td></tr>
+</tbody></table>
+
+<p>接手老库时先跑一次体检。下面这段把「几乎一定选错了」的列直接列出来，比人工翻建表语句可靠：</p>
+
+<pre><code class="language-sql">-- 类型体检：按列名与类型的组合，把高风险选择挑出来
+-- 只是启发式筛查，结果要人工确认；但它能在五分钟内找到最贵的那几个错
+SELECT * FROM (
+  SELECT c.table_schema || '.' || c.table_name AS tbl,
+         c.column_name                          AS col,
+         c.data_type,
+         c.character_maximum_length             AS maxlen,
+         CASE
+           WHEN c.data_type IN ('real', 'double precision')
+                AND c.column_name ~* '(amount|price|money|fee|cost|balance|rate)'
+             THEN '浮点存金额：必须改 numeric 或改存最小货币单位'
+           WHEN c.data_type = 'timestamp without time zone'
+             THEN '无时区时刻列：跨时区与夏令时必错，改 timestamptz 要重写全表'
+           WHEN c.data_type = 'json'
+             THEN 'json 列：不能建 GIN、不能等值比较，改 jsonb'
+           WHEN c.data_type = 'character'
+             THEN 'char(n)：补空格到定长且比较语义怪，改 text'
+           WHEN c.data_type = 'character varying' AND c.character_maximum_length IS NOT NULL
+             THEN 'varchar(n)：PG 里没有性能收益，限长建议交给 CHECK'
+           WHEN c.data_type = 'integer' AND c.column_name IN ('id', 'user_id', 'order_id')
+             THEN '标识列用 int4：21 亿上限，改 bigint 要重写全表'
+           WHEN c.data_type = 'text' AND c.column_name ~* '(uuid|guid)'
+             THEN 'UUID 存成 text：36 字节对 16 字节，且被所有二级索引引用'
+           WHEN c.data_type = 'text' AND c.column_name ~* '(^ip$|ip_addr|client_ip)'
+             THEN 'IP 存成文本：失去网段包含运算，判断逻辑只能散落到应用层'
+         END                                    AS issue
+  FROM   information_schema.columns c
+  JOIN   information_schema.tables  t
+         ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+        AND t.table_type = 'BASE TABLE'
+  WHERE  c.table_schema NOT IN ('pg_catalog', 'information_schema')
+) x
+WHERE  issue IS NOT NULL
+ORDER  BY tbl, col;
+
+-- 顺手确认一下真实占用：类型选错的成本最终体现在这里
+SELECT c.oid::regclass AS 表名,
+       pg_size_pretty(pg_relation_size(c.oid))                          AS 主表,
+       pg_size_pretty(pg_indexes_size(c.oid))                           AS 索引,
+       pg_size_pretty(pg_total_relation_size(c.reltoastrelid))          AS toast
+FROM   pg_class c
+WHERE  c.relkind = 'r' AND c.relnamespace = 'public'::regnamespace
+ORDER  BY pg_total_relation_size(c.oid) DESC
+LIMIT  10;</code></pre>
+
+<p>常见需求对应的标准写法，直接抄：</p>
+
+<table>
+<thead><tr><th>要做什么</th><th>怎么写</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>自增主键</td><td><code>id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY</code></td><td>不要用 <code>serial</code>：序列会变成独立对象，残留、撞唯一键、漏授权三类问题都由它产生</td></tr>
+<tr><td>限制文本长度</td><td><code>col text</code> 加 <code>CHECK (char_length(col) &lt;= 32)</code></td><td>以后放宽只需换约束（加 <code>NOT VALID</code> 再 <code>VALIDATE</code>），不重写表；<code>char_length</code> 数字符，<code>octet_length</code> 数字节</td></tr>
+<tr><td>有限取值集合</td><td><code>status text NOT NULL CHECK (status IN ('a','b'))</code>，或一张字典表</td><td>用 enum 就要接受「不能删值、不能安全改值」，而状态集合几乎一定会变</td></tr>
+<tr><td>标签过滤</td><td><code>tags text[]</code> 加 <code>USING gin (tags)</code>，查询用包含与交集运算符</td><td>元素不能建外键；一旦要「按标签反查并排序分页」，就该建关联表</td></tr>
+<tr><td>时间段不重叠</td><td><code>period tstzrange</code> 加 <code>EXCLUDE USING gist (res_id WITH =, period WITH &amp;&amp;)</code></td><td>需要 <code>btree_gist</code> 扩展；用左闭右开区间才符合排期语义</td></tr>
+<tr><td>网段判断</td><td><code>ip inet</code>，用包含运算符直接比网段</td><td><code>cidr</code> 要求主机位为 0，写入带主机位的地址会报错，两者别混用</td></tr>
+</tbody>
+</table>
+
+<p>为什么是这些答案——浮点误差从哪来、<code>timestamptz</code> 到底存了什么、jsonb 的索引怎么选、改类型为什么会重写全表，下面逐节展开。先看一个影响所有变长类型的机制。</p>
+
+<h2>② 原理 · 类型系统全景与 TOAST</h2>
+
+<p>先把类型按「要存什么」分好组，再记住一个横跨所有变长类型的机制：TOAST。它解释了「为什么大 jsonb 字段一高频更新，表就开始疯涨」。</p>
+
 <div class="mermaid">
 flowchart TB
     ROOT["PostgreSQL 类型系统<br/>内部统一走 varlena 变长结构或定长结构"]
@@ -131,7 +248,7 @@ flowchart TB
 
 <p>顺带提一个影响所有变长类型的机制：<strong>TOAST</strong>。一行超过约 2 KB（页大小的四分之一）时，PG 会把大的变长字段压缩，压不下去就挪到附属的 TOAST 表里，主表只留一个指针。好处是宽表不会撑爆页；代价是访问被 TOAST 化的字段要多一次 IO，而且<strong>更新一个大 jsonb 字段会连带整行重写</strong>，这是 jsonb 大字段高频更新场景性能塌陷的根因。</p>
 
-<h2>数值：钱的问题只有一个正确答案</h2>
+<h2>② 原理 · 数值：钱的问题只有一个正确答案</h2>
 
 <p><code>float8</code> 是 IEEE 754 二进制浮点，十进制的 0.1 在二进制里是无限循环小数，存进去就已经有误差。这不是「精度够不够」的问题，而是「每一笔都带误差、累加后必然对不上」的问题。</p>
 
@@ -176,7 +293,7 @@ SELECT setval(pg_get_serial_sequence('legacy_order', 'id'),
               (SELECT max(id) FROM legacy_order));   -- 别忘了对齐当前值
 </code></pre>
 
-<h2>字符类型：text、varchar(n)、char(n) 在 PG 里性能相同</h2>
+<h2>② 原理 · 字符类型：text、varchar(n)、char(n) 在 PG 里性能相同</h2>
 
 <p>这是 PG 与 MySQL 最容易被误搬的一条经验。MySQL 里 <code>char</code> 定长、<code>varchar</code> 变长，行格式和索引前缀都受影响；<strong>PG 内部三者都是同一个 varlena 结构</strong>，带 1 或 4 字节长度头，存储与比较路径完全一致。<code>varchar(n)</code> 唯一的作用是多一条长度检查，<code>char(n)</code> 则会补空格到定长，既费空间又让比较语义变怪（尾部空格在比较时被忽略）。</p>
 
@@ -195,7 +312,7 @@ SELECT setval(pg_get_serial_sequence('legacy_order', 'id'),
     <p>把列声明成 <code>text</code>，再写 <code>CHECK (char_length(phone) BETWEEN 5 AND 32)</code>。以后要放宽限制，只需删掉旧约束、加一条新的 <code>NOT VALID</code> 约束再 <code>VALIDATE</code>，全程只取 SHARE UPDATE EXCLUSIVE 锁，不重写表；而缩短 <code>varchar</code> 上限是要重写全表的。另外 <code>char_length</code> 数的是字符数，<code>octet_length</code> 才是字节数，校验中文长度时注意选对。</p>
 </div>
 
-<h2>时间类型：默认就该用 timestamptz</h2>
+<h2>② 原理 · 时间类型：默认就该用 timestamptz</h2>
 
 <p>先纠正一个广泛误解：<strong><code>timestamptz</code> 并不存储时区</strong>。它存的是一个绝对时刻（UTC 微秒数），写入时把输入按会话 <code>TimeZone</code> 换算成 UTC，读出时再换算回会话时区。<code>timestamp</code> 存的是「字面值」，数据库完全不知道它属于哪个时区，跨时区读写时不做任何换算——这就是跨区数据错乱的来源。</p>
 
@@ -257,7 +374,7 @@ ALTER TABLE orders
   USING created_at AT TIME ZONE 'Asia/Shanghai';
 </code></pre>
 
-<h2>JSONB 与 JSON：选前者，但别当主数据模型</h2>
+<h2>② 原理 · JSONB 与 JSON：选前者，但别当主数据模型</h2>
 
 <table>
 <thead><tr><th>维度</th><th>json</th><th>jsonb</th><th>影响</th></tr></thead>
@@ -319,7 +436,7 @@ SELECT key, count(*) FROM product, jsonb_each_text(attrs) GROUP BY key ORDER BY 
     <p>一是<strong>不能建外键</strong>，引用完整性只能靠应用层保证；二是<strong>统计信息粒度粗</strong>，优化器对 jsonb 条件的选择率估算常常偏差一两个数量级，进而选错连接方式；三是<strong>更新任意一个键都重写整行</strong>，大字段高频更新会让表快速膨胀；四是<strong>约束能力弱</strong>，类型与取值范围只能用 CHECK 加表达式勉强补。把它当主数据模型用，等于把关系数据库最值钱的那部分能力关掉。</p>
 </div>
 
-<h2>数组、enum 与那些「看起来很方便」的类型</h2>
+<h2>② 原理 · 数组、enum 与那些「看起来很方便」的类型</h2>
 
 <p><strong>数组</strong>适合标签这类小集合：单行内元素不多、整体一起读写、不需要被外键引用。它的限制很硬——元素不能建外键，追加一个元素要重写整行，而且多对多关系一旦需要反向查询（「哪些文章打了这个标签、按时间排序分页」），数组加 GIN 虽然能过滤但没法高效排序与分页。判断标准很简单：<strong>如果这个集合里的元素本身是实体、需要独立属性或被引用，就必须建关联表</strong>。</p>
 
@@ -367,45 +484,7 @@ ALTER TYPE order_state ADD VALUE 'refunded' AFTER 'shipped';   -- 加值可以�
 
 <p>关于 <strong>UUID 主键</strong>：<code>uuid</code> 类型是 16 字节，存成 <code>text</code> 是 36 字节，而主键会被每一个二级索引引用，膨胀是成倍放大的。更隐蔽的代价是<strong>写放大</strong>：随机 UUID（v4）每次插入落在 B-tree 的随机页上，页分裂频繁、缓存命中率差，写吞吐明显低于顺序自增的 <code>bigint</code>。要既保留分布式生成和不可枚举，又恢复插入局部性，用<strong>时间有序的 UUIDv7</strong>（高位是毫秒时间戳）或 ULID；PG 18 内置了 <code>uuidv7()</code>，更早的版本用扩展或在应用侧生成。</p>
 
-<h2>类型选择决策表</h2>
-
-<div class="mermaid">
-flowchart TB
-    Q["要存什么"] --> A{"是不是钱或需要精确小数"}
-    A -- 是 --> A1["numeric 带精度<br/>或 bigint 存最小货币单位"]
-    A -- 否 --> B{"是不是时间"}
-    B -- "时刻" --> B1["timestamptz<br/>存 UTC，按会话时区转换"]
-    B -- "纯日期" --> B2["date"]
-    B -- "时间段" --> B3["tstzrange 配 EXCLUDE 约束"]
-    B -- "时长" --> B4["interval<br/>注意月和日不是固定长度"]
-    B -- 否 --> C{"是不是标识"}
-    C -- "单库自增" --> C1["bigint GENERATED AS IDENTITY"]
-    C -- "分布式生成" --> C2["uuid 类型，优先 UUIDv7 有序方案"]
-    C -- 否 --> D{"是不是有限取值集合"}
-    D -- 是 --> D1["text 加 CHECK 可随时改<br/>或字典关联表；enum 仅在追求紧凑时用"]
-    D -- 否 --> E{"结构是否稳定"}
-    E -- "稳定" --> E1["拆成普通列，该建索引建索引"]
-    E -- "不稳定的附加属性" --> E2["jsonb 加 GIN 索引"]
-    E -- "小集合标签" --> E3["数组加 GIN；元素是实体就建关联表"]
-    E -- "网络地址" --> E4["inet 或 cidr"]
-</div>
-
-<table>
-<thead><tr><th>用途</th><th>该用</th><th>常见的错误选择</th><th>选错的迁移代价</th></tr></thead>
-<tbody>
-<tr><td>金额</td><td>numeric(18,2) 或 bigint 存分</td><td>float8 / real</td><td>历史数据的误差无法还原，只能按业务规则重新核算，属于最贵的一类错</td></tr>
-<tr><td>时刻</td><td>timestamptz</td><td>timestamp，或用 bigint 存毫秒</td><td>改类型要重写全表，且换算依赖当初写入方的时区假设，往往需要逐批人工确认</td></tr>
-<tr><td>自增主键</td><td>bigint GENERATED AS IDENTITY</td><td>integer serial</td><td>int4 到 int8 重写全表并锁表，21 亿用尽时通常正是业务高峰</td></tr>
-<tr><td>分布式 ID</td><td>uuid（优先 v7 有序）</td><td>text 存 UUID 字符串</td><td>重写全表加重建所有索引，收益是索引空间直接减半</td></tr>
-<tr><td>变长文本</td><td>text 加 CHECK</td><td>varchar(20) 这类拍脑袋长度</td><td>放宽上限不重写表，缩短要重写；真正的痛点是每次改都要走 DDL 审批</td></tr>
-<tr><td>状态枚举</td><td>text 加 CHECK，或字典表</td><td>enum</td><td>删值和改值都不支持，只能新建类型整列迁移，重写全表</td></tr>
-<tr><td>标签集合</td><td>小集合用数组，实体化就建关联表</td><td>逗号拼接字符串</td><td>无法用索引过滤，迁移要写解析脚本并处理脏数据</td></tr>
-<tr><td>不定形附加属性</td><td>jsonb</td><td>宽表几十个可空列，或 json</td><td>json 转 jsonb 会重写全表；宽表拆 jsonb 还要改全部读写路径</td></tr>
-<tr><td>IP 地址</td><td>inet 或 cidr</td><td>varchar(15)</td><td>迁移不难，但期间所有网段判断都得靠应用层，逻辑会散落各处</td></tr>
-<tr><td>时间段不重叠约束</td><td>tstzrange 加 EXCLUDE</td><td>两个时间列加应用层先查后插</td><td>并发下必然出现重叠脏数据，清洗历史冲突记录往往需要业务介入</td></tr>
-</tbody></table>
-
-<h2>改类型要付多少代价：哪些转换会重写全表</h2>
+<h2>③ 场景 · 改类型要付多少代价：哪些转换会重写全表</h2>
 
 <p>判断标准是<strong>新旧类型的存储表示是否二进制兼容</strong>。兼容则只改系统表里的类型定义，秒级完成；不兼容就要重写整张表的每一行，全程持有 ACCESS EXCLUSIVE 锁，读写全部阻塞，并且所有相关索引都要重建。</p>
 
@@ -445,6 +524,30 @@ flowchart TB
     <div class="callout-title">大表改类型前先设 lock_timeout</div>
     <p>ACCESS EXCLUSIVE 锁需要等现存的所有读写事务结束，而它在等待期间会<strong>阻塞后来的所有查询</strong>——一个长查询没结束，ALTER 在排队，业务流量全部堵在 ALTER 后面，几秒钟就能把连接池打满。做法是先 <code>SET lock_timeout = '3s'</code>，抢不到锁就失败重试，别让它无限等待。</p>
 </div>
+
+<h2>③ 场景 · 大表改类型的迁移路线与取舍</h2>
+
+<p>知道哪些转换会重写全表之后，剩下的就是选路线。下面这张矩阵按「现在要改什么」给动作，第四列是必须提前认的账：</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>小表（几十万行以内）改类型</td><td>维护窗口内直接 <code>ALTER</code>，前面先 <code>SET lock_timeout</code></td><td>重写耗时可接受，复杂方案反而引入更多风险</td><td>等排他锁期间会挡住它后面的所有查询，所以必须限时并可重试</td></tr>
+<tr><td>大表 <code>integer</code> 改 <code>bigint</code></td><td>加新列、分批回填、触发器双写，最后短事务内改名切换</td><td>存储宽度变了，直接 <code>ALTER</code> 要全程持排他锁</td><td>代码要有一段时间同时兼容两列；回填期间写放大与 WAL 量都翻倍</td></tr>
+<tr><td>大表 <code>timestamp</code> 改 <code>timestamptz</code></td><td>同上，回填时<strong>显式写 <code>AT TIME ZONE</code></strong></td><td>隐式换算依赖当前会话时区，不同执行者会得到不同结果</td><td>必须先确认历史数据当初是按哪个时区写入的，确认不了就只能逐批人工核对</td></tr>
+<tr><td><code>text</code> 改 <code>jsonb</code></td><td>先用 <code>CHECK</code> 或一次全表校验找出非法 JSON 并清洗，再转</td><td>转换逐行解析，<strong>一行非法就让整条语句失败</strong>，重试还是失败</td><td>清洗阶段要处理脏数据，往往需要业务判断怎么补</td></tr>
+<tr><td>enum 要删掉一个值</td><td>新建类型整列迁移，或者顺势改成 <code>text</code> 加 <code>CHECK</code></td><td>没有 <code>DROP VALUE</code>，也没有安全的重命名路径</td><td>重写全表；建议借这次迁移彻底换掉 enum，避免下次再来一遍</td></tr>
+<tr><td><code>varchar</code> 要放宽长度</td><td>直接 <code>ALTER</code></td><td>只放宽约束，二进制兼容，秒级完成</td><td>仍然要拿一次排他锁，注意避开长事务与大查询</td></tr>
+<tr><td>宽表拆成主键列加 <code>jsonb</code></td><td>先双写新结构、再迁读、最后删旧列</td><td>真正贵的是改读写路径，不是改类型</td><td><code>DROP COLUMN</code> 不回收空间，事后还要重组表才能把体积降下来</td></tr>
+<tr><td>完全不能停机</td><td>逻辑复制到一个新结构的库，再切流量</td><td>逻辑复制允许目标端结构不同</td><td>不同步 DDL 与序列当前值，切换时仍需一个短暂停写窗口来对齐序列</td></tr>
+</tbody>
+</table>
+
+<p><strong>不适用边界</strong>：这篇只管列类型的选择与迁移。字段选好之后索引怎么建、GIN 与 BRIN 怎么选、执行计划怎么读见 <a href="../index-optimize/">索引选型与执行计划判读</a>；<code>ALTER</code> 拿的锁到底怎么排队、隔离级别语义见 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；为什么更新一个 jsonb 键会重写整行、死元组怎么回收见 <a href="../">PostgreSQL 深度原理</a>；<code>lock_timeout</code> 一类参数在哪配、部署期还有哪些不可逆决定见 <a href="../install/">生产部署与必调参数</a>；从 MySQL 迁过来的类型对应关系见 <a href="../intro/">PG 与 MySQL 架构差异与选型</a>；MySQL 侧的行格式与主键类型代价见 <a href="../../mysql/">MySQL 深度原理</a>。</p>
+
+<p>这条路径上，上一篇把实例装好调好，本篇决定表里每一列长什么样，下一篇在这些列上建索引并学会判读执行计划——类型选错会让后面的索引优化事倍功半。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../install/">← 上一步：PostgreSQL 生产部署与必调参数</a> · <a href="../index-optimize/">下一步：PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN →</a></p>
 
 <h2>最容易踩的坑</h2>
 

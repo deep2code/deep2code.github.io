@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="从 slab allocator 的 page 与 chunk 规格讲透 Memcached 的内存模型：chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」，1.5 之后的分段 LRU 与 lru_crawler 到底做了什么，多线程模型与 Redis 单线程的后果差异，客户端一致性哈希在扩缩容时的命中率影响，无持久化无复制的连带风险，以及 CAS 并发更新、value 上限、extstore 与 Redis 的选型矩阵。">
+        <meta name="description" content="Memcached 三段式：先给「该用 Memcached 还是 Redis」的七问自查、不该用默认值的启动参数清单，以及 stats 与 stats slabs 与 stats items 三条命令各看哪些字段、怎么判读命中率与钙化；再从 page 与 slab class 与 chunk 与 item 四层讲透内存模型，说清 chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」、1.5 之后的分段 LRU 与 lru_crawler 做了什么、多线程与 Redis 单线程的后果差异、客户端分片在扩缩容时打掉多少命中率、CAS 与 add 的原子性边界、value 上限与 extstore；最后给选型矩阵与「哪些数据放进来就是埋事故」的对照。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/memcached/">
     <!-- Open Graph -->
     <meta property="og:title" content="Memcached 的内存模型与适用边界 - 资深码农">
-    <meta property="og:description" content="从 slab allocator 的 page 与 chunk 规格讲透 Memcached 的内存模型：chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」，1.5 之后的分段 LRU 与 lru_crawler 到底做了什么，多线程模型与 Redis 单线程的后果差异，客户端一致性哈希在扩缩容时的命中率影响，无持久化无复制的连带风险，以及 CAS 并发更新、value 上限、extstore 与 Redis 的选型矩阵。">
+    <meta property="og:description" content="Memcached 三段式：先给「该用 Memcached 还是 Redis」的七问自查、不该用默认值的启动参数清单，以及 stats 与 stats slabs 与 stats items 三条命令各看哪些字段、怎么判读命中率与钙化；再从 page 与 slab class 与 chunk 与 item 四层讲透内存模型，说清 chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」、1.5 之后的分段 LRU 与 lru_crawler 做了什么、多线程与 Redis 单线程的后果差异、客户端分片在扩缩容时打掉多少命中率、CAS 与 add 的原子性边界、value 上限与 extstore；最后给选型矩阵与「哪些数据放进来就是埋事故」的对照。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/memcached/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Memcached 的内存模型与适用边界 - 资深码农">
-    <meta name="twitter:description" content="从 slab allocator 的 page 与 chunk 规格讲透 Memcached 的内存模型：chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」，1.5 之后的分段 LRU 与 lru_crawler 到底做了什么，多线程模型与 Redis 单线程的后果差异，客户端一致性哈希在扩缩容时的命中率影响，无持久化无复制的连带风险，以及 CAS 并发更新、value 上限、extstore 与 Redis 的选型矩阵。">
+    <meta name="twitter:description" content="Memcached 三段式：先给「该用 Memcached 还是 Redis」的七问自查、不该用默认值的启动参数清单，以及 stats 与 stats slabs 与 stats items 三条命令各看哪些字段、怎么判读命中率与钙化；再从 page 与 slab class 与 chunk 与 item 四层讲透内存模型，说清 chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」、1.5 之后的分段 LRU 与 lru_crawler 做了什么、多线程与 Redis 单线程的后果差异、客户端分片在扩缩容时打掉多少命中率、CAS 与 add 的原子性边界、value 上限与 extstore；最后给选型矩阵与「哪些数据放进来就是埋事故」的对照。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="数据库与缓存">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Memcached 的内存模型与适用边界","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"从 slab allocator 的 page 与 chunk 规格讲透 Memcached 的内存模型：chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」，1.5 之后的分段 LRU 与 lru_crawler 到底做了什么，多线程模型与 Redis 单线程的后果差异，客户端一致性哈希在扩缩容时的命中率影响，无持久化无复制的连带风险，以及 CAS 并发更新、value 上限、extstore 与 Redis 的选型矩阵。","url":"https://www.yijunjun.asia/database/memcached/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/memcached/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Memcached 的内存模型与适用边界","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Memcached 三段式：先给「该用 Memcached 还是 Redis」的七问自查、不该用默认值的启动参数清单，以及 stats 与 stats slabs 与 stats items 三条命令各看哪些字段、怎么判读命中率与钙化；再从 page 与 slab class 与 chunk 与 item 四层讲透内存模型，说清 chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」、1.5 之后的分段 LRU 与 lru_crawler 做了什么、多线程与 Redis 单线程的后果差异、客户端分片在扩缩容时打掉多少命中率、CAS 与 add 的原子性边界、value 上限与 extstore；最后给选型矩阵与「哪些数据放进来就是埋事故」的对照。","url":"https://www.yijunjun.asia/database/memcached/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/memcached/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "Memcached", "item": "https://www.yijunjun.asia/database/memcached/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -93,7 +93,97 @@
                     <div class="article-content">
 <p>Memcached 的对外接口只有十几条命令，但它的实际行为几乎全部由内存分配器决定。<strong>它不是「把 key 塞进堆里」的哈希表，而是一个预先切好格子的板材仓库</strong>：格子规格固定，东西按最接近的格子放，放不进去的空格子闲着也不会借给别人。理解这一层，线上最常见的两个困惑才有答案——为什么 <code>stats</code> 显示还剩很多内存却在疯狂驱逐，以及为什么同样 8GB，Memcached 能装下的小对象比 Redis 多一截。缓存穿透、击穿、雪崩属于访问模式层面的问题，站内缓存架构专篇已有系统讨论，本文只讲 Memcached 自身的内存模型、并发模型与适用边界。</p>
 
-<h2>内存模型：page、slab class、chunk、item 四层</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一张「该用 Memcached 还是 Redis」的七问自查、一份不该用默认值的启动参数清单，以及 <code>stats</code>、<code>stats slabs</code>、<code>stats items</code> 三条命令各自该看哪些字段、怎么判读。</li>
+        <li><strong>② 原理</strong>：page 与 slab class 与 chunk 与 item 四层内存模型、slab 钙化为什么造成「内存没满却在驱逐」、1.5 之后的分段 LRU 与 lru_crawler、多线程与 Redis 单线程的后果差异、客户端分片在扩缩容时打掉多少命中率、CAS 与 add 的原子性边界、extstore 与单 item 上限。</li>
+        <li><strong>③ 场景</strong>：什么时候 Memcached 仍然是更好的选择，以及哪些数据放进来就是在给自己埋事故。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 先做七问自查，再学会读三条 stats</h2>
+
+<p>选 Memcached 还是 Redis，不需要比性能——<strong>先看功能与故障模式，前两问只要有一个答「需要」，选型就已经定了</strong>。</p>
+
+<table>
+<thead><tr><th>自查</th><th>答这一项时</th><th>结论</th></tr></thead>
+<tbody>
+<tr><td>1. 业务需要 list、set、zset、stream 里的任何一种吗</td><td>需要</td><td>直接选 Redis。在 Memcached 上用字符串拼接模拟结构，会把并发正确性问题全留给自己</td></tr>
+<tr><td>2. 需要跨多个 key 的原子逻辑（脚本、事务）吗</td><td>需要</td><td>直接选 Redis。Memcached 只有单 key 的 <code>cas</code> 与 <code>add</code>，跨 key 只能靠外部锁</td></tr>
+<tr><td>3. 缓存整节点归零之后，业务能靠回源自愈吗</td><td>不能</td><td>选 Redis 并配持久化与复制。会话、幂等标记、余额这类数据放进 Memcached，一次重启就是线上事故</td></tr>
+<tr><td>4. 单实例需要吃满多个 CPU 核吗</td><td>需要</td><td>这是 Memcached 的真优势：worker 多线程可线性利用多核，大机器上实例数能少很多</td></tr>
+<tr><td>5. 是海量小对象、且对每条数据的内存开销敏感吗</td><td>是</td><td>这是 Memcached 的第二个真优势：item 元数据开销更小也更可预测</td></tr>
+<tr><td>6. 团队已经在运维 Redis 了吗</td><td>是</td><td>除非第 4 或第 5 条成立，否则复用 Redis、少一种中间件，比省一点内存更划算</td></tr>
+<tr><td>7. value 里有超过单 item 上限的对象吗</td><td>有</td><td>先考虑拆分，其次才调 <code>-I</code>。超限的 <code>set</code> 返回的 <code>SERVER_ERROR</code> 常被客户端当成连接级错误，表现为「偶发连接重建加写不进去」</td></tr>
+</tbody></table>
+
+<p>定下来之后，启动参数里下面这几项一个都不该用默认值。注意最后一项：<strong>Memcached 默认没有认证，绑到通用地址等于把整个缓存对外开放</strong>，这也是它长期被用于 UDP 反射放大攻击的原因。</p>
+
+<pre><code class="language-bash">memcached -d -u memcache \
+  -m 4096 \
+  -c 4096 \
+  -t 4 \
+  -I 1m \
+  -o modern,slab_reassign,slab_automove=1,lru_crawler,lru_maintainer \
+  -l 10.0.0.11 -p 11211 -U 0
+# -m 只是 item 空间上限，不是进程内存上限：哈希表、每连接读写缓冲、线程栈都在它之外，
+#    容器的 memory limit 必须在 -m 之上留出余量，否则 Memcached 认为内存没满、容器已被 OOM Kill
+# -c 每个连接都带读写缓冲，连接数上万时这部分内存不是零头
+# -t 一般不超过物理核数，给多了只会加剧锁竞争
+# -l 必须显式绑内网地址；-U 0 关掉 UDP 端口，它没有任何业务用途却是反射放大的入口</code></pre>
+
+<table>
+<thead><tr><th>参数</th><th>作用</th><th>默认值</th><th>什么时候必须改</th></tr></thead>
+<tbody>
+<tr><td><code>-m</code></td><td>slab 分配器用于存 item 的空间上限</td><td>64（MB）</td><td>一定要显式设；容器场景下要与 memory limit 一起规划，之间留出哈希表与连接缓冲的余量</td></tr>
+<tr><td><code>-c</code></td><td>最大并发连接数</td><td>1024</td><td>连接数高的服务必须调大，撞上限的表现是新连接直接被拒</td></tr>
+<tr><td><code>-t</code></td><td>worker 线程数</td><td>4</td><td>要吃满多核时调到物理核数附近；超过之后锁竞争会吃掉收益</td></tr>
+<tr><td><code>-f</code></td><td>slab class 的 chunk 增长因子</td><td>1.25</td><td>想压低取整浪费可调小（如 1.08），代价是 class 变多、每个 class 至少占一个 page，钙化概率上升</td></tr>
+<tr><td><code>-n</code></td><td>最小 chunk 的数据空间</td><td>48（字节）</td><td>value 普遍极小时调小，能显著提高小对象的装载密度</td></tr>
+<tr><td><code>-I</code></td><td>单 item 上限</td><td>1m</td><td>确有大对象时才调；调大之前先评估拆分，大档 class 更容易制造钙化</td></tr>
+<tr><td><code>-M</code></td><td>内存满时拒绝写入而不是驱逐</td><td>不启用</td><td>多数缓存场景都不该用；启用后写失败表现为 <code>SERVER_ERROR</code> 且 <code>outofmemory</code> 计数上涨</td></tr>
+<tr><td><code>-e</code></td><td>restart mode 的内存映射文件路径</td><td>不启用</td><td>只为优雅重启保留缓存，不覆盖强杀与掉电，别当持久化方案用</td></tr>
+<tr><td><code>-o ext_path</code></td><td>extstore：把较大的 value 下沉到 SSD</td><td>不启用</td><td>需要单机缓存容量超过物理内存、且访问有明显冷热分层时</td></tr>
+</tbody></table>
+
+<p>以上默认值随版本与发行版编译选项变化，落地前用 <code>memcached -h</code> 与 <code>stats settings</code> 核对你这套实例的实际取值。</p>
+
+<p>日常排查只需要三条命令，按「先全局、再分档、后定位」的顺序看。<strong>它们各自回答的问题完全不同，顺序错了就会得出「内存够用」这种错误结论</strong>：</p>
+
+<table>
+<thead><tr><th>命令</th><th>回答什么问题</th><th>重点看哪些字段</th><th>怎么判读</th></tr></thead>
+<tbody>
+<tr><td><code>stats</code></td><td>整体水位与命中情况</td><td><code>bytes</code> 对 <code>limit_maxbytes</code>、<code>evictions</code>、<code>get_hits</code> 与 <code>get_misses</code>、<code>curr_items</code>、<code>curr_connections</code> 对 <code>-c</code></td><td>命中率要自己算，Memcached 不直接给。<strong><code>bytes</code> 远低于 <code>limit_maxbytes</code> 而 <code>evictions</code> 在涨，就说明不是容量问题</strong>，必须往下一条走</td></tr>
+<tr><td><code>stats slabs</code></td><td>内存被怎么切开、切给了谁</td><td>每个 class 的 <code>chunk_size</code>、<code>total_pages</code>、<code>used_chunks</code>、<code>free_chunks</code>；全局的 <code>total_malloced</code> 与 <code>mem_requested</code></td><td>各 class 的 <code>total_pages</code> 之和已吃满 <code>-m</code>、而部分 class 的 <code>free_chunks</code> 长期很大，就是 slab 钙化；<code>total_malloced</code> 与 <code>mem_requested</code> 的差额是取整浪费加空闲 chunk，占比超过 25% 就该回头看 value 体积分布</td></tr>
+<tr><td><code>stats items</code></td><td>每一档里数据活了多久、为什么被踢</td><td>逐 class 的 <code>number</code>、<code>age</code>、<code>evicted</code>、<code>evicted_unfetched</code>、<code>expired_unfetched</code>、<code>reclaimed</code>、<code>crawler_reclaimed</code>、<code>outofmemory</code></td><td><code>age</code> 是 LRU 尾部 item 的存活秒数，<strong>它比命中率更能说明「缓存到底留得住多久」</strong>；<code>evicted_unfetched</code> 占比高说明写进来的数据一次都没被读过就被踢了，那是无效写入在挤热数据</td></tr>
+</tbody></table>
+
+<pre><code class="language-bash"># 一次完整体检：三条命令按顺序打，别跳步
+# 注意 nc 的参数因实现而异：BSD 版本用 -w1，GNU netcat 用 -q1，不通就先确认自己装的是哪个
+printf 'stats\r\nquit\r\n' | nc -q1 127.0.0.1 11211 \
+  | awk '/STAT (bytes|limit_maxbytes|curr_items|evictions|get_hits|get_misses|curr_connections) /{print $2"="$3}'
+
+# 命中率与内存水位都要自己算，这两个比值才是能长期盯的指标
+printf 'stats\r\nquit\r\n' | nc -q1 127.0.0.1 11211 | awk '
+  /STAT get_hits /{h=$3} /STAT get_misses /{m=$3}
+  /STAT bytes /{b=$3} /STAT limit_maxbytes /{l=$3}
+  END{printf "hit_rate=%.4f  mem_used=%.2f%%\n", h/(h+m), 100*b/l}'
+
+# 分档看钙化：某个 class 的 free_chunks 长期很大、另一个 class 一直在驱逐，就是钙化
+printf 'stats slabs\r\nquit\r\n' | nc -q1 127.0.0.1 11211
+
+# 定位驱逐来源：age 说明留得住多久，evicted_unfetched 说明有多少是白写的
+printf 'stats items\r\nquit\r\n' | nc -q1 127.0.0.1 11211
+
+# 唯一正当的 key 枚举方式。Memcached 没有 KEYS 命令，也不该有；
+# 这条命令本身有开销，只在排查期用，不要接进监控轮询
+printf 'lru_crawler metadump all\r\nquit\r\n' | nc -q1 127.0.0.1 11211 | head -50</code></pre>
+
+<p>这些字段为什么是这个含义、钙化为什么会发生，下面从内存模型开始讲。</p>
+
+<h2>② 原理 · 内存模型：page、slab class、chunk、item 四层</h2>
 
 <p>Memcached 启动时并不会立刻申请 <code>-m</code> 指定的全部内存，而是在运行中按需以 <strong>page</strong>（默认 1MB）为单位向操作系统要内存，然后把这个 page 整块划给某一个 <strong>slab class</strong>。每个 class 有固定的 <strong>chunk</strong> 规格：最小档由 <code>-n</code>（默认 48 字节的数据空间）加上 item 头部决定，往上每一档乘以增长因子 <code>-f</code>（默认 1.25），一直排到单 item 上限。一个 page 被切成 <code>1048576 / chunk_size</code> 个等长 chunk，此后这个 page 只能存这一档的 item。</p>
 
@@ -136,7 +226,7 @@ flowchart TB
 
 <p>这张表的用法不是背数字，而是<strong>把业务 value 的长度分布对着 chunk 档去看</strong>。如果你的序列化结果集中在 1190 字节左右，那每条都在浪费近 300 字节；把序列化格式换紧一点让它落回 1184 档，同样内存能多装两成 item。反过来，调小 <code>-f</code>（比如 1.08）能让档位更密、浪费更小，代价是 slab class 数量变多，每个 class 都要至少占一个 page，钙化的概率随之上升——小实例上尤其明显。</p>
 
-<h2>「内存没满却在驱逐」的根因与判定</h2>
+<h2>② 原理 · 「内存没满却在驱逐」的根因与判定</h2>
 
 <p>这是 Memcached 最经典的线上现象：监控上 <code>bytes</code> 离 <code>limit_maxbytes</code> 还有距离，<code>evictions</code> 却一直在涨。根因是 page 一旦划给某个 slab class 就长期属于它，而<strong>驱逐是 class 内部的事</strong>：class 13 要写新 item 时，只会在 class 13 的 LRU 尾部踢掉一个，哪怕 class 5 有几百个空闲 chunk 也借不过来。这个现象叫 slab 钙化（calcification），典型触发条件是业务 value 的长度分布发生了变化——上线一次改版，序列化结果从 800 字节变成 1300 字节，于是新档位没 page 可用、老档位的 page 全在空转。</p>
 
@@ -176,7 +266,9 @@ printf 'stats slabs\r\nquit\r\n' | nc -q1 127.0.0.1 11211 | grep -E 'mem_request
 <tr><td>outofmemory 非零</td><td>以 -M 启动，内存满后拒绝写入而不驱逐</td><td>stats items 看 outofmemory，客户端看 SERVER_ERROR</td><td>确认是否真的需要 -M；多数缓存场景不该用</td></tr>
 </tbody></table>
 
-<h2>分段 LRU、TEMP LRU 与 lru_crawler</h2>
+<h2>② 原理 · 分段 LRU、TEMP LRU 与 lru_crawler</h2>
+
+<p>搞清这一节能解决的现象是：<code>curr_items</code> 很大但命中率很低，一次批量导入之后热数据整体失效。</p>
 
 <p>「Memcached 就是一条简单的 LRU 链表」这个说法在 1.5 之后已经不成立。开启 <code>lru_maintainer</code>（1.5 起默认开启）后，<strong>每个 slab class 内部被拆成 HOT、WARM、COLD 三段</strong>，另有一个用于极短 TTL 数据的 TEMP 段。新写入的 item 先进 HOT；HOT 有比例上限，超出后尾部 item 按「期间是否被再次访问过」分流：被访问过的搬进 WARM，没被访问的降级到 COLD。<strong>驱逐只发生在 COLD 段的尾部</strong>，COLD 里的 item 若被命中，会被异步标记并搬回 WARM。这个设计的目的和 Redis 的近似 LRU 类似——避免一次全量扫描把整个热集冲掉。</p>
 
@@ -209,7 +301,9 @@ stateDiagram-v2
 <tr><td>temporary_ttl</td><td>61（秒）</td><td>TTL 低于此值的 item 进 TEMP 段，不参与段间搬移</td><td>业务 TTL 普遍小于它时，等于所有数据都走 TEMP，分段 LRU 失效</td></tr>
 </tbody></table>
 
-<h2>多线程模型：与 Redis 单线程的后果差异</h2>
+<h2>② 原理 · 多线程模型：与 Redis 单线程的后果差异</h2>
+
+<p>搞清这一节能解决的现象是：同样的机器、同样的 QPS，两种缓存的延迟曲线形状完全不同。</p>
 
 <p>Memcached 默认 <code>-t 4</code> 个 worker 线程，每个线程有独立的事件循环，新连接由主线程分派后就固定在某个 worker 上；item 与哈希桶由细粒度锁保护，所以<strong>单实例可以线性地吃掉多个 CPU 核心</strong>。Redis 的命令执行始终是单线程（io-threads 只并行化网络收发与协议解析），这不是缺陷而是取舍，但它带来几个具体后果上的差异。</p>
 
@@ -225,7 +319,9 @@ stateDiagram-v2
 
 <p>顺带纠正一个常见结论：「Redis 比 Memcached 快」和「Memcached 比 Redis 快」都不成立，因为它们在不同维度上快。<strong>单连接单命令的延迟两者在同一量级</strong>（都是内存操作加一次网络往返，微秒级），差异体现在单实例总吞吐（Memcached 因多线程更高）和功能密度（Redis 更高）。任何脱离并发度、value 大小、命令类型的「快 N 倍」结论都没有意义。Redis 的单线程事件循环、编码转换阈值与持久化细节，详见站内 Redis 深度原理。</p>
 
-<h2>客户端分片：扩缩容会打掉多少命中率</h2>
+<h2>② 原理 · 客户端分片：扩缩容会打掉多少命中率</h2>
+
+<p>搞清这一节能解决的现象是：加了一台机器之后数据库负载突然翻倍；或者两个服务读同一个 key 却拿到不同的值。</p>
 
 <p>Memcached 服务端之间互相不知道彼此存在——<strong>没有集群协议，没有槽位，没有请求转发</strong>。分片完全由客户端决定，这带来一个后果：分片策略的正确性取决于「所有客户端是否算得一样」，而不是服务端配置。这是分布式缓存里最容易长期带病运行的地方。</p>
 
@@ -283,7 +379,7 @@ client = HashClient(
 # 逐个 get 的开销不在服务端，而在 N 次网络往返
 rows = client.get_many([b"user:1", b"user:2", b"user:3"])</code></pre>
 
-<h2>无持久化、无复制的直接后果</h2>
+<h2>② 原理 · 无持久化、无复制的直接后果</h2>
 
 <p>Memcached 没有主从复制，也没有常规意义上的持久化。这条特性的真正含义不是「数据可能丢」——缓存本来就允许丢——而是<strong>它的失效是整节点、瞬时、全量的</strong>。一个 32GB 的实例重启，等于瞬间把这一分片的全部回源流量推给数据库。要评估风险，看的不是命中率，而是「假设这一片缓存现在归零，数据库能不能扛住这一片的全量 QPS」。</p>
 
@@ -298,7 +394,9 @@ rows = client.get_many([b"user:1", b"user:2", b"user:3"])</code></pre>
 <tr><td>业务需要「缓存里的数据不能丢」</td><td>Memcached 无法满足</td><td>把会话、去重标记、计数器放进来就会真丢业务</td><td>换 Redis 并配持久化与复制，或把权威数据落库</td></tr>
 </tbody></table>
 
-<h2>CAS、add 与并发更新的边界</h2>
+<h2>② 原理 · CAS、add 与并发更新的边界</h2>
+
+<p>搞清这一节能解决的现象是：并发下计数器少加了几次，或者两个进程同时以为自己拿到了同一把锁。</p>
 
 <p>Memcached 常被说成「不支持原子操作」，这是错的。每个 item 都带一个 64 位的 <code>cas</code> 版本号，<code>gets</code> 会连同版本号返回，<code>cas</code> 命令只在版本号未变时写入成功，否则返回 <code>EXISTS</code>（key 已不存在则返回 <code>NOT_FOUND</code>）。这是一个<strong>单 key 的乐观锁</strong>，足以正确实现「读-改-写」；<code>add</code>（仅当 key 不存在时写入）则是一个天然的抢占原语，常用于分布式互斥或防止并发回源。</p>
 
@@ -331,13 +429,15 @@ def acquire_lock(key, token, ttl=10):
 
 <p>两个必须知道的边界。第一，<code>incr</code> / <code>decr</code> 只对「看起来像十进制数字」的 value 生效，对不存在的 key 返回 <code>NOT_FOUND</code> 而不会当 0 处理，<code>decr</code> 不会低于 0，而且它们<strong>不会刷新 TTL</strong>——用它做限流计数时，计数窗口的起点由第一次 <code>add</code> 决定。第二，<code>exptime</code> 的语义有个流传很久的坑：<strong>数值大于 2592000（30 天）时被解释为绝对 Unix 时间戳</strong>，而不是相对秒数。有人想设「一年有效」填 31536000，实际得到的是 1971 年的某个时刻，item 写进去立刻就是过期状态。要设超过 30 天就老老实实传时间戳。</p>
 
-<h2>value 上限、大对象与 extstore</h2>
+<h2>② 原理 · value 上限、大对象与 extstore</h2>
+
+<p>搞清这一节能解决的现象是：某类 key 写不进去，客户端日志里是连接反复重建，而服务端看不出异常。</p>
 
 <p>单 item 默认上限 1MB，可用 <code>-I</code> 调整（下限 1k）。超限的 <code>set</code> 会收到 <code>SERVER_ERROR object too large for cache</code>，而不是静默截断——但很多客户端把这类 SERVER_ERROR 当成连接级错误处理，于是表现为「偶发连接重建 + 缓存写不进去」，排查时要盯客户端日志而不是服务端。1.4.29 之后 Memcached 支持把超过 <code>slab_chunk_max</code> 的大 item 拆成多个 chunk 链式存储，所以调大 <code>-I</code> 不会把 page 也变成那么大，但链式 item 的分配与释放成本更高，且更容易在大档 class 上制造钙化。</p>
 
 <p>关于「Memcached 容量不能超过内存」，1.5.4 之后也需要修正：<strong>extstore 允许把较大的 value 下沉到 SSD</strong>，key 与元数据仍常驻内存。适用前提很明确——value 不能太小（元数据开销会吃掉收益，默认只下沉超过 <code>ext_item_size</code> 的 item），访问要有明显冷热分层（命中下沉数据的延迟从微秒级变成 SSD 级别），并且要接受写放大带来的盘寿命消耗。</p>
 
-<h2>选择矩阵：什么时候 Memcached 仍然更好</h2>
+<h2>③ 场景 · 什么时候 Memcached 仍然更好</h2>
 
 <p>2026 年选缓存的默认答案是 Redis，这没错，但「Memcached 已经没用了」是懒惰的结论。Memcached 的价值恰恰在于它<strong>功能少到故障模式可以穷举</strong>：没有持久化就没有 fork 抖动，没有复制就没有主从延迟和脑裂，没有脚本就没人能在缓存层写业务逻辑。对于一层纯粹的、丢了就回源的只读缓存，这些「缺失」都是优点。</p>
 
@@ -365,6 +465,27 @@ flowchart TB
 <tr><td>可运维面</td><td>命令与统计项都少，故障模式可穷举</td><td>功能多，误用面也大（大 key、慢命令、脚本）</td><td>团队规模小、缓存职责单一时，少即是多</td></tr>
 <tr><td>冷数据下沉</td><td>extstore 支持下沉 SSD</td><td>社区版无（需商业版或换方案）</td><td>超内存容量的纯缓存，Memcached 反而有路可走</td></tr>
 </tbody></table>
+
+<h2>③ 场景 · 不该放进 Memcached 的东西与替代</h2>
+
+<p>上面那张矩阵回答「能不能用」，这张表回答「放什么」。判断标准只有一条：<strong>这份数据在整节点瞬时清零之后，业务能不能自己长回来</strong>。答不上来就不要放。</p>
+
+<table>
+<thead><tr><th>数据</th><th>该放哪</th><th>为什么不能放 Memcached</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>只读的对象缓存：商品基础信息、类目树、渲染结果片段</td><td>正是 Memcached 最合适的场景</td><td>不适用；丢了就回源，回源路径本来就存在</td><td>要给回源侧配并发上限，否则整节点重启就是一次雪崩</td></tr>
+<tr><td>会话与登录态</td><td>Redis 配持久化与复制，或签名令牌不落存储</td><td>整节点清零等于全站掉登录，且没有任何恢复手段</td><td>Redis 的运维复杂度更高，或者改造成无状态令牌</td></tr>
+<tr><td>幂等标记、去重键</td><td>Redis，或直接靠数据库唯一索引</td><td>标记丢了就等于允许重复执行，重复扣款这类问题没有补偿路径</td><td>数据库唯一索引会把冲突判定压到写入路径上</td></tr>
+<tr><td>分布式锁</td><td>Redis 的 <code>SET NX PX</code> 加 Lua 校验释放</td><td><code>add</code> 确实能做互斥，但节点重启会让所有锁瞬间消失，临界区同时被多个持有者进入</td><td>正确性边界（时钟、GC 停顿）依然要自己评估，见站内 Redis 深度原理</td></tr>
+<tr><td>计数器与限流</td><td>Redis 的 Lua 令牌桶，或允许误差就继续用 Memcached</td><td><code>incr</code> 不刷新 TTL、key 不存在时返回 <code>NOT_FOUND</code> 而不是从 0 开始，窗口语义容易写错</td><td>Redis 侧要保证脚本可复制，时间戳必须由客户端传入</td></tr>
+<tr><td>排行榜、队列、标签集合</td><td>Redis 的 zset、stream、set</td><td>没有对应结构，用字符串模拟就要自己处理并发覆盖</td><td>没有代价，这条不存在取舍</td></tr>
+<tr><td>单条超过 1 MB 的对象</td><td>拆分成多个 key，或放对象存储只缓存引用</td><td>超限的 <code>set</code> 返回 <code>SERVER_ERROR</code>，很多客户端把它当连接级错误处理，故障现象会指向错误方向</td><td>拆分后要自己保证多片的一致性与整体失效</td></tr>
+<tr><td>超过物理内存的纯缓存数据</td><td>Memcached 的 extstore 下沉 SSD</td><td>不适用；这反而是 Memcached 有路可走而 Redis 社区版没有的场景</td><td>命中下沉数据时延迟从微秒级变成 SSD 级，且要接受写放大带来的盘寿命消耗</td></tr>
+</tbody></table>
+
+<p><strong>不适用边界</strong>：这一篇只讲 Memcached 自身的内存模型、并发模型与选型边界。缓存穿透、击穿、雪崩这些访问模式层面的问题，以及更新策略与脏数据窗口，见 <a href="../cache/">缓存的收益与代价</a> 与 <a href="../cache/problems/">缓存一致性与失效</a>；本地缓存、网关缓存与热点打散的拓扑取舍见 <a href="../cache/architecture/">多级缓存与拓扑</a>；Redis 的单线程事件循环、编码转换阈值、持久化与集群机制见 <a href="../redis/">Redis 深度原理</a>。如果你需要的是按内容检索而不是按键取值，那不是缓存能解决的，见 <a href="../search/">Elasticsearch 的索引结构与查询代价</a>。</p>
+
+<h2>最容易踩的坑</h2>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
