@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="RPC 与 REST、消息队列的差别首先是语义而不是性能：同步调用天然有成功、失败、未知三种结果，而「未知」这一态决定了超时和重试该怎么写。本文按序列化、传输、服务治理三层拆开 RPC 框架的抽象，讲清超时预算自上而下分配的算法、重试放大的指数关系与重试预算、幂等键与状态机 CAS 的落地、服务发现与健康检查的陷阱，并给出 gRPC、Thrift、Dubbo、tRPC、brpc、JSON-RPC、Connect 的定位矩阵，以及什么时候根本不该用 RPC。">
+        <meta name="description" content="RPC 按用法、原理、场景三段组织：先给「该用 RPC 还是 REST 还是消息」的四问判断法、超时预算自上而下分配的可手算流程与单次尝试超时的推法，每项都配验证手段；再讲清同步调用的成功、失败、未知三态，契约、序列化、传输、治理四层抽象，预算校验不等式，重试的乘法放大与幂等键加状态机 CAS，服务发现的三类错位；最后给 gRPC、Thrift、Dubbo、tRPC、brpc、JSON-RPC、Connect 的定位矩阵，以及哪些场景该换成消息、Saga 或批量接口。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/api/rpc/">
     <!-- Open Graph -->
     <meta property="og:title" content="RPC 框架的抽象层次与选型 - 资深码农">
-    <meta property="og:description" content="RPC 与 REST、消息队列的差别首先是语义而不是性能：同步调用天然有成功、失败、未知三种结果，而「未知」这一态决定了超时和重试该怎么写。本文按序列化、传输、服务治理三层拆开 RPC 框架的抽象，讲清超时预算自上而下分配的算法、重试放大的指数关系与重试预算、幂等键与状态机 CAS 的落地、服务发现与健康检查的陷阱，并给出 gRPC、Thrift、Dubbo、tRPC、brpc、JSON-RPC、Connect 的定位矩阵，以及什么时候根本不该用 RPC。">
+    <meta property="og:description" content="RPC 按用法、原理、场景三段组织：先给「该用 RPC 还是 REST 还是消息」的四问判断法、超时预算自上而下分配的可手算流程与单次尝试超时的推法，每项都配验证手段；再讲清同步调用的成功、失败、未知三态，契约、序列化、传输、治理四层抽象，预算校验不等式，重试的乘法放大与幂等键加状态机 CAS，服务发现的三类错位；最后给 gRPC、Thrift、Dubbo、tRPC、brpc、JSON-RPC、Connect 的定位矩阵，以及哪些场景该换成消息、Saga 或批量接口。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/rpc/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="RPC 框架的抽象层次与选型 - 资深码农">
-    <meta name="twitter:description" content="RPC 与 REST、消息队列的差别首先是语义而不是性能：同步调用天然有成功、失败、未知三种结果，而「未知」这一态决定了超时和重试该怎么写。本文按序列化、传输、服务治理三层拆开 RPC 框架的抽象，讲清超时预算自上而下分配的算法、重试放大的指数关系与重试预算、幂等键与状态机 CAS 的落地、服务发现与健康检查的陷阱，并给出 gRPC、Thrift、Dubbo、tRPC、brpc、JSON-RPC、Connect 的定位矩阵，以及什么时候根本不该用 RPC。">
+    <meta name="twitter:description" content="RPC 按用法、原理、场景三段组织：先给「该用 RPC 还是 REST 还是消息」的四问判断法、超时预算自上而下分配的可手算流程与单次尝试超时的推法，每项都配验证手段；再讲清同步调用的成功、失败、未知三态，契约、序列化、传输、治理四层抽象，预算校验不等式，重试的乘法放大与幂等键加状态机 CAS，服务发现的三类错位；最后给 gRPC、Thrift、Dubbo、tRPC、brpc、JSON-RPC、Connect 的定位矩阵，以及哪些场景该换成消息、Saga 或批量接口。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="接口、协议与安全">
     <meta property="article:tag" content="其他">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"RPC 框架的抽象层次与选型","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"RPC 与 REST、消息队列的差别首先是语义而不是性能：同步调用天然有成功、失败、未知三种结果，而「未知」这一态决定了超时和重试该怎么写。本文按序列化、传输、服务治理三层拆开 RPC 框架的抽象，讲清超时预算自上而下分配的算法、重试放大的指数关系与重试预算、幂等键与状态机 CAS 的落地、服务发现与健康检查的陷阱，并给出 gRPC、Thrift、Dubbo、tRPC、brpc、JSON-RPC、Connect 的定位矩阵，以及什么时候根本不该用 RPC。","url":"https://www.yijunjun.asia/api/rpc/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/api/rpc/"},"articleSection":"其他"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"RPC 框架的抽象层次与选型","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"RPC 按用法、原理、场景三段组织：先给「该用 RPC 还是 REST 还是消息」的四问判断法、超时预算自上而下分配的可手算流程与单次尝试超时的推法，每项都配验证手段；再讲清同步调用的成功、失败、未知三态，契约、序列化、传输、治理四层抽象，预算校验不等式，重试的乘法放大与幂等键加状态机 CAS，服务发现的三类错位；最后给 gRPC、Thrift、Dubbo、tRPC、brpc、JSON-RPC、Connect 的定位矩阵，以及哪些场景该换成消息、Saga 或批量接口。","url":"https://www.yijunjun.asia/api/rpc/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/api/rpc/"},"articleSection":"其他"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "接口、协议与安全", "item": "https://www.yijunjun.asia/api/"}, {"position": 3, "name": "RPC", "item": "https://www.yijunjun.asia/api/rpc/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -93,7 +93,200 @@
                     <div class="article-content">
 <p>RPC 最贵的不是序列化和网络，而是<strong>它把一次跨网络交互伪装成了函数调用</strong>。伪装带来的所有工程成本——三态失败、超时预算、重试放大、服务发现——都发生在框架抽象的不同层次上。这篇讲抽象层次与选型判断；gRPC 的传输细节见站内 <a href="grpc/">gRPC 的传输机制与工程落地</a>，编码与兼容性见站内 <a href="protobuf/">Protobuf 的编码与模式演进</a>。</p>
 
-<h2>同步调用的第三态：不是成功也不是失败</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：四个问题判断该走 RPC、REST 还是消息，以及把一条链路的超时与重试预算算出来落进配置的具体方法，每项都给验证手段。</li>
+        <li><strong>② 原理</strong>：为什么这些配法是唯一站得住的——同步调用的第三态、三者的语义差异、框架的四层抽象、预算校验不等式、重试的乘法放大、服务发现的三类错位。</li>
+        <li><strong>③ 场景</strong>：gRPC、Thrift、Dubbo、tRPC、brpc、JSON-RPC、Connect 各自的落位，以及哪几类场景根本不该用 RPC、该换成什么。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 先判断通信方式，再把超时与重试预算算出来</h2>
+<p>这一层不解释机制，只给两件当天就能做完的事：判断这次交互该用什么通信方式，以及把整条链路的超时与重试预算算出来、写进配置、验证它真的生效了。为什么「未知」这一态决定重试能不能开、为什么重试是乘法而不是加法，见下一节起的原理部分。</p>
+
+<p><strong>第一步，四问判断通信方式</strong>，按顺序问，第一个能定性的答案就是结论：</p>
+<ul>
+    <li><strong>调用方必须立刻拿到结果吗</strong>：不必须就先考虑消息或后台任务，别把异步业务写成同步调用再靠超时兜底。</li>
+    <li><strong>调用方是浏览器或外部第三方吗</strong>：是就走 HTTP 加 JSON。选二进制 RPC 意味着你必须额外维护一层协议转换网关，这个成本要提前算进去。</li>
+    <li><strong>接口数量与语言栈</strong>：内部服务、接口多、两种以上语言、需要生成 stub，二进制 RPC 才划算；只有三五个内部接口时，一套 HTTP 加 JSON 省掉整条工具链。</li>
+    <li><strong>需要削峰、扇出或可重放吗</strong>：需要就用消息，这三件事同步调用做不了——同步调用没有「回放昨天的流量」这个动作。</li>
+</ul>
+
+<div class="mermaid">
+flowchart TB
+    Q1{"调用方必须立刻拿到结果吗"}
+    Q1 -->|"不必须"| Q2{"需要削峰、扇出或重放吗"}
+    Q2 -->|"需要"| MQ["消息队列，接受最终一致"]
+    Q2 -->|"不需要，只是后台工作"| JOB["定时任务或工作队列"]
+    Q1 -->|"必须"| Q3{"调用方是浏览器或外部第三方吗"}
+    Q3 -->|"是"| REST["HTTP 加 JSON，用得上缓存与幂等语义"]
+    Q3 -->|"不是，是内部服务"| Q4{"强类型契约与多语言 stub 有价值吗"}
+    Q4 -->|"有，接口多且跨语言"| RPC["二进制 RPC 框架"]
+    Q4 -->|"没有，接口很少"| REST2["内部也用 HTTP 加 JSON，省一套工具链"]
+</div>
+
+<p><strong>第二步，分配超时与重试预算</strong>。这是个可以手算的三步流程，不要每层各自拍一个数：</p>
+<ul>
+    <li><strong>定总预算</strong>：由产品可接受的等待时间决定，不由下游能力决定。这个值只在入口出现一次。</li>
+    <li><strong>逐跳扣减</strong>：每一跳先扣掉本层自身开销（编排、序列化、写响应），把剩余时间当成下游的预算传下去。自身开销取本层 p99 减去下游 p99，不要凭感觉填。</li>
+    <li><strong>切给单次尝试</strong>：单次尝试超时 = 本层剩余预算 ÷ 剩余尝试次数。<strong>让单次尝试超时等于总预算，等于关掉了重试。</strong></li>
+</ul>
+<p>算完只需校验一条不等式：<strong>本层所有下游超时之和（并行调用取最大值）加上本层自身开销，必须小于本层拿到的预算</strong>。不等式不成立就说明这层注定先超时，配置是假的。</p>
+
+<pre><code class="language-go">// 入口只做一件事：把「产品能接受的总时延」变成 deadline，全链路预算在这里唯一确定
+func WithBudget(total time.Duration) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            ctx, cancel := context.WithTimeout(r.Context(), total)
+            defer cancel() // 不 cancel 会把 timer 留到 total 到期，高 QPS 下是可观的内存与 GC 压力
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+
+// 每往下一跳调用前，先扣掉本层自己的开销，再把剩余时间交给下游
+// selfCost 取「本层 p99 减去下游 p99」，代表编排与序列化的实测成本
+func nextHop(ctx context.Context, selfCost time.Duration) (context.Context, context.CancelFunc, error) {
+    dl, ok := ctx.Deadline()
+    if !ok {
+        // 没预算就不发起调用：一个没有 deadline 的跨进程调用会一直占着连接和 goroutine
+        return nil, nil, errors.New("rpc: refuse to call without deadline")
+    }
+    remain := time.Until(dl) - selfCost
+    if remain &lt;= 0 {
+        // 剩余时间已经不够，直接放弃比发出一个注定超时的请求便宜
+        return nil, nil, context.DeadlineExceeded
+    }
+    child, cancel := context.WithTimeout(ctx, remain)
+    return child, cancel, nil
+}
+
+// 单次尝试超时由剩余预算和剩余次数推出，保证第 2 次尝试真的有机会执行
+func perTry(ctx context.Context, attemptsLeft int) time.Duration {
+    dl, ok := ctx.Deadline()
+    if !ok || attemptsLeft &lt;= 0 {
+        return 0
+    }
+    return time.Until(dl) / time.Duration(attemptsLeft)
+}</code></pre>
+
+<table>
+    <thead>
+        <tr>
+            <th>要做什么</th>
+            <th>怎么做</th>
+            <th>怎么验证它真的生效了</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>决定通信方式</td>
+            <td>按上面四问走一遍，把结论和理由写进设计文档</td>
+            <td>反查一条：如果调用方里有浏览器或第三方而你选了二进制 RPC，就一定多出一层网关；这层网关出现在架构图上就说明第二问答错了</td>
+        </tr>
+        <tr>
+            <td>给链路定超时</td>
+            <td>入口用 <code>WithBudget</code> 定总量，每跳用 <code>nextHop</code> 扣自身开销后传下游</td>
+            <td>在每个服务入口打一条日志记录「收到的剩余预算」，这个数必须逐跳递减；出现某跳比上游还大，就是中间某处没传 deadline 而是重新拍了一个值</td>
+        </tr>
+        <tr>
+            <td>让重试真的能发生</td>
+            <td>单次尝试超时用 <code>perTry</code> 推出，不要等于整体超时</td>
+            <td>注入一次下游慢响应，日志里必须出现第 2 次尝试；只有一次说明第一次尝试就把预算吃光了</td>
+        </tr>
+        <tr>
+            <td>消掉重复重试</td>
+            <td>先把框架默认、客户端 SDK 默认、业务代码里的重试<strong>全部显式关掉</strong>，再只在一处打开</td>
+            <td>在最下游按幂等键统计同一请求的到达次数，注入一次失败后这个数应等于你配的次数，而不是几处配置的乘积</td>
+        </tr>
+        <tr>
+            <td>给写接口加幂等键</td>
+            <td>调用方生成、重试时保持不变；服务端唯一键插入加状态机 CAS 推进</td>
+            <td>用同一个键连发两次写，第二次必须返回首次的结果且不产生第二条副作用；同时把两次请求顺序颠倒再试一遍</td>
+        </tr>
+        <tr>
+            <td>配熔断</td>
+            <td>按时间滑动窗口统计失败率，配冷却时间与半开放量，同时准备好降级路径</td>
+            <td>把下游停掉，调用方应在冷却期内接近零延迟地快速失败；如果还是等到超时才报错，说明熔断没生效或阈值永远达不到</td>
+        </tr>
+        <tr>
+            <td>上下线摘流</td>
+            <td>顺序固定为反注册 → 等一个传播周期 → 停收新请求 → 优雅关闭</td>
+            <td>滚动发布时看错误率曲线：每替换一个实例都冒出一小段错误，就是顺序写反了</td>
+        </tr>
+        <tr>
+            <td>防注册中心故障扩散</td>
+            <td>客户端缓存地址列表，拿不到新列表时沿用旧的，不清空</td>
+            <td>断开客户端与注册中心的连接，此时已有调用必须继续成功；如果立刻全链路失败，说明实现把「拿不到列表」当成了「没有实例」</td>
+        </tr>
+    </tbody>
+</table>
+
+<table>
+    <thead>
+        <tr>
+            <th>配置项</th>
+            <th>作用</th>
+            <th>默认值</th>
+            <th>什么时候需要改</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>调用 deadline / timeout</td>
+            <td>本次调用的预算上限，同时决定何时释放连接与线程</td>
+            <td>多数框架不提供默认超时，不设即无限等待；以所用框架文档与运行时配置 dump 为准</td>
+            <td>任何跨进程调用都必须显式设置，没有例外</td>
+        </tr>
+        <tr>
+            <td>单次尝试超时（per-try timeout）</td>
+            <td>把整体预算切给一次尝试，使重试有机会发生</td>
+            <td>常见实现在不配时等于整体超时；以配置 dump 输出为准</td>
+            <td>只要开了重试就必须改小，取整体预算除以尝试次数</td>
+        </tr>
+        <tr>
+            <td>最大重试次数</td>
+            <td>限制同一请求的尝试上限</td>
+            <td>部分客户端 SDK 自带重试且默认开启；以 SDK 文档为准，不要假设是关闭的</td>
+            <td>先把所有层的重试关掉，再只在最接近故障点的一侧开一处</td>
+        </tr>
+        <tr>
+            <td>重试预算（百分比）</td>
+            <td>重试并发占正常请求的比例上限，故障扩大时重试自动退场</td>
+            <td>一般不默认启用</td>
+            <td>链路层数达到两层以上，或压测发现最下游放大超过三倍时</td>
+        </tr>
+        <tr>
+            <td>熔断阈值与冷却时间</td>
+            <td>下游明确不可用时把排队换成快速失败</td>
+            <td>一般不默认启用</td>
+            <td>下游存在明确的不可用形态且调用方有降级路径时；没有降级路径就先别开</td>
+        </tr>
+        <tr>
+            <td>最大摘除比例</td>
+            <td>被动健康检查的安全阀，防止实例被全部摘掉</td>
+            <td>随控制面实现不同，以控制面配置 dump 为准</td>
+            <td>启用被动摘除时必须同时设，通常与副本数一起算</td>
+        </tr>
+        <tr>
+            <td>连接与 keepalive 参数</td>
+            <td>长连接的保活与空闲回收，直接影响代理与网关的兼容性</td>
+            <td>随传输实现不同；gRPC 侧的取值与代理配合见站内 <a href="grpc/">gRPC 的传输机制与工程落地</a></td>
+            <td>链路中间有 L4 负载均衡或反向代理时必须对齐两端配置</td>
+        </tr>
+        <tr>
+            <td>负载均衡策略</td>
+            <td>决定请求落到哪个实例，长连接下比 DNS 轮询重要得多</td>
+            <td>随框架与控制面不同，以配置 dump 为准</td>
+            <td>实例规格不一致、长尾延迟明显，或扩容后新实例分不到流量时</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>② 原理 · 同步调用的第三态：不是成功也不是失败</h2>
+<p>搞清这一态，能解决「为什么加了重试反而把事故放大」和「为什么会重复扣款」——这两件事的根都在这里。</p>
 <p>本地函数调用只有两种结果：返回或抛异常。跨网络调用有三种：<strong>成功、明确失败、未知</strong>。第三态是所有分布式故障处理的起点——超时、连接中断、对端重启，你都无法判断请求到底执行没执行。</p>
 <p>「未知」不可消除，只能转化。工程上只有两条路：要么让操作幂等，把「未知」转成「可以安全重试」；要么引入对账或补偿，把「未知」转成「事后收敛」。<strong>没有第三条路，而不设计就等于默认选了「靠运气」</strong>。这也解释了为什么「加个重试」经常让事故变严重：重试只在第一条路上成立。</p>
 
@@ -146,8 +339,9 @@
     </tbody>
 </table>
 
-<h2>RPC、REST 与消息队列：选错的是语义</h2>
-<p>这三者的差别常被简化成「二进制比 JSON 快」「异步比同步抗压」，真正的分野是<strong>时间耦合与失败归属</strong>：同步调用要求双方同时在线，失败由调用方承担；消息传递允许错峰，失败由消费侧与重投机制承担。选型错了，后面的所有治理手段都在打补丁。</p>
+<h2>② 原理 · RPC、REST 与消息队列：选错的是语义</h2>
+<p>搞清这三者的差别，能解决「为什么这套链路怎么调参都不稳」——多数时候不是参数问题，而是用同步调用做了本该异步的事。</p>
+<p>三者的差别常被简化成「二进制比 JSON 快」「异步比同步抗压」，真正的分野是<strong>时间耦合与失败归属</strong>：同步调用要求双方同时在线，失败由调用方承担；消息传递允许错峰，失败由消费侧与重投机制承担。选型错了，后面的所有治理手段都在打补丁。</p>
 
 <table>
     <thead>
@@ -198,23 +392,11 @@
     </tbody>
 </table>
 
-<p>API 风格本身的取舍（资源建模、版本化、分页、错误体）详见站内 <a href="../">API 设计</a>；消息中间件的投递语义与堆积治理详见站内 <a href="../../architecture/messaging/">消息队列</a>。</p>
+<p>API 风格本身的取舍（资源建模、版本化、分页、错误体）详见站内 <a href="../design/restful/">RESTful 设计</a> 与 <a href="../design/versioning/">API 版本治理</a>；消息中间件的投递语义与堆积治理详见站内 <a href="../../architecture/messaging/">消息队列</a>。</p>
 
-<div class="mermaid">
-flowchart TB
-    Q1{"调用方必须立刻拿到结果吗"}
-    Q1 -->|"不必须"| Q2{"需要削峰、扇出或重放吗"}
-    Q2 -->|"需要"| MQ["消息队列，接受最终一致"]
-    Q2 -->|"不需要，只是后台工作"| JOB["定时任务或工作队列"]
-    Q1 -->|"必须"| Q3{"调用方是浏览器或外部第三方吗"}
-    Q3 -->|"是"| REST["HTTP 加 JSON，用得上缓存与幂等语义"]
-    Q3 -->|"不是，是内部服务"| Q4{"强类型契约与多语言 stub 有价值吗"}
-    Q4 -->|"有，接口多且跨语言"| RPC["二进制 RPC 框架"]
-    Q4 -->|"没有，接口很少"| REST2["内部也用 HTTP 加 JSON，省一套工具链"]
-</div>
-
-<h2>抽象三层：序列化、传输、服务治理</h2>
-<p>看懂任何一个 RPC 框架，只要把它拆成四段：<strong>契约与代码生成、序列化、传输、服务治理</strong>。四段各自可替换，替换成本从右到左递增。这个视角比记住框架名字有用得多——它直接告诉你换框架时哪些代码会被波及。</p>
+<h2>② 原理 · 抽象四层：契约、序列化、传输、治理</h2>
+<p>搞清分层，能解决「换个框架要动多少代码」这个每次选型都要回答的问题——答案取决于你的代码越了哪几层。</p>
+<p>看懂任何一个 RPC 框架，只要把它拆成四段：<strong>契约与代码生成、序列化、传输、服务治理</strong>。四段各自可替换，替换成本从右到左递增。这个视角比记住框架名字有用得多。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -284,8 +466,9 @@ flowchart TB
     </tbody>
 </table>
 
-<h2>超时预算：自上而下分配，而不是各层自己拍</h2>
-<p>最常见的错误配置是每层各设一个「看起来合理」的超时。结果是入口先超时、下游还在跑，资源被幽灵请求占着。<strong>正确模型是预算：入口定总量，每层扣掉自己的开销后把剩余传给下游。</strong></p>
+<h2>② 原理 · 超时预算为什么必须自上而下分配</h2>
+<p>搞清这条，能解决「明明每层超时都设了，为什么线上还是有大量幽灵请求」。</p>
+<p>每层各设一个「看起来合理」的超时，结果是入口先超时、下游还在跑，资源被没人要的请求占着。<strong>正确模型是预算：入口定总量，每层扣掉自己的开销后把剩余传给下游。</strong>用法层给的 <code>nextHop</code> 就是这条规则的代码形态。</p>
 <p>校验规则只有一条：<strong>本层的所有下游超时之和，加上本层自身处理开销，必须小于本层拿到的预算</strong>。并行调用取最大值而不是求和。有重试时还要再加一条：单次尝试超时必须明显小于本层剩余预算，否则第一次尝试就吃光预算，重试根本不会发生——这是「配了重试但日志里从没出现过第二次尝试」的原因。</p>
 
 <table>
@@ -329,8 +512,10 @@ flowchart TB
         </tr>
     </tbody>
 </table>
+<p>上表的数字是一个示例链路的分配方式，不是推荐值：总预算来自产品要求，各层自身开销要用本层实测 p99 替换。</p>
 
-<h2>重试放大与幂等前提</h2>
+<h2>② 原理 · 重试放大与幂等前提</h2>
+<p>搞清这条，能解决「下游只是变慢，为什么最后整条链路都挂了」。</p>
 <p>重试的危险在于它是<strong>乘法</strong>。每层最多 3 次，两层串联最坏 9 次，三层 27 次，再叠上客户端 SDK 自带重试就是几十倍。下游本来只是变慢，重试直接把它压成不可用，然后所有上游一起超时——这是典型的重试型雪崩。</p>
 
 <div class="mermaid">
@@ -465,8 +650,9 @@ func callWithBudget(ctx context.Context, do func(context.Context) error) error {
     return last
 }</code></pre>
 
-<h2>服务发现与健康检查</h2>
-<p>服务发现的难点不在「怎么拿到地址列表」，而在<strong>列表什么时候是错的</strong>。三类错位反复出现：注册早于就绪、下线晚于摘流、注册中心自身不可用。</p>
+<h2>② 原理 · 服务发现与健康检查的三类错位</h2>
+<p>搞清这三类错位，能解决「注册中心里一片绿色，调用方却在报错」。</p>
+<p>服务发现的难点不在「怎么拿到地址列表」，而在<strong>列表什么时候是错的</strong>：注册早于就绪、下线晚于摘流、注册中心自身不可用。</p>
 <p>第一类：进程起来就注册，但缓存没预热、连接池没建好，流量一进来全是超时。解法是把注册动作绑在就绪检查之后。第二类更隐蔽：<strong>正确的下线顺序是先反注册、等一个传播周期、再停止接收新请求、最后优雅关闭</strong>；顺序颠倒就会有一段时间流量打向已关闭的实例。第三类：注册中心抖动时，客户端必须用本地缓存的地址列表兜底，并且<strong>不能因为拿不到列表就把已有连接全摘掉</strong>——这是注册中心故障引发全站不可用的经典路径。</p>
 
 <table>
@@ -528,7 +714,7 @@ retry_policy:
   num_retries: 2
   per_try_timeout: 0.3s</code></pre>
 
-<h2>框架定位矩阵</h2>
+<h2>③ 场景 · 框架定位矩阵与跨语言的隐性成本</h2>
 <p>选框架的实际约束往往是「团队语言栈 + 是否需要开箱治理 + 调用方能不能是浏览器」，而不是基准测试数字。</p>
 
 <table>
@@ -568,7 +754,7 @@ retry_policy:
             <td>国内 Java 体系的服务治理</td>
         </tr>
         <tr>
-            <td>tRPC</td>
+            <td>tRPC（腾讯的 RPC 框架）</td>
             <td>多协议：私有协议 / HTTP / gRPC</td>
             <td>多编解码可插拔</td>
             <td>强，插件化</td>
@@ -602,18 +788,75 @@ retry_policy:
     </tbody>
 </table>
 
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">同名不同物：两个 tRPC</div>
+    <p>上表里的 tRPC 是腾讯开源的多语言 RPC 框架，和 TypeScript 生态里那个「端到端类型安全」的 tRPC 是两个完全不同的项目，只是名字撞了。后者不生成 IDL、不跨语言，靠 TypeScript 类型推导把服务端类型直接喂给前端，适用边界完全不同，见站内 <a href="../trpc/">tRPC 的端到端类型安全：原理与适用边界</a>。搜资料时混在一起会得到完全矛盾的结论。</p>
+</div>
+
 <p>跨语言方面有一个常被忽略的成本：<strong>治理策略必须跨语言一致</strong>。同一套超时、重试、熔断规则要在 Go、Java、C++ 客户端里表现一致，靠各语言 SDK 各自实现几乎做不到，这才是服务网格和 xDS 控制面真正的价值所在——把治理从 SDK 里拿出来。</p>
 
-<h2>什么时候不该用 RPC</h2>
-<p>RPC 不是通信的默认答案。以下几类场景用 RPC 都会付出隐性代价：</p>
-<ul>
-    <li><strong>对外开放的 API</strong>：第三方需要最低的接入成本、可读的调试方式和稳定的版本策略，应走 HTTP 加 JSON，接口风格详见站内 <a href="../">API 设计</a>。</li>
-    <li><strong>需要削峰、扇出或可重放的链路</strong>：用消息传递而不是同步调用，细节详见站内 <a href="../../architecture/messaging/">消息队列</a>。</li>
-    <li><strong>跨服务的强一致写</strong>：用同步 RPC 串起多个写操作，本质是分布式事务，应改用 Saga、TCC 或本地消息表，详见站内 <a href="../../architecture/distributed/">分布式系统</a>。</li>
-    <li><strong>细粒度、高频的数据读取</strong>：一次页面渲染触发几十次 RPC（N+1 调用）时，该做的是批量接口或数据本地化，而不是优化单次调用延迟。</li>
-    <li><strong>大文件与批量数据传输</strong>：走对象存储传引用，RPC 只传地址，不要把几十 MB 的 payload 塞进调用。</li>
-    <li><strong>调用链蔓延</strong>：如果一个业务动作要穿过五六个服务，问题在服务边界而不在通信方式，拆分原则详见站内 <a href="../../architecture/microservices/">微服务</a>。</li>
-</ul>
+<h2>③ 场景 · 什么时候不该用 RPC</h2>
+<p>RPC 不是通信的默认答案。下面这几类场景用同步 RPC 都会付出隐性代价，代价栏写的是「换方案要付什么」，不是「不换会怎样」。</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>场景</th>
+            <th>该怎么做</th>
+            <th>为什么</th>
+            <th>换方案的代价</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>对外开放的 API</td>
+            <td>走 HTTP 加 JSON，版本与错误体按 REST 约定设计</td>
+            <td>第三方需要最低接入成本、可读的调试方式和稳定的版本策略；二进制契约会把工具链成本转给对方</td>
+            <td>要自己维护一层网关与文档，见站内 <a href="../design/versioning/">API 版本治理</a></td>
+        </tr>
+        <tr>
+            <td>需要削峰、扇出或可重放的链路</td>
+            <td>改用消息传递，接受最终一致</td>
+            <td>同步调用做不到这三件事，硬做就是用超时和重试模拟队列</td>
+            <td>要处理重复消费、乱序与堆积，见站内 <a href="../../architecture/messaging/">消息队列</a></td>
+        </tr>
+        <tr>
+            <td>跨服务的强一致写</td>
+            <td>用 Saga、TCC 或本地消息表</td>
+            <td>用同步 RPC 串起多个写操作，本质就是没有协调者的分布式事务，中途失败没有回滚点</td>
+            <td>要写补偿逻辑并保证补偿幂等，见站内 <a href="../../architecture/distributed/">分布式系统</a></td>
+        </tr>
+        <tr>
+            <td>细粒度、高频的数据读取</td>
+            <td>做批量接口，或把数据本地化、加缓存</td>
+            <td>一次页面渲染触发几十次调用（N+1 调用）时，优化单次延迟的收益被次数抵消掉</td>
+            <td>批量接口的错误语义更复杂：要能返回部分成功</td>
+        </tr>
+        <tr>
+            <td>大文件与批量数据传输</td>
+            <td>走对象存储，RPC 只传引用地址</td>
+            <td>几十 MB 的 payload 会撑爆消息大小上限、吃满连接与内存，还让重试代价高到不可接受</td>
+            <td>要处理临时凭据与清理策略</td>
+        </tr>
+        <tr>
+            <td>一个业务动作穿过五六个服务</td>
+            <td>先改服务边界，而不是优化通信</td>
+            <td>问题在拆分粒度而不在通信方式，每多一跳就多一份超时与失败概率</td>
+            <td>要合并服务或重划领域边界，见站内 <a href="../../architecture/microservices/">微服务</a></td>
+        </tr>
+        <tr>
+            <td>同仓库的 TypeScript 全栈项目</td>
+            <td>考虑端到端类型推导方案，别为几个内部接口引入 IDL 与代码生成</td>
+            <td>IDL 的价值来自跨语言与多调用方；两端同语言同仓时，这份价值收不回工具链成本</td>
+            <td>失去跨语言能力与公开契约，见站内 <a href="../trpc/">tRPC 的端到端类型安全</a></td>
+        </tr>
+    </tbody>
+</table>
+
+<p>这篇在 RPC 簇里是入口：判断完「该不该用、预算怎么分」之后，往下依次是 gRPC 的传输层细节、Go 侧的服务实现、以及 Protobuf 的编码与兼容性。观测侧的配套（超时与重试要能在链路追踪里看出来）见站内 <a href="../../observability/tracing/">链路追踪</a>；把治理下沉到控制面见站内 <a href="../../devops/kubernetes/">Kubernetes</a>。</p>
+
+<p class="cluster-nav">同主题路径：<a href="grpc/">下一步：gRPC 的传输机制与工程落地 →</a></p>
 
 <h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
@@ -623,6 +866,7 @@ retry_policy:
         <li>把 RPC 当本地调用写，在循环里逐条调用。单次 1ms 也架不住上千次，必须改批量接口。</li>
         <li>每层各自拍一个超时值，不做预算分配。入口先超时、下游继续执行，资源被幽灵请求占满。</li>
         <li>单次尝试超时等于本层总预算。第一次尝试就把预算用光，配了重试却从未真正重试过。</li>
+        <li>中间某一跳没有透传 deadline，而是重新拍了一个更大的值。整条链路的预算从这里断掉，上游日志里看不出来。</li>
         <li>框架默认重试、SDK 默认重试、业务代码自己的重试同时开着，放大倍数是三者相乘。</li>
         <li>对超时做自动重试却没有幂等键。超时属于「未知」，重复扣款和重复发货就是这么来的。</li>
         <li>幂等键用时间戳或自增 ID 生成，重试时键就变了，去重逻辑形同虚设。</li>
@@ -632,6 +876,7 @@ retry_policy:
         <li>下线顺序写反：先停服务再反注册。正确顺序是先反注册、等传播、再优雅关闭。</li>
         <li>注册中心抖动时把地址列表清空。应该用本地缓存兜底，宁可用旧列表也不要把所有连接摘掉。</li>
         <li>就绪探针里检查所有下游依赖。一个下游抖动就让整组实例被摘除，故障从此扩散。</li>
+        <li>被动摘除不设最大摘除比例。抖动时实例被连续摘光，剩下的那几个立刻被打死。</li>
     </ul>
 </div>
 </div>

@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="与具体产品无关的消息使用范式：点对点、发布订阅、请求回复、竞争消费者、消息路由五种基础模式的适用边界；命令、事件、文档三类消息的命名方式与耦合方向，以及混用它们为什么是消息架构混乱的根源；事件驱动的三种成熟度（事件通知、事件携带状态转移、事件溯源）对照；编排与协同两种流程实现的取舍；消息契约的向前向后兼容规则；顺序性与并发的根本矛盾与按键哈希折中；十条常见反模式。">
+    <meta name="description" content="消息通信模式三段式：先给「这个交互该定成命令、事件还是文档」的判断表，和三类消息的最小可用契约（信封字段该有什么、schemaVersion 与 aggregateVersion 两层版本怎么带）；再讲五种基础模式的适用边界、命令与事件混用的两种具体事故、事件驱动的三种成熟度、编排与协同的取舍、契约兼容规则、顺序与并发的根本矛盾、死信与重试的分类处置；最后给八类流程该用哪种模式组合与十条反模式。">
     <meta name="keywords" content="消息队列深入,消息模式与最佳实践,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/messaging/patterns/">
     <meta property="og:title" content="消息通信模式：命令、事件与编排协同 - 消息队列深入 - 资深码农">
-    <meta property="og:description" content="与具体产品无关的消息使用范式：点对点、发布订阅、请求回复、竞争消费者、消息路由五种基础模式的适用边界；命令、事件、文档三类消息的命名方式与耦合方向，以及混用它们为什么是消息架构混乱的根源；事件驱动的三种成熟度（事件通知、事件携带状态转移、事件溯源）对照；编排与协同两种流程实现的取舍；消息契约的向前向后兼容规则；顺序性与并发的根本矛盾与按键哈希折中；十条常见反模式。">
+    <meta property="og:description" content="消息通信模式三段式：先给「这个交互该定成命令、事件还是文档」的判断表，和三类消息的最小可用契约（信封字段该有什么、schemaVersion 与 aggregateVersion 两层版本怎么带）；再讲五种基础模式的适用边界、命令与事件混用的两种具体事故、事件驱动的三种成熟度、编排与协同的取舍、契约兼容规则、顺序与并发的根本矛盾、死信与重试的分类处置；最后给八类流程该用哪种模式组合与十条反模式。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/messaging/patterns/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="消息通信模式：命令、事件与编排协同">
-    <meta name="twitter:description" content="与具体产品无关的消息使用范式：点对点、发布订阅、请求回复、竞争消费者、消息路由五种基础模式的适用边界；命令、事件、文档三类消息的命名方式与耦合方向，以及混用它们为什么是消息架构混乱的根源；事件驱动的三种成熟度（事件通知、事件携带状态转移、事件溯源）对照；编排与协同两种流程实现的取舍；消息契约的向前向后兼容规则；顺序性与并发的根本矛盾与按键哈希折中；十条常见反模式。">
+    <meta name="twitter:description" content="消息通信模式三段式：先给「这个交互该定成命令、事件还是文档」的判断表，和三类消息的最小可用契约（信封字段该有什么、schemaVersion 与 aggregateVersion 两层版本怎么带）；再讲五种基础模式的适用边界、命令与事件混用的两种具体事故、事件驱动的三种成熟度、编排与协同的取舍、契约兼容规则、顺序与并发的根本矛盾、死信与重试的分类处置；最后给八类流程该用哪种模式组合与十条反模式。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,7 +73,103 @@
                     <div class="article-content">
 <p>这篇不谈任何具体产品，只谈<strong>消息该怎么用</strong>——这部分知识换 MQ 不会失效，而且是实际项目里出问题最多的地方。选型与产品机制见<a href="../compare/">选型与机制对比</a>，可靠投递见<a href="../reliable/">可靠投递篇</a>。经验上，一个消息架构走向混乱的起点几乎总是同一件事：<strong>没有区分「命令」和「事件」</strong>。</p>
 
-<h2>五种基础通信模式</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一张「这个交互该定成命令、事件还是文档」的判断表，三类消息的最小可用契约（信封字段固定哪几个、两层版本号各管什么），以及信封字段速查表。</li>
+        <li><strong>② 原理</strong>：五种基础模式各自被谁消费、命令与事件混用的两种具体事故、事件驱动三种成熟度的成本差、编排与协同的可见性与耦合取舍、契约变更的兼容规则与 Schema Registry 的拦截点、顺序与并发为什么无法两全、死信与重试按错误类型分流。</li>
+        <li><strong>③ 场景</strong>：八类流程该用哪种模式组合与各自代价、十条反模式的表面理由与真实后果。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 先定这条消息是命令、事件还是文档，再照契约写</h2>
+
+<p>动手顺序固定三步：<strong>先用一句话定类型，再照最小契约写信封，最后定版本策略</strong>。类型定错，后面所有可靠性工作都是在给错误的契约打补丁——这是消息架构走向混乱最常见的起点。</p>
+
+<p>定类型只需要问一句：<strong>如果没有任何人订阅这条消息，发送方是否算出错</strong>？答案为「是」就是命令（有唯一接收方、发送方关心结果），为「否」就是事件（描述已发生的事实，订阅方数量未知）。既不指挥也不描述变化、只是一份供人取用的数据，那是文档。对着下表落地：</p>
+
+<table>
+<thead><tr><th>这个交互长什么样</th><th>定成什么</th><th>主题与命名怎么写</th><th>定错的直接后果</th></tr></thead>
+<tbody>
+<tr><td>下单成功后要通知积分、搜索索引、数仓</td><td>事件</td><td>过去式，<code>order.paid</code>，一主题多消费组</td><td>定成命令后，多个消费者各执行一遍，重复发券</td></tr>
+<tr><td>要求履约服务生成一张运单</td><td>命令</td><td>祈使式，<code>shipment.create</code>，点对点，唯一接收方</td><td>定成事件后每个订阅方各生成一张运单，重复履约</td></tr>
+<tr><td>商品全量目录下发给多个本地缓存</td><td>文档</td><td>名词，<code>catalog.snapshot</code>，覆盖式语义</td><td>定成增量事件后，消费方要自己攒全量，永远对不齐</td></tr>
+<tr><td>需要下游算完返回结果（批量算价、转码）</td><td>请求回复</td><td>请求主题加每请求方独占的回调队列</td><td>当成同步 RPC 用，延迟和复杂度都劣于直接调用</td></tr>
+<tr><td>同一订单的创建与取消必须按序收敛</td><td>事件加实体版本号</td><td>按 <code>aggregateId</code> 哈希，同键有序</td><td>只靠「先发先到」，一次失败重试就乱序</td></tr>
+<tr><td>上游不关心谁消费，但下游要完整字段</td><td>事件携带状态转移</td><td>消息带核心字段加版本号，不只发 ID</td><td>只发 ID 会让每个消费方回查一次，上游变查询热点</td></tr>
+<tr><td>流程有明确先后与补偿（下单、扣库存、支付）</td><td>命令加中心协调者</td><td>编排，流程状态机显式落库</td><td>改用事件协同后流程无处可见，补偿路径容易漏</td></tr>
+<tr><td>参与方不影响主流程成败的扩散通知</td><td>事件协同</td><td>自助订阅，不改生产方</td><td>改用编排会让协调者持续膨胀成上帝服务</td></tr>
+</tbody>
+</table>
+
+<p>类型定了就照下面三份契约起手。<strong>版本分两层且不能合并</strong>：<code>schemaVersion</code> 管契约结构，只在破坏性变更时加一；<code>aggregateVersion</code> 管实体新旧，每次状态变更递增，消费端靠它丢弃乱序的旧消息。注释只说明为什么要这个字段：</p>
+
+<pre><code class="language-json">// 1) 命令：祈使式命名，恰好一个接收方，发送方关心结果
+{
+  "type": "shipment.create",          // 动词祈使式：让谁去做什么
+  "messageId": "cmd_7d1e4a",          // 接收方的幂等键；重发必须复用同一个值
+  "schemaVersion": 1,
+  "issuedAt": "2026-09-23T10:15:30.123+08:00",
+  "source": "order-service",          // 出问题时知道找谁，不要省
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "replyTo": "order.command.reply",   // 要回执就必须显式指定回复通道
+  "correlationId": "cmd_7d1e4a",      // 回执靠它对上请求，缺了就成孤儿回复
+  "data": {"orderId": "O20260923001", "addressId": 88123}
+}
+
+// 2) 事件：过去式命名，订阅方数量未知，只描述已发生的事实
+{
+  "type": "order.paid",
+  "eventId": "evt_8f3a9c",            // 消费端幂等键，全局唯一
+  "schemaVersion": 3,                 // 契约版本，消费方据此走兼容分支
+  "aggregateId": "O20260923001",      // 顺序与路由的哈希键，用业务实体 ID
+  "aggregateVersion": 7,              // 实体版本，单调递增，用于丢弃过期消息
+  "occurredAt": "2026-09-23T10:15:30.123+08:00",  // 事实发生时间，不是投递时间
+  "source": "order-service",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "data": {                           // 带上消费方真需要的字段，省掉回查
+    "userId": 10086,
+    "amountCents": 19900,             // 金额一律整数分，不要用浮点
+    "currency": "CNY"
+  }
+}
+
+// 3) 文档：名词命名，覆盖式语义，消费方自己决定怎么用
+{
+  "type": "catalog.snapshot",
+  "messageId": "doc_20260923T1015",
+  "schemaVersion": 2,
+  "snapshotVersion": 20260923101500,  // 覆盖靠它比大小，不靠到达顺序
+  "completeness": "FULL",             // FULL 或 DELTA；缺了它消费方无法判断能否直接覆盖
+  "source": "product-center",
+  "data": {                           // 大内容放对象存储，消息里只带引用与校验值
+    "payloadRef": "s3://catalog/2026/09/23/full.jsonl.gz",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb924"
+  }
+}</code></pre>
+
+<p>信封字段不要按项目各自发明，下表是三类消息共用的骨架。第四列是实际会踩到的地方：</p>
+
+<table>
+<thead><tr><th>字段</th><th>作用</th><th>必填性</th><th>什么时候需要改</th></tr></thead>
+<tbody>
+<tr><td><code>type</code></td><td>消息类型，路由、监控与积压归因都按它分组</td><td>三类都必填</td><td>语义变了必须换新名，不要复用旧名字换含义</td></tr>
+<tr><td><code>messageId</code> / <code>eventId</code></td><td>消费端幂等键</td><td>必填</td><td><strong>重试时必须复用同一个值</strong>；在发送处用随机 UUID 每次重新生成等于没有幂等键</td></tr>
+<tr><td><code>schemaVersion</code></td><td>契约结构版本，消费方据此走兼容分支</td><td>必填</td><td>只在破坏性变更（删字段、改语义、类型收窄）时加一</td></tr>
+<tr><td><code>aggregateId</code></td><td>顺序保证与分区路由的哈希键</td><td>事件必填</td><td>键的基数决定并发上限；用业务实体 ID，不要用消息 ID</td></tr>
+<tr><td><code>aggregateVersion</code></td><td>实体版本，消费端据此丢弃比当前状态旧的消息</td><td>状态类事件必填</td><td>增量型操作（余额加减）不适用，那种只能靠幂等键</td></tr>
+<tr><td><code>occurredAt</code> / <code>issuedAt</code></td><td>事实发生时间</td><td>必填</td><td>它不等于投递时间；要算端到端延迟必须另记投递时间戳</td></tr>
+<tr><td><code>traceId</code></td><td>让消费端能接回上游链路</td><td>必填</td><td>人工重投之后原 trace 已断，重投时要把原 traceId 一起带上</td></tr>
+<tr><td><code>source</code></td><td>生产方标识</td><td>必填</td><td>多机房或多实例时带上机房与实例，否则排查时定位不到发送者</td></tr>
+<tr><td><code>replyTo</code> / <code>correlationId</code></td><td>请求回复模式的回调通道与请求关联</td><td>命令按需</td><td>请求方重启后回调队列要能重建，否则回复变成孤儿消息</td></tr>
+<tr><td><code>data</code></td><td>业务负载，建议延迟解析</td><td>必填</td><td>只放消费方真需要的字段；大对象放对象存储，这里只留引用</td></tr>
+</tbody>
+</table>
+
+<p>再记三条默认值，它们能避开后面提到的大部分事故：<strong>默认选「事件携带状态转移」</strong>（只发 ID 的通知式默认不用）；<strong>反序列化一律容忍未知字段</strong>，不要开严格模式；<strong>同一主题只放同一实体的同族消息</strong>。这三条为什么是默认值，见下面几节。</p>
+
+<h2>② 原理 · 五种基础通信模式</h2>
 <p>所有复杂的消息拓扑都是这五种的组合。区分它们的关键不是图长什么样，而是<strong>一条消息被几个人消费</strong>以及<strong>发送方是否等结果</strong>。</p>
 <table>
 <thead><tr><th>模式</th><th>一条消息被谁消费</th><th>适用场景</th><th>实现要点与陷阱</th></tr></thead>
@@ -104,7 +200,7 @@ sequenceDiagram
     Note over W,Q2: 回调队列不存在或请求方已重启<br/>回复就无处可去 变成孤儿消息
 </div>
 
-<h2>命令、事件、文档：最重要的一组区分</h2>
+<h2>② 原理 · 命令、事件、文档：最重要的一组区分</h2>
 <p>三者在技术上都是一条消息，但语义完全不同，混用会直接导致架构失控。判断方法只有一句：<strong>如果没有任何人订阅这条消息，发送方是否算出错</strong>？答案为「是」就是命令，为「否」就是事件。</p>
 <table>
 <thead><tr><th>维度</th><th>命令 Command</th><th>事件 Event</th><th>文档 Document</th></tr></thead>
@@ -143,7 +239,7 @@ flowchart TB
     end
 </div>
 
-<h2>事件驱动的三种成熟度</h2>
+<h2>② 原理 · 事件驱动的三种成熟度</h2>
 <p>「用事件」不是一个开关，而是三个层次，成本和收益差别巨大。很多团队直接上最贵的那个，然后被复杂度压死。</p>
 <table>
 <thead><tr><th>层次</th><th>消息里放什么</th><th>优点</th><th>代价</th><th>适用边界</th></tr></thead>
@@ -185,7 +281,7 @@ flowchart TB
 // OrderCreated -> OrderItemAdded -> OrderPaid -> OrderShipped -> OrderCompleted
 // 重放成本随事件数线性增长，所以必须定期打快照，这是它最贵的部分</code></pre>
 
-<h2>编排与协同：同一个流程的两种写法</h2>
+<h2>② 原理 · 编排与协同：同一个流程的两种写法</h2>
 <p>下单流程要走「创建订单 → 扣库存 → 支付 → 发货」，有一个中心协调者按序驱动，还是各服务自己监听事件接力？这是分布式流程设计最核心的一个分叉。先看编排：</p>
 <div class="mermaid">
 sequenceDiagram
@@ -245,7 +341,7 @@ sequenceDiagram
     <p>最难维护的形态是「一半编排一半协同」：协调者驱动前三步，第四步靠某个服务监听事件自行接力。这时流程状态在协调者里显示为「已完成」，实际第四步可能还没跑或已经失败，没有任何地方持有真相。同一个业务流程要么全程编排，要么全程协同；跨流程之间可以用事件衔接，但衔接点必须是明确的流程边界。TCC 与 Saga 两种补偿事务的具体落地见站内分布式一致性篇。</p>
 </div>
 
-<h2>消息契约与版本演进</h2>
+<h2>② 原理 · 消息契约与版本演进</h2>
 <p>消息一旦有第二个消费方，它就是<strong>公开 API</strong>，改它的难度和改 HTTP 接口一样。核心约束是生产方和消费方<strong>永远不可能同时发布</strong>，所以每次变更都必须能在「新生产旧消费」和「旧生产新消费」两种交错状态下工作。</p>
 <table>
 <thead><tr><th>变更类型</th><th>兼容性</th><th>能否直接上线</th><th>正确做法</th></tr></thead>
@@ -314,7 +410,7 @@ func (h *OrderHandler) Handle(ctx context.Context, raw []byte) error {
     return h.repo.Apply(ctx, evt, env.AggregateVersion)
 }</code></pre>
 
-<h2>顺序性与并发的根本矛盾</h2>
+<h2>② 原理 · 顺序性与并发的根本矛盾</h2>
 <p>这是消息系统里少数<strong>无法两全</strong>的问题：要严格顺序就必须让同一条流被单线程处理，要提高并发就一定会乱序。常见的错误是嘴上说「我们保证了顺序」，实际只是在低并发下侥幸没乱。</p>
 <table>
 <thead><tr><th>方案</th><th>顺序保证范围</th><th>并发上限</th><th>失效条件</th></tr></thead>
@@ -327,7 +423,7 @@ func (h *OrderHandler) Handle(ctx context.Context, raw []byte) error {
 </table>
 <p>按键哈希的实现思路很简单但有三个细节决定成败：哈希键必须选<strong>业务实体 ID</strong>（订单号、用户 ID）而不是消息 ID；处理单元数量要固定，扩容前必须排空在途消息；每个处理单元前面要有独立的有界缓冲，避免一个慢键把整体拖住。具体代码见<a href="../">主干篇</a>的 worker 池示例。更推荐的做法是第三行——<strong>不依赖顺序</strong>：在消息里带上实体版本号，消费端丢弃比当前状态旧的消息，把「顺序问题」转化成「幂等与冲突检测问题」。因为无论你怎么保序，失败重试都会重新打乱顺序，而版本号方案对重试天然免疫。</p>
 
-<h2>死信与重试的通用设计</h2>
+<h2>② 原理 · 死信与重试的通用设计</h2>
 <p>重试策略不是「多试几次」，而是要区分<strong>可重试错误</strong>和<strong>不可重试错误</strong>：下游超时可以重试，反序列化失败重试一万次也是失败，后者应该立刻进死信。</p>
 <table>
 <thead><tr><th>错误类型</th><th>判断方式</th><th>处置</th><th>重试间隔</th></tr></thead>
@@ -340,7 +436,23 @@ func (h *OrderHandler) Handle(ctx context.Context, raw []byte) error {
 </table>
 <p>三条通用约定：<strong>重试次数放消息头</strong>（不要放消息体，否则每次重试都要改业务载荷，也没法在不反序列化的情况下判读）；<strong>死信必须告警且有人工重投入口</strong>，一个只能看不能操作的死信队列等于没有；<strong>死信消息要保留原始头信息与失败原因</strong>，包括最后一次异常摘要、失败时间、重试次数，否则重投时无从判断该不该投。各产品内置的重试队列分级与死信配置（Kafka 侧的重试主题设计、RocketMQ 的重试等级、RabbitMQ 的 <code>x-delivery-limit</code>）见站内 Kafka 可靠性篇与<a href="../compare/">机制对比篇</a>。</p>
 
-<h2>常见反模式</h2>
+<h2>③ 场景 · 八类流程该用哪种模式组合</h2>
+<p>前面的机制落到具体流程上就是下面这张表。第四列必须一起看，否则会得出「全用事件最解耦」的错觉。</p>
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么是这个做法</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>关键交易流程：下单、扣库存、支付、发货</td><td>编排。协调者发命令，流程状态机显式落库</td><td>补偿必须完整、状态必须可查、失败时要能人工干预</td><td>协调者随业务膨胀，且是流程单点，要单独做高可用</td></tr>
+<tr><td>注册成功后送券、建画像、发欢迎信</td><td>协同。一条事件多个消费组自助订阅</td><td>参与方不影响主流程成败，新增方零改动</td><td>全局流程无处可见，排查要按 traceId 跨服务拼日志</td></tr>
+<tr><td>搜索索引、缓存、数仓等派生存储同步</td><td>事件携带状态转移，并保证能从头重放</td><td>消费方自治不回查，派生存储坏了能全量重建</td><td>消息体变大，字段一旦暴露就很难再改</td></tr>
+<tr><td>账务、风控判定这类强审计需求</td><td>事件流落库做审计轨迹；是否上事件溯源单独评估</td><td>需要可回到任意历史时点并解释每一次变更</td><td>事件溯源要快照、投影重建与事件版本迁移，成本极高</td></tr>
+<tr><td>长耗时任务要拿结果：批量算价、文件转码</td><td>请求回复加关联 ID 与超时清理，或改任务模型给查询接口</td><td>既要跨网络解耦又必须拿到结果</td><td>请求方要维护等待表与超时清理，重启后在途回复变孤儿</td></tr>
+<tr><td>同一实体的状态必须收敛正确：订单状态机</td><td>事件带 <code>aggregateVersion</code>，消费端丢弃旧消息</td><td>失败重试天然打乱顺序，版本号方案对重试免疫</td><td>只适用于可判新旧的状态覆盖，增量型操作不适用</td></tr>
+<tr><td>老系统过渡，上游代码暂时不能改</td><td>用数据库变更订阅产生事件，再在下游做语义翻译</td><td>上游零改动就能拿到变更流</td><td>事件退化成「某行变了」，与表结构强耦合，改表即破坏契约</td></tr>
+<tr><td>一条消息被多个团队消费</td><td>当公开 API 管：契约进独立仓库加 CI 兼容性检查，有条件上 Schema Registry</td><td>生产方与消费方永远不可能同时发布</td><td>变更节奏被拖慢，破坏性变更只能走双写双读再摘除</td></tr>
+</tbody>
+</table>
+
+<h2>③ 场景 · 十条反模式：表面理由与真实后果</h2>
 <table>
 <thead><tr><th>反模式</th><th>表面理由</th><th>真实后果</th><th>正确做法</th></tr></thead>
 <tbody>
@@ -357,9 +469,16 @@ func (h *OrderHandler) Handle(ctx context.Context, raw []byte) error {
 </tbody>
 </table>
 
+<p><strong>不适用边界</strong>：这篇不解决产品能力差异——延迟消息、事务消息、路由模型与选型流程在 <a href="../compare/">MQ 选型方法论</a>；五个丢失点与生产确认、落盘、提交时机的验证在 <a href="../reliable/">消息可靠投递</a>；要不要引入 MQ 在 <a href="../">主干篇</a>；幂等的四种落地与 TCC / Saga 在 <a href="../../distributed/idempotency/">幂等的完整工程实现</a> 与 <a href="../../distributed/transaction/">柔性事务</a>；分区数与分区键的取舍在 <a href="../../kafka/topic-partition/">Kafka 分区设计</a>。需要同步拿结果、需要强一致的交互，不要套用这里的事件模式。</p>
+
+<p>本篇在这条路径上负责把消息的<strong>语义与契约</strong>定对。契约定好之后，下一步才是保证它不丢——上一步定义的 <code>eventId</code> 与 <code>aggregateVersion</code> 正是可靠投递篇里幂等与乱序防护的前提。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../">← 上一步：消息队列到底解决什么问题，又带来什么问题</a> · <a href="../reliable/">下一步：消息可靠投递：五个丢失点与跨产品通用防法 →</a></p>
+
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">这些坑每条都对应一次真实返工</div>
     <ul>
         <li><strong>命令和事件用同一套命名</strong>：半年后没人分得清 <code>order.process</code> 是让人去处理还是告知已处理，最终变成多个消费者各执行一遍。</li>
         <li><strong>事件里塞了「请下游做什么」的指令字段</strong>：比如事件里带 <code>needSendSms: true</code>，这是命令伪装成事件，生产方重新耦合了下游行为。</li>

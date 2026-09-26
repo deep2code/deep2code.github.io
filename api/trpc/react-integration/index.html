@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="tRPC 的 React 集成本质是 TanStack Query 的一层包装，真正要理解的是它的缓存模型。本文讲清 queryKey 的构成、staleTime 与 gcTime 的区别与各自默认值、后台重新获取的四个触发条件、mutation 成功后精确失效与过度失效的取舍、乐观更新从 onMutate 快照到 onError 回滚再到 onSettled 失效的完整写法、游标分页与无限滚动的配合、Next.js 下的预取与 hydration，以及 batching 造成的慢接口拖累整批等常见性能问题。">
+    <meta name="description" content="tRPC 的 React 集成按用法、原理、场景三段组织：先给缓存键设计规则、写操作之后该失效哪些 query、乐观更新的五步完整写法（取消、存快照、写乐观值、失败回滚、无条件失效），外加全局 QueryClient 默认值与参数速查表，每项都配验证方法；再讲清 queryKey 的结构化哈希、staleTime 与 gcTime 的分工、一条 query 的状态流转与 isFetching 的判读、失效范围如何决定请求数、四个回调各自防哪类问题、游标分页与无限查询的缓存结构、initialData 与 placeholderData 的本质区别；最后按列表页、表单页、搜索、无限滚动、实时看板给缓存策略矩阵与排查表。">
     <meta name="keywords" content="tRPC,React 集成与实践,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/trpc/react-integration/">
     <meta property="og:title" content="React 集成：查询缓存、失效与乐观更新 - tRPC - 资深码农">
-    <meta property="og:description" content="tRPC 的 React 集成本质是 TanStack Query 的一层包装，真正要理解的是它的缓存模型。本文讲清 queryKey 的构成、staleTime 与 gcTime 的区别与各自默认值、后台重新获取的四个触发条件、mutation 成功后精确失效与过度失效的取舍、乐观更新从 onMutate 快照到 onError 回滚再到 onSettled 失效的完整写法、游标分页与无限滚动的配合、Next.js 下的预取与 hydration，以及 batching 造成的慢接口拖累整批等常见性能问题。">
+    <meta property="og:description" content="tRPC 的 React 集成按用法、原理、场景三段组织：先给缓存键设计规则、写操作之后该失效哪些 query、乐观更新的五步完整写法（取消、存快照、写乐观值、失败回滚、无条件失效），外加全局 QueryClient 默认值与参数速查表，每项都配验证方法；再讲清 queryKey 的结构化哈希、staleTime 与 gcTime 的分工、一条 query 的状态流转与 isFetching 的判读、失效范围如何决定请求数、四个回调各自防哪类问题、游标分页与无限查询的缓存结构、initialData 与 placeholderData 的本质区别；最后按列表页、表单页、搜索、无限滚动、实时看板给缓存策略矩阵与排查表。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/trpc/react-integration/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="React 集成：查询缓存、失效与乐观更新 - tRPC">
-    <meta name="twitter:description" content="tRPC 的 React 集成本质是 TanStack Query 的一层包装，真正要理解的是它的缓存模型。本文讲清 queryKey 的构成、staleTime 与 gcTime 的区别与各自默认值、后台重新获取的四个触发条件、mutation 成功后精确失效与过度失效的取舍、乐观更新从 onMutate 快照到 onError 回滚再到 onSettled 失效的完整写法、游标分页与无限滚动的配合、Next.js 下的预取与 hydration，以及 batching 造成的慢接口拖累整批等常见性能问题。">
+    <meta name="twitter:description" content="tRPC 的 React 集成按用法、原理、场景三段组织：先给缓存键设计规则、写操作之后该失效哪些 query、乐观更新的五步完整写法（取消、存快照、写乐观值、失败回滚、无条件失效），外加全局 QueryClient 默认值与参数速查表，每项都配验证方法；再讲清 queryKey 的结构化哈希、staleTime 与 gcTime 的分工、一条 query 的状态流转与 isFetching 的判读、失效范围如何决定请求数、四个回调各自防哪类问题、游标分页与无限查询的缓存结构、initialData 与 placeholderData 的本质区别；最后按列表页、表单页、搜索、无限滚动、实时看板给缓存策略矩阵与排查表。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -67,8 +67,17 @@
                         <h1 class="article-title">React 集成：查询缓存、失效与乐观更新</h1>
                     </header>
                     <div class="article-content">
-
 <p><code>@trpc/react-query</code> 这个包名已经把答案写出来了：<strong>tRPC 的 React 集成本质上是 TanStack Query 的一层类型化包装</strong>。它做的事就是把 <code>trpc.user.byId.useQuery(input)</code> 翻译成一个 <code>useQuery({ queryKey: [['user','byId'], { input, type: 'query' }], queryFn })</code>。所以这一篇几乎所有内容都不是 tRPC 特有的，你遇到的问题也基本都是 Query 缓存模型的问题——但正因为被包了一层，很多人从没读过 Query 的文档，于是踩遍所有坑。</p>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：缓存键怎么设计、写操作之后该失效哪些 query、乐观更新的五步完整写法（含回滚），外加一份全局默认值配置与参数速查表，每项都给验证方法。</li>
+        <li><strong>② 原理</strong>：queryKey、staleTime、gcTime 各管什么，一条 query 的状态流转，失效范围如何决定请求数，乐观更新四个回调各自防哪一类问题，游标分页与无限查询的缓存结构，<code>initialData</code> 与 <code>placeholderData</code> 的本质区别。</li>
+        <li><strong>③ 场景</strong>：列表页、详情页、表单页、实时数据、无限滚动各该怎么配，以及常见性能症状的排查路径。</li>
+    </ul>
+</div>
 
 <div class="mermaid">
 flowchart TB
@@ -94,21 +103,33 @@ flowchart TB
     LK --> S["服务端 procedure"]
 </div>
 
-<h2>缓存模型：queryKey、staleTime 与 gcTime</h2>
+<h2>① 用法 · 缓存键、失效时机与乐观更新的正确写法</h2>
+<p>这一层给三件能立刻落地的事：把缓存键设计对、把失效范围收窄、把乐观更新的五步写全。机制解释在下一节起的原理部分。</p>
 
-<p>三个概念必须分清。<strong>queryKey 决定「这是不是同一份数据」</strong>，tRPC 自动用 procedure path 加输入生成，所以你几乎不用手写 key，但也因此要注意输入的稳定性。<strong>staleTime 决定「要不要重新发请求」</strong>，<strong>gcTime 决定「缓存条目什么时候被丢掉」</strong>——后两者经常被搞混，而它们的默认值组合恰好是「最容易产生冗余请求」的那一组。</p>
+<p><strong>第一件，缓存键设计。</strong>key 由 procedure path 加输入组成，而且是按输入内容做结构化哈希的，所以有三条实用规则：</p>
+<ul>
+    <li><strong>新建一个内容相同的对象字面量不会让缓存失效</strong>：哈希看的是内容，不是引用。这一点和 <code>useEffect</code> 的依赖比较不同，不要混为一谈。</li>
+    <li><strong>真正会撑爆缓存的是「内容每次都变」</strong>：输入里带 <code>Date.now()</code>、<code>new Date()</code>、随机数、顺序不稳定的数组，每次渲染都会生成一条新 query，缓存永不命中且条目只增不减。</li>
+    <li><strong>所有影响返回结果的条件都要进输入</strong>：筛选、排序、分页都放进 input，每种组合各占一条缓存，返回上一页时才能命中；放在输入之外用前端过滤会让所有组合共用一条 key，数据互相污染。</li>
+</ul>
 
-<table>
-<thead><tr><th>参数</th><th>默认值</th><th>管什么</th><th>设错的后果</th></tr></thead>
-<tbody>
-<tr><td><code>staleTime</code></td><td><code>0</code> 毫秒</td><td>数据多久后被视为过期</td><td>保持默认时，任何重挂载或窗口聚焦都会重新请求，路由来回切几次就是十几个请求</td></tr>
-<tr><td><code>gcTime</code></td><td>5 分钟</td><td>无订阅的缓存条目多久被回收</td><td>设太小会让返回上一页时没有缓存可用，白屏一闪；设太大占内存但通常无害</td></tr>
-<tr><td><code>refetchOnWindowFocus</code></td><td><code>true</code></td><td>窗口重新聚焦时是否刷新过期数据</td><td>配合 staleTime 为 0 时，每次切回标签页就全量刷新</td></tr>
-<tr><td><code>refetchOnMount</code></td><td><code>true</code></td><td>组件挂载时是否刷新过期数据</td><td>列表页与详情页来回跳会反复请求同一数据</td></tr>
-<tr><td><code>refetchOnReconnect</code></td><td><code>true</code></td><td>网络恢复时是否刷新</td><td>地铁里网络抖动会引发请求风暴</td></tr>
-<tr><td><code>retry</code></td><td>3 次，指数退避</td><td>查询失败重试次数</td><td>对 401、403、404 这类确定性错误重试是纯浪费，应按错误码短路</td></tr>
-<tr><td><code>refetchInterval</code></td><td><code>false</code></td><td>轮询间隔</td><td>被当成实时方案时会产生持续的无效流量</td></tr>
-</tbody></table>
+<pre><code class="language-typescript">// 反例：输入内容每次渲染都变，缓存条目无限堆积
+const bad = trpc.post.list.useQuery({ since: Date.now() - 86_400_000 })
+
+// 正例一：把「变化的量」量化到稳定粒度（按天、按小时取整）
+const sinceDay = useMemo(() =&gt; startOfDay(Date.now()).valueOf(), [])
+const good1 = trpc.post.list.useQuery({ since: sinceDay })
+
+// 正例二：搜索框先做防抖，再把防抖后的值放进输入
+// 不防抖的话每敲一个字符就是一条新 query，同时把请求也打出去了
+const input = useMemo(() =&gt; ({ keyword: debouncedKeyword, limit: 20 }), [debouncedKeyword])
+const good2 = trpc.post.list.useQuery(input, {
+  // 只有输入有意义时才发请求，避免空条件把全表拉回来
+  enabled: debouncedKeyword.length &gt; 0,
+})
+
+// 正例三：排序与筛选条件也进输入，返回时能命中各自的缓存
+const good3 = trpc.post.list.useQuery({ orderBy: 'createdAt', order: 'desc', limit: 20 })</code></pre>
 
 <pre><code class="language-typescript">// app/providers.tsx —— 全局默认值是收益最高的一处配置
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -140,93 +161,23 @@ const queryClient = new QueryClient({
   },
 })</code></pre>
 
-<h2>一条 query 的状态流转</h2>
-
-<div class="mermaid">
-stateDiagram-v2
-    [*] --> fetching: 组件首次挂载
-    fetching --> fresh: 请求成功 写入缓存并记时间戳
-    fetching --> failed: 请求失败
-    failed --> fetching: 按 retry 策略退避重试
-    failed --> [*]: 重试耗尽 交给 error 分支渲染
-    fresh --> stale: 超过 staleTime
-    stale --> fetching: 窗口聚焦 组件重挂载 网络恢复 或手动失效
-    fresh --> inactive: 最后一个订阅组件卸载
-    stale --> inactive: 最后一个订阅组件卸载
-    inactive --> stale: 组件重新挂载 先返回旧数据再后台刷新
-    inactive --> [*]: 超过 gcTime 被回收
-    note right of stale
-        stale 只表示可以刷新
-        不代表数据不能用
-        UI 依然渲染缓存里的值
-    end note
-</div>
-
-<p>这张图里最该记住的是 <code>inactive --&gt; stale</code> 这条边：<strong>重新挂载时组件会先拿到缓存里的旧数据立刻渲染，再在后台发请求</strong>。这就是为什么列表页返回时不会白屏，也是为什么很多人误以为「没发请求」——实际上请求发了，只是 UI 没有 loading 态。判断是否在后台刷新要看 <code>isFetching</code> 而不是 <code>isLoading</code>，后者只在没有任何缓存数据时为真。</p>
-
-<h2>失效：写操作之后最重要的一步</h2>
-
-<p>mutation 成功后服务端数据已经变了，但客户端缓存不会自己知道。<code>trpc.useUtils()</code> 返回的对象按 router 路径分层，可以在任意粒度上调用 <code>invalidate()</code>。<strong>失效范围的选择直接决定一次点击会引发几个请求</strong>。</p>
-
-<div class="mermaid">
-flowchart TB
-    M["mutation 成功"] --> Q1{"这次写操作影响了<br/>哪些数据"}
-    Q1 -->|只改了一条记录的字段| A1["utils.post.byId.invalidate 传 id<br/>1 个请求"]
-    Q1 -->|列表的成员或顺序变了| A2["utils.post.list.invalidate<br/>该 router 下所有 list 变体"]
-    Q1 -->|跨模块的聚合数字也变了| A3["显式再失效 dashboard.summary<br/>列清楚 不要靠根失效兜"]
-    Q1 -->|说不清| A4["utils.invalidate 全局失效<br/>十几个请求 应当禁止"]
-    A4 --> W["batch 里夹一个慢接口<br/>整页一起卡住"]
-</div>
+<p><strong>第二件，失效时机。</strong>mutation 成功后服务端数据已经变了，但客户端缓存不会自己知道。<code>trpc.useUtils()</code> 返回的对象按 router 路径分层，可以在任意粒度上调用失效。<strong>失效范围的选择直接决定一次点击会引发几个请求</strong>，所以要显式列出受影响的 query，而不是图省事用根失效。</p>
 
 <table>
-<thead><tr><th>失效写法</th><th>影响范围</th><th>典型请求数</th><th>什么时候用</th></tr></thead>
+<thead><tr><th>失效与缓存写法</th><th>影响范围</th><th>典型请求数</th><th>什么时候用</th></tr></thead>
 <tbody>
 <tr><td><code>utils.post.byId.invalidate({ id })</code></td><td>该输入对应的单条 query</td><td>1</td><td>详情页字段更新</td></tr>
 <tr><td><code>utils.post.byId.invalidate()</code></td><td>该 procedure 的所有输入变体</td><td>页面上活跃的详情数量</td><td>批量操作后</td></tr>
 <tr><td><code>utils.post.invalidate()</code></td><td>整个 post router</td><td>通常 3 到 8</td><td>结构性变更，如删除记录</td></tr>
 <tr><td><code>utils.invalidate()</code></td><td>全部 query</td><td>10 以上</td><td>只有登录、切换租户、退出登录时才合理</td></tr>
 <tr><td><code>utils.post.list.setData(...)</code></td><td>直接改缓存，不发请求</td><td>0</td><td>服务端已返回新实体，可以直接写入</td></tr>
+<tr><td><code>utils.post.list.setInfiniteData(...)</code></td><td>精确改无限查询里某一页的某一项</td><td>0</td><td>无限列表上的点赞、编辑这类原地更新</td></tr>
+<tr><td><code>utils.post.byId.cancel({ id })</code></td><td>取消同 key 的进行中请求</td><td>—</td><td>乐观更新的第一步，漏掉会被旧响应覆盖</td></tr>
 <tr><td><code>utils.post.byId.prefetch({ id })</code></td><td>提前拉取并写入缓存</td><td>1（提前发生）</td><td>鼠标悬停在列表项上时预取详情</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
-<div class="callout callout-warning">
-    <div class="callout-icon">⚠️</div>
-    <div class="callout-title">过度失效是最隐蔽的性能问题</div>
-    <p>写 <code>utils.invalidate()</code> 永远不会出功能 bug，所以它会在代码库里无声扩散。后果是一次点赞触发十几个请求，配合 <code>httpBatchLink</code> 合并后，其中任何一个慢 procedure 都会让整页数据一起卡住。审查时把「根失效」和「router 级失效」当成需要解释的写法，默认只允许精确失效。</p>
-</div>
-
-<h2>乐观更新的完整正确写法</h2>
-
-<p>乐观更新有四个回调，<strong>缺任何一个都会留下一类问题</strong>：缺 <code>onMutate</code> 就没有即时反馈，缺 cancel 会让飞行中的旧请求覆盖你的乐观值，缺 <code>onError</code> 会让失败后的界面与服务端长期不一致，缺 <code>onSettled</code> 会让本地计算与服务端的细微差异永久留存。</p>
-
-<table>
-<thead><tr><th>回调</th><th>职责</th><th>漏掉的后果</th></tr></thead>
-<tbody>
-<tr><td><code>onMutate</code> 里的 <code>cancel()</code></td><td>取消同 key 的进行中请求</td><td>飞行中的旧响应落地，把乐观值覆盖回旧数据，表现为「点了又跳回去」</td></tr>
-<tr><td><code>onMutate</code> 里的 <code>getData()</code></td><td>保存回滚快照并 return</td><td><code>onError</code> 拿不到快照，无法回滚</td></tr>
-<tr><td><code>onMutate</code> 里的 <code>setData()</code></td><td>写入预期结果</td><td>没有即时反馈，乐观更新本身失去意义</td></tr>
-<tr><td><code>onError</code></td><td>用快照回滚并提示</td><td>请求失败但界面显示成功，用户以为改动已保存</td></tr>
-<tr><td><code>onSettled</code></td><td>无论成败都失效重拉</td><td>本地推算的计数、排序、时间戳与服务端不一致且永不纠正</td></tr>
-</tbody></table>
-
-<div class="mermaid">
-sequenceDiagram
-    participant U as 用户
-    participant C as 组件
-    participant Q as Query 缓存
-    participant S as 服务端
-    U->>C: 点击点赞
-    C->>Q: onMutate cancel 同 key 的进行中请求
-    C->>Q: getData 保存快照
-    C->>Q: setData 写入 liked 为真 计数加一
-    Q-->>U: UI 立刻变化 无等待
-    C->>S: post.like mutate 发出
-    S-->>C: 失败 例如 409 或网络中断
-    C->>Q: onError 用快照 setData 回滚
-    Q-->>U: UI 恢复原状 并提示失败
-    C->>Q: onSettled 失效该 query
-    Q->>S: 重新拉取 以服务端为最终真相
-</div>
+<p><strong>第三件，乐观更新。</strong>五步一步都不能少：取消 → 存快照 → 写乐观值 → 失败回滚 → 无论成败都失效。</p>
 
 <pre><code class="language-typescript">function LikeButton({ postId }: { postId: string }) {
   const utils = trpc.useUtils()
@@ -262,7 +213,124 @@ sequenceDiagram
   return &lt;button onClick={() =&gt; like.mutate({ id: postId })} disabled={like.isPending}&gt;点赞&lt;/button&gt;
 }</code></pre>
 
-<h2>分页与无限滚动</h2>
+<table>
+<thead><tr><th>要做什么</th><th>怎么做</th><th>怎么验证它真的生效了</th></tr></thead>
+<tbody>
+<tr><td>砍掉冗余请求</td><td>全局 <code>staleTime</code> 设 30 秒起步，强实时数据在调用处单独覆盖</td><td>在列表页与详情页之间来回跳五次，网络面板里同一 path 的请求数应明显下降</td></tr>
+<tr><td>缓存键稳定</td><td>输入里不要放 <code>Date.now()</code>、随机数；搜索词先防抖</td><td>打开 Query 开发者工具看条目数：连续操作后条目数应收敛，而不是持续增长</td></tr>
+<tr><td>失效范围收窄</td><td>mutation 的 <code>onSettled</code> 里显式列出受影响的两三个 query</td><td>点一次按钮，数一下发出的请求数：超过三四个就说明失效范围过宽</td></tr>
+<tr><td>乐观更新不被旧响应覆盖</td><td><code>onMutate</code> 第一行就 <code>cancel()</code></td><td>把接口人为调慢，快速连点：UI 不应出现「变了又跳回去」</td></tr>
+<tr><td>失败能回滚</td><td><code>onMutate</code> 存快照，<code>onError</code> 用快照 <code>setData</code></td><td>把服务端改成必定报错：点击后 UI 应先变化再恢复原状并给出提示</td></tr>
+<tr><td>与服务端最终一致</td><td><code>onSettled</code> 里无条件失效一次</td><td>两个标签页同时点赞，最终两边显示的计数应一致</td></tr>
+<tr><td>无限列表原地更新</td><td>用 <code>setInfiniteData</code> 改目标页里的目标项，不要 <code>invalidate</code></td><td>滚到第十页再点赞：不应重新拉取十页，滚动位置也不应跳</td></tr>
+<tr><td>确定性错误不重试</td><td><code>retry</code> 回调里对 401、403、404、400 返回 false</td><td>触发一次 401：网络面板里应只有一次失败请求，而不是三次</td></tr>
+<tr><td>表单页不被后台刷新打断</td><td>该 query 单独关掉 <code>refetchOnWindowFocus</code></td><td>填一半表单后切走再切回：输入内容不应被覆盖</td></tr>
+</tbody>
+</table>
+
+<table>
+<thead><tr><th>参数</th><th>默认值</th><th>管什么</th><th>设错的后果</th></tr></thead>
+<tbody>
+<tr><td><code>staleTime</code></td><td><code>0</code> 毫秒</td><td>数据多久后被视为过期</td><td>保持默认时，任何重挂载或窗口聚焦都会重新请求，路由来回切几次就是十几个请求</td></tr>
+<tr><td><code>gcTime</code></td><td>5 分钟</td><td>无订阅的缓存条目多久被回收</td><td>设太小会让返回上一页时没有缓存可用，白屏一闪；设太大占内存但通常无害</td></tr>
+<tr><td><code>refetchOnWindowFocus</code></td><td><code>true</code></td><td>窗口重新聚焦时是否刷新过期数据</td><td>配合 staleTime 为 0 时，每次切回标签页就全量刷新</td></tr>
+<tr><td><code>refetchOnMount</code></td><td><code>true</code></td><td>组件挂载时是否刷新过期数据</td><td>列表页与详情页来回跳会反复请求同一数据</td></tr>
+<tr><td><code>refetchOnReconnect</code></td><td><code>true</code></td><td>网络恢复时是否刷新</td><td>地铁里网络抖动会引发请求风暴</td></tr>
+<tr><td><code>retry</code></td><td>3 次，指数退避</td><td>查询失败重试次数</td><td>对 401、403、404 这类确定性错误重试是纯浪费，应按错误码短路</td></tr>
+<tr><td><code>refetchInterval</code></td><td><code>false</code></td><td>轮询间隔</td><td>被当成实时方案时会产生持续的无效流量</td></tr>
+<tr><td><code>enabled</code></td><td><code>true</code></td><td>是否发起这条查询</td><td>依赖参数还没准备好时不关掉，会先打一个无意义请求并写进缓存</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · queryKey、staleTime 与 gcTime 各管什么</h2>
+<p>搞清这三者的分工，能解决「明明设了参数请求还是没变少」——多半是改错了那一个。</p>
+
+<p>三个概念必须分清。<strong>queryKey 决定「这是不是同一份数据」</strong>，tRPC 自动用 procedure path 加输入生成，所以你几乎不用手写 key，但也因此要注意输入内容的稳定性。<strong>staleTime 决定「要不要重新发请求」</strong>，<strong>gcTime 决定「缓存条目什么时候被丢掉」</strong>——后两者经常被搞混，而它们的默认值组合恰好是「最容易产生冗余请求」的那一组：数据一写入就立刻被视为过期，于是任何重挂载与窗口聚焦都会触发刷新。</p>
+
+<p>key 的哈希是结构化的，这带来一个容易误判的结论：<strong>每次渲染新建对象字面量并不会让缓存失效</strong>，只要内容一样，算出来的 key 就一样。会出问题的是内容本身在变——时间戳、随机数、顺序不稳定的数组，以及不可序列化的值。前者让缓存条目无限堆积，后者会让不同数据被算成同一个 key 或反过来。</p>
+
+<h2>② 原理 · 一条 query 的状态流转</h2>
+<p>搞清这张图，能解决「为什么返回列表页不白屏但请求还是发了」和「该用 isLoading 还是 isFetching」。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> fetching: 组件首次挂载
+    fetching --> fresh: 请求成功 写入缓存并记时间戳
+    fetching --> failed: 请求失败
+    failed --> fetching: 按 retry 策略退避重试
+    failed --> [*]: 重试耗尽 交给 error 分支渲染
+    fresh --> stale: 超过 staleTime
+    stale --> fetching: 窗口聚焦 组件重挂载 网络恢复 或手动失效
+    fresh --> inactive: 最后一个订阅组件卸载
+    stale --> inactive: 最后一个订阅组件卸载
+    inactive --> stale: 组件重新挂载 先返回旧数据再后台刷新
+    inactive --> [*]: 超过 gcTime 被回收
+    note right of stale
+        stale 只表示可以刷新
+        不代表数据不能用
+        UI 依然渲染缓存里的值
+    end note
+</div>
+
+<p>这张图里最该记住的是 <code>inactive --&gt; stale</code> 这条边：<strong>重新挂载时组件会先拿到缓存里的旧数据立刻渲染，再在后台发请求</strong>。这就是为什么列表页返回时不会白屏，也是为什么很多人误以为「没发请求」——实际上请求发了，只是 UI 没有 loading 态。判断是否在后台刷新要看 <code>isFetching</code> 而不是 <code>isLoading</code>，后者只在没有任何缓存数据时为真。</p>
+
+<h2>② 原理 · 失效范围如何决定请求数</h2>
+<p>搞清这条，能解决「一次点赞发出十几个请求，整页跟着卡住」。</p>
+
+<div class="mermaid">
+flowchart TB
+    M["mutation 成功"] --> Q1{"这次写操作影响了<br/>哪些数据"}
+    Q1 -->|只改了一条记录的字段| A1["utils.post.byId.invalidate 传 id<br/>1 个请求"]
+    Q1 -->|列表的成员或顺序变了| A2["utils.post.list.invalidate<br/>该 router 下所有 list 变体"]
+    Q1 -->|跨模块的聚合数字也变了| A3["显式再失效 dashboard.summary<br/>列清楚 不要靠根失效兜"]
+    Q1 -->|说不清| A4["utils.invalidate 全局失效<br/>十几个请求 应当禁止"]
+    A4 --> W["batch 里夹一个慢接口<br/>整页一起卡住"]
+</div>
+
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">过度失效是最隐蔽的性能问题</div>
+    <p>写 <code>utils.invalidate()</code> 永远不会出功能 bug，所以它会在代码库里无声扩散。后果是一次点赞触发十几个请求，配合 <code>httpBatchLink</code> 合并后，其中任何一个慢 procedure 都会让整页数据一起卡住。审查时把「根失效」和「router 级失效」当成需要解释的写法，默认只允许精确失效。batch 的木桶效应见站内 <a href="../">tRPC 的端到端类型安全</a>。</p>
+</div>
+
+<h2>② 原理 · 乐观更新的四个回调各自防什么</h2>
+<p>搞清每个回调对应的失效模式，就不会把乐观更新写成「只有乐观没有更新」。</p>
+
+<p>乐观更新有四个回调，<strong>缺任何一个都会留下一类问题</strong>：缺 <code>onMutate</code> 就没有即时反馈，缺 cancel 会让飞行中的旧请求覆盖你的乐观值，缺 <code>onError</code> 会让失败后的界面与服务端长期不一致，缺 <code>onSettled</code> 会让本地计算与服务端的细微差异永久留存。</p>
+
+<table>
+<thead><tr><th>回调</th><th>职责</th><th>漏掉的后果</th></tr></thead>
+<tbody>
+<tr><td><code>onMutate</code> 里的 <code>cancel()</code></td><td>取消同 key 的进行中请求</td><td>飞行中的旧响应落地，把乐观值覆盖回旧数据，表现为「点了又跳回去」</td></tr>
+<tr><td><code>onMutate</code> 里的 <code>getData()</code></td><td>保存回滚快照并 return</td><td><code>onError</code> 拿不到快照，无法回滚</td></tr>
+<tr><td><code>onMutate</code> 里的 <code>setData()</code></td><td>写入预期结果</td><td>没有即时反馈，乐观更新本身失去意义</td></tr>
+<tr><td><code>onError</code></td><td>用快照回滚并提示</td><td>请求失败但界面显示成功，用户以为改动已保存</td></tr>
+<tr><td><code>onSettled</code></td><td>无论成败都失效重拉</td><td>本地推算的计数、排序、时间戳与服务端不一致且永不纠正</td></tr>
+</tbody></table>
+
+<div class="mermaid">
+sequenceDiagram
+    participant U as 用户
+    participant C as 组件
+    participant Q as Query 缓存
+    participant S as 服务端
+    U->>C: 点击点赞
+    C->>Q: onMutate cancel 同 key 的进行中请求
+    C->>Q: getData 保存快照
+    C->>Q: setData 写入 liked 为真 计数加一
+    Q-->>U: UI 立刻变化 无等待
+    C->>S: post.like mutate 发出
+    S-->>C: 失败 例如 409 或网络中断
+    C->>Q: onError 用快照 setData 回滚
+    Q-->>U: UI 恢复原状 并提示失败
+    C->>Q: onSettled 失效该 query
+    Q->>S: 重新拉取 以服务端为最终真相
+</div>
+
+<p>还有一条边界要写进规范：<strong>乐观更新只适合「结果可预测」的操作</strong>。点赞、收藏、勾选待办这类本地能算准结果的动作很合适；而下单、支付、扣库存这类结果由服务端裁决的操作不要做乐观更新——你无法预测服务端会不会拒绝，先展示成功再回滚对用户是更差的体验，也更容易被误解成已经成功。</p>
+
+<h2>② 原理 · 分页与无限滚动的缓存结构</h2>
+<p>搞清无限查询的数据结构，能解决「滚了十页，一次写操作把十页全重拉」。</p>
 
 <p>服务端多取一条来判断有没有下一页，返回 <code>nextCursor</code>；客户端用 <code>useInfiniteQuery</code> 配 <code>getNextPageParam</code> 消费。<strong>这里必须用游标分页而不是 offset 分页</strong>：列表在翻页过程中有插入时，offset 会让同一条记录在两页里重复出现，也会漏掉记录。游标分页的必要性与实现细节见站内 <a href="../../design/best-practices/">API 设计最佳实践</a>。</p>
 
@@ -307,9 +375,10 @@ const items = useMemo(() =&gt; data?.pages.flatMap((p) =&gt; p.items) ?? [], [da
     <p>对 <code>useInfiniteQuery</code> 调失效会让已加载的所有页一起重新拉取：用户滚了十页，一次写操作就触发十个请求，并且滚动位置往往会跳。正确做法是用 <code>setInfiniteData</code> 精确修改目标那一页里的那一项，只有在列表结构发生变化（删除、重排）时才失效。</p>
 </div>
 
-<h2>SSR 与预取</h2>
+<h2>② 原理 · SSR 与预取：initialData 与 placeholderData 的区别</h2>
+<p>搞清这两者，能解决「详情页拿到的是列表里的简化对象，直接崩在缺失字段上」。</p>
 
-<p>预取的价值是消掉「首屏白屏加转圈」。Next.js 下有两种形态：服务端组件里用 <code>await</code> 直接拿数据再 hydrate，或者在服务端发起预取把结果塞进 <code>QueryClient</code> 随 HTML 一起下发。</p>
+<p>预取的价值是消掉「首屏白屏加转圈」。Next.js 下有两种形态：服务端组件里用 <code>await</code> 直接拿数据再 hydrate，或者在服务端发起预取把结果塞进 <code>QueryClient</code> 随 HTML 一起下发。SSR 侧怎么在服务端安全地调 procedure 见站内 <a href="../intro/">tRPC 上手：Router、Context 与客户端调用</a>。</p>
 
 <table>
 <thead><tr><th>方案</th><th>首屏表现</th><th>代价</th><th>适用</th></tr></thead>
@@ -323,21 +392,36 @@ const items = useMemo(() =&gt; data?.pages.flatMap((p) =&gt; p.items) ?? [], [da
 
 <p><code>initialData</code> 与 <code>placeholderData</code> 的区别是高频面试题也是高频 bug 源：<strong><code>initialData</code> 会被真正写入缓存并被其他组件复用，<code>placeholderData</code> 不会</strong>。如果你手上的对象只是列表里的简化版（缺少详情字段），用 <code>initialData</code> 会把这个残缺对象污染进缓存，其他组件读到后可能直接崩在缺失字段上，这种情况必须用 <code>placeholderData</code>。</p>
 
-<h2>常见性能问题与排查</h2>
+<h2>③ 场景 · 按页面类型选缓存策略</h2>
+<p>同一套 API，不同页面该配的参数完全不同。下表给常见页面类型的推荐配置与代价。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>后台列表页与详情页来回跳</td><td><code>staleTime</code> 30 到 60 秒，<code>gcTime</code> 保持 5 分钟以上</td><td>返回时先命中缓存立刻渲染，后台刷新对用户无感</td><td>数据最多陈旧一个 staleTime</td></tr>
+<tr><td>强实时数据（余额、库存、排队人数）</td><td>在调用处把 <code>staleTime</code> 覆盖为 0，必要时配可见性感知的轮询</td><td>这类数据陈旧的代价远高于多几个请求</td><td>请求数上升，要留意限流</td></tr>
+<tr><td>表单编辑页</td><td>该 query 关掉 <code>refetchOnWindowFocus</code>，提交成功后再失效</td><td>后台刷新会把服务端值写回表单，覆盖用户正在填的内容</td><td>页面数据可能不是最新，需要提交时做冲突检测</td></tr>
+<tr><td>搜索框</td><td>输入先防抖，再进 input；配 <code>enabled</code> 控制空条件不发请求</td><td>每敲一个字符都是一条新 query，既打请求也堆缓存</td><td>结果延迟一个防抖窗口</td></tr>
+<tr><td>无限滚动列表</td><td>拉长 <code>staleTime</code> 与 <code>gcTime</code>，写操作用 <code>setInfiniteData</code> 原地改</td><td>失效会把已加载的每一页都重拉，滚动位置还会跳</td><td>结构性变更（删除、重排）时仍要失效</td></tr>
+<tr><td>结果可预测的轻交互（点赞、收藏、勾选）</td><td>做乐观更新，五步写全</td><td>本地能算准结果，即时反馈收益最大</td><td>要多写快照与回滚逻辑</td></tr>
+<tr><td>结果由服务端裁决（下单、支付、扣库存）</td><td>不要乐观更新，用 pending 态加明确结果提示</td><td>无法预测服务端是否拒绝，先成功再回滚更容易被误解为已完成</td><td>用户要等一个往返</td></tr>
+<tr><td>需要秒级推送的看板</td><td>用 subscription，而不是把 <code>refetchInterval</code> 调小</td><td>轮询的延迟下限就是一个周期，而且没有数据变化时也在消耗流量</td><td>多一套长连接运维，见站内 <a href="../procedures/">Procedure 设计</a></td></tr>
+<tr><td>首屏与 SEO 页面</td><td>服务端预取加 hydration；数据不完整时用 <code>placeholderData</code> 而不是 <code>initialData</code></td><td><code>initialData</code> 会写进缓存被别处复用，残缺对象会让其他组件崩</td><td>HTML 变大，服务端承担查询耗时，见站内 <a href="../../../frontend/nextjs/">Next.js 实践</a></td></tr>
+</tbody>
+</table>
 
 <table>
 <thead><tr><th>症状</th><th>根因</th><th>怎么确认</th><th>修法</th></tr></thead>
 <tbody>
 <tr><td>同一接口一分钟内请求十几次</td><td><code>staleTime</code> 为默认 0，叠加聚焦与重挂载刷新</td><td>网络面板按 path 分组看重复次数</td><td>全局设 <code>staleTime</code> 30 秒起</td></tr>
-<tr><td>缓存永远命中不了</td><td>输入里带了每次渲染新建的对象或数组，queryKey 不稳定</td><td>Query 开发者工具里看是否堆积了大量相似 key</td><td>输入用原始值或 <code>useMemo</code> 固定</td></tr>
+<tr><td>缓存条目持续增长且命中率极低</td><td>输入内容每次都变（时间戳、随机数、未防抖的搜索词）</td><td>Query 开发者工具里看是否堆积了大量相似 key</td><td>把变化量量化到稳定粒度，搜索词先防抖</td></tr>
 <tr><td>整页四块内容一起卡 800 毫秒</td><td>batch 里夹了一个慢 procedure</td><td>看单个批量请求的耗时与其包含的 path</td><td><code>splitLink</code> 把慢接口分流到 <code>httpLink</code></td></tr>
 <tr><td>一次点击发出十几个请求</td><td>mutation 里用了根失效</td><td>搜索代码里的全局 <code>invalidate</code> 调用</td><td>改成精确失效，显式列出受影响 query</td></tr>
-<tr><td>列表滚到十页后写操作导致跳动</td><td>对无限查询调了失效</td><td>看失败后 <code>data.pages</code> 是否整体重建</td><td>用 <code>setInfiniteData</code> 精确改</td></tr>
+<tr><td>列表滚到十页后写操作导致跳动</td><td>对无限查询调了失效</td><td>看写操作后 <code>data.pages</code> 是否整体重建</td><td>用 <code>setInfiniteData</code> 精确改</td></tr>
 <tr><td>失败请求被重试三次</td><td><code>retry</code> 默认 3 次，对 4xx 也生效</td><td>网络面板里同一请求连续失败三次</td><td>按错误 code 短路重试</td></tr>
 <tr><td>切回标签页时输入框内容被覆盖</td><td>聚焦刷新把服务端数据写回表单</td><td>观察 <code>isFetching</code> 与表单重置时机</td><td>表单页把该 query 的 <code>refetchOnWindowFocus</code> 关掉</td></tr>
+<tr><td>点完 UI 变了又跳回去</td><td>乐观更新漏了 <code>cancel()</code></td><td>把接口调慢后快速连点，观察是否有回跳</td><td><code>onMutate</code> 第一行先 <code>cancel()</code></td></tr>
 </tbody></table>
-
-<h2>反模式对照</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>后果</th><th>正确做法</th></tr></thead>
@@ -346,23 +430,31 @@ const items = useMemo(() =&gt; data?.pages.flatMap((p) =&gt; p.items) ?? [], [da
 <tr><td>mutation 后 <code>utils.invalidate()</code></td><td>一次写操作引发全页刷新</td><td>显式列出受影响的两三个 query</td></tr>
 <tr><td>乐观更新不写 <code>onError</code></td><td>失败后界面与服务端长期不一致</td><td>onMutate 存快照，onError 回滚</td></tr>
 <tr><td>乐观更新不写 <code>onSettled</code></td><td>本地推算的计数永远偏差</td><td>无论成败都失效一次</td></tr>
+<tr><td>对下单支付类操作做乐观更新</td><td>用户以为已成功，回滚时更困惑</td><td>结果由服务端裁决的操作只显示 pending</td></tr>
 <tr><td>把副作用放进 query</td><td>被缓存跳过、被预取提前触发、被重试重复执行</td><td>任何有副作用的都用 mutation</td></tr>
 <tr><td>用 <code>refetchInterval</code> 做实时</td><td>持续无效流量，延迟仍有一个轮询周期</td><td>用 subscription，或至少按页面可见性暂停轮询</td></tr>
 <tr><td>在 <code>useQuery</code> 的 <code>select</code> 里做重计算</td><td>每次缓存更新都重算一遍，掉帧</td><td>用 <code>useMemo</code> 或把计算下移到服务端</td></tr>
 <tr><td>用 <code>initialData</code> 塞残缺对象</td><td>缺失字段污染缓存，其他组件崩溃</td><td>数据不完整时用 <code>placeholderData</code></td></tr>
 </tbody></table>
 
+<p>这篇是 tRPC 簇的最后一环：从选型判断、服务端骨架、procedure 的安全组合，到客户端的缓存与更新策略。React 侧的渲染与状态管理基础见站内 <a href="../../../frontend/frameworks/react/">React 实践</a>。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../procedures/">← 上一步：Procedure 设计：输入校验、中间件与鉴权</a></p>
+
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
 <li><strong><code>staleTime</code> 保持默认 0</strong>：这是重复请求的头号原因，光调这一个参数常能砍掉一半请求。</li>
 <li><strong>把 <code>gcTime</code> 当成 <code>staleTime</code> 用</strong>：改 <code>gcTime</code> 不会减少请求，只会影响缓存能不能复用。</li>
 <li><strong>mutation 后用根失效</strong>：功能永远正确，所以没人会去修，但一次点击就是十几个请求。</li>
 <li><strong>乐观更新忘了 <code>cancel()</code></strong>：飞行中的旧响应落地覆盖乐观值，表现是「点完变了又跳回去」。</li>
 <li><strong>乐观更新没有回滚</strong>：失败后界面显示成功，用户离开页面前都不会发现改动没保存。</li>
+<li><strong>对下单、支付这类操作做乐观更新</strong>：结果由服务端裁决，先显示成功再回滚只会让用户更困惑。</li>
 <li><strong>对无限查询调 <code>invalidate</code></strong>：已加载的十页会一起重拉，滚动位置丢失。</li>
-<li><strong>queryKey 里混入不稳定输入</strong>：每次渲染新建的对象让缓存永不命中，还会撑爆缓存条目数。</li>
+<li><strong>输入里放时间戳或未防抖的搜索词</strong>：每次渲染都生成一条新 query，缓存条目只增不减。</li>
+<li><strong>以为「新建对象字面量」会让缓存失效</strong>：key 按内容做结构化哈希，内容相同就是同一条 query，真正的问题是内容本身在变。</li>
 <li><strong>用 <code>isLoading</code> 判断后台刷新</strong>：它只在没有任何缓存时为真，后台刷新要看 <code>isFetching</code>。</li>
 <li><strong>慢接口和快接口共用一个 batch</strong>：整批耗时等于最慢那个，四块 UI 一起卡住。</li>
 <li><strong>对 401、404 也重试三次</strong>：纯浪费，且会把用户卡在转圈里多等几秒。</li>
@@ -370,8 +462,7 @@ const items = useMemo(() =&gt; data?.pages.flatMap((p) =&gt; p.items) ?? [], [da
 <li><strong><code>initialData</code> 塞进列表里的简化对象</strong>：残缺实体被写入缓存并被详情页复用，直接崩在缺失字段上。</li>
     </ul>
 </div>
-
-                    </div>
+</div>
                 </article>
             </main>
         </div>

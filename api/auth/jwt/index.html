@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="JWT 只是容器，真正要分清的是签名的 JWS 与加密的 JWE。逐字段讲透 header 的 alg 与 kid、七个标准声明的语义，给出验签必校验清单（只验签名不验 aud 与 exp 会导致跨服务重放）、HMAC 与 RSA 与 ECDSA 算法族对照、JWKS 公钥分发与双密钥轮换流程、算法白名单与时钟偏移容忍，以及令牌体积对带宽和网关的真实影响。">
+    <meta name="description" content="JWT 按用法、原理、场景三段组织：先给验签的正确写法——算法白名单、iss 与 aud 与 exp 的必校验清单、kid 与 JWKS 缓存的配法、以及「JWT 做不到即时失效，撤销该落在哪」的三种落点与验收命令；再拆 JWS 与 JWE 的区别、三段结构逐字段语义、HMAC 与 RSA 与 ECDSA 算法族的选择依据、双密钥轮换的正确顺序、令牌体积对请求头上限与带宽的真实影响；最后给不同系统形态该验到哪一步、吊销做到哪一档的取舍矩阵与反模式对照。">
     <meta name="keywords" content="认证授权,JWT 实战,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/auth/jwt/">
     <meta property="og:title" content="JWT 的结构与验签机制 - 认证授权 - 资深码农">
-    <meta property="og:description" content="JWT 只是容器，真正要分清的是签名的 JWS 与加密的 JWE。逐字段讲透 header 的 alg 与 kid、七个标准声明的语义，给出验签必校验清单（只验签名不验 aud 与 exp 会导致跨服务重放）、HMAC 与 RSA 与 ECDSA 算法族对照、JWKS 公钥分发与双密钥轮换流程、算法白名单与时钟偏移容忍，以及令牌体积对带宽和网关的真实影响。">
+    <meta property="og:description" content="JWT 按用法、原理、场景三段组织：先给验签的正确写法——算法白名单、iss 与 aud 与 exp 的必校验清单、kid 与 JWKS 缓存的配法、以及「JWT 做不到即时失效，撤销该落在哪」的三种落点与验收命令；再拆 JWS 与 JWE 的区别、三段结构逐字段语义、HMAC 与 RSA 与 ECDSA 算法族的选择依据、双密钥轮换的正确顺序、令牌体积对请求头上限与带宽的真实影响；最后给不同系统形态该验到哪一步、吊销做到哪一档的取舍矩阵与反模式对照。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/auth/jwt/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="JWT 的结构与验签机制 - 认证授权">
-    <meta name="twitter:description" content="JWT 只是容器，真正要分清的是签名的 JWS 与加密的 JWE。逐字段讲透 header 的 alg 与 kid、七个标准声明的语义，给出验签必校验清单（只验签名不验 aud 与 exp 会导致跨服务重放）、HMAC 与 RSA 与 ECDSA 算法族对照、JWKS 公钥分发与双密钥轮换流程、算法白名单与时钟偏移容忍，以及令牌体积对带宽和网关的真实影响。">
+    <meta name="twitter:description" content="JWT 按用法、原理、场景三段组织：先给验签的正确写法——算法白名单、iss 与 aud 与 exp 的必校验清单、kid 与 JWKS 缓存的配法、以及「JWT 做不到即时失效，撤销该落在哪」的三种落点与验收命令；再拆 JWS 与 JWE 的区别、三段结构逐字段语义、HMAC 与 RSA 与 ECDSA 算法族的选择依据、双密钥轮换的正确顺序、令牌体积对请求头上限与带宽的真实影响；最后给不同系统形态该验到哪一步、吊销做到哪一档的取舍矩阵与反模式对照。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,7 +71,180 @@
     </header>
     <p>JWT 的麻烦之处在于它太容易「用起来」：引一个库、调一次 sign、调一次 verify，功能就通了。真正的问题全藏在细节里——验签通过并不代表这个令牌是发给你的，header 里的算法字段是攻击者可控的输入，密钥轮换的步骤顺序颠倒就是一次全站 401。这篇只讲格式与验签机制本身：JWS 与 JWE 的区别、每个字段的语义、必须校验哪些声明、公钥怎么分发与轮换、以及令牌体积的真实代价。至于算法混淆与无签名攻击的利用细节、令牌该存在浏览器哪里，见站内 <a href="../../security/auth-security/">越权与鉴权安全</a>。</p>
 
-    <h2>JWT 只是容器：先分清 JWS 与 JWE</h2>
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">这篇怎么读</div>
+        <ul>
+            <li><strong>① 用法</strong>：一段可直接抄的验签代码、六项必校验清单与漏掉的后果、JWKS 与时钟偏移该怎么配，以及即时失效为什么必须另外做。</li>
+            <li><strong>② 原理</strong>：JWS 与 JWE 的分工、三段结构每个字段的语义、算法族按信任关系怎么选、双密钥轮换的步骤顺序为什么不能颠倒、令牌体积的代价从哪来。</li>
+            <li><strong>③ 场景</strong>：单体、多资源服务、开放平台、强合规、移动端、网关统一验签各该做到哪一步，以及 JWT 解决不了的那几件事。</li>
+        </ul>
+    </div>
+
+    <h2>① 用法 · 验签的正确写法：必校验项、kid 轮换与撤销的落点</h2>
+    <p>验签代码里真正决定安全性的不是「调了 verify」这一行，而是<strong>传进去的那几个参数</strong>。绝大多数线上缺陷都长成同一个样子：签名校验通过，于是放行，而没人问过这个令牌是不是发给本服务的、是不是还在有效期内、算法是不是本服务期望的那一种。下面这段可以直接抄进项目，六个参数一个都不能少，原因见下一节起的原理部分。</p>
+    <pre><code class="language-typescript">// 验签中间件（Node + jose）：算法白名单 + 全部必校验声明 + JWKS 缓存 + 撤销落点
+import { createRemoteJWKSet, jwtVerify } from 'jose'
+
+// 公钥只从配置好的地址取；令牌 header 里的 jku 与 x5u 一律忽略，
+// 否则等于允许对方自带密钥来证明自己
+const JWKS = createRemoteJWKSet(new URL('https://idp.example.com/.well-known/jwks.json'), {
+  cacheMaxAge: 10 * 60 * 1000,   // 决定轮换后多久拿到新公钥，也决定旧公钥要保留多久
+  cooldownDuration: 30 * 1000,   // 未命中回源的最小间隔：没有它，随机 kid 的请求会压到授权服务
+})
+
+export async function verifyAccessToken(raw: string) {
+  const { payload } = await jwtVerify(raw, JWKS, {
+    algorithms: ['RS256'],              // 硬要求：本服务只接受这一种，不让 header 的 alg 参与决策
+    issuer: 'https://idp.example.com/', // 精确相等比较，尾部斜杠差一个字符也要判失败
+    audience: 'order-service',          // 缺这一行就是跨服务重放，很多库默认不校验
+    clockTolerance: '60s',              // 吸收多机 NTP 漂移，否则会出现查无规律的零星 401
+    requiredClaims: ['sub', 'exp', 'iat', 'jti'],
+    typ: 'at+jwt',                      // 区分访问令牌与身份令牌，取值按签发方实际下发的值填
+  })
+  // 关键：验签只证明「没被篡改、来自可信签发方」，不代表「现在还该放行」。
+  // 需要封禁即时生效时，必须在这里再查一次失效状态，判定方式见下方提示框
+  if (await isInvalidated(payload)) throw new Error('token invalidated')
+  return payload
+}
+
+// 用户级失效：一条记录顶掉该用户全部在途令牌，存储量与用户数同阶而不是与令牌数同阶
+async function isInvalidated(p: { sub?: string; jti?: string; iat?: number }) {
+  if (!p.sub || !p.iat) return true
+  const invalidBefore = await cache.getNumber(`uid:${p.sub}:invalid_before`)
+  return invalidBefore ? p.iat &lt; invalidBefore : false
+}</code></pre>
+    <pre><code class="language-bash"># 三条验收命令，上线前各跑一次；前两条是安全验收，第三条是轮换演练
+# 1) 拿一个签给「另一个服务」的令牌来调本服务：必须 401（这就是 aud 校验的验收方式）
+curl -s -o /dev/null -w 'aud 不匹配 %{http_code}\n' \
+  -H "Authorization: Bearer $TOKEN_FOR_ANOTHER_SERVICE" https://order.example.com/api/me
+
+# 2) 拿一个已过期的令牌：必须 401，且响应体里不能出现「过期」「签名不匹配」这类校验细节
+curl -s -H "Authorization: Bearer $EXPIRED_TOKEN" https://order.example.com/api/me | head -3
+
+# 3) 轮换演练：切换签发密钥之前，JWKS 里必须已经同时能看到新旧两把 key
+curl -s https://idp.example.com/.well-known/jwks.json | jq '[.keys[] | {kid, kty, alg}]'
+# 只看到一把 key 就去切签发密钥，等于给自己安排一次全量 401；
+# 反之在旧令牌还没全部过期时删掉旧公钥，表现是「刚登录的用户忽然被登出」</code></pre>
+    <table>
+        <thead>
+            <tr>
+                <th>要做什么</th>
+                <th>怎么写</th>
+                <th>漏了会怎样</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>算法白名单</td>
+                <td>验签时显式传入期望算法（示例里的 <code>algorithms</code>），只接受一种，绝不读 header 的 <code>alg</code> 来选择验签方式</td>
+                <td>算法混淆与无签名令牌被接受，等于验签形同虚设</td>
+            </tr>
+            <tr>
+                <td><code>iss</code> 精确匹配</td>
+                <td>与配置里的签发方字符串完全相等比较，不做前缀或包含匹配</td>
+                <td>信任了非预期的签发方，包括对方自建的签发端</td>
+            </tr>
+            <tr>
+                <td><code>aud</code> 包含本服务</td>
+                <td>把本服务标识作为期望受众传给库；注意 <code>aud</code> 可能是字符串也可能是数组</td>
+                <td><strong>跨服务重放</strong>：一个低敏感服务的令牌可以直接调核心服务</td>
+            </tr>
+            <tr>
+                <td><code>exp</code> 与 <code>nbf</code> 加时钟偏移容忍</td>
+                <td>启用库的时间校验并要求 <code>exp</code> 必须存在，容忍值设 30 到 60 秒</td>
+                <td>过期令牌仍可用；或多机时钟不同步导致查无规律的随机 401</td>
+            </tr>
+            <tr>
+                <td>签名密钥来源固定</td>
+                <td>公钥只从配置好的 JWKS 地址取，忽略令牌里的 <code>jku</code> 与 <code>x5u</code></td>
+                <td>对方自带密钥自签自证，签名校验变成走过场</td>
+            </tr>
+            <tr>
+                <td>令牌类型区分</td>
+                <td>校验 <code>typ</code> 或自定义声明，区分访问令牌、身份令牌与刷新令牌</td>
+                <td>身份令牌被当访问令牌使用，权限判断失去依据</td>
+            </tr>
+            <tr>
+                <td><code>kid</code> 路由与公钥缓存</td>
+                <td>按 header 的 <code>kid</code> 从本地缓存取公钥，缓存设 TTL，未命中回源要限流并加负缓存</td>
+                <td>无缓存则每请求打授权服务；无 TTL 则轮换后永远取不到新公钥</td>
+            </tr>
+            <tr>
+                <td>失效判定（如业务需要即时生效）</td>
+                <td>验签通过后再查一次用户级失效时间点或 <code>jti</code> 名单，命中即拒</td>
+                <td>封禁、降权、改密码都要等到令牌自然过期才生效</td>
+            </tr>
+        </tbody>
+    </table>
+    <div class="callout callout-warning">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-title">JWT 做不到即时失效，撤销必须另外落地</div>
+        <p>自包含令牌的定义就是「验签方不联系任何人即可确认有效」，所以它<strong>天然不具备吊销能力</strong>——「登出接口清掉前端存储」不是吊销，令牌在有效期内仍然可用。可选的落点只有三个，按生效延迟从宽到严：<strong>一，短有效期加刷新令牌轮换</strong>，访问令牌 5 到 15 分钟，封禁时让刷新失败，延迟最长一个有效期，零额外开销；<strong>二，用户级失效时间点</strong>，缓存里记一条 <code>userID</code> 到 <code>invalidBefore</code> 的映射，验签后比较令牌的 <code>iat</code>，一条记录顶掉该用户全部在途令牌，改密码与封禁的首选；<strong>三，按 <code>jti</code> 维护吊销名单</strong>，粒度最细但存储量与令牌数同阶。后两者都要付一次缓存查询（同机房约 0.2 到 1 毫秒）并承认自己需要服务端状态，各自的适用范围见下文原理层的对照表。</p>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>参数或配置</th>
+                <th>作用</th>
+                <th>默认值</th>
+                <th>什么时候必须改</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>算法白名单</td>
+                <td>限定本服务接受的签名算法</td>
+                <td>多数库在不传时会按 header 的 <code>alg</code> 处理，等于没有白名单</td>
+                <td>永远显式传；换算法时按「先加后删」的顺序临时接受两种</td>
+            </tr>
+            <tr>
+                <td>期望受众（<code>audience</code>）</td>
+                <td>声明本服务标识，拒绝签给别人的令牌</td>
+                <td>很多库默认不校验 <code>aud</code></td>
+                <td>只要同一个授权服务器下有第二个资源服务，就必须传</td>
+            </tr>
+            <tr>
+                <td>时钟偏移容忍</td>
+                <td>吸收 NTP 漂移，避免零星 401</td>
+                <td>多数库默认为 0</td>
+                <td>设 30 到 60 秒；更大就等于变相延长了有效期</td>
+            </tr>
+            <tr>
+                <td>JWKS 缓存 TTL</td>
+                <td>决定轮换后多久所有验签方拿到新公钥</td>
+                <td>各库不同，以所用库文档为准</td>
+                <td>取 5 到 15 分钟；旧公钥的保留时长要覆盖「最长令牌有效期 + 这个 TTL」</td>
+            </tr>
+            <tr>
+                <td>JWKS 回源冷却与限流</td>
+                <td>限制未命中时的回源频率</td>
+                <td>部分库不做限制</td>
+                <td>一律配；否则随机 <code>kid</code> 的请求会让网关把授权服务打满</td>
+            </tr>
+            <tr>
+                <td>访问令牌有效期</td>
+                <td>它就是「无法吊销」的窗口长度</td>
+                <td>由签发方决定，以令牌响应的 <code>expires_in</code> 与 <code>exp</code> 实际值为准</td>
+                <td>压到 5 到 15 分钟；不要靠调长它来减少刷新请求</td>
+            </tr>
+            <tr>
+                <td>HMAC 密钥长度</td>
+                <td>决定能否被离线爆破</td>
+                <td>无强制，库通常不校验长度</td>
+                <td>随机源生成且至少 32 字节；绝不用口令或配置项里的短字符串</td>
+            </tr>
+            <tr>
+                <td>请求头大小上限（网关与容器）</td>
+                <td>决定令牌多大时请求会被直接拒</td>
+                <td>随服务器与版本变化，以所用服务器配置的实际值为准（Tomcat 与 Nginx 都有各自的默认上限）</td>
+                <td>payload 变大或出现 400 与 431 时，先缩令牌再考虑调上限</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>② 原理 · JWT 只是容器：先分清 JWS 与 JWE</h2>
+    <p>搞清这两者的分工，能解决一个很常见的误解引发的事故：把敏感字段写进 payload，以为签名等于加密。</p>
     <p>JWT 是一种声明的传递格式，它的具体承载有两种形态：<strong>JWS 是签名</strong>，内容公开可读但不可篡改；<strong>JWE 是加密</strong>，内容对持有者以外不可读。绝大多数人说「JWT」时指的都是 JWS，这直接带来一个必须记住的结论：<strong>payload 只是 base64url 编码，不是加密</strong>。任何拿到令牌的人都能一行命令解出全部内容，所以手机号、证件号、内部角色描述、金额这类东西不能放进去。</p>
     <div class="mermaid">
 flowchart TB
@@ -101,7 +274,8 @@ done
 curl -s https://idp.example.com/.well-known/jwks.json | jq '.keys[] | {kid, kty, alg}'
 # 典型输出会有两把甚至三把 key，这是正在做密钥轮换的正常现象</code></pre>
 
-    <h2>三段结构逐字段拆开</h2>
+    <h2>② 原理 · 三段结构逐字段拆开</h2>
+    <p>搞清每个字段的语义，能解决「上面那张必校验清单为什么是这几项」——每一项都对应一个具体的失效方式。</p>
     <p>三段分别是 header、payload、signature，前两段是 base64url 编码的 JSON，第三段是对「前两段拼接后的字符串」做签名的结果。注意签名的输入是<strong>编码后的字符串</strong>而不是原始 JSON，所以同一份声明用不同的 JSON 序列化方式会得到不同的令牌，这也是为什么不能自己拼 JSON 再复用别人的签名。</p>
     <table>
         <thead>
@@ -198,49 +372,9 @@ curl -s https://idp.example.com/.well-known/jwks.json | jq '.keys[] | {kid, kty,
         <div class="callout-title">本篇最重要的一条</div>
         <p>大量实现只做了「签名对不对」这一步就放行。签名正确只说明令牌来自持有签名密钥的一方，<strong>不说明它是发给当前这个服务的、也不说明它还在有效期内</strong>。在同一个授权服务器下有多个资源服务时，缺少 <code>aud</code> 校验等价于所有服务共用一张通行证，一个低敏感服务的令牌泄露会直接扩散到核心服务。</p>
     </div>
-    <table>
-        <thead>
-            <tr>
-                <th>必做校验项</th>
-                <th>具体做法</th>
-                <th>漏掉会怎样</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>算法白名单</td>
-                <td>验签时显式传入期望算法，只接受一种</td>
-                <td>算法混淆与无签名令牌被接受</td>
-            </tr>
-            <tr>
-                <td><code>iss</code> 精确匹配</td>
-                <td>与配置里的签发方字符串完全相等比较，不做前缀匹配</td>
-                <td>信任了非预期的签发方</td>
-            </tr>
-            <tr>
-                <td><code>aud</code> 包含本服务</td>
-                <td>把本服务标识作为期望受众传给库，注意 aud 可能是数组</td>
-                <td>跨服务重放</td>
-            </tr>
-            <tr>
-                <td><code>exp</code> 与 <code>nbf</code></td>
-                <td>启用库的时间校验，时钟偏移容忍设 30-60 秒</td>
-                <td>过期令牌可用；或跨机器时钟不同步导致随机 401</td>
-            </tr>
-            <tr>
-                <td>签名密钥来源固定</td>
-                <td>公钥只从配置好的 JWKS 地址取，忽略令牌里的 <code>jku</code></td>
-                <td>攻击者自带密钥自签自证</td>
-            </tr>
-            <tr>
-                <td>类型区分</td>
-                <td>校验 <code>typ</code> 或自定义声明，区分访问令牌与身份令牌、刷新令牌</td>
-                <td>身份令牌被当访问令牌使用，权限判断失据</td>
-            </tr>
-        </tbody>
-    </table>
 
-    <h2>签名算法族：选哪一类由信任关系决定</h2>
+    <h2>② 原理 · 签名算法族：选哪一类由信任关系决定</h2>
+    <p>搞清算法与信任关系的对应，能解决「为什么我们这套 HS256 不能再加第二个服务进来验签」。</p>
     <p>选算法不是选「哪个更安全」，而是选<strong>谁有能力签发</strong>。HMAC 系是对称的，验签方手里的密钥同时也能签发令牌，因此只适合签发方与验签方属于同一信任域的场景。一旦有多个团队、多个服务甚至外部方需要验签，就必须换非对称：私钥只在授权服务器，公钥可以随便发。</p>
     <table>
         <thead>
@@ -315,7 +449,8 @@ flowchart TB
     H --> W["注意：密钥一旦分发给多个服务<br/>每个服务都能伪造任意用户令牌"]
 </div>
 
-    <h2>密钥分发与轮换：工程上最容易出事的一环</h2>
+    <h2>② 原理 · 密钥分发与轮换：工程上最容易出事的一环</h2>
+    <p>搞清轮换的步骤顺序，能解决两种自伤型故障：切换瞬间全量 401，以及旧公钥删太早导致在线用户集体掉线。</p>
     <p>非对称方案下，验签方需要拿到公钥。标准做法是授权服务器暴露一个 <strong>JWKS 端点</strong>（通常是 <code>/.well-known/jwks.json</code>），里面是一组 JWK，每个带 <code>kid</code>。验签方读令牌 header 的 <code>kid</code>，从本地缓存里取对应公钥；缓存未命中才回源拉取。这里有两个必须做的保护：<strong>回源要限流</strong>（否则伪造随机 kid 就能让授权服务器被自家网关打挂），<strong>缓存要有 TTL</strong>（否则轮换后永远拿不到新公钥）。</p>
     <div class="mermaid">
 sequenceDiagram
@@ -396,8 +531,9 @@ func AuthMiddleware(next http.Handler) http.Handler {
     })
 }</code></pre>
 
-    <h2>jti 与吊销：两条路都要付代价</h2>
-    <p>自包含令牌按设计就不可吊销：验签方不需要联系任何人就能确认令牌有效，这既是它的优点也是它的上限。补救只有两条路，选择标准是<strong>业务能容忍多长的生效延迟</strong>。</p>
+    <h2>② 原理 · jti 与吊销：三条路都要付代价</h2>
+    <p>搞清代价的构成，能解决「到底该不该为了封禁功能放弃无状态」这个必须在设计阶段回答的问题。</p>
+    <p>自包含令牌按设计就不可吊销：验签方不需要联系任何人就能确认令牌有效，这既是它的优点也是它的上限。补救只有三条路，选择标准是<strong>业务能容忍多长的生效延迟</strong>。</p>
     <table>
         <thead>
             <tr>
@@ -434,7 +570,8 @@ func AuthMiddleware(next http.Handler) http.Handler {
     </table>
     <p>第三种做法实践中最划算：缓存里只存 <code>userID</code> 到 <code>invalidBefore</code> 的映射，验签后比较令牌的 <code>iat</code> 是否早于这个时间点即可，一条记录顶掉该用户全部在途令牌，存储量和用户数同阶而不是和令牌数同阶。</p>
 
-    <h2>令牌体积的真实代价</h2>
+    <h2>② 原理 · 令牌体积的真实代价</h2>
+    <p>搞清体积从哪来，能解决「接口忽然开始返回 400 或 431」以及「网关内存随并发线性上涨」。</p>
     <p>令牌在<strong>每一个请求</strong>的请求头里重传，这件事常被忽略。base64url 会让原始字节膨胀约三分之一，签名本身在 RS256 下就有 342 个字符。往 payload 里塞几十个权限字符串，令牌很容易过 2 KB，而不少服务器默认的请求头上限只有 8 KB（Tomcat 的 <code>max-http-header-size</code> 默认 8 KB，nginx 的 <code>large_client_header_buffers</code> 默认 4 个 8 KB 缓冲），超限会直接得到 400 或 431，且错误信息通常很不直观。HTTP/2 的头部压缩只在同一连接上重复发送相同头部时才有效，令牌一变（每次刷新后都会变）压缩收益就归零。</p>
     <table>
         <thead>
@@ -478,7 +615,65 @@ func AuthMiddleware(next http.Handler) http.Handler {
         <p>只放<strong>身份标识与授权判断必需的最小集合</strong>：不可变的用户 ID、租户 ID、粗粒度角色、以及协议要求的标准声明。用户资料由前端单独调接口获取（可缓存），细粒度权限由资源服务现查。判断标准是问一句：这个字段变更后，能容忍它在令牌里保持旧值到过期吗？不能，就不该放进去。</p>
     </div>
 
-    <h2>反模式对照</h2>
+    <h2>③ 场景 · 不同系统形态该验到哪一步、吊销做到哪一档</h2>
+    <p>前面几节给的是机制，这一节给投入顺序。<strong>判断依据只有两条：有几方需要验签，以及封禁的生效延迟容忍度是多少。</strong>这两条一定下来，算法、公钥分发方式、吊销档位基本没有自由度。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>场景</th>
+                <th>该怎么做</th>
+                <th>为什么停在这里</th>
+                <th>代价</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>单体应用，签发与验签都在同一个服务里</td>
+                <td>HS256，密钥纳入密钥管理并定期轮换；校验 <code>iss</code>、<code>exp</code>、<code>typ</code></td>
+                <td>没有第二方需要验签，非对称带来的收益为零，只增加运维面</td>
+                <td>一旦要把密钥分发给第二个服务，就必须改成非对称，改造要停机或双算法并存</td>
+            </tr>
+            <tr>
+                <td>一个授权服务器 + 多个资源服务</td>
+                <td>RS256 或 ES256，公钥走 JWKS；每个服务校验属于自己的 <code>aud</code></td>
+                <td>私钥只在授权服务器，任何资源服务被入侵都不能伪造令牌；<code>aud</code> 把泄露影响限制在单个服务</td>
+                <td>每个服务都要接验签库、公钥缓存与时钟容忍，新服务上线多一项接入清单</td>
+            </tr>
+            <tr>
+                <td>对外开放平台，需要随时断掉某个接入方</td>
+                <td>不透明令牌加内省，或短有效期 JWT 配严格 scope 与撤销端点</td>
+                <td>对外授权必须可被立即收回，而自包含令牌做不到</td>
+                <td>内省要缓存 30 到 60 秒，否则授权服务器被自家资源服务打挂</td>
+            </tr>
+            <tr>
+                <td>金融、涉密、强合规，封禁要求秒级生效</td>
+                <td>JWT + 用户级失效时间点（首选）或 <code>jti</code> 吊销名单</td>
+                <td>生效延迟容忍度是零，这一条直接否决纯自包含方案</td>
+                <td>每请求一次缓存查询，且吊销存储成为关键依赖，要做高可用</td>
+            </tr>
+            <tr>
+                <td>移动端为主，流量与电量敏感</td>
+                <td>ES256 或 EdDSA，payload 只放最小集合</td>
+                <td>签名段 64 字节对 256 字节，而令牌在每个请求里都要重传</td>
+                <td>要先确认各端与各语言的库都支持所选算法，否则联调阶段才发现</td>
+            </tr>
+            <tr>
+                <td>网关统一验签，下游只读身份头</td>
+                <td>网关验签并清空外部同名头后注入身份；下游只监听内网</td>
+                <td>下游接入成本几乎为零，小语言栈的服务也能接</td>
+                <td>下游一旦能被绕过网关直连，加一个请求头就是任意用户（见 <a href="../">认证与授权的协议全景</a>）</td>
+            </tr>
+            <tr>
+                <td>令牌要经过不可信中间方，且内容必须保密</td>
+                <td>JWE，或干脆改用不透明令牌加内省</td>
+                <td>JWS 的 payload 任何持有者都能解码，编码不是加密</td>
+                <td>JWE 的实现与排查成本明显更高，日志里也不再能直接看内容</td>
+            </tr>
+        </tbody>
+    </table>
+    <p><strong>JWT 解决不了的事要说清楚</strong>，否则很容易把它当万能容器用：它不管<strong>会话管理</strong>（设备列表、登出其他设备、刷新并发），这些要靠服务端记录，见 <a href="../best-practices/">认证系统的工程实践</a>；它不管<strong>授权范围怎么设计</strong>（scope 与权限的区别、授权码与 PKCE 的流程），见 <a href="../oauth2/">OAuth 2.0 与 OIDC 的协议细节</a>；它不管<strong>令牌该存在浏览器哪里</strong>以及算法混淆的具体利用条件，见 <a href="../../security/auth-security/">越权与鉴权安全</a>；放请求头免疫 CSRF 的前提与 <code>SameSite</code> 语义见 <a href="../../security/csrf-clickjacking/">CSRF 与点击劫持</a>。另外它<strong>不是缓存</strong>：用户资料、权限明细、业务状态塞进 payload 换来的只是体积与过期失真。</p>
+
+    <h2>③ 场景 · 反模式对照：每条都对应一次真实故障</h2>
     <table>
         <thead>
             <tr>
@@ -530,6 +725,8 @@ func AuthMiddleware(next http.Handler) http.Handler {
             </tr>
         </tbody>
     </table>
+
+    <p class="cluster-nav">同主题路径：<a href="../">← 上一步：认证与授权的协议全景：从 Cookie Session 到 Token 与联邦</a> · <a href="../oauth2/">下一步：OAuth 2.0 与 OIDC 的协议细节 →</a></p>
 
     <h2>最容易踩的坑</h2>
     <div class="callout callout-danger">

@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="讲透服务注册发现的实现机制与故障形态：客户端发现、服务端发现、Sidecar 三种模式的对照，应用自注册与平台自动注册的区别，心跳续约、服务端探测、TCP 探测、业务健康接口四种健康检查的发现延迟与误判风险，摘除延迟四段耗时叠加为什么导致下游重启时调用方必然报错，优雅下线的正确顺序，Eureka 与 Nacos 的保护模式如何避免实例被摘空，元数据标签与同区域优先路由，以及完整的排障清单和反模式。">
+    <meta name="description" content="服务注册发现三段式：先给「注册与就绪对齐」的落地清单（注册不能早于可服务、下线必须晚于摘流、注册中心抖动时不能清空列表）、心跳与探针参数速查、容器最小配置与三条验收命令，再讲三种发现模式的代价、四种健康检查的盲区、摘除延迟为什么是四段叠加、优雅下线顺序与保护模式，最后给六种注册中心的选型对照、排障清单与七类反模式。">
     <meta name="keywords" content="配置中心与服务发现,服务发现,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/governance/service-discovery/">
     <meta property="og:title" content="服务注册发现的机制与故障模式 - 配置中心与服务发现 - 资深码农">
-    <meta property="og:description" content="讲透服务注册发现的实现机制与故障形态：客户端发现、服务端发现、Sidecar 三种模式的对照，应用自注册与平台自动注册的区别，心跳续约、服务端探测、TCP 探测、业务健康接口四种健康检查的发现延迟与误判风险，摘除延迟四段耗时叠加为什么导致下游重启时调用方必然报错，优雅下线的正确顺序，Eureka 与 Nacos 的保护模式如何避免实例被摘空，元数据标签与同区域优先路由，以及完整的排障清单和反模式。">
+    <meta property="og:description" content="服务注册发现三段式：先给「注册与就绪对齐」的落地清单（注册不能早于可服务、下线必须晚于摘流、注册中心抖动时不能清空列表）、心跳与探针参数速查、容器最小配置与三条验收命令，再讲三种发现模式的代价、四种健康检查的盲区、摘除延迟为什么是四段叠加、优雅下线顺序与保护模式，最后给六种注册中心的选型对照、排障清单与七类反模式。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/governance/service-discovery/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="服务注册发现的机制与故障模式 - 配置中心与服务发现">
-    <meta name="twitter:description" content="讲透服务注册发现的实现机制与故障形态：客户端发现、服务端发现、Sidecar 三种模式的对照，应用自注册与平台自动注册的区别，心跳续约、服务端探测、TCP 探测、业务健康接口四种健康检查的发现延迟与误判风险，摘除延迟四段耗时叠加为什么导致下游重启时调用方必然报错，优雅下线的正确顺序，Eureka 与 Nacos 的保护模式如何避免实例被摘空，元数据标签与同区域优先路由，以及完整的排障清单和反模式。">
+    <meta name="twitter:description" content="服务注册发现三段式：先给「注册与就绪对齐」的落地清单（注册不能早于可服务、下线必须晚于摘流、注册中心抖动时不能清空列表）、心跳与探针参数速查、容器最小配置与三条验收命令，再讲三种发现模式的代价、四种健康检查的盲区、摘除延迟为什么是四段叠加、优雅下线顺序与保护模式，最后给六种注册中心的选型对照、排障清单与七类反模式。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,9 +73,95 @@
                     <div class="article-content">
 <p><strong>本篇写注册发现的实现机制与故障模式</strong>：三种发现模式、健康检查的盲区、摘除延迟的四段叠加、优雅下线、保护模式、就近路由与多机房。三块治理基础设施的共性与 AP 选型结论见 <a href="../">服务治理的三块基础设施</a>；配置中心的服务端机制见 <a href="../config-center/">配置中心的服务端机制与选型</a>；重试与熔断的参数细节见 <a href="../circuit-breaker/">熔断与重试</a>；K8s 的 Service 与 Endpoints 语义见 <a href="../../../devops/kubernetes/core-resources/">Kubernetes 核心资源</a>。</p>
 
-<h2>注册发现解决的是「地址随时在变」</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一份「注册与就绪对齐」的落地清单（注册不能早于可服务、下线必须晚于摘流、注册中心抖动时不能清空列表）、一张心跳与探针的参数速查表、容器里的最小可用配置，以及三条能直接验收这套时序的命令。</li>
+        <li><strong>② 原理</strong>：三种发现模式的代价对照、自注册与平台注册的差别、四种健康检查各自的盲区、摘除延迟为什么是四段叠加、优雅下线的正确顺序、保护模式为什么宁可留死实例、元数据与同区域优先路由。</li>
+        <li><strong>③ 场景</strong>：六种注册中心的选型对照与不适用边界、七条现象到根因的排障清单、七类反模式与正确做法。</li>
+    </ul>
+</div>
 
-<p>单体时代地址写在配置文件里就够了，因为一年也不改几次。微服务加容器之后，实例地址变化成了常态：扩缩容、故障自愈替换、滚动更新、节点驱逐、单元切换，每一次都在改变「某个服务当前有哪些可用地址」。注册发现要做的就是<strong>把这份随时在变的地址清单，及时、准确地送到每一个调用方手里</strong>。</p>
+<h2>① 用法 · 注册与就绪对齐的落地清单</h2>
+
+<p>注册发现这件事上，绝大多数线上失败请求不是来自组件选错，而是来自<strong>时序错位</strong>：注册发生在实例真正能服务之前，或者进程退出发生在流量摘掉之前。下面六条是工程上的标准动作，照做即可，为什么必须这样在原理层。</p>
+
+<table>
+<thead><tr><th>对齐规则</th><th>标准动作</th><th>怎么验收</th><th>违反时的现象</th></tr></thead>
+<tbody>
+<tr><td>注册不能早于「真正可服务」</td><td>先以权重 0 或 <code>enabled=false</code> 注册，预热与缓存加载完成后再置为可用；平台注册则交给就绪探针门控</td><td>扩容一个实例，观察它进入列表的时刻是否晚于健康接口首次返回 200</td><td>每次扩容后新实例的前几秒错误率与 P99 明显高于其他实例</td></tr>
+<tr><td>下线必须晚于摘流</td><td>收到终止信号后先注销并让就绪接口失败，等待大于「推送延迟加客户端缓存周期」后才停止监听并排空</td><td>滚动重启全程用固定压测打流量，外部错误数应为 0</td><td>每次发布都有一小批连接被拒或 502，长期被当成「偶发抖动」忍受</td></tr>
+<tr><td>注册中心抖动时不能清空地址列表</td><td>客户端拒绝接受空列表、拉取失败保留旧值并打指标；服务端侧为核心服务显式配置实例保护阈值</td><td>把注册中心出向流量丢弃，确认调用方仍在正常转发而不是报「无可用实例」</td><td>注册中心一次异常升级为全站不可发现，比注册中心宕机本身严重得多</td></tr>
+<tr><td>先治摘除延迟里最长的那一段</td><td>四段延迟里健康检查通常占 5 到 30 秒，先调它；再确认推送链路真的连上，而不是退化成纯拉取</td><td>用下面第三条命令看长连接数是否约等于实例数</td><td>下游重启时调用方错误持续半分钟以上，误以为注册中心有 bug</td></tr>
+<tr><td>就绪探针只检查强依赖</td><td>健康接口只查「没它就真处理不了请求」的依赖，结果缓存 1 到 2 秒，内部超时远小于探测方超时</td><td>把一个非核心依赖停掉，实例应保持就绪并走降级</td><td>一个非核心依赖抖动导致全部实例同时不就绪，端点被摘空</td></tr>
+<tr><td>注册的地址必须是调用方可达的地址</td><td>自注册时显式指定对外地址与端口，不要让 SDK 自己挑网卡；能用平台注册就不要自注册</td><td>从调用方所在机器直连注册中心里那个地址的健康接口</td><td>注册中心界面一切正常，调用方却连不上，排查方向被带偏</td></tr>
+</tbody></table>
+
+<p>这些动作落到参数上只有下面这几项。默认值随版本变化，以实际部署的组件文档与 <code>kubectl describe</code> 输出为准：</p>
+
+<table>
+<thead><tr><th>参数</th><th>作用</th><th>常见默认值</th><th>什么时候需要改</th></tr></thead>
+<tbody>
+<tr><td>Nacos 临时实例心跳间隔与租约</td><td>决定第一段发现延迟</td><td>5 秒心跳、15 秒标记不健康、30 秒删除</td><td>要求摘除更快时把心跳压到 3 秒、不健康阈值 9 秒；再短就会被网络抖动误摘</td></tr>
+<tr><td>Nacos 实例保护阈值</td><td>健康实例占比过低时把不健康实例也返回，避免列表摘空</td><td>0，即不开启</td><td>核心服务必须显式配置，取 0.5 到 0.7 之间</td></tr>
+<tr><td>Eureka 心跳与过期时长</td><td>决定发现延迟</td><td>30 秒心跳、90 秒过期</td><td>新项目不要选 Eureka；存量集群把过期时长调小并接受统计噪声</td></tr>
+<tr><td><code>readinessProbe.periodSeconds</code> 与 <code>failureThreshold</code></td><td>K8s 侧的摘除触发速度</td><td>10 秒、3 次</td><td>想把摘除延迟压到秒级就设 2 到 3 秒、2 次；配合缓存过的健康接口才不会打爆依赖</td></tr>
+<tr><td><code>preStop</code> 的等待时长</td><td>覆盖「摘流生效」的窗口</td><td>无默认，不写就是 0</td><td>必须大于推送延迟加调用方缓存刷新周期，常见取 5 到 15 秒</td></tr>
+<tr><td><code>terminationGracePeriodSeconds</code></td><td>从 SIGTERM 到 SIGKILL 的总预算</td><td>30 秒</td><td>必须大于 preStop 等待加最长请求处理时间，否则优雅下线会被强杀打断</td></tr>
+<tr><td>客户端兜底拉取周期</td><td>推送失效时的最大陈旧时间</td><td>随 SDK 与版本变化，以客户端配置为准</td><td>推送之外一律叠加一次定时拉取，周期控制在 10 到 30 秒</td></tr>
+</tbody></table>
+
+<p>容器环境里这套时序的最小可用写法如下，四个字段是一组，少一个整组失效：</p>
+
+<pre><code class="language-yaml"># 容器环境里等待摘除的标准做法：preStop 里睡够，terminationGracePeriodSeconds 要更长
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      # 必须大于 preStop 等待 + 请求排空时间，否则 kubelet 会在排空前发 SIGKILL
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: app
+        lifecycle:
+          preStop:
+            exec:
+              # SIGTERM 与 Endpoints 移除是并发发生的，没有这段等待就必然有请求打到正在退出的 Pod
+              command: ["/bin/sh", "-c", "sleep 15"]
+        readinessProbe:            # 只有就绪探针失败才会摘流量，存活探针失败是重启
+          httpGet: { path: /readyz, port: 8080 }
+          periodSeconds: 3         # 缩短这一段能显著降低摘除延迟
+          failureThreshold: 2
+          timeoutSeconds: 1        # 必须大于应用侧健康检查的内部超时
+        livenessProbe:
+          httpGet: { path: /livez, port: 8080 }
+          periodSeconds: 10
+          failureThreshold: 3      # 存活探针要比就绪探针宽松，否则抖动时会被反复重启
+</code></pre>
+
+<p>写完之后用下面三条验收，它们分别对应上表的前四条规则。第一条是唯一能证明「发布不丢请求」的办法，其余都是间接证据：</p>
+
+<pre><code class="language-bash"># 一、发布窗口验收：一边持续打流量，一边滚动重启，结束后失败数必须是 0
+#     -c 50 是并发，时长要覆盖整个滚动过程；用 hey、wrk 或 ab 都可以
+hey -z 3m -c 50 http://order.internal/api/ping &gt; /tmp/rollout.txt &amp;
+kubectl rollout restart deploy/order-service &amp;&amp; kubectl rollout status deploy/order-service
+wait; grep -E 'Status code|error' /tmp/rollout.txt   # 期望只有 200，任何非 2xx 都说明时序没对齐
+
+# 二、摘除时序验收：终止一个实例的同时盯端点列表，端点消失应早于容器退出
+kubectl get endpointslice -l kubernetes.io/service-name=order-service -w &amp;
+kubectl delete pod order-service-xxxxx --grace-period=60
+# 判读：端点先消失、容器后退出 = 正确；容器先退出、端点后消失 = preStop 等待不足
+
+# 三、注册早于可服务的验收：新实例进入列表的时间不应早于健康接口首次成功
+kubectl get pod -l app=order-service \
+  -o custom-columns='NAME:.metadata.name,READY:.status.containerStatuses[*].ready,START:.status.startTime'
+ss -tanp | grep -E ':8848|:9848' | grep -c ESTABLISHED   # 顺带确认推送连接在，0 表示已退化成纯拉取
+</code></pre>
+
+<h2>② 原理 · 注册发现解决的是「地址随时在变」</h2>
+
+<p>搞清这一节能解决的现象是：为什么把地址写在配置里在微服务下必然失效。单体时代地址写在配置文件里就够了，因为一年也不改几次。微服务加容器之后，实例地址变化成了常态：扩缩容、故障自愈替换、滚动更新、节点驱逐、单元切换，每一次都在改变「某个服务当前有哪些可用地址」。注册发现要做的就是<strong>把这份随时在变的地址清单，及时、准确地送到每一个调用方手里</strong>。</p>
 
 <p>注意这句话里有三个互相冲突的要求：及时（延迟要低）、准确（不要给死实例）、送到每个调用方（扇出大）。后面所有的机制和故障，本质都是在这三者之间做取舍。</p>
 
@@ -113,9 +199,9 @@ flowchart TB
 <tr><td>适合谁</td><td>单一语言栈、追求极致延迟</td><td>多语言、南北向入口</td><td>服务数多、多语言、且有平台团队能兜住网格</td></tr>
 </tbody></table>
 
-<h2>注册的两种来源：自注册与平台注册</h2>
+<h2>② 原理 · 注册的两种来源：自注册与平台注册</h2>
 
-<p><strong>应用自注册</strong>是应用启动后自己调注册中心的接口把自己加进去，再靠心跳维持。优点是不依赖平台、任何部署形态都能用；缺点是注册逻辑散落在每个应用里，注册的地址由应用自己决定，<strong>最常见的事故就是注册了一个不可达的地址</strong>：容器里注册了 Docker 的内部 IP、多网卡机器上选错了网卡、或者注册了容器端口而不是映射后的主机端口。</p>
+<p>搞清这一节能解决的现象是：注册中心里有这个实例，但谁都连不上它。<strong>应用自注册</strong>是应用启动后自己调注册中心的接口把自己加进去，再靠心跳维持。优点是不依赖平台、任何部署形态都能用；缺点是注册逻辑散落在每个应用里，注册的地址由应用自己决定，<strong>最常见的事故就是注册了一个不可达的地址</strong>：容器里注册了 Docker 的内部 IP、多网卡机器上选错了网卡、或者注册了容器端口而不是映射后的主机端口。</p>
 
 <p><strong>平台自动注册</strong>是编排系统替应用完成注册。K8s 的 Endpoints 与 EndpointSlice 就是典型：Pod 通过就绪探针后，控制器把它的地址写进去；Pod 进入终止状态时自动移除。应用里没有一行注册代码，也就不会出现注册错地址的问题。<strong>这也是为什么全量跑在 K8s 上时往往不需要额外的注册中心</strong>，除非你需要跨集群发现、实例级元数据路由，或者框架强绑定了某个注册中心的生态。K8s 侧的控制循环与探针语义见 <a href="../../../devops/kubernetes/core-resources/">Kubernetes 核心资源</a>。</p>
 
@@ -125,9 +211,9 @@ flowchart TB
     <p>很多人以为用了 K8s Service 就不存在摘除延迟。实际上 Pod 终止时，EndpointSlice 的变更要经过 API Server、控制器、再到每个节点的 kube-proxy 或 CNI 更新转发规则，<strong>这个链路同样是几百毫秒到几秒</strong>；如果前面还有 Ingress 或自建网关，又多一段缓存。所以无论平台注册还是自注册，preStop 里的等待与优雅下线都必须做。</p>
 </div>
 
-<h2>健康检查的四种机制与各自盲区</h2>
+<h2>② 原理 · 健康检查的四种机制与各自盲区</h2>
 
-<p>注册中心判断「一个实例还活着吗」只有四种手段，每一种都有明确的盲区。<strong>选择健康检查方式，实际上是在选择你愿意接受哪一类误判</strong>。</p>
+<p>搞清这一节能解决的现象是：注册中心显示健康，调用却一直失败。注册中心判断「一个实例还活着吗」只有四种手段，每一种都有明确的盲区。<strong>选择健康检查方式，实际上是在选择你愿意接受哪一类误判</strong>。</p>
 
 <table>
 <thead><tr><th>机制</th><th>怎么工作</th><th>发现故障的延迟</th><th>盲区与误判风险</th><th>典型实现与默认值</th></tr></thead>
@@ -191,9 +277,9 @@ func (rd *Readiness) check() bool {
 }
 </code></pre>
 
-<h2>摘除延迟：服务发现最核心的指标</h2>
+<h2>② 原理 · 摘除延迟：服务发现最核心的指标</h2>
 
-<p>如果只允许用一个指标衡量注册发现做得好不好，那就是<strong>摘除延迟</strong>：从实例真正不可用，到最后一个调用方不再向它发请求，一共过了多久。这个时间不是单一环节，而是四段延迟的叠加，任何一段配置不当都会把总时长拉长到分钟级。</p>
+<p>搞清这一节能解决的现象是：下游一重启，我这边就报一批错。如果只允许用一个指标衡量注册发现做得好不好，那就是<strong>摘除延迟</strong>：从实例真正不可用，到最后一个调用方不再向它发请求，一共过了多久。这个时间不是单一环节，而是四段延迟的叠加，任何一段配置不当都会把总时长拉长到分钟级。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -231,9 +317,9 @@ sequenceDiagram
     <p>很多人第一反应是注册中心有 bug，其实<strong>这是机制的必然结果</strong>：摘除必须靠观测来推断，而观测有周期。摘除延迟不可能降到零，所以工程上只有两条路——被调方通过优雅下线把「实例消失」变成一个提前通知的、有序的过程；调用方通过连接失败快速重试与熔断兜住剩余失败。把希望寄托在「把心跳调到 1 秒」上只会换来抖动误摘。</p>
 </div>
 
-<h2>优雅下线：把摘除延迟从被动观测变成主动通知</h2>
+<h2>② 原理 · 优雅下线：把摘除延迟从被动观测变成主动通知</h2>
 
-<p>优雅下线的核心思路是<strong>先让调用方知道我要走，再真的走</strong>。顺序错了整个机制就失效：先停服务再注销，或者直接强杀，都会让调用方在摘除窗口里继续发请求。</p>
+<p>搞清这一节能解决的现象是：发布期间总有一小批失败请求，怎么调心跳参数都消不掉。优雅下线的核心思路是<strong>先让调用方知道我要走，再真的走</strong>。顺序错了整个机制就失效：先停服务再注销，或者直接强杀，都会让调用方在摘除窗口里继续发请求。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -289,35 +375,9 @@ func main() {
 }
 </code></pre>
 
-<pre><code class="language-yaml"># 容器环境里等待摘除的标准做法：preStop 里睡够，terminationGracePeriodSeconds 要更长
-apiVersion: apps/v1
-kind: Deployment
-spec:
-  template:
-    spec:
-      # 必须大于 preStop 等待 + 请求排空时间，否则 kubelet 会在排空前发 SIGKILL
-      terminationGracePeriodSeconds: 60
-      containers:
-      - name: app
-        lifecycle:
-          preStop:
-            exec:
-              # SIGTERM 与 Endpoints 移除是并发发生的，没有这段等待就必然有请求打到正在退出的 Pod
-              command: ["/bin/sh", "-c", "sleep 15"]
-        readinessProbe:            # 只有就绪探针失败才会摘流量，存活探针失败是重启
-          httpGet: { path: /readyz, port: 8080 }
-          periodSeconds: 3         # 缩短这一段能显著降低摘除延迟
-          failureThreshold: 2
-          timeoutSeconds: 1        # 必须大于应用侧健康检查的内部超时
-        livenessProbe:
-          httpGet: { path: /livez, port: 8080 }
-          periodSeconds: 10
-          failureThreshold: 3      # 存活探针要比就绪探针宽松，否则抖动时会被反复重启
-</code></pre>
+<h2>② 原理 · 保护模式：宁可留着死实例，也不能把列表摘空</h2>
 
-<h2>保护模式：宁可留着死实例，也不能把列表摘空</h2>
-
-<p>假设注册中心在一分钟内发现 80% 的实例都没有续约，最合理的推断是什么？<strong>不是「80% 的实例同时挂了」，而是「注册中心自己的网络出问题了」</strong>。真实世界里成百上千个实例同时失联的概率极低，而注册中心与机房之间断网的概率高得多。</p>
+<p>搞清这一节能解决的现象是：注册中心网络一抖，实例列表突然变成空。假设注册中心在一分钟内发现 80% 的实例都没有续约，最合理的推断是什么？<strong>不是「80% 的实例同时挂了」，而是「注册中心自己的网络出问题了」</strong>。真实世界里成百上千个实例同时失联的概率极低，而注册中心与机房之间断网的概率高得多。</p>
 
 <p>如果注册中心此时照常摘除，结果是实例列表被清空，调用方拿到空列表，<strong>一个注册中心的网络问题被放大成全站不可用</strong>。这正是 Eureka 自我保护模式要解决的问题：当最近一段时间的续约成功率低于阈值时，停止摘除任何实例。这也是 AP 取向在工程上的具体落地——宁可给出包含死实例的列表，也不给出空列表。</p>
 
@@ -347,9 +407,9 @@ stateDiagram-v2
 <tr><td>客户端 SDK 侧</td><td>空列表保护</td><td>拉取或推送得到的实例列表为空</td><td>保留上一次的非空列表，并打告警指标</td><td><strong>这是最后一道防线，也是最应该确认的一条</strong>：无论服务端用什么实现，客户端都不该接受空列表</td></tr>
 </tbody></table>
 
-<h2>元数据、就近路由与多机房</h2>
+<h2>② 原理 · 元数据、就近路由与多机房</h2>
 
-<p>注册信息里除了地址，还应带上一组元数据标签，它们是流量治理的基础：版本号用于金丝雀、分组标签用于灰度、<strong>区域与可用区标签用于同区域优先路由</strong>。</p>
+<p>搞清这一节能解决的现象是：跨可用区调用把延迟和云账单同时抬了起来。注册信息里除了地址，还应带上一组元数据标签，它们是流量治理的基础：版本号用于金丝雀、分组标签用于灰度、<strong>区域与可用区标签用于同区域优先路由</strong>。</p>
 
 <p>同区域优先的收益非常具体：跨可用区调用的网络往返通常比同可用区高 0.5 到 2 毫秒，一条链路上有十几次内部调用时，累积延迟差异可达十几毫秒；更直接的是<strong>跨可用区流量在公有云上是要计费的</strong>，把内部调用限制在同可用区里，这部分账单可以显著下降。实现方式是负载均衡时先过滤出同区域实例，只有同区域没有健康实例时才回退到跨区域——<strong>回退逻辑必须有，否则同区域全挂时流量无处可去</strong>。</p>
 
@@ -365,7 +425,7 @@ stateDiagram-v2
 
 <p>多机房部署要先回答一个问题：<strong>注册信息要不要跨机房同步</strong>。全同步的好处是任何机房都能发现全部实例，可以做跨机房容灾；代价是同步链路本身成为故障点，且一旦跨机房调用变成常态，延迟与流量成本都会上升。更稳的做法是<strong>每个机房一套注册中心，各自只管本机房实例，机房之间通过网关或专门的跨机房入口互通</strong>，这样机房级故障天然被隔离，代价是跨机房调用要显式声明，不能像本机房一样透明。</p>
 
-<h2>选型对照</h2>
+<h2>③ 场景 · 选型对照与不适用边界</h2>
 
 <table>
 <thead><tr><th>方案</th><th>一致性取向</th><th>健康检查方式</th><th>默认摘除延迟量级</th><th>元数据与路由能力</th><th>多语言</th><th>现状与适用</th></tr></thead>
@@ -378,7 +438,9 @@ stateDiagram-v2
 <tr><td>服务网格，如 Istio</td><td>控制面最终一致</td><td>复用 K8s 探针加代理主动探测</td><td>与 K8s 接近，加上 xDS 推送延迟</td><td>最强，支持按任意标签与请求属性路由</td><td>语言无关</td><td>服务数多且有平台团队时最强，否则运维成本不划算</td></tr>
 </tbody></table>
 
-<h2>排障清单</h2>
+<p><strong>不适用边界</strong>：注册发现只负责「谁在、地址是什么」，它不能替你兜住调用失败——摘除窗口内的失败必须靠重试与熔断，参数怎么定见 <a href="../circuit-breaker/">熔断限流降级与舱壁隔离</a>；实例参数与开关的下发不属于它的职责，服务端机制见 <a href="../config-center/">配置中心的服务端机制与选型</a>，应用侧写法见 <a href="../config-client/">配置中心应用侧实践</a>；外部流量怎么进来、认证限流放哪里在 <a href="../api-gateway/">API 网关的责任边界</a>；探针、Endpoints 与 preStop 的平台侧语义在 <a href="../../../devops/kubernetes/core-resources/">Kubernetes 核心资源</a>；AP 与 CP 的完整推演在 <a href="../../distributed/consistency/">CAP 定理</a>；「摘除延迟到底是多少」这种问题要靠指标回答，见 <a href="../../../observability/metrics/">指标体系</a>。</p>
+
+<h2>③ 场景 · 排障清单与反模式</h2>
 
 <table>
 <thead><tr><th>现象</th><th>最可能的原因</th><th>怎么确认</th><th>处理</th></tr></thead>
@@ -417,8 +479,6 @@ ss -tanp | grep -E ':8848|:9848' | awk '{print $1, $5}' | sort | uniq -c
 curl -sS -m 2 -o /dev/null -w 'code=%{http_code} connect=%{time_connect}s total=%{time_total}s\n' http://10.0.2.31:8080/readyz
 </code></pre>
 
-<h2>反模式</h2>
-
 <table>
 <thead><tr><th>反模式</th><th>为什么有人这么做</th><th>后果</th><th>正确做法</th></tr></thead>
 <tbody>
@@ -431,9 +491,15 @@ curl -sS -m 2 -o /dev/null -w 'code=%{http_code} connect=%{time_connect}s total=
 <tr><td>就绪探针检查所有下游依赖</td><td>觉得依赖不可用就不该接流量</td><td>一个非核心依赖抖动导致全部实例同时不就绪，端点被摘空，全站不可用</td><td>只检查强依赖，非核心依赖走降级而不是摘流量</td></tr>
 </tbody></table>
 
+<p>在这条路径上，上一篇讲清了三块基础设施的共性与弱依赖底线，本篇把「谁在、地址是什么」这件事做实；下一步换到另一块权威数据：配置在服务端是怎么存、怎么推、怎么保证改错能回滚的。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../">← 上一步：服务治理的三块基础设施：注册发现、配置、网关</a> · <a href="../config-center/">下一步：配置中心的服务端机制与选型 →</a></p>
+
+<h2>最容易踩的坑</h2>
+
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">这些坑都对应发布窗口里那批「偶发」失败</div>
     <ul>
     <li>K8s 里只写了 SIGTERM 处理却没有 preStop 等待，Endpoints 移除与 SIGTERM 是并发的，仍然会有请求打到正在退出的 Pod。</li>
     <li>terminationGracePeriodSeconds 小于 preStop 等待加排空时间，kubelet 在排空完成前就发 SIGKILL，优雅下线白做。</li>
@@ -447,9 +513,9 @@ curl -sS -m 2 -o /dev/null -w 'code=%{http_code} connect=%{time_connect}s total=
     <li>新扩容实例不做权重预热，冷启动阶段就承接平均流量，表现为该实例 P99 异常高。</li>
     <li>多网卡机器上自注册选错网卡，注册了一个只有内部管理网可达的地址。</li>
     <li>调用方只重试超时不重试连接被拒，摘除窗口内的连接拒绝错误全部透传给了用户。</li>
+    <li>注册动作发生在预热完成之前，实例一进列表就被打满流量，表现为「每次扩容都抖一下」。</li>
     </ul>
 </div>
-
                     </div>
                 </article>
             </main>

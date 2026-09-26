@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="表结构上线之后怎么安全地改：expand-migrate-contract 三阶段模式与每阶段的回滚点，九类常见变更的兼容性判定（是否兼容旧代码、是否锁表重写、MySQL 与 PostgreSQL 差异），改列名与删列为什么必须拆成两个发布周期，唯一约束在软删除与多租户下的陷阱与 NULL 的特殊语义，CHECK 与枚举怎么选，默认值的两类误解，分批迁移脚本的幂等与续跑要求，以及 DDL 与代码的发布顺序和版本化管理工具对比。">
+    <meta name="description" content="模式演进三段式：先给加列、加索引、加约束、改类型、改列名、删列六类动作的安全做法与执行顺序（加法先行、减法最后），每步都标出验证方法与回滚点，附 DDL 前置检查 SQL、一次改类型的六步完整清单与锁相关参数速查；再讲清灰度期读写错配为什么必然出事故、expand-migrate-contract 六阶段各自的回滚动作、十类变更的兼容性与是否重写整表、元数据锁排队的连锁反应、唯一约束在软删除与多租户下的三个陷阱、枚举四种实现与默认值四个陷阱、回填脚本的五条工程要求；最后给版本化工具对照、按规模选变更路径的取舍矩阵与不适用边界。">
     <meta name="keywords" content="数据库设计,索引设计原则,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/design/index-design/">
     <meta property="og:title" content="模式演进与约束设计：表结构上线之后怎么改 - 资深码农">
-    <meta property="og:description" content="表结构上线之后怎么安全地改：expand-migrate-contract 三阶段模式与每阶段的回滚点，九类常见变更的兼容性判定（是否兼容旧代码、是否锁表重写、MySQL 与 PostgreSQL 差异），改列名与删列为什么必须拆成两个发布周期，唯一约束在软删除与多租户下的陷阱与 NULL 的特殊语义，CHECK 与枚举怎么选，默认值的两类误解，分批迁移脚本的幂等与续跑要求，以及 DDL 与代码的发布顺序和版本化管理工具对比。">
+    <meta property="og:description" content="模式演进三段式：先给加列、加索引、加约束、改类型、改列名、删列六类动作的安全做法与执行顺序（加法先行、减法最后），每步都标出验证方法与回滚点，附 DDL 前置检查 SQL、一次改类型的六步完整清单与锁相关参数速查；再讲清灰度期读写错配为什么必然出事故、expand-migrate-contract 六阶段各自的回滚动作、十类变更的兼容性与是否重写整表、元数据锁排队的连锁反应、唯一约束在软删除与多租户下的三个陷阱、枚举四种实现与默认值四个陷阱、回填脚本的五条工程要求；最后给版本化工具对照、按规模选变更路径的取舍矩阵与不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/design/index-design/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="模式演进与约束设计：表结构上线之后怎么改">
-    <meta name="twitter:description" content="表结构上线之后怎么安全地改：expand-migrate-contract 三阶段模式与每阶段的回滚点，九类常见变更的兼容性判定（是否兼容旧代码、是否锁表重写、MySQL 与 PostgreSQL 差异），改列名与删列为什么必须拆成两个发布周期，唯一约束在软删除与多租户下的陷阱与 NULL 的特殊语义，CHECK 与枚举怎么选，默认值的两类误解，分批迁移脚本的幂等与续跑要求，以及 DDL 与代码的发布顺序和版本化管理工具对比。">
+    <meta name="twitter:description" content="模式演进三段式：先给加列、加索引、加约束、改类型、改列名、删列六类动作的安全做法与执行顺序（加法先行、减法最后），每步都标出验证方法与回滚点，附 DDL 前置检查 SQL、一次改类型的六步完整清单与锁相关参数速查；再讲清灰度期读写错配为什么必然出事故、expand-migrate-contract 六阶段各自的回滚动作、十类变更的兼容性与是否重写整表、元数据锁排队的连锁反应、唯一约束在软删除与多租户下的三个陷阱、枚举四种实现与默认值四个陷阱、回填脚本的五条工程要求；最后给版本化工具对照、按规模选变更路径的取舍矩阵与不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,7 +71,188 @@
     </header>
     <p>建表是一次性的，改表是无限次的。绝大多数关于数据库设计的资料都在讲怎么把表建好，却几乎不讲一个更常见也更危险的问题：<strong>表结构已经上线，上面跑着几十个服务实例和几亿行数据，现在要改，怎么改才不出事</strong>。这篇只讲改表，以及改表时那些能救命的约束设计。范式与冗余的取舍见站内《范式与反范式》篇。</p>
 
-    <h2>为什么改表比建表难：灰度期的读写错配</h2>
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">这篇怎么读</div>
+        <ul>
+            <li><strong>① 用法</strong>：加列、加索引、加约束、改类型、改列名、删列各自的安全做法与执行顺序（<strong>加法先行、减法最后</strong>），每一步都给出验证方法和明确的回滚点；外加 DDL 前置检查 SQL、一次改类型的六步完整清单、锁与在线性相关的参数速查。</li>
+            <li><strong>② 原理</strong>：灰度期读写错配为什么必然产生事故、expand-migrate-contract 的六个阶段与各阶段的回滚动作、十类常见变更的兼容性与是否重写整表、元数据锁排队的连锁反应、唯一约束的三个语义陷阱、枚举四种实现与默认值四个陷阱、回填脚本的五条工程要求与可直接改的脚本。</li>
+            <li><strong>③ 场景</strong>：变更流程与版本化工具对照、按团队与数据规模选变更路径的取舍矩阵、不适用边界。</li>
+        </ul>
+    </div>
+
+    <h2>① 用法 · 六类改表动作：安全做法、验证与回滚点</h2>
+
+    <p>所有改表动作只按一条顺序排：<strong>加法先行，减法最后，中间用一个完整发布周期隔开</strong>。下表左到右就是执行顺序，「回滚点」一列写的是这一步出问题时具体该做什么——如果某一步填不出回滚动作，说明这一步被切得太粗，要再拆。为什么必须这么切，原因见原理层。</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>动作</th>
+                <th>安全做法</th>
+                <th>怎么验证</th>
+                <th>回滚点</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>1 加列</td>
+                <td>一律建成可空，或带默认值且默认值与应用侧一致；不要在这一步加 NOT NULL</td>
+                <td>不改代码的旧实例仍能正常插入；<code>information_schema.columns</code> 里确认可空</td>
+                <td>直接删列。此时还没有任何代码读它，删除是安全的</td>
+            </tr>
+            <tr>
+                <td>2 加索引</td>
+                <td>PostgreSQL 必须 <code>CREATE INDEX CONCURRENTLY</code> 且不能放在事务里；MySQL 显式写 <code>ALGORITHM=INPLACE, LOCK=NONE</code>，让会重建表的情况直接报错而不是悄悄重建</td>
+                <td>建完立刻看目标查询的执行计划是否真的用上了它；PG 还要检查 <code>pg_index.indisvalid</code></td>
+                <td>删索引。注意 PG 上并发建索引失败会留下无效索引，必须先删干净再重试，否则报名称冲突</td>
+            </tr>
+            <tr>
+                <td>3 双写与回填</td>
+                <td>先开双写开关，确认增量已被覆盖，再启动分批回填；回填语句自带「尚未迁移」条件</td>
+                <td>最近时间段内新列为空的行数为 0；全表为空行数逐批下降到 0</td>
+                <td>关闭双写开关；必要时把新列整体置空重跑。此时权威值仍是旧列，数据没有风险</td>
+            </tr>
+            <tr>
+                <td>4 加约束（NOT NULL、CHECK、唯一）</td>
+                <td>回填完成后再加。PostgreSQL 走 <code>NOT VALID</code> 加 <code>VALIDATE</code> 两步；唯一约束先跑一遍重复扫描，PG 可并发建唯一索引再转成约束</td>
+                <td>故意写一条违规数据，确认被拒；MySQL 8.0.16 以下要确认 CHECK 是否真的生效</td>
+                <td>删约束。代价只是回到「靠应用保证」，不丢数据</td>
+            </tr>
+            <tr>
+                <td>5 切读</td>
+                <td>只改读路径，写路径继续双写；灰度放量，不要一次全量</td>
+                <td>对比新旧两列的读结果差异行数；观察一个完整发布周期</td>
+                <td>读切回旧列。这一步能安全回退的前提正是写路径还在双写</td>
+            </tr>
+            <tr>
+                <td>6 改类型 / 改列名 / 删列（减法）</td>
+                <td>一律不要原地改。缩长度、换类型、改列名都等价于「加新列走完前五步再删旧列」；删列前必须确认连续一个周期零访问，并导出该列数据留档</td>
+                <td>审计日志与慢查询日志里连续一个周期没有出现旧列名；确认报表、BI、下游同步都不再读它</td>
+                <td><strong>没有回滚点</strong>，这是整个流程里唯一不可逆的一步，所以它必须单独发布、单独执行</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <table>
+        <thead>
+            <tr>
+                <th>参数或命令</th>
+                <th>作用</th>
+                <th>默认值</th>
+                <th>什么时候需要改</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>MySQL <code>lock_wait_timeout</code>（会话级）</td>
+                <td>获取元数据锁的等待上限，超时即报错退出</td>
+                <td>随版本与实例配置变化，以 <code>SHOW VARIABLES LIKE 'lock_wait_timeout'</code> 输出为准，通常大到等同于死等</td>
+                <td>执行任何 DDL 前设成个位数秒，让 DDL 拿不到锁就失败，而不是把后续查询全堵在它后面</td>
+            </tr>
+            <tr>
+                <td>PostgreSQL <code>lock_timeout</code></td>
+                <td>同上，等待锁超过该时长即报错</td>
+                <td>以 <code>SHOW lock_timeout</code> 输出为准，0 表示永不超时</td>
+                <td>大表 DDL 前必设；配合外层重试，形成「短锁多试」的执行方式</td>
+            </tr>
+            <tr>
+                <td>MySQL <code>ALGORITHM=INPLACE, LOCK=NONE</code></td>
+                <td>显式声明对在线性的要求，服务器达不到就直接报错</td>
+                <td>不写时由服务器自行选择算法</td>
+                <td>所有生产 DDL 都该写上，避免以为是秒级操作、实际在重建整张表</td>
+            </tr>
+            <tr>
+                <td>PostgreSQL <code>CREATE INDEX CONCURRENTLY</code></td>
+                <td>建索引期间不阻塞写入，代价是要扫两遍表且不能在事务块里执行</td>
+                <td>不加该关键字时会阻塞写</td>
+                <td>生产库建索引一律加；失败后检查并清理无效索引</td>
+            </tr>
+            <tr>
+                <td>PostgreSQL <code>ADD CONSTRAINT ... NOT VALID</code> 加 <code>VALIDATE CONSTRAINT</code></td>
+                <td>把「全表校验」从排他锁降级为共享锁，且可中断重试</td>
+                <td>不加 NOT VALID 时会持排他锁扫全表</td>
+                <td>给大表加 CHECK 或收非空时；PG 12 起还能让 <code>SET NOT NULL</code> 复用已验证的约束，免掉一次全表扫描</td>
+            </tr>
+            <tr>
+                <td>回填的单批行数与批间休眠</td>
+                <td>控制单事务大小与对线上写入的挤占</td>
+                <td>没有通用默认值，必须按主从延迟实测确定</td>
+                <td>延迟超过阈值就自动降速；批太小总耗时拖长，批太大拉长延迟并长时间持锁</td>
+            </tr>
+            <tr>
+                <td>在线改表工具（<code>pt-online-schema-change</code>、<code>gh-ost</code>）</td>
+                <td>用影子表加增量追平的方式替代原生重建</td>
+                <td>不适用</td>
+                <td>原生 DDL 会重建整表且表大到无法接受时；注意它们会改变触发器与外键的行为，上线前在影子库演练</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>① 用法 · 前置检查与一次改类型的完整执行清单</h2>
+
+    <p>下面两段可以直接抄进变更工单。第一段是所有 DDL 的前置检查，第二段是「把 <code>status</code> 换成新的枚举列 <code>status_v2</code>」这个典型不兼容变更的六步落地，每一步后面跟着验证与回滚动作。</p>
+
+    <pre><code class="language-sql">-- ① 前置检查一：找长事务与长查询。它们会让 DDL 卡在元数据锁上，
+--    而后续所有访问这张表的普通查询会排在这个 DDL 之后，表现为整表瞬间不可用。
+SELECT trx_id, trx_started,
+       TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS secs, trx_query
+  FROM information_schema.innodb_trx
+ WHERE TIMESTAMPDIFF(SECOND, trx_started, NOW()) &gt; 5
+ ORDER BY secs DESC;                     -- MySQL
+
+-- PostgreSQL 等价查询：
+-- SELECT pid, now() - xact_start AS dur, state, left(query, 80)
+--   FROM pg_stat_activity
+--  WHERE xact_start &lt; now() - interval '5 s' ORDER BY dur DESC;
+
+-- ② 前置检查二：给 DDL 会话设锁等待上限，拿不到锁立刻失败，由外层重试，绝不死等
+SET SESSION lock_wait_timeout = 5;       -- MySQL，单位秒
+-- SET lock_timeout = '5s';              -- PostgreSQL</code></pre>
+
+    <pre><code class="language-sql">-- 第 1 步（加法）先上 DDL，再发代码。新列可空，旧实例不改代码也能继续写入
+ALTER TABLE orders
+  ADD COLUMN status_v2 SMALLINT NULL
+      COMMENT '新状态枚举 迁移中 回填完成后收成 NOT NULL',
+  ALGORITHM=INPLACE, LOCK=NONE;          -- 达不到在线要求就直接报错，而不是悄悄重建整表
+-- 验证：旧版本实例的插入与更新全部正常
+-- 回滚：ALTER TABLE orders DROP COLUMN status_v2  （此刻无人读它）
+
+-- 第 2 步 代码开双写：新旧两列一起写，读路径仍然只读旧列
+-- 验证：最近产生的数据里新列不应为空
+SELECT COUNT(*) FROM orders
+ WHERE created_at &gt;= NOW() - INTERVAL 10 MINUTE AND status_v2 IS NULL;   -- 期望 0
+-- 回滚：关掉双写开关，数据库结构不动
+
+-- 第 3 步 回填。必须在双写已生效之后才开始，否则回填期间产生的新行不会进新列。
+--   按主键分批，条件里带 IS NULL，因此可以反复重跑
+UPDATE orders SET status_v2 = CASE status
+                                WHEN 0 THEN 10 WHEN 1 THEN 20 WHEN 2 THEN 30
+                                WHEN 3 THEN 40 WHEN 4 THEN 90
+                              END
+ WHERE id &gt; ? AND id &lt;= ? AND status_v2 IS NULL;
+-- 验证：全表残留为 0，且没有映射不到的旧值
+SELECT COUNT(*) FROM orders WHERE status_v2 IS NULL;                     -- 期望 0
+SELECT status, COUNT(*) FROM orders WHERE status_v2 IS NULL GROUP BY status;
+-- 回滚：把新列整体置空重跑，权威值此刻仍是旧列
+
+-- 第 4 步 收紧约束（PostgreSQL 低锁路径，避免 SET NOT NULL 直接扫全表）
+-- ALTER TABLE orders ADD CONSTRAINT ck_status_v2_nn CHECK (status_v2 IS NOT NULL) NOT VALID;
+-- ALTER TABLE orders VALIDATE CONSTRAINT ck_status_v2_nn;
+-- ALTER TABLE orders ALTER COLUMN status_v2 SET NOT NULL;
+-- 验证：插一条不带该列的数据，确认被拒绝
+-- 回滚：DROP CONSTRAINT，退回靠应用保证
+
+-- 第 5 步 切读：读路径改用 status_v2，写路径继续双写，灰度放量
+-- 验证：观察一个完整发布周期，确认审计日志里不再出现旧列名
+-- 回滚：读切回 status，因为写路径还在双写，切回即恢复
+
+-- 第 6 步（减法）删旧列。整个流程里唯一不可回滚的一步，必须单独发布
+--   前置：连续一个周期零访问 + 该列数据已导出留档 + 下游报表与同步任务确认改完
+ALTER TABLE orders DROP COLUMN status;</code></pre>
+
+    <h2>② 原理 · 为什么改表比建表难：灰度期的读写错配</h2>
+    <p>搞清这一节能解决「DDL 明明是秒级的，为什么发布窗口里接口大面积报错」。</p>
     <p>所有改表事故的根都在同一处：<strong>发布不是原子的</strong>。滚动发布期间，旧版本实例和新版本实例同时在跑，同时连着同一个数据库。数据库只有一个结构，代码却有两个版本的期望。这个窗口通常是几分钟到几十分钟，如果是灰度放量，可能是几天。</p>
 
     <div class="mermaid">
@@ -94,7 +275,8 @@ sequenceDiagram
 
     <p>把这三类事故抽象出来，就是一条纪律：<strong>任何一步变更都不能同时改读和写</strong>。违反它，就一定存在一个窗口，两个版本的代码对同一份数据持有互相矛盾的假设。而遵守它，每一步都能找到一个明确的回滚动作。</p>
 
-    <h2>expand-migrate-contract：唯一安全的变更骨架</h2>
+    <h2>② 原理 · expand-migrate-contract：唯一安全的变更骨架</h2>
+    <p>搞清这一节能解决「每一步到底能不能回滚」这个在变更评审里最常答不上来的问题。</p>
     <p>这个模式在不同资料里也叫「并行变更」或「扩张收缩」，本质是把一次不兼容变更切成若干次兼容变更：<strong>先只加不减（expand），再迁移数据和读路径（migrate），最后才删除旧结构（contract）</strong>。</p>
 
     <div class="mermaid">
@@ -125,7 +307,8 @@ stateDiagram-v2
 
     <p>三个细节决定它是否真的安全。第一，<strong>阶段一的新列必须可空或带默认值</strong>，否则旧实例的插入会直接失败。第二，<strong>阶段三的回填必须在双写已经生效之后开始</strong>，否则回填过程中产生的新数据不会进入新结构，回填完还是不全。第三，<strong>阶段四和阶段五之间要留足观察期</strong>，这段时间新结构承担读，旧结构仍在写，是唯一能安全发现问题并回退的窗口。</p>
 
-    <h2>常见变更的兼容性判定</h2>
+    <h2>② 原理 · 常见变更的兼容性判定</h2>
+    <p>搞清这一节能解决「这个 DDL 能不能直接在高峰执行」的判断，两个维度分别决定能不能单独一步上线、能不能不挑时间。</p>
     <p>这张表是评审时最常用的速查。关键区分两件事：<strong>是否兼容旧代码</strong>决定它能不能单独一步上线，<strong>是否锁表重写</strong>决定它能不能在业务高峰直接执行。</p>
 
     <table>
@@ -207,7 +390,8 @@ stateDiagram-v2
         <p>「这个 DDL 是 INSTANT 的，秒级完成，可以直接上」这句话只说了一半。所有 DDL 都要先拿到表级元数据锁。如果表上存在一个还没结束的长事务或长查询，DDL 会一直等在那里，<strong>而后续所有对这张表的普通查询会排在这个 DDL 之后</strong>，表现为整张表在几秒内彻底不可用，连接池瞬间打满。执行任何 DDL 之前先查一遍长事务，并给 DDL 会话设置较短的锁等待超时，拿不到锁就立刻放弃重试，而不是死等。大表在线改表的具体工具与参数，站内《索引优化》篇的索引治理部分已有展开。</p>
     </div>
 
-    <h2>改列名与删列：必须拆成两个发布周期</h2>
+    <h2>② 原理 · 改列名与删列：必须拆成两个发布周期</h2>
+    <p>搞清这一节能解决「元数据操作明明不到一秒，为什么反而是最危险的两类变更」。</p>
     <p>这两个操作在数据库层面都极快（只动元数据），所以特别容易被低估。它们的风险完全来自应用侧：<strong>灰度期间还在运行的旧实例会因为找不到列而整条 SQL 失败</strong>，不是降级，是报错。</p>
 
     <div class="mermaid">
@@ -227,7 +411,8 @@ flowchart TB
 
     <p>关于改列名，还有一个更稳的选择：<strong>不改</strong>。列名只是标识符，在应用层做一次映射的成本远低于一次跨发布周期的协调。真要改，等价于「加新列、双写、回填、切读、停旧写、删旧列」六步，也就是上一节的完整流程。<code>SELECT *</code> 在这里是隐藏地雷——它让「哪些代码用了这一列」这个问题无法被静态回答，也让删列的影响面无法评估。</p>
 
-    <h2>唯一约束的三个设计陷阱</h2>
+    <h2>② 原理 · 唯一约束的三个设计陷阱</h2>
+    <p>搞清这一节能解决「同一个编码删了就再也建不回来」「别的租户建过我就建不了」这两类只在特定操作序列下复现的投诉。</p>
     <p>唯一约束是少数能让数据库替应用兜住 bug 的机制，但它的语义细节常被误解，而误解的代价通常要等到上线后才显现。</p>
 
     <table>
@@ -273,7 +458,8 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>CHECK、枚举与默认值</h2>
+    <h2>② 原理 · CHECK、枚举与默认值</h2>
+    <p>搞清这一节能解决「约束写了却没生效」「改了默认值历史行却没变」这两类静默失效。</p>
     <p>数据库约束的价值不在于替代应用校验，而在于<strong>兜住应用的 bug 和绕过应用的直连写入</strong>。代价是改约束要走 DDL，所以约束应该只覆盖那些「几年都不会变」的规则。</p>
 
     <table>
@@ -369,7 +555,8 @@ ALTER TABLE orders DROP CONSTRAINT ck_orders_uid_nn;</code></pre>
         </tbody>
     </table>
 
-    <h2>数据迁移脚本的工程要求</h2>
+    <h2>② 原理 · 数据迁移脚本的工程要求</h2>
+    <p>搞清这一节能解决「回填跑到九成挂了只能从头再来」和「重跑把已经对的数据改坏」。</p>
     <p>回填脚本的失败率比 DDL 高得多，因为它运行时间长、要处理存量脏数据、还会和线上写入竞争。一个能进生产的迁移脚本必须同时满足下面五条，缺一条就会在凌晨三点把人叫起来。</p>
 
     <table>
@@ -473,7 +660,7 @@ with conn.cursor() as cur:
         d = replica_delay(cur)
         time.sleep(SLEEP if d &lt; DELAY_LIMIT else min(30, d))</code></pre>
 
-    <h2>变更流程与版本化管理</h2>
+    <h2>③ 场景 · 变更流程与版本化管理</h2>
     <p>把上面所有内容压缩成一条可执行的纪律：<strong>永远先发兼容的 DDL，再发代码，最后清理</strong>。顺序反了，灰度期必然出事故；顺序对了，每一步都可以单独回滚。</p>
 
     <div class="mermaid">
@@ -594,10 +781,80 @@ flowchart TB
 
     <p>手工执行必然漂移的原因很具体：变更由人挑时机、挑环境执行，就一定会出现某个环境漏执行、某个分片执行两遍、某次执行的内容和仓库里的脚本对不上这三类情况，而且事后没有任何记录能证明「当前库的结构」等于「哪个版本代码期望的结构」。版本化工具的核心价值不是省事，是把执行记录落在数据库里并校验脚本指纹，让环境之间的差异能被发现。</p>
 
-    <h2>新手最容易踩的坑</h2>
+    <h2>③ 场景 · 按规模与场景选变更路径</h2>
+    <p>同一个变更在不同规模下的正确路径不一样。下表按「表有多大、有几个消费方、能不能停机」把常见情形排开，每行都写清代价。</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>场景</th>
+                <th>该怎么做</th>
+                <th>为什么</th>
+                <th>代价</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>万行级小表，只有一个服务读写</td>
+                <td>低峰直接执行原生 DDL，前面照样设锁等待超时</td>
+                <td>重写整表也就几秒，引入影子表工具反而增加出错面</td>
+                <td>仍要承担一次元数据锁排队，所以不能省掉长事务检查</td>
+            </tr>
+            <tr>
+                <td>亿行级大表，原生 DDL 会重建整表</td>
+                <td>用影子表类在线改表工具，或改成「新表加双写加回填加切读」</td>
+                <td>原生重建期间的锁与磁盘放大都不可接受</td>
+                <td>工具会改变触发器与外键行为，必须先在影子库演练；迁移窗口以小时甚至天计</td>
+            </tr>
+            <tr>
+                <td>列被报表、BI、数据同步等库外消费方直读</td>
+                <td>把「通知下游并等其改完」作为删列的前置条件，写进工单而不是口头确认</td>
+                <td>这些消费方不在你的代码库里，静态扫描和灰度都发现不了</td>
+                <td>删列周期被拉长到以周计，中间要一直维护两套结构</td>
+            </tr>
+            <tr>
+                <td>已分库分表</td>
+                <td>按分片顺序执行并逐个记录结果，全部分片执行完才算变更完成</td>
+                <td>漏执行一个分片，错误只在路由到该分片时出现，分布看起来毫无规律</td>
+                <td>执行时间成倍增加，需要一个能断点续跑的批量执行器</td>
+            </tr>
+            <tr>
+                <td>有明确停机窗口（内部系统、批处理型业务）</td>
+                <td>可以合并步骤：停服、改结构、回填、启服</td>
+                <td>没有灰度期就没有读写错配，流程可以大幅简化</td>
+                <td>窗口内失败就要在压力下抉择「继续还是回滚」，所以回滚脚本必须提前演练过</td>
+            </tr>
+            <tr>
+                <td>变更涉及语义改写（如枚举取值重排、金额单位换算）</td>
+                <td>不要复用旧列，新列新语义，并在代码里保留一段时间的双读校验</td>
+                <td>同一列上并存两种语义，任何时刻的读都可能解释错，而且无法用数据判断哪种</td>
+                <td>存储与代码都要多背一段时间的兼容逻辑</td>
+            </tr>
+            <tr>
+                <td>紧急修数据（线上已经在产生脏数据）</td>
+                <td>先加约束堵住新增，再分批修历史，不要反过来</td>
+                <td>先修历史时新的脏数据仍在产生，永远修不完</td>
+                <td>加约束可能让部分写入直接失败，需要业务方确认能接受</td>
+            </tr>
+            <tr>
+                <td>只是想让某个查询变快</td>
+                <td>先确认是不是索引问题，绝大多数情况不需要改表结构</td>
+                <td>改结构是这几类手段里代价最高、可逆性最差的一种</td>
+                <td>误改结构的代价远高于加一条索引</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <p><strong>不适用边界</strong>：本篇只讲「已上线的结构怎么安全改」。表该怎么建、一份事实存几遍在 <a href="../">范式与反范式：数据库设计的取舍</a>；实体、关系与四类难模式怎么定在上一篇 <a href="../modeling/">业务建模：从需求到表结构</a>；多租户与分片键的数据归属在下一篇 <a href="../sharding-strategy/">数据归属与多租户：分片的数据模型策略</a>；索引该不该建、怎么识别并下线无用索引在 <a href="../../optimization/index/">索引设计与优化</a>；分片扩容迁移本身的流程在 <a href="../../optimization/sharding/">分库分表</a>；回填期间主从延迟怎么观察与压制在 <a href="../../postgresql/replication-ha/">PostgreSQL 复制与高可用</a>；MySQL 侧的锁与 MVCC 机制在 <a href="../../mysql/">MySQL 深度原理</a>；改类型本身会不会重写全表、各类型转换的代价在 <a href="../../postgresql/datatypes/">PostgreSQL 数据类型</a>。</p>
+
+    <p>这条路径上，前两篇把结构定下来，本篇负责「定错了还能不能救回来」，下一篇处理数据长大之后的归属问题——分片键一旦定错，连本篇的流程都救不了，因为那时要改的不是一张表而是全部路由。</p>
+
+    <p class="cluster-nav">同主题路径：<a href="../modeling/">← 上一步：业务建模：从需求到表结构</a> · <a href="../sharding-strategy/">下一步：数据归属与多租户：分片的数据模型策略 →</a></p>
+
+    <h2>最容易踩的坑</h2>
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
-        <div class="callout-title">避坑指南</div>
+        <div class="callout-title">这些坑多数要等灰度期才暴露</div>
         <ul>
             <li>先发代码再发 DDL，灰度期新实例查询一个还不存在的列，接口整条链路报错，且回滚代码才能止血。</li>
             <li>新列直接建成 NOT NULL 且不给默认值，旧实例的所有插入立刻失败，这是最常见的一类分钟级故障。</li>

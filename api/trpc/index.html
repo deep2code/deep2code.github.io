@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="tRPC 不是新的 RPC 协议，而是把 TypeScript 类型系统本身当作前后端契约：没有 IDL、没有代码生成，客户端直接 import type 引用服务端 router 类型。本文讲清类型如何从服务端流到客户端、传输层其实只是 HTTP POST 加 batch 合并、与 GraphQL 和 REST 加 OpenAPI 生成以及 gRPC-web 的契约能力对照，以及这套机制的硬约束推出的适用边界：必须共享类型、必须是 TS、前后端必须同步部署。">
+    <meta name="description" content="tRPC 按用法、原理、场景三段组织：先给「这个项目适不适合 tRPC」的自查表——前后端是否同仓或能共享类型包、调用方是否全是可控的 TS、是否要对外开放或被非 TS 消费、能否同步发布，以及决定采用后必须立刻落地的五条纪律和 curl 验证方式；再讲清类型只在编译期流动的通道、传输层就是 HTTP 加 batch 合并的代价、类型擦除后运行时防线只有 input schema、契约只有一份导致的前后端部署耦合；最后给与 GraphQL、REST 加 OpenAPI、gRPC-web 的契约能力对照与反模式替代做法。">
     <meta name="keywords" content="tRPC,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/trpc/">
     <meta property="og:title" content="tRPC 的端到端类型安全：原理与适用边界 - 资深码农">
-    <meta property="og:description" content="tRPC 不是新的 RPC 协议，而是把 TypeScript 类型系统本身当作前后端契约：没有 IDL、没有代码生成，客户端直接 import type 引用服务端 router 类型。本文讲清类型如何从服务端流到客户端、传输层其实只是 HTTP POST 加 batch 合并、与 GraphQL 和 REST 加 OpenAPI 生成以及 gRPC-web 的契约能力对照，以及这套机制的硬约束推出的适用边界：必须共享类型、必须是 TS、前后端必须同步部署。">
+    <meta property="og:description" content="tRPC 按用法、原理、场景三段组织：先给「这个项目适不适合 tRPC」的自查表——前后端是否同仓或能共享类型包、调用方是否全是可控的 TS、是否要对外开放或被非 TS 消费、能否同步发布，以及决定采用后必须立刻落地的五条纪律和 curl 验证方式；再讲清类型只在编译期流动的通道、传输层就是 HTTP 加 batch 合并的代价、类型擦除后运行时防线只有 input schema、契约只有一份导致的前后端部署耦合；最后给与 GraphQL、REST 加 OpenAPI、gRPC-web 的契约能力对照与反模式替代做法。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/trpc/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="tRPC 的端到端类型安全：原理与适用边界 - 资深码农">
-    <meta name="twitter:description" content="tRPC 不是新的 RPC 协议，而是把 TypeScript 类型系统本身当作前后端契约：没有 IDL、没有代码生成，客户端直接 import type 引用服务端 router 类型。本文讲清类型如何从服务端流到客户端、传输层其实只是 HTTP POST 加 batch 合并、与 GraphQL 和 REST 加 OpenAPI 生成以及 gRPC-web 的契约能力对照，以及这套机制的硬约束推出的适用边界：必须共享类型、必须是 TS、前后端必须同步部署。">
+    <meta name="twitter:description" content="tRPC 按用法、原理、场景三段组织：先给「这个项目适不适合 tRPC」的自查表——前后端是否同仓或能共享类型包、调用方是否全是可控的 TS、是否要对外开放或被非 TS 消费、能否同步发布，以及决定采用后必须立刻落地的五条纪律和 curl 验证方式；再讲清类型只在编译期流动的通道、传输层就是 HTTP 加 batch 合并的代价、类型擦除后运行时防线只有 input schema、契约只有一份导致的前后端部署耦合；最后给与 GraphQL、REST 加 OpenAPI、gRPC-web 的契约能力对照与反模式替代做法。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -73,7 +73,90 @@
                     <div class="article-content">
 <p>关于 tRPC 流传最广的一句介绍是「TypeScript 版的 RPC 框架」，这句话几乎每个词都会把人带偏。tRPC 没有定义任何新协议，网络上跑的就是普通的 HTTP POST 加 JSON；它也不做代码生成，没有 <code>.proto</code>、没有 schema 文件、没有 <code>codegen</code> 命令。它真正做的事只有一件：<strong>把 TypeScript 的类型系统本身当成前后端之间的契约</strong>。理解这一点，就能推导出它全部的优点和全部的限制。</p>
 
-<h2>类型是怎么从服务端流到客户端的</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一张「这个项目适不适合 tRPC」的自查表——是否同仓或能共享类型包、调用方是否全是可控的 TS、是否要对外开放或被非 TS 消费、前后端能否同步发布，每条都给怎么确认和判定结论。</li>
+        <li><strong>② 原理</strong>：为什么这些条件是硬约束——类型只在编译期流动、传输层其实就是 HTTP 加 batch 合并、类型擦除后运行时防线只有 input schema、契约只有一份导致前后端部署耦合。</li>
+        <li><strong>③ 场景</strong>：与 GraphQL、REST 加 OpenAPI 生成、gRPC-web 的契约能力对照，适用与绝对不适用的场景清单，以及常见反模式的替代做法。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 先判断这个项目适不适合 tRPC</h2>
+<p>tRPC 的取舍几乎全在选型这一步决定，选对了后面很省事，选错了后面每个月都要还债。下面这张表按顺序过一遍，<strong>任何一条判定为「不满足」就不要在这条边界上用 tRPC</strong>。每条背后的机制在下一节起的原理部分。</p>
+
+<table>
+<thead><tr><th>自查项</th><th>怎么确认</th><th>不满足时的结论</th></tr></thead>
+<tbody>
+<tr><td>前后端是否同仓，或能共享一个内部类型包</td><td>在客户端目录下跑一次类型检查，看能不能解析到服务端导出的 <code>AppRouter</code> 类型</td><td>不满足就不要用。跨仓库共享类型会变成「类型包版本」与「服务端部署版本」两条独立的线，编译通过而线上 400</td></tr>
+<tr><td>所有调用方是否都是可控的 TypeScript 客户端</td><td>列清楚未来两年会有哪些调用方：Web、小程序、Electron、移动原生、数据团队脚本</td><td>出现 Python、Go、Java、iOS 原生等任何非 TS 调用方，这条边界就得另出一层 REST 或 OpenAPI</td></tr>
+<tr><td>是否需要对第三方开放接口</td><td>问一句「对方能不能引用我们的类型包，且接受我们随时改类型」</td><td>需要开放就不要直接暴露 tRPC，在它之上加一层薄 REST 门面</td></tr>
+<tr><td>是否需要长期并存的版本化契约</td><td>看有没有「v1 与 v2 要同时在线半年」这类要求</td><td>有就选 Protobuf 或 OpenAPI：tRPC 没有字段编号，也没有 deprecated 语义</td></tr>
+<tr><td>前后端能否同步发布</td><td>看部署流水线：前端产物和服务端是不是同一次发布上线</td><td>不能同步也可以用，但<strong>只允许向后兼容的变更</strong>，并且必须做版本提示</td></tr>
+<tr><td>接口是按用例设计还是按资源设计</td><td>看现有接口命名：出现 <code>getList</code>、<code>getListV2</code> 这类就是 REST 习惯没转过来</td><td>坚持资源建模的话 tRPC 的收益会大幅缩水，不如直接用 REST</td></tr>
+<tr><td>团队能否守住「每个 procedure 必须有 input schema」</td><td>看 CI 里有没有这条检查，而不是看规范文档里有没有写</td><td>守不住就等于没有运行时校验，这是 tRPC 最危险的失守点</td></tr>
+</tbody>
+</table>
+
+<div class="mermaid">
+flowchart TB
+    Q1{"前后端同仓库<br/>或能共享类型包"} -->|否| N1["不要用<br/>REST 加 OpenAPI 生成"]
+    Q1 -->|是| Q2{"所有调用方<br/>都是可控的 TS 客户端"}
+    Q2 -->|否| N1
+    Q2 -->|是| Q3{"需要对外提供<br/>长期稳定契约"}
+    Q3 -->|是| N2["不要直接暴露<br/>另起一层 REST 门面"]
+    Q3 -->|否| Q4{"前后端能同步发布"}
+    Q4 -->|否| N3["可以用<br/>但只允许兼容变更"]
+    Q4 -->|是| Y["tRPC 在此场景内<br/>效率优势极大"]
+</div>
+
+<p>自查通过、决定要用之后，有三件事必须在第一个迭代里就落地，晚做的代价会越来越大：</p>
+
+<table>
+<thead><tr><th>要做什么</th><th>怎么做</th><th>怎么验证它真的生效了</th></tr></thead>
+<tbody>
+<tr><td>类型只走编译期通道</td><td>客户端一律用 <code>import type</code> 引用 <code>AppRouter</code>，不要值导入</td><td>在构建产物里搜服务端依赖名（数据库客户端、密钥读取工具），必须搜不到；产物体积不应因为接了 tRPC 而明显变大</td></tr>
+<tr><td>每个 procedure 都有 input schema</td><td>在 CI 里遍历 router 检查 input 是否为空，而不是只写进规范文档</td><td>故意提交一个没有 <code>.input()</code> 的 procedure，流水线必须失败</td></tr>
+<tr><td>确认网关与观测链路认得它</td><td>用 curl 直接打接口，确认路径、请求体、状态码都能被现有网关与 APM 处理</td><td>batch 请求整体返回 200 时，监控里应仍能按 procedure path 看到单个失败，而不是一片绿</td></tr>
+<tr><td>只允许向后兼容的线上变更</td><td>新增字段必须可选；改名要两个字段并存一个发布周期；删 procedure 要留别名</td><td>拿上一个版本的前端产物打新服务端，所有交互必须照常可用</td></tr>
+<tr><td>慢接口不进 batch</td><td>用 <code>splitLink</code> 按条件把慢 procedure 分流到不合并的链路</td><td>观察首屏：一个慢查询不应再拖住同页其他区块的渲染</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-bash"># 它就是 HTTP，可以直接 curl —— 这也是确认网关、WAF、APM 能否处理它的最快方式
+# query 默认走 POST，也可以配成 GET（httpLink 的 methodOverride）
+# 注意 input 在 GET 下是 URL 编码的 JSON，这是能利用 HTTP 缓存的唯一形态
+curl 'http://localhost:3000/trpc/user.byId?input=%7B%22id%22%3A%2242%22%7D'
+
+# mutation 一定是 POST，body 直接是 input
+curl -X POST 'http://localhost:3000/trpc/post.create' \
+  -H 'content-type: application/json' \
+  -d '{"title":"hello","body":"world"}'
+
+# batch 模式：URL 上用逗号连接多个 path，body 是以下标为键的对象
+curl -X POST 'http://localhost:3000/trpc/user.byId,post.list?batch=1' \
+  -H 'content-type: application/json' \
+  -d '{"0":{"id":"42"},"1":{"cursor":null}}'
+
+# 关键验证点：batch 下返回的是数组，整体 HTTP 状态码通常是 200
+# 某个 procedure 失败只体现在对应数组元素的 error 字段里，按状态码做的告警会漏报</code></pre>
+
+<table>
+<thead><tr><th>链路（link）选项</th><th>作用</th><th>默认行为</th><th>什么时候需要改</th></tr></thead>
+<tbody>
+<tr><td><code>httpBatchLink</code></td><td>把同一事件循环 tick 内的多个调用合并成一个请求</td><td>脚手架模板里通常是默认选择，合并开启</td><td>页面里有明显慢的 procedure 时改用 <code>splitLink</code> 分流</td></tr>
+<tr><td><code>httpLink</code></td><td>一个调用一个请求，不合并</td><td>不合并</td><td>慢接口、需要独立超时或独立缓存策略的接口走它</td></tr>
+<tr><td><code>splitLink</code></td><td>按条件（path、操作类型）把调用分发到不同链路</td><td>不启用</td><td>要同时用 batch 与非 batch，或要把 subscription 分到 WebSocket 时</td></tr>
+<tr><td>query 的 HTTP 方法</td><td>决定能不能被 HTTP 缓存</td><td>默认 POST</td><td>公开且可缓存的列表数据改成 GET，并配 <code>Cache-Control</code></td></tr>
+<tr><td><code>output</code> schema</td><td>限定返回字段，防止 ORM 对象整个下发</td><td>不声明即原样返回 resolver 的返回值</td><td>返回值来自 ORM 或包含敏感字段时必须声明</td></tr>
+<tr><td><code>errorFormatter</code></td><td>决定错误结构里暴露什么</td><td>默认结构可能带堆栈信息</td><td>生产环境必须去掉 stack 与内部路径</td></tr>
+<tr><td>subscription 的传输</td><td>实时推送</td><td>需要单独配 WebSocket 或 SSE 链路</td><td>有实时需求时才引入，它的运维成本与 HTTP 完全不同</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 类型是怎么从服务端流到客户端的</h2>
+<p>搞清这条通道，就知道为什么「能不能共享类型」是第一道硬门槛，也知道为什么写错 import 会把数据库驱动打进浏览器包。</p>
 
 <p>传统的类型共享方案都要经过一次「序列化契约」：后端写 OpenAPI 或 proto，跑生成器，产出客户端代码。tRPC 把这一步整个删掉了，取而代之的是一行 <code>export type AppRouter = typeof appRouter</code>。服务端 router 的结构、每个 procedure 的 input schema 推导出的入参类型、resolver 返回值推导出的出参类型，全部编码在这个类型里。客户端 <code>import type</code> 它，再通过 <code>createTRPCClient&lt;AppRouter&gt;()</code> 把类型注入一个 Proxy 对象，你写 <code>client.user.byId.query(...)</code> 时，属性访问链会在运行期被拼成路径字符串 <code>user.byId</code>，而在编译期由 TS 逐级校验。</p>
 
@@ -94,28 +177,12 @@ flowchart TB
     G --> H["服务端按 path 找 procedure<br/>用 zod 做真正的校验"]
 </div>
 
-<p>图里最关键的是中间那层：<strong>类型通道只存在于编译期</strong>。<code>import type</code> 是 TS 的纯类型导入语法，编译后整条 import 语句连同模块引用一起消失，所以前端产物里不会打进服务端代码，也不会因为 router 文件引用了数据库驱动而把驱动打进浏览器包。这也是 tRPC 唯一能成立的前提——如果你写成普通的值导入并且被打包器保留，就会把服务端依赖拖进前端包，这是新手最常见的构建体积事故。</p>
+<p>图里最关键的是中间那层：<strong>类型通道只存在于编译期</strong>。<code>import type</code> 是 TS 的纯类型导入语法，编译后整条 import 语句连同模块引用一起消失，所以前端产物里不会打进服务端代码，也不会因为 router 文件引用了数据库驱动而把驱动打进浏览器包。这也是 tRPC 唯一能成立的前提——如果你写成普通的值导入并且被打包器保留，就会把服务端依赖拖进前端包，这是新手最常见的构建体积事故。router 与 context 的具体写法见站内 <a href="intro/">tRPC 上手：Router、Context 与客户端调用</a>。</p>
 
-<h2>传输层真相：它就是 HTTP</h2>
+<h2>② 原理 · 传输层真相：它就是 HTTP</h2>
+<p>搞清这一节，能解决「私有协议不好抓包、网关不认」这类评估期的顾虑，也能解释 batch 带来的木桶效应与告警失真。</p>
 
-<p>很多团队在评估 tRPC 时会担心「私有协议不好抓包、网关不认」，这个担心是多余的。tRPC 的 HTTP 适配器只做三件事：从 URL 取 procedure path、从 query string 或 body 取输入、把结果包成约定格式。你完全可以用 curl 调它。</p>
-
-<pre><code class="language-bash"># query 默认走 POST，也可以配成 GET（httpLink 的 methodOverride）
-# 注意 input 在 GET 下是 URL 编码的 JSON，这是能利用 HTTP 缓存的唯一形态
-curl 'http://localhost:3000/trpc/user.byId?input=%7B%22id%22%3A%2242%22%7D'
-
-# mutation 一定是 POST，body 直接是 input
-curl -X POST 'http://localhost:3000/trpc/post.create' \
-  -H 'content-type: application/json' \
-  -d '{"title":"hello","body":"world"}'
-
-# batch 模式：URL 上用逗号连接多个 path，body 是以下标为键的对象
-curl -X POST 'http://localhost:3000/trpc/user.byId,post.list?batch=1' \
-  -H 'content-type: application/json' \
-  -d '{"0":{"id":"42"},"1":{"cursor":null}}'
-
-# 观察响应：batch 下返回的是数组，整体 HTTP 状态码通常是 200
-# 某个 procedure 失败只体现在对应数组元素的 error 字段里 —— 这点必须记住</code></pre>
+<p>tRPC 的 HTTP 适配器只做三件事：从 URL 取 procedure path、从 query string 或 body 取输入、把结果包成约定格式。用法层那几条 curl 命令就是全部真相。</p>
 
 <table>
 <thead><tr><th>调用形态</th><th>HTTP 方法</th><th>输入位置</th><th>可否被 CDN 与浏览器缓存</th><th>典型用途</th></tr></thead>
@@ -149,44 +216,8 @@ sequenceDiagram
     <p>合并请求省下的是连接数，付出的是「木桶效应」：一个 800ms 的报表查询和三个 20ms 的查询合并后，四块 UI 全都要等 800ms。同时因为整批返回 200，网关和 APM 按 HTTP 状态码统计的错误率会失真。明显慢的 procedure 应该单独走一条 <code>httpLink</code>（用 <code>splitLink</code> 按条件分流），并把监控打点下沉到 procedure path 粒度。</p>
 </div>
 
-<h2>硬约束推出的适用边界</h2>
-
-<p>既然契约是 TS 类型，那么所有「拿不到这份类型」或「不认这份类型」的场景都直接出局。这不是生态成熟度问题，是机制决定的，不会随版本迭代改善。</p>
-
-<div class="mermaid">
-flowchart TB
-    Q1{"前后端同仓库<br/>或能共享类型包"} -->|否| N1["不要用<br/>REST 加 OpenAPI 生成"]
-    Q1 -->|是| Q2{"所有调用方<br/>都是可控的 TS 客户端"}
-    Q2 -->|否| N1
-    Q2 -->|是| Q3{"需要对外提供<br/>长期稳定契约"}
-    Q3 -->|是| N2["不要直接暴露<br/>另起一层 REST 门面"]
-    Q3 -->|否| Q4{"前后端能同步发布"}
-    Q4 -->|否| N3["可以用<br/>但只允许兼容变更"]
-    Q4 -->|是| Y["tRPC 在此场景内<br/>效率优势极大"]
-</div>
-
-<p>落到具体项目上，<strong>tRPC 的适用场景很窄，但在场景内几乎没有对手</strong>：全栈 TS 的 monorepo、内部管理后台、Next.js 这类前后端同构项目、以及给自家小程序或 Electron 客户端提供接口的服务。这些场景的共同点是调用方 100% 可控，接口按用例设计而不是按资源设计，改一个字段可以前后端一起改一起发。</p>
-
-<p>反过来，绝对不要用 tRPC 的场景是：对第三方开放的 API、有 Python 或 Go 数据团队要消费的接口、iOS 和 Android 原生客户端、需要按版本号长期并存的公开契约。<strong>如果内部想用 tRPC 又必须对外提供接口，正确做法是在 tRPC 之上再暴露一层薄的 REST 门面</strong>（也可以用 <code>trpc-openapi</code> 类插件从 procedure 生成 OpenAPI），而不是让第三方去引用你的类型包。REST 与 GraphQL 的风格选型与契约能力对比，详见站内 <a href="../">API 设计</a>。</p>
-
-<h2>与 GraphQL、OpenAPI 生成、gRPC-web 的对照</h2>
-
-<table>
-<thead><tr><th>维度</th><th>tRPC</th><th>GraphQL</th><th>REST + OpenAPI 生成</th><th>gRPC-web</th></tr></thead>
-<tbody>
-<tr><td>契约形式</td><td>TS 类型（代码即契约）</td><td>SDL schema，运行时可自省</td><td>OpenAPI 文档（事后描述）</td><td>proto 文件（编译期强约束）</td></tr>
-<tr><td>是否需要代码生成</td><td>不需要</td><td>客户端类型通常要生成</td><td>必须生成或手写</td><td>必须生成</td></tr>
-<tr><td>跨语言</td><td>只支持 TS</td><td>支持</td><td>支持</td><td>支持</td></tr>
-<tr><td>版本演进机制</td><td>无内建机制，靠纪律</td><td>字段 deprecated 标记</td><td>URL 或 header 版本号</td><td>字段编号，规则最明确</td></tr>
-<tr><td>运行时开销</td><td>极低，JSON 加一层 Proxy</td><td>解析与执行查询有成本</td><td>极低</td><td>需要 Envoy 类代理转换</td></tr>
-<tr><td>浏览器可直连</td><td>可以</td><td>可以</td><td>可以</td><td>不可以，必须经代理</td></tr>
-<tr><td>是否能被 HTTP 缓存</td><td>仅 GET 形态的 query</td><td>默认不能（POST 单端点）</td><td>天然可以</td><td>不能</td></tr>
-<tr><td>心智成本落点</td><td>几乎为零，会写函数就会用</td><td>schema 设计与复杂度防护</td><td>资源建模与文档同步</td><td>工具链与构建流程</td></tr>
-</tbody></table>
-
-<p>这张表最该带走的一句结论是：<strong>tRPC 省掉的是「维护契约文件加跑代码生成」这一步，代价是彻底失去语言无关性</strong>。它不是在跨语言这条赛道上赢了 gRPC，而是主动退出了这条赛道。评估时问自己一句「我未来两年会不会有非 TS 的调用方」，答案是「会」就别选它。</p>
-
-<h2>类型安全的真实边界：编译期与运行期</h2>
+<h2>② 原理 · 类型安全的真实边界：编译期与运行期</h2>
+<p>搞清这条，能解决「端到端类型安全」这个名字带来的最大误解——它保护的不是你的服务端。</p>
 
 <p>这是必须纠正的第一号错误认知。<strong>TypeScript 的类型在编译后被完全擦除，运行期不存在任何类型信息</strong>。tRPC 的类型安全保护的是「你自己写的调用代码」，不保护「服务端收到的数据」。服务端收到的永远只是一段 JSON，攻击者用 curl 想发什么就发什么。</p>
 
@@ -231,9 +262,10 @@ const goodProcedure = t.procedure
     return user
   })</code></pre>
 
-<p>关于 TS 类型只在编译期存在、跨越进程边界的数据必须做运行时校验，这套原则的完整推演详见站内 <a href="../../frontend/frameworks/typescript/">TypeScript</a>。而 <code>input</code> schema 的常见写法、<code>output</code> 的取舍、中间件如何做类型收窄，见本系列的 <a href="procedures/">Procedure 设计</a>。</p>
+<p>关于 TS 类型只在编译期存在、跨越进程边界的数据必须做运行时校验，这套原则的完整推演详见站内 <a href="../../frontend/frameworks/typescript/">TypeScript</a>。而 <code>input</code> schema 的常见写法、<code>output</code> 的取舍、中间件如何做类型收窄与鉴权，见站内 <a href="procedures/">Procedure 设计：输入校验、中间件与鉴权</a>。</p>
 
-<h2>版本演进：前后端部署耦合是最大的运维约束</h2>
+<h2>② 原理 · 版本演进：前后端部署耦合是最大的运维约束</h2>
+<p>搞清这一节，能解决「本地一切正常，上线后老用户的提交按钮全部失效」这类事故。</p>
 
 <p>gRPC 有字段编号，GraphQL 有 deprecated 标记，OpenAPI 有版本化 URL。tRPC 什么都没有——因为类型就是契约，而类型只有一份，服务端一改，「正确的调用方式」立刻变了。这在服务端到服务端的调用里问题不大（一起编译一起发），但客户端是浏览器时会立刻暴露：<strong>用户标签页里可能跑着几天前加载的旧 JS</strong>。</p>
 
@@ -285,7 +317,40 @@ export const trpcClient = createTRPCClient&lt;AppRouter&gt;({
   ],
 })</code></pre>
 
-<h2>反模式对照</h2>
+<h2>③ 场景 · 与 GraphQL、OpenAPI 生成、gRPC-web 的对照</h2>
+<p>选型时真正要比的是契约能力，而不是性能——它们的传输层差异对业务几乎没有影响。</p>
+
+<table>
+<thead><tr><th>维度</th><th>tRPC</th><th>GraphQL</th><th>REST + OpenAPI 生成</th><th>gRPC-web</th></tr></thead>
+<tbody>
+<tr><td>契约形式</td><td>TS 类型（代码即契约）</td><td>SDL schema，运行时可自省</td><td>OpenAPI 文档（事后描述）</td><td>proto 文件（编译期强约束）</td></tr>
+<tr><td>是否需要代码生成</td><td>不需要</td><td>客户端类型通常要生成</td><td>必须生成或手写</td><td>必须生成</td></tr>
+<tr><td>跨语言</td><td>只支持 TS</td><td>支持</td><td>支持</td><td>支持</td></tr>
+<tr><td>版本演进机制</td><td>无内建机制，靠纪律</td><td>字段 deprecated 标记</td><td>URL 或 header 版本号</td><td>字段编号，规则最明确</td></tr>
+<tr><td>运行时开销</td><td>极低，JSON 加一层 Proxy</td><td>解析与执行查询有成本</td><td>极低</td><td>需要 Envoy 类代理转换</td></tr>
+<tr><td>浏览器可直连</td><td>可以</td><td>可以</td><td>可以</td><td>不可以，必须经代理</td></tr>
+<tr><td>是否能被 HTTP 缓存</td><td>仅 GET 形态的 query</td><td>默认不能（POST 单端点）</td><td>天然可以</td><td>不能</td></tr>
+<tr><td>心智成本落点</td><td>几乎为零，会写函数就会用</td><td>schema 设计与复杂度防护</td><td>资源建模与文档同步</td><td>工具链与构建流程</td></tr>
+</tbody></table>
+
+<p>这张表最该带走的一句结论是：<strong>tRPC 省掉的是「维护契约文件加跑代码生成」这一步，代价是彻底失去语言无关性</strong>。它不是在跨语言这条赛道上赢了 gRPC，而是主动退出了这条赛道。评估时问自己一句「我未来两年会不会有非 TS 的调用方」，答案是「会」就别选它。REST 与 GraphQL 之间的取舍见站内 <a href="../graphql/rest-vs-graphql/">REST 与 GraphQL 的取舍</a>，gRPC 那一侧的契约机制见站内 <a href="../rpc/protobuf/">Protobuf 的编码与模式演进</a>。</p>
+
+<h2>③ 场景 · 该用、不该用、以及反模式的替代做法</h2>
+<p>既然契约是 TS 类型，那么所有「拿不到这份类型」或「不认这份类型」的场景都直接出局。<strong>这不是生态成熟度问题，是机制决定的，不会随版本迭代改善。</strong></p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>全栈 TS 的 monorepo、内部管理后台</td><td>直接用，接口按用例设计</td><td>调用方 100% 可控，改字段可以前后端一起改一起发</td><td>低；但要在 CI 里守住 input schema 这条线</td></tr>
+<tr><td>Next.js 这类前后端同构项目</td><td>直接用，配合服务端渲染时的预取</td><td>类型共享和部署同步天然成立</td><td>低，见站内 <a href="../../frontend/nextjs/">Next.js 实践</a></td></tr>
+<tr><td>给自家小程序或 Electron 客户端供接口</td><td>可以用，但客户端发版慢，必须只做兼容变更</td><td>客户端版本长期滞留，旧版本会一直打新服务端</td><td>中，要做版本提示与兼容期管理</td></tr>
+<tr><td>对第三方开放的 API</td><td>不要直接暴露；在 tRPC 之上加一层薄 REST 门面，或用插件从 procedure 生成 OpenAPI</td><td>第三方拿不到类型，也不接受你随时改类型</td><td>多一层门面与一套文档，见站内 <a href="../design/versioning/">API 版本治理</a></td></tr>
+<tr><td>有 Python 或 Go 数据团队要消费</td><td>另出一层 HTTP 加 JSON 接口，或直接给数据出口</td><td>TS 类型对非 TS 调用方等于没有契约</td><td>要维护两套接口定义</td></tr>
+<tr><td>iOS、Android 原生客户端</td><td>用 REST 或 gRPC，不要让原生端去对齐 TS 类型</td><td>原生端无法消费类型，且发版周期比 Web 长得多</td><td>另一套契约与文档</td></tr>
+<tr><td>需要 v1 与 v2 长期并存</td><td>选 Protobuf 或版本化 REST</td><td>tRPC 没有字段编号与 deprecated 语义，做不了明确的兼容规则</td><td>引入 IDL 与代码生成，见站内 <a href="../rpc/">RPC 框架的抽象层次与选型</a></td></tr>
+<tr><td>前后端分仓、发布节奏不同</td><td>合成 monorepo，或换成 OpenAPI 生成</td><td>类型包版本与服务端部署版本脱节，会出现「编译通过但线上 400」</td><td>要动仓库结构或引入生成流程</td></tr>
+</tbody>
+</table>
 
 <table>
 <thead><tr><th>反模式</th><th>为什么会这么干</th><th>实际后果</th><th>替代做法</th></tr></thead>
@@ -299,9 +364,14 @@ export const trpcClient = createTRPCClient&lt;AppRouter&gt;({
 <tr><td>在 query 里做写操作</td><td>写起来省事</td><td>被 GET 缓存、被预取、被重试，产生重复副作用</td><td>任何有副作用的都必须是 mutation</td></tr>
 </tbody></table>
 
+<p>这篇是 tRPC 簇的入口，负责选型判断。判定为适用之后，往下依次是 router 与 context 的最小可用写法、procedure 的校验与鉴权组合、以及 React 侧的缓存与失效策略。</p>
+
+<p class="cluster-nav">同主题路径：<a href="intro/">下一步：tRPC 上手：Router、Context 与客户端调用 →</a></p>
+
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
 <li><strong>没有 input schema 的 procedure 等于没有校验</strong>：类型编译后全部擦除，服务端拿到的只是 JSON，必须靠 zod 兜住。</li>
 <li><strong>把 AppRouter 当值导入而不是类型导入</strong>：会把服务端依赖拉进前端产物，前端包突然多出几百 KB，严重时泄露服务端代码。</li>
@@ -315,10 +385,10 @@ export const trpcClient = createTRPCClient&lt;AppRouter&gt;({
 <li><strong>errorFormatter 忘了在生产去掉 stack</strong>：默认错误结构里的堆栈会把文件路径和依赖版本暴露给浏览器。</li>
 <li><strong>以为 tRPC 比 REST 更快</strong>：传输层完全一样，性能差异只来自 batch 减少了请求数，不是协议优势。</li>
 <li><strong>monorepo 里让前端 tsconfig 包含整个后端源码</strong>：类型检查时间会随后端代码量线性增长，编辑器补全变卡，应该用 project references 限定范围。</li>
+<li><strong>选型时只看「开发效率高」一条</strong>：先把自查表里的调用方清单列完；两年内会出现非 TS 调用方的边界，一开始就别用它。</li>
     </ul>
 </div>
-
-                    </div>
+</div>
                 </article>
             </main>
         </div>

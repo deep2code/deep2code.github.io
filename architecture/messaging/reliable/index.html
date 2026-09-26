@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="消息从产生到处理完的五个丢失点与通用防法：生产端确认的三种形态（RabbitMQ 的 publisher confirm 与 mandatory、RocketMQ 的 SendResult 状态判断、Kafka 的 acks）、Broker 持久化的三种取舍与为什么多副本比单机同步刷盘更划算、RabbitMQ 持久化三件套与 Quorum Queue 的 Raft 复制、RocketMQ 刷盘与复制的四种组合及各自丢失窗口、消费端确认语义与 requeue 死循环、消息完整状态机、故障注入清单与对账兜底。">
+    <meta name="description" content="消息可靠投递三段式：先给五个丢失点逐点验证的可执行清单——生产确认、Broker 落盘与副本、消费提交时机、重试与死信、消费端幂等，每点都写清怎么配、怎么注入故障验证、通过标准是什么，外加跨产品参数速查；再讲五个丢失点的成因、生产确认的三种形态与 RabbitMQ 的 return 盲区、为什么多副本比单机同步刷盘更划算、持久化三件套、RocketMQ 四种组合的丢失窗口、requeue 死循环与消息状态机；最后按业务类型给可靠性等级矩阵。">
     <meta name="keywords" content="消息队列深入,可靠投递与消费,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/messaging/reliable/">
     <meta property="og:title" content="消息可靠投递：五个丢失点与跨产品通用防法 - 消息队列深入 - 资深码农">
-    <meta property="og:description" content="消息从产生到处理完的五个丢失点与通用防法：生产端确认的三种形态（RabbitMQ 的 publisher confirm 与 mandatory、RocketMQ 的 SendResult 状态判断、Kafka 的 acks）、Broker 持久化的三种取舍与为什么多副本比单机同步刷盘更划算、RabbitMQ 持久化三件套与 Quorum Queue 的 Raft 复制、RocketMQ 刷盘与复制的四种组合及各自丢失窗口、消费端确认语义与 requeue 死循环、消息完整状态机、故障注入清单与对账兜底。">
+    <meta property="og:description" content="消息可靠投递三段式：先给五个丢失点逐点验证的可执行清单——生产确认、Broker 落盘与副本、消费提交时机、重试与死信、消费端幂等，每点都写清怎么配、怎么注入故障验证、通过标准是什么，外加跨产品参数速查；再讲五个丢失点的成因、生产确认的三种形态与 RabbitMQ 的 return 盲区、为什么多副本比单机同步刷盘更划算、持久化三件套、RocketMQ 四种组合的丢失窗口、requeue 死循环与消息状态机；最后按业务类型给可靠性等级矩阵。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/messaging/reliable/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="消息可靠投递：五个丢失点与跨产品通用防法">
-    <meta name="twitter:description" content="消息从产生到处理完的五个丢失点与通用防法：生产端确认的三种形态（RabbitMQ 的 publisher confirm 与 mandatory、RocketMQ 的 SendResult 状态判断、Kafka 的 acks）、Broker 持久化的三种取舍与为什么多副本比单机同步刷盘更划算、RabbitMQ 持久化三件套与 Quorum Queue 的 Raft 复制、RocketMQ 刷盘与复制的四种组合及各自丢失窗口、消费端确认语义与 requeue 死循环、消息完整状态机、故障注入清单与对账兜底。">
+    <meta name="twitter:description" content="消息可靠投递三段式：先给五个丢失点逐点验证的可执行清单——生产确认、Broker 落盘与副本、消费提交时机、重试与死信、消费端幂等，每点都写清怎么配、怎么注入故障验证、通过标准是什么，外加跨产品参数速查；再讲五个丢失点的成因、生产确认的三种形态与 RabbitMQ 的 return 盲区、为什么多副本比单机同步刷盘更划算、持久化三件套、RocketMQ 四种组合的丢失窗口、requeue 死循环与消息状态机；最后按业务类型给可靠性等级矩阵。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,7 +73,82 @@
                     <div class="article-content">
 <p>「消息不丢」不是一个开关，而是链路上<strong>五个独立环节</strong>各自都要做对。任何一环漏掉，其他四环配得再完美也会丢。这篇讲跨产品通用的原理，并落到 RabbitMQ 与 RocketMQ 的具体机制上；Kafka 侧的 acks 与 min.insync.replicas 组合、幂等 Producer、事务边界见站内 Kafka 可靠性专篇，这里只给结论。</p>
 
-<h2>消息全链路的五个丢失点</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：五个丢失点逐点验证的清单——生产确认、Broker 落盘与副本、消费提交时机、重试与死信、消费端幂等，每点给怎么配、怎么注入故障验证、通过标准，外加一段可直接套用的收发核对脚本与跨产品参数速查表。</li>
+        <li><strong>② 原理</strong>：每个丢失点的成因与残留风险、RabbitMQ 的 confirm 与 return 两条独立失败通道、为什么共识是多副本加异步刷盘、持久化三件套缺一件各自怎么丢、RocketMQ 四种组合的丢失窗口、requeue 立即回队的死循环、至少一次为什么是唯一现实语义、一条消息的完整状态机与三条回边。</li>
+        <li><strong>③ 场景</strong>：按业务类型定可靠性等级的决策矩阵、什么时候该降级换吞吐、对账与重建能力在哪些场景比「不丢」更重要。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 五个丢失点逐点验证：这张清单跑完再上线</h2>
+
+<p>可靠性不是配完就算完，是<strong>每一点都要有一次能复现的验证</strong>。顺序按链路从前往后走，前一点没验过就不要验后一点——前面丢了，后面的机制根本收不到消息。每一点的配置为什么是这样，见原理层。</p>
+
+<table>
+<thead><tr><th>验证点</th><th>怎么配（跨产品通用）</th><th>怎么验证（可直接执行）</th><th>通过标准</th></tr></thead>
+<tbody>
+<tr><td>1 生产确认</td><td>用带确认的发送并<strong>检查返回状态</strong>；RabbitMQ 额外加 <code>mandatory</code>，RocketMQ 判 <code>sendStatus</code> 的四种取值，Kafka 用 <code>acks=all</code></td><td>故意用一个没有任何 binding 的 routing key 发一条；再用防火墙丢包断开生产端与集群 30 秒</td><td>路由失败必须报错而不是静默成功；断网期间的消息全部留在 outbox，恢复后补发，总条数无缺口</td></tr>
+<tr><td>2 Broker 落盘与副本</td><td>副本数至少 3 且<strong>跨机架分布</strong>，写入要求多数派确认；刷盘方式按可靠性等级选</td><td>持续发送的同时 <code>kill -9</code> 主节点进程；另起一次用大文件把数据盘填到水位线以上</td><td>切换完成后收发条数无缺口；磁盘越线后生产端收到<strong>明确拒绝</strong>而不是成功</td></tr>
+<tr><td>3 消费提交时机</td><td>关闭自动确认，<strong>处理成功之后</strong>再确认或提交位点</td><td>在消费者处理到一半时强杀进程</td><td>被中断的消息重新投递并最终被处理；条数一条不少，允许出现重复</td></tr>
+<tr><td>4 重试与死信</td><td>区分可重试错误与毒消息；失败走 <code>requeue=false</code> 加死信交换机，重投由延迟队列按退避执行</td><td>把下游停 10 分钟；再单独投一条必填字段缺失的毒消息</td><td>退避生效且 CPU 不飙升；毒消息<strong>第一次就进死信</strong>并告警，不参与重试</td></tr>
+<tr><td>5 消费端幂等</td><td>业务唯一键加去重表或唯一索引，或状态机单向流转</td><td>把同一条消息人工投两次；再触发一次主从切换或消费组重平衡</td><td>结果表去重后条数不变，可见副作用（发券、扣款、发短信）只发生一次</td></tr>
+<tr><td>6 outbox 与对账（兜底）</td><td>业务与消息记录写在同一个本地事务；对账任务独立于消息链路，并提供一键补偿</td><td>在业务事务 Commit 之后立刻 kill 生产进程；再人为删掉一条消费结果</td><td>进程重启后消息被自动补发；对账能算出差集、告警并触发补偿</td></tr>
+</tbody>
+</table>
+
+<p>六点的结论最后都要落到同一件事上：<strong>核对收发条数</strong>。下面这段骨架在预发环境直接可用，每次只注入一种故障，否则结果无法归因：</p>
+
+<pre><code class="language-bash"># 五点验证的骨架：固定条数、固定编号，边发边注入故障，最后只核对三个数字
+# 只在预发环境跑；每轮只注入一种故障，否则分不清是谁的问题
+N=10000
+
+# 步骤 1 发送。业务唯一键就用编号，发送结果必须逐条落 outbox 表而不是只打日志
+python3 send.py --count $N --topic order.created --biz-key-prefix verify-
+
+# 步骤 2 注入故障（五种轮着来：杀主节点、断网、填盘、强杀消费者、主从切换）
+kill -9 $(pgrep -f broker)                    # 例：杀 Broker 主节点
+
+# 步骤 3 等消费追平。RabbitMQ：ready 与 unacked 都要归零，consumers 不能为 0
+rabbitmqctl list_queues name messages_ready messages_unacknowledged consumers
+
+# RocketMQ：每个队列的 diff 都要归零（brokerOffset 减 consumerOffset）
+sh mqadmin consumerProgress -n 127.0.0.1:9876 -g order_consumer_group
+
+# 步骤 4 核对。第一条等式不成立就是丢消息，必须停下来查，不要继续下一轮
+#   已发送条数 等于 结果表去重后条数        -- 不丢
+#   结果表总条数 减 去重后条数 等于 重复次数  -- 允许大于零，说明幂等确实在工作
+#   死信条数为零                            -- 非零先看死信原因再谈结论
+psql -c "SELECT count(*) AS 已发送 FROM outbox WHERE biz_key LIKE 'verify-%';"
+psql -c "SELECT count(*) AS 结果行数, count(DISTINCT biz_key) AS 去重后
+         FROM consume_result WHERE biz_key LIKE 'verify-%';"
+</code></pre>
+
+<p>配置项的名字三家完全不同，但对应的是同一批决策。下表只列直接影响「会不会丢」的项，默认值随版本变化的一律以实际输出为准，不要照抄：</p>
+
+<table>
+<thead><tr><th>参数</th><th>作用</th><th>默认值</th><th>什么时候需要改</th></tr></thead>
+<tbody>
+<tr><td>RabbitMQ exchange 与 queue 的 <code>durable</code></td><td>定义本身是否随 Broker 重启存活</td><td>声明时不指定即非持久化</td><td>生产环境一律 true，只有临时调试队列才用 false</td></tr>
+<tr><td>RabbitMQ <code>delivery_mode</code></td><td>2 才写盘，1 只在内存</td><td>不设即 1</td><td>任何不允许丢的消息都要设 2，这是三件套里最容易漏的一件</td></tr>
+<tr><td>RabbitMQ <code>mandatory</code></td><td>路由不到队列时把消息退回生产端</td><td>不设即 false</td><td>一律开启，或给交换机配 alternate exchange 兜住</td></tr>
+<tr><td>RabbitMQ <code>x-queue-type</code></td><td>quorum 用 Raft 多数派确认替代单机刷盘</td><td>默认经典队列</td><td>不允许丢且要自动故障切换时改 quorum；队列数量极多时先评估内存</td></tr>
+<tr><td>RabbitMQ <code>prefetch</code></td><td>单消费者未确认消息上限</td><td>随客户端与版本变化，以 <code>rabbitmqctl list_consumers</code> 输出为准</td><td>处理慢就调小；设很大又处理很慢时，断连会引发重投风暴</td></tr>
+<tr><td>RabbitMQ <code>x-dead-letter-exchange</code></td><td>失败消息的去处</td><td>默认没有</td><td>只要存在失败路径就必须配，否则 <code>requeue=false</code> 等于丢弃</td></tr>
+<tr><td>RocketMQ <code>brokerRole</code></td><td>是否等从节点复制完再返回成功</td><td><code>ASYNC_MASTER</code></td><td>生产环境改 <code>SYNC_MASTER</code>，并在客户端处理 <code>SLAVE_NOT_AVAILABLE</code></td></tr>
+<tr><td>RocketMQ <code>flushDiskType</code></td><td>是否每条消息都等一次 fsync</td><td><code>ASYNC_FLUSH</code></td><td>只有账务类才值得改 <code>SYNC_FLUSH</code>，吞吐会掉一个档</td></tr>
+<tr><td>RocketMQ <code>diskMaxUsedSpaceRatio</code></td><td>磁盘水位保护线，越线后拒写</td><td>以 <code>mqadmin getBrokerConfig</code> 输出为准</td><td>大流量场景留更多余量，给清理任务与告警留出时间</td></tr>
+<tr><td>RocketMQ <code>autoCreateTopicEnable</code></td><td>是否允许自动创建 Topic</td><td>随版本变化，以 broker 启动日志与 <code>mqadmin getBrokerConfig</code> 为准</td><td>生产环境一律关闭，否则打错一个字母就多一个无人消费的 Topic</td></tr>
+<tr><td>Kafka <code>acks</code> 与 <code>min.insync.replicas</code></td><td>多少副本确认才算写入成功</td><td><code>acks</code> 在 3.0 起的客户端默认 all，此前为 1；<code>min.insync.replicas</code> 默认 1</td><td>两者必须一起看，组合语义与幂等 Producer 见 <a href="../../kafka/reliability/">Kafka 消息可靠性落地</a></td></tr>
+<tr><td>Kafka <code>enable.auto.commit</code></td><td>是否按时间间隔自动提交位点</td><td>true</td><td>不允许丢就关掉，改成处理成功后手动提交</td></tr>
+</tbody>
+</table>
+
+<p>清单跑完还剩一件事：把每一轮的实测现象写进文档，包括「预期」和「实测」两列。<strong>实测与预期不符的那几格，就是你真正的风险点</strong>，比任何配置检查表都准。下面几节解释这些配置各自在挡什么。</p>
+
+<h2>② 原理 · 消息全链路的五个丢失点</h2>
 <div class="mermaid">
 flowchart TB
     subgraph L1["环节一 业务与发送之间"]
@@ -114,7 +189,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>生产端确认的三种形态</h2>
+<h2>② 原理 · 生产端确认的三种形态</h2>
 <p>三家的 API 名字完全不同，但要解决的是同一件事：<strong>让客户端知道 Broker 到底收没收到</strong>。区别在于确认的粒度和失败时能拿到多少信息。</p>
 <table>
 <thead><tr><th>产品</th><th>机制</th><th>失败信息粒度</th><th>必须额外处理的场景</th></tr></thead>
@@ -187,7 +262,7 @@ def publish(payload: dict) -> bool:
         # 保留 outbox 记录让兜底线程重发，重复由消费端幂等消化
         return False</code></pre>
 
-<h2>Broker 端持久化的通用取舍</h2>
+<h2>② 原理 · Broker 端持久化的通用取舍</h2>
 <p>三种策略的本质区别是「返回成功」这句话的含金量。这里有一个现代共识值得强调：<strong>多副本比单机同步刷盘更划算</strong>。</p>
 <table>
 <thead><tr><th>策略</th><th>返回成功意味着</th><th>延迟量级</th><th>能防住什么 / 防不住什么</th></tr></thead>
@@ -216,7 +291,7 @@ flowchart TB
     Q4 -->|否| A3
 </div>
 
-<h2>RabbitMQ 的持久化三件套与 Quorum Queue</h2>
+<h2>② 原理 · RabbitMQ 的持久化三件套与 Quorum Queue</h2>
 <p>「我配了持久化怎么还会丢」几乎都是因为只配了其中一件。三件套<strong>缺任何一个都会丢</strong>，而且丢的方式各不相同：</p>
 <table>
 <thead><tr><th>要件</th><th>怎么配</th><th>缺了它会怎样</th></tr></thead>
@@ -229,7 +304,7 @@ flowchart TB
 </table>
 <p>即使三件套齐全，经典队列仍然是<strong>先写内存再批量落盘</strong>，宕机存在数百毫秒量级的丢失窗口。Quorum Queue 的价值就在这里：它用 Raft 把写入变成多数派确认，只要多数副本存活，<strong>已确认的消息就不会丢</strong>，故障切换也不需要人工介入。代价是单队列吞吐低于经典队列、不支持全局 QoS、队列数量极多时内存开销更高（详见<a href="../compare/">机制对比篇</a>）。</p>
 
-<h2>RocketMQ 的四种组合与丢失窗口</h2>
+<h2>② 原理 · RocketMQ 的四种组合与丢失窗口</h2>
 <p><code>flushDiskType</code> 与 <code>brokerRole</code> 正交，四种组合的丢失窗口差别很大：</p>
 <table>
 <thead><tr><th>组合</th><th>返回成功时消息在哪</th><th>丢失窗口</th><th>延迟与适用</th></tr></thead>
@@ -269,7 +344,7 @@ autoCreateSubscriptionGroup=false
 transactionCheckInterval=60000
 transactionCheckMax=15</code></pre>
 
-<h2>消费端确认：唯一原则是先处理后确认</h2>
+<h2>② 原理 · 消费端确认：唯一原则是先处理后确认</h2>
 <p>自动确认（auto-ack）等于放弃可靠性——Broker 一投递出去就删除消息，消费者崩溃时这批消息永久消失，而且你连丢了哪些都不知道。下面这张表是 RabbitMQ 三个确认动作的语义差异，<code>requeue</code> 参数是事故高发点：</p>
 <table>
 <thead><tr><th>动作</th><th>语义</th><th>Broker 行为</th><th>什么时候用</th></tr></thead>
@@ -321,11 +396,11 @@ consumer.registerMessageListener(new MessageListenerConcurrently() {
 // try { handle(m); } catch (Exception e) { log.error(e); }
 // return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;</code></pre>
 
-<h2>「至少一次」是现实中唯一可靠的语义</h2>
+<h2>② 原理 · 「至少一次」是现实中唯一可靠的语义</h2>
 <p>三种语义里，最多一次会丢，精确一次只在「单个系统内部、且状态更新与位点提交能落进同一个事务」这个前提下成立——一旦消费逻辑要写外部数据库、调外部接口、发短信，端到端的精确一次就不存在了。所以现实选择只有至少一次，<strong>消费端幂等因此是必需品而不是可选项</strong>。</p>
 <p>重复的四个来源都不是配置能消除的：发送超时但服务端已写入导致重试产生第二条；处理成功但确认前进程被杀；消费组重平衡或消费者断连导致未确认消息重新投递；运维做主从切换或从备份恢复导致位点回退。幂等的具体落地（唯一索引、去重表、状态机单向流转、乐观锁版本号四种方式）站内分布式一致性篇已展开，这里只强调两点工程约束：<strong>幂等键必须是业务唯一键</strong>（订单号加事件类型），不能用每次重试都会变的随机 ID；<strong>去重表要有保留期与清理任务</strong>，并且清理窗口要大于消息最大可能延迟，否则超期的迟到重复会被当成新消息处理一遍。</p>
 
-<h2>一条消息的完整状态机</h2>
+<h2>② 原理 · 一条消息的完整状态机</h2>
 <p>把上面所有环节合起来，一条消息的生命周期是这样。值得注意的是有<strong>三条回边</strong>：发送失败回到待发送、消费者断连回到 Broker 待投递、人工处理后回到待投递——这三条回边正是重复投递的来源。</p>
 <div class="mermaid">
 stateDiagram-v2
@@ -361,7 +436,7 @@ stateDiagram-v2
     end note
 </div>
 
-<h2>验证可靠性：故障注入与监控</h2>
+<h2>② 原理 · 故障注入与监控：证明配置真的生效</h2>
 <p>配置写对了不等于生效。唯一可信的验证方式是在预发环境边发消息边制造故障，然后<strong>核对收发条数</strong>。下面每一项都要先写下预期现象，实测与预期不符的地方就是真实风险点。</p>
 <table>
 <thead><tr><th>故障注入</th><th>操作</th><th>预期现象</th><th>不符预期说明什么</th></tr></thead>
@@ -388,9 +463,32 @@ stateDiagram-v2
 </div>
 <p><strong>对账是必须有的兜底</strong>，不是可选加分项。原因是链路上永远有配置覆盖不到的极端情况：运维从旧备份恢复导致位点回退、网络分区期间的异常写入、毒消息被误判为可丢弃、死信堆积无人处理、以及人为重置位点。最小实现是生产方把已发出的业务单据落一张流水表，消费方把处理结果落一张结果表，每小时或每天比对差集，差集非空就告警并触发补偿。两条硬要求：对账逻辑<strong>必须独立于消息链路</strong>（不要用消息去驱动对账，否则消息链路故障时对账一起失效）；对账发现的差异要能<strong>一键补偿</strong>，只告警不提供修复入口的对账在真出问题时依然救不了场。</p>
 
+<h2>③ 场景 · 按业务类型定可靠性等级</h2>
+<p>可靠性是买来的，不是白送的。下表把前面的机制按业务类型收成一组默认配置，第四列是你实际要付的账——只看第二列会得出「全都上最高档」的结论，而那通常撑不住吞吐。</p>
+<table>
+<thead><tr><th>场景</th><th>该怎么配</th><th>为什么是这个组合</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>账务、资金结算、合规留痕</td><td>outbox 加多副本同步复制加同步刷盘，消费端强幂等，每日全量对账</td><td>丢一条就是资损或合规问题，要把所有丢失点全部堵死</td><td>吞吐与延迟都要打折，对账与补偿是一套要长期维护的工程</td></tr>
+<tr><td>订单状态流转、库存变更</td><td>outbox 加多副本同步复制加<strong>异步</strong>刷盘，幂等加小时级对账</td><td>多副本已覆盖磁盘损坏与整机故障，fsync 的边际收益低于它的延迟代价</td><td>留下「多数副本同时断电」的极小窗口，用对账兜住</td></tr>
+<tr><td>支付回调这类金额相关但吞吐很高的链路</td><td>outbox 加多副本加异步刷盘，强幂等加准实时对账</td><td>同步刷盘撑不住这个量级，可靠性靠副本与对账两层叠加</td><td>准实时对账本身是一套独立系统，还要处理对账自身的延迟</td></tr>
+<tr><td>短信、站内信、推送等通知</td><td>生产确认加死信告警即可，可以不做 outbox</td><td>晚到可接受，丢一条的业务代价有限，不值得为它上全套</td><td>少量丢失通常只能靠用户反馈发现</td></tr>
+<tr><td>搜索索引、缓存刷新等派生数据</td><td>可靠性可以降级，但<strong>必须保证能全量重建</strong>，并演练过一次</td><td>派生数据的正确性靠重建能力保证，不靠每条都不丢</td><td>重建期间数据不一致，需要一个对外可见的降级开关</td></tr>
+<tr><td>埋点、访问日志、行为流</td><td>异步复制加异步刷盘，优先吞吐</td><td>统计层面允许小比例丢失，为它付延迟不划算</td><td>故障期间的缺口无法补回，报表要标注异常时段</td></tr>
+<tr><td>跨机房或跨可用区容灾</td><td>副本跨可用区分布，接受跨机房网络往返</td><td>同机架的三副本抗不住机架级断电，副本数是账面数字</td><td>写延迟按跨机房往返计算，吞吐下降，且要处理分区期间的写入策略</td></tr>
+<tr><td>大促前的临时保障</td><td>提前压测、磁盘水位留足余量、预置扩容脚本、关闭自动建 Topic、死信值班到人</td><td>磁盘写满与自动建 Topic 是两类最典型的静默丢消息</td><td>要预留资源成本，且这些动作必须在流量来之前完成</td></tr>
+</tbody>
+</table>
+
+<p><strong>不适用边界</strong>：这篇解决的是「消息进出链路不丢」，不解决「该不该用消息」——那在 <a href="../">主干篇</a>；消息该定成命令还是事件、契约怎么演进在 <a href="../patterns/">消息通信模式</a>；产品能力差异与选型流程在 <a href="../compare/">MQ 选型方法论</a>；Kafka 的 acks 与 <code>min.insync.replicas</code> 组合、幂等 Producer 与事务边界在 <a href="../../kafka/reliability/">Kafka 消息可靠性落地</a>；幂等的四种落地写法与柔性事务在 <a href="../../distributed/idempotency/">幂等的完整工程实现</a> 与 <a href="../../distributed/transaction/">柔性事务</a>。需要「精确一次」且消费逻辑要写外部系统的场景，这里给不出方案，因为端到端精确一次并不存在。</p>
+
+<p>本篇在这条路径上负责把消息守住。守住之后剩下的问题才是产品选择——投递语义、顺序要求、吞吐与运维能力四步筛，决定这套机制具体落在哪个产品上。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../patterns/">← 上一步：消息通信模式：命令、事件与编排协同</a> · <a href="../compare/">下一步：MQ 选型方法论与 RabbitMQ / RocketMQ 机制拆解 →</a></p>
+
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">这些坑都会表现为「监控一切正常但消息没了」</div>
     <ul>
         <li><strong>只配了消息持久化没配队列持久化</strong>：Broker 重启后队列直接消失，消息一起没。三件套必须齐：Exchange、Queue、<code>delivery_mode=2</code>。</li>
         <li><strong>RabbitMQ 不加 mandatory</strong>：路由不到队列时 Broker 照样回 ack，消息被静默丢弃，看监控一切正常。</li>

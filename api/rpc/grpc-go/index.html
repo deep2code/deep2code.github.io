@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="只讲 Go 侧的落地细节：protoc-gen-go 与 protoc-gen-go-grpc 的版本关系、嵌入 Unimplemented 的取舍，context 取消怎么才算真的传到底，unary 与 stream 两条独立拦截器链为什么 recover 要挂两遍，直接 return err 会让客户端看到 Unknown 并泄露内部信息，grpc.NewClient 的惰性连接与默认 dns 解析器，service config 里的重试与限流配法，流式接口的 goroutine 泄漏排查，GracefulStop 与 K8s 摘流的配合，以及 bufconn 测试和 otelgrpc 的正确接入位置。">
+        <meta name="description" content="Go 中 gRPC 服务的工程实践按用法、原理、场景三段组织：先给一套最小可用骨架——两个插件的生成命令、一元与流式两条拦截器链都挂 recover、优雅停机的四步顺序、客户端用 status.FromError 判错、bufconn 进程内测试，每项都给验证方法；再讲清 protoc-gen-go 与 protoc-gen-go-grpc 的分工、一次调用穿过的层、ctx 取消的传递边界与 WithoutCancel、error 转 status 的必要性、NewClient 的惰性与 dns 解析器变更、流泄漏排查、GracefulStop 的一直等语义；最后按项目形态给该配到哪一步。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/api/rpc/grpc-go/">
     <!-- Open Graph -->
     <meta property="og:title" content="Go 中 gRPC 服务的工程实践 - 资深码农">
-    <meta property="og:description" content="只讲 Go 侧的落地细节：protoc-gen-go 与 protoc-gen-go-grpc 的版本关系、嵌入 Unimplemented 的取舍，context 取消怎么才算真的传到底，unary 与 stream 两条独立拦截器链为什么 recover 要挂两遍，直接 return err 会让客户端看到 Unknown 并泄露内部信息，grpc.NewClient 的惰性连接与默认 dns 解析器，service config 里的重试与限流配法，流式接口的 goroutine 泄漏排查，GracefulStop 与 K8s 摘流的配合，以及 bufconn 测试和 otelgrpc 的正确接入位置。">
+    <meta property="og:description" content="Go 中 gRPC 服务的工程实践按用法、原理、场景三段组织：先给一套最小可用骨架——两个插件的生成命令、一元与流式两条拦截器链都挂 recover、优雅停机的四步顺序、客户端用 status.FromError 判错、bufconn 进程内测试，每项都给验证方法；再讲清 protoc-gen-go 与 protoc-gen-go-grpc 的分工、一次调用穿过的层、ctx 取消的传递边界与 WithoutCancel、error 转 status 的必要性、NewClient 的惰性与 dns 解析器变更、流泄漏排查、GracefulStop 的一直等语义；最后按项目形态给该配到哪一步。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/rpc/grpc-go/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Go 中 gRPC 服务的工程实践 - 资深码农">
-    <meta name="twitter:description" content="只讲 Go 侧的落地细节：protoc-gen-go 与 protoc-gen-go-grpc 的版本关系、嵌入 Unimplemented 的取舍，context 取消怎么才算真的传到底，unary 与 stream 两条独立拦截器链为什么 recover 要挂两遍，直接 return err 会让客户端看到 Unknown 并泄露内部信息，grpc.NewClient 的惰性连接与默认 dns 解析器，service config 里的重试与限流配法，流式接口的 goroutine 泄漏排查，GracefulStop 与 K8s 摘流的配合，以及 bufconn 测试和 otelgrpc 的正确接入位置。">
+    <meta name="twitter:description" content="Go 中 gRPC 服务的工程实践按用法、原理、场景三段组织：先给一套最小可用骨架——两个插件的生成命令、一元与流式两条拦截器链都挂 recover、优雅停机的四步顺序、客户端用 status.FromError 判错、bufconn 进程内测试，每项都给验证方法；再讲清 protoc-gen-go 与 protoc-gen-go-grpc 的分工、一次调用穿过的层、ctx 取消的传递边界与 WithoutCancel、error 转 status 的必要性、NewClient 的惰性与 dns 解析器变更、流泄漏排查、GracefulStop 的一直等语义；最后按项目形态给该配到哪一步。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="接口、协议与安全">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 中 gRPC 服务的工程实践","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"只讲 Go 侧的落地细节：protoc-gen-go 与 protoc-gen-go-grpc 的版本关系、嵌入 Unimplemented 的取舍，context 取消怎么才算真的传到底，unary 与 stream 两条独立拦截器链为什么 recover 要挂两遍，直接 return err 会让客户端看到 Unknown 并泄露内部信息，grpc.NewClient 的惰性连接与默认 dns 解析器，service config 里的重试与限流配法，流式接口的 goroutine 泄漏排查，GracefulStop 与 K8s 摘流的配合，以及 bufconn 测试和 otelgrpc 的正确接入位置。","url":"https://www.yijunjun.asia/api/rpc/grpc-go/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/api/rpc/grpc-go/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 中 gRPC 服务的工程实践","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Go 中 gRPC 服务的工程实践按用法、原理、场景三段组织：先给一套最小可用骨架——两个插件的生成命令、一元与流式两条拦截器链都挂 recover、优雅停机的四步顺序、客户端用 status.FromError 判错、bufconn 进程内测试，每项都给验证方法；再讲清 protoc-gen-go 与 protoc-gen-go-grpc 的分工、一次调用穿过的层、ctx 取消的传递边界与 WithoutCancel、error 转 status 的必要性、NewClient 的惰性与 dns 解析器变更、流泄漏排查、GracefulStop 的一直等语义；最后按项目形态给该配到哪一步。","url":"https://www.yijunjun.asia/api/rpc/grpc-go/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/api/rpc/grpc-go/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "接口、协议与安全", "item": "https://www.yijunjun.asia/api/"}, {"position": 3, "name": "gRPC 2026", "item": "https://www.yijunjun.asia/api/rpc/"}, {"position": 4, "name": "Go gRPC 示例", "item": "https://www.yijunjun.asia/api/rpc/grpc-go/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -93,28 +93,35 @@
                     <div class="article-content">
 <p>HTTP/2 的帧与流控、四种调用模式的边界、deadline 端到端传播的机制、错误模型里 status 与 details 的设计、keepalive 与中间代理造成的偶发断连，都在<a href="../grpc/">gRPC 的传输机制与工程落地</a>里。这一篇不重复那些，只讲 <strong>Go 这个具体实现里那些会让你半夜起来的细节</strong>：版本、拦截器、停机、泄漏、测试。</p>
 
-<h2>代码生成：两个插件、两套版本</h2>
-<p>最常见的困惑是「装了 protoc-gen-go 却没生成 service 代码」。原因是 protobuf 的 Go 实现换到新 API 之后，<strong>protoc-gen-go 只负责消息类型，服务桩交给了独立的 protoc-gen-go-grpc</strong>，两个插件的版本号完全独立，必须分别安装。</p>
-<table>
-<thead><tr><th>组件</th><th>负责什么</th><th>版本与坑</th></tr></thead>
-<tbody>
-<tr><td><code>protoc</code> 或 buf</td><td>解析 proto 并调用插件</td><td>buf 能顺带做 lint 与破坏性变更检查，见<a href="../grpc/">总览篇</a></td></tr>
-<tr><td><code>protoc-gen-go</code></td><td>只生成消息类型</td><td>新 API 之后<strong>不再生成任何 service 代码</strong></td></tr>
-<tr><td><code>protoc-gen-go-grpc</code></td><td>生成 client 与 server 桩</td><td>版本与上面那个无关，忘装的症状就是「找不到 RegisterXxxServer」</td></tr>
-<tr><td>生成代码里的 <code>SupportPackageIsVersionN</code></td><td>编译期版本断言</td><td>grpc-go 太旧会正好在这一行报错，该升 grpc-go 而不是改生成的文件</td></tr>
-<tr><td><code>go_package</code> 选项</td><td>决定导入路径与输出目录</td><td>写错会生成到意外的目录，或者两个 proto 撞包名</td></tr>
-<tr><td><code>require_unimplemented_servers</code></td><td>控制是否强制嵌入</td><td>默认要求嵌入；改成不要求会把运行时问题变成编译时问题</td></tr>
-</tbody>
-</table>
-<p>嵌入 <code>UnimplementedXxxServer</code> 这件事值得单独想清楚，因为它是一个<strong>把编译期错误换成运行期错误</strong>的交易。</p>
-<table>
-<thead><tr><th>做法</th><th>proto 新增方法时</th><th>风险</th><th>什么时候选它</th></tr></thead>
-<tbody>
-<tr><td>嵌入（默认）</td><td>编译通过，运行时返回 Unimplemented</td><td>忘了实现不会有人发现，直到客户端报错</td><td>proto 与服务端分开发布、必须向前兼容时</td></tr>
-<tr><td>关掉强制嵌入</td><td><strong>编译失败</strong></td><td>一次 proto 变更会卡住所有实现方的构建</td><td>单仓库、proto 和实现一起发版时</td></tr>
-<tr><td>嵌入 + CI 断言</td><td>编译通过，但 CI 报出未实现的方法</td><td>要自己写这条检查</td><td>推荐：既保留兼容性又不丢失信号</td></tr>
-</tbody>
-</table>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一套能直接开跑的最小服务端与客户端——代码生成命令、两条拦截器链都挂上、recover、优雅停机的四步顺序、<code>status.FromError</code> 判错、<code>bufconn</code> 进程内测试，每项都给验证方法。</li>
+        <li><strong>② 原理</strong>：为什么这些写法是必须的——两个插件两套版本、一次调用在 Go 侧穿过的层、ctx 取消的传递与失效边界、两条链的独立性与 recover 的作用域、error 转 status 的必要性、<code>NewClient</code> 的惰性与解析器变更、流泄漏的成因、<code>GracefulStop</code> 的「一直等」语义。</li>
+        <li><strong>③ 场景</strong>：单体内部服务、多团队共用 proto、长连流式服务、K8s 编排、大报文、浏览器调用各该配到哪一步。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 最小可用的服务端、客户端与测试</h2>
+<p>这一层给一套能直接跑起来的骨架：生成代码、启服务、挂两条拦截器链、优雅停机、客户端判错、进程内测试。每个选项旁边的注释只写「为什么要这行」，机制解释在下一节起的原理部分。</p>
+
+<pre><code class="language-bash"># 两个插件必须分别装：protoc-gen-go 只生成消息类型，服务桩由 protoc-gen-go-grpc 生成
+# 团队里应把版本写进工具清单（buf 的 plugins 配置或 tools.go）而不是长期用 latest
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+protoc -I proto \
+  --go_out=. --go_opt=module=example.com/app \
+  --go-grpc_out=. --go-grpc_opt=module=example.com/app \
+  proto/order/v1/order.proto
+
+# 验证生成结果：两个文件都要有。只有 .pb.go 没有 _grpc.pb.go，就是第二个插件没装
+ls proto/order/v1/*.go
+
+# 验证服务真的注册上了（服务端需开 reflection）
+grpcurl -plaintext localhost:9090 list</code></pre>
+
 <pre><code class="language-go">type orderServer struct {
 	// 生成器默认要求嵌入它（靠一个 mustEmbed 方法强制）。代价要清楚：
 	// 以后 proto 里加了方法、你忘了实现，照样编译通过，线上表现是客户端收到 Unimplemented。
@@ -193,8 +200,157 @@ func main() {
 	}
 }</code></pre>
 
-<h2>一次调用在 Go 侧穿过哪些层</h2>
-<p>把这张图记住，后面所有「这段逻辑该写在哪」的问题都能直接回答。</p>
+<pre><code class="language-go">// service config 随连接下发，按方法配。重试绝不能一刀切全开。
+const svcCfg = `{
+  "methodConfig": [{
+    "name": [{"service": "order.v1.OrderService", "method": "GetOrder"}],
+    "timeout": "2s",
+    "retryPolicy": {
+      "maxAttempts": 4,
+      "initialBackoff": "0.05s",
+      "maxBackoff": "1s",
+      "backoffMultiplier": 2,
+      "retryableStatusCodes": ["UNAVAILABLE"]
+    }
+  }],
+  "retryThrottling": {"maxTokens": 100, "tokenRatio": 0.1},
+  "loadBalancingConfig": [{"round_robin": {}}]
+}`
+
+func newClient(target string) (pb.OrderServiceClient, func() error, error) {
+	// NewClient 取代了已废弃的 Dial。两个必须知道的行为差异：
+	// 1) 它不建连就返回，通道处于 IDLE，第一次调用才触发连接。
+	//    所以这里 err 为 nil 不代表服务端活着，别拿它当健康检查。
+	// 2) 默认解析器是 dns（Dial 是 passthrough），写 "127.0.0.1:9090" 也会走 DNS 路径；
+	//    要配自定义拨号器必须显式写 "passthrough:///xxx"。
+	cc, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultServiceConfig(svcCfg),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second, // 不能小于服务端的 MinTime，否则被 GOAWAY 踢掉
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	cc.Connect() // 想启动时预热就显式调它；NewClient 不支持 WithBlock
+	return pb.NewOrderServiceClient(cc), cc.Close, nil
+}
+
+func getOrder(ctx context.Context, c pb.OrderServiceClient, id string) (*pb.Order, error) {
+	// 客户端默认没有 deadline。不设的话，服务端一卡这个调用就一直挂着。
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	o, err := c.GetOrder(ctx, &amp;pb.GetOrderRequest{Id: id})
+	if err != nil {
+		// 第二个返回值的含义是「这个 error 到底是不是服务端返回的 status」。
+		// 为 false 说明是本地错误（连不上、序列化失败、本地 ctx 取消），
+		// 这时候拿 code 去做业务分支是错的 —— 它只是被填成了 Unknown 或 Canceled。
+		st, ok := status.FromError(err)
+		if !ok {
+			return nil, fmt.Errorf("local failure: %w", err)
+		}
+		// 另外：用 fmt.Errorf 把 status 包一层之后还能不能被识别，取决于 grpc-go 版本。
+		// 跨层传递时不要依赖解包，要么原样返回，要么显式重建一个 status。
+		switch st.Code() {
+		case codes.NotFound:
+			return nil, ErrOrderNotFound
+		case codes.Unavailable, codes.DeadlineExceeded:
+			// 走到这里说明 service config 的重试已经用完了，这是最终失败
+			return nil, ErrRetryLater
+		}
+		return nil, fmt.Errorf("%s: %s", st.Code(), st.Message())
+	}
+	return o, nil
+}</code></pre>
+
+<pre><code class="language-go">// bufconn：在进程内跑真实的 gRPC 栈 —— 真编解码、真拦截器链、真 status 码，
+// 不占端口也不会有端口冲突。比手写 mock client 有价值得多，因为它能测到拦截器。
+func startTestServer(t *testing.T, srv pb.OrderServiceServer) pb.OrderServiceClient {
+	t.Helper()
+	lis := bufconn.Listen(1024 * 1024)
+	s := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(recoveryUnary, logUnary), // 拦截器要一起测，否则线上才发现它吞了错误
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
+	pb.RegisterOrderServiceServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+
+	// 关键的一行：NewClient 默认走 dns 解析器，必须写 passthrough 前缀，
+	// 否则它会真的去解析 "bufnet" 这个域名然后失败。用旧的 Dial 时没这个问题。
+	cc, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cc.Close(); s.Stop(); _ = lis.Close() })
+	return pb.NewOrderServiceClient(cc)
+}</code></pre>
+
+<table>
+<thead><tr><th>要做什么</th><th>怎么做</th><th>怎么验证它真的生效了</th></tr></thead>
+<tbody>
+<tr><td>生成代码</td><td>分别装 <code>protoc-gen-go</code> 与 <code>protoc-gen-go-grpc</code>，版本写进工具清单</td><td>生成目录下必须同时出现 <code>.pb.go</code> 与 <code>_grpc.pb.go</code>；只有前者就是第二个插件没装，症状是「找不到 RegisterXxxServer」</td></tr>
+<tr><td>两条拦截器链都挂上</td><td><code>ChainUnaryInterceptor</code> 与 <code>ChainStreamInterceptor</code> 都注册，recover 放第一个</td><td>写一个故意 panic 的<strong>流式</strong>方法去调：进程必须不退出、客户端收到 Internal。进程挂了就是只挂了一元链</td></tr>
+<tr><td>把 ctx 传到底</td><td>handler 里一路传 <code>ctx</code>；异步收尾用 <code>context.WithoutCancel</code></td><td>客户端发起后立刻 cancel，数据库侧的活跃会话应随之消失；还在跑就是中途换成了 <code>context.Background()</code></td></tr>
+<tr><td>错误转 status</td><td>在 handler 边界统一把 error 映射成 <code>status.Error</code>，细节只进日志</td><td><code>grpcurl -vv</code> 看返回码：出现 Unknown 就说明某条路径直接 <code>return err</code> 了</td></tr>
+<tr><td>客户端判错</td><td><code>status.FromError</code> 的<strong>两个</strong>返回值都用，false 时按本地错误处理</td><td>把服务端停掉再调用，<code>ok</code> 必须为 false；如果代码仍按 code 走业务分支，就会把「连不上」误判成业务结果</td></tr>
+<tr><td>客户端设超时</td><td>每次调用 <code>context.WithTimeout</code>，或用 service config 的 <code>timeout</code></td><td>让服务端 sleep 超过预算，客户端必须在预算点返回 DeadlineExceeded 而不是一直挂着</td></tr>
+<tr><td>优雅停机</td><td>顺序固定：置 NOT_SERVING → 等传播 → <code>GracefulStop</code>（套超时）→ 超时后 <code>Stop</code></td><td>对一个实例发 SIGTERM，客户端错误数应为 0；出现一小段 Unavailable 就是摘流窗口不够或顺序反了</td></tr>
+<tr><td>写测试</td><td><code>bufconn</code> 加 <code>passthrough:///</code> 前缀，跑真实栈</td><td>故意让鉴权拦截器拒绝一次，用例必须看到 PermissionDenied；如果看到 OK，说明测试没覆盖拦截器链</td></tr>
+<tr><td>启动期预热连接</td><td>显式调 <code>cc.Connect()</code></td><td>打印 <code>cc.GetState()</code>：不调时它停在 IDLE，调用后应进入 CONNECTING 或 READY</td></tr>
+</tbody>
+</table>
+
+<table>
+<thead><tr><th>选项 / API</th><th>作用</th><th>默认值</th><th>什么时候需要改</th></tr></thead>
+<tbody>
+<tr><td><code>ChainUnaryInterceptor</code> / <code>ChainStreamInterceptor</code></td><td>注册两条独立的拦截器链，先传入的在最外层</td><td>都不注册</td><td>任何对外提供服务的进程都必须挂，至少要有 recover 与观测</td></tr>
+<tr><td><code>grpc.MaxRecvMsgSize</code></td><td>单条消息接收上限</td><td>接收侧 4 MiB；发送侧实际不限</td><td>确实有大报文时两端一起调；更好的做法是改分块流</td></tr>
+<tr><td><code>KeepaliveEnforcementPolicy.MinTime</code></td><td>允许客户端的最小 ping 间隔</td><td>5 分钟</td><td>客户端开了 keepalive 就必须调小到客户端间隔之下</td></tr>
+<tr><td><code>KeepaliveParams.MaxConnectionAge</code></td><td>连接最大寿命，到龄发 GOAWAY</td><td>不限</td><td>多实例部署时必须设，否则扩容实例长期没流量</td></tr>
+<tr><td><code>grpc.NewClient</code></td><td>创建通道，取代已废弃的 <code>Dial</code></td><td>惰性建连（IDLE）；默认解析器为 dns；不支持 <code>WithBlock</code></td><td>用自定义拨号器时必须写 <code>passthrough:///</code>；要预热就显式 <code>Connect()</code></td></tr>
+<tr><td>调用级 deadline</td><td>本次调用的预算</td><td>没有默认超时</td><td>每个调用都要设，或在 service config 里按方法配 <code>timeout</code></td></tr>
+<tr><td><code>status.FromError</code></td><td>把 error 还原成服务端 status</td><td>第二个返回值为 false 表示这是本地错误</td><td>任何要按 code 分支的地方都得先看这个布尔值</td></tr>
+<tr><td><code>GracefulStop</code></td><td>停止接收新连接、发 GOAWAY、等在途调用结束</td><td>没有超时参数，会一直等</td><td>有流式接口时必须自己套超时并准备 <code>Stop</code> 兜底</td></tr>
+<tr><td><code>StatsHandler</code>（otelgrpc）</td><td>逐条消息的观测事件，位置比拦截器更靠外</td><td>不注册</td><td>需要流式观测或链路追踪时；官方拦截器式接法已废弃</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 代码生成：两个插件、两套版本</h2>
+<p>搞清这一节，能解决「装了 protoc-gen-go 却没生成 service 代码」和「proto 加了方法但没人发现忘了实现」。</p>
+<p>原因是 protobuf 的 Go 实现换到新 API 之后，<strong>protoc-gen-go 只负责消息类型，服务桩交给了独立的 protoc-gen-go-grpc</strong>，两个插件的版本号完全独立，必须分别安装。</p>
+<table>
+<thead><tr><th>组件</th><th>负责什么</th><th>版本与坑</th></tr></thead>
+<tbody>
+<tr><td><code>protoc</code> 或 buf</td><td>解析 proto 并调用插件</td><td>buf 能顺带做 lint 与破坏性变更检查，接法见站内 <a href="../protobuf/">Protobuf 的编码与模式演进</a></td></tr>
+<tr><td><code>protoc-gen-go</code></td><td>只生成消息类型</td><td>新 API 之后<strong>不再生成任何 service 代码</strong></td></tr>
+<tr><td><code>protoc-gen-go-grpc</code></td><td>生成 client 与 server 桩</td><td>版本与上面那个无关，忘装的症状就是「找不到 RegisterXxxServer」</td></tr>
+<tr><td>生成代码里的 <code>SupportPackageIsVersionN</code></td><td>编译期版本断言</td><td>grpc-go 太旧会正好在这一行报错，该升 grpc-go 而不是改生成的文件</td></tr>
+<tr><td><code>go_package</code> 选项</td><td>决定导入路径与输出目录</td><td>写错会生成到意外的目录，或者两个 proto 撞包名</td></tr>
+<tr><td><code>require_unimplemented_servers</code></td><td>控制是否强制嵌入</td><td>默认要求嵌入；改成不要求会把运行时问题变成编译时问题</td></tr>
+</tbody>
+</table>
+<p>嵌入 <code>UnimplementedXxxServer</code> 这件事值得单独想清楚，因为它是一个<strong>把编译期错误换成运行期错误</strong>的交易。</p>
+<table>
+<thead><tr><th>做法</th><th>proto 新增方法时</th><th>风险</th><th>什么时候选它</th></tr></thead>
+<tbody>
+<tr><td>嵌入（默认）</td><td>编译通过，运行时返回 Unimplemented</td><td>忘了实现不会有人发现，直到客户端报错</td><td>proto 与服务端分开发布、必须向前兼容时</td></tr>
+<tr><td>关掉强制嵌入</td><td><strong>编译失败</strong></td><td>一次 proto 变更会卡住所有实现方的构建</td><td>单仓库、proto 和实现一起发版时</td></tr>
+<tr><td>嵌入 + CI 断言</td><td>编译通过，但 CI 报出未实现的方法</td><td>要自己写这条检查</td><td>推荐：既保留兼容性又不丢失信号</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 一次调用在 Go 侧穿过哪些层</h2>
+<p>搞清这张图，后面所有「这段逻辑该写在哪」的问题都能直接回答。</p>
 <div class="mermaid">
 flowchart TB
     APP["业务代码调用生成出来的 client 方法"] --> CLI
@@ -216,11 +372,13 @@ flowchart TB
 </div>
 <p>两个位置关系要记牢：<strong>StatsHandler 比拦截器链更靠外</strong>，所以链路上下文在你的日志拦截器运行之前就已经解出来了；而<strong>service config 里的重试发生在客户端拦截器之内</strong>，你在客户端拦截器里看到的是一次逻辑调用，看不到它底下重试了几次。</p>
 
-<h2>context：取消怎么才算真的传到底</h2>
+<h2>② 原理 · context：取消怎么才算真的传到底</h2>
+<p>搞清这一节，能解决「客户端早返回了，服务端还在跑慢查询」与「handler 里 go 出去的任务为什么立刻失败」。</p>
 <p>服务端 handler 拿到的 <code>ctx</code> 会在两种情况下被取消：客户端主动断开，或者 deadline 到期。但<strong>取消只有被一路传下去才有意义</strong>。把 <code>ctx</code> 换成 <code>context.Background()</code> 去查数据库，是 Go 服务里最普遍的一类浪费——客户端早就超时返回了，服务端还在慢查询上占着连接和内存。</p>
-<p>反方向也有个坑：<strong><code>handler</code> 一返回，它的 <code>ctx</code> 立刻被取消</strong>。所以在 handler 里 <code>go</code> 出去一个异步任务、还把这个 ctx 带上，那个任务几乎必然立刻失败。要做异步收尾，用 <code>context.WithoutCancel</code> 剥掉取消信号（Go 1.21 起），或者干脆投给一个有自己生命周期的后台队列。至于流式方法，<code>stream.Context()</code> 的生命周期和这次调用绑定，同样不能带出去。</p>
+<p>反方向也有个坑：<strong><code>handler</code> 一返回，它的 <code>ctx</code> 立刻被取消</strong>。所以在 handler 里 <code>go</code> 出去一个异步任务、还把这个 ctx 带上，那个任务几乎必然立刻失败。要做异步收尾，用 <code>context.WithoutCancel</code> 剥掉取消信号（Go 1.21 起），或者干脆投给一个有自己生命周期的后台队列。至于流式方法，<code>stream.Context()</code> 的生命周期和这次调用绑定，同样不能带出去。Go 侧 context 与协程生命周期的系统讲法见站内 <a href="../../../programming/go/concurrency/">Go 并发编程</a>。</p>
 
-<h2>拦截器：两条链、顺序与 recover</h2>
+<h2>② 原理 · 拦截器：两条链、顺序与 recover</h2>
+<p>搞清这一节，能解决「流式接口里的 panic 为什么直接打挂进程」与「为什么告警长期误报」。</p>
 <p><strong>grpc-go 不会替你兜 panic</strong>：handler 在服务流的 goroutine 里跑，panic 一路冒上去就是进程退出。这一点和多数 HTTP 框架的默认行为相反，是 Go gRPC 服务上线初期最常见的事故来源。更容易漏的是<strong>一元和流式是两条完全独立的链</strong>，只在一元链上挂了 recover，流式方法照样能把进程打挂。</p>
 <table>
 <thead><tr><th>类型</th><th>能拿到什么</th><th>适合做</th><th>做不到</th></tr></thead>
@@ -299,7 +457,8 @@ func (s *orderServer) GetOrder(ctx context.Context, req *pb.GetOrderRequest) (*p
 	return o, nil
 }</code></pre>
 
-<h2>错误：别把 error 直接返回给客户端</h2>
+<h2>② 原理 · 错误：别把 error 直接返回给客户端</h2>
+<p>搞清这一节，能解决「客户端拿到的全是 Unknown 没法做分支」与「错误信息里泄露了表名」。</p>
 <p>从 handler 里 <code>return err</code> 有两个后果：客户端看到的码是 <strong>Unknown</strong>，没法做任何分支也没法配重试；并且 <strong><code>err.Error()</code> 会原样发给客户端</strong>，数据库报错里的表名、SQL 片段、内部地址全都可能泄露。转换必须在边界上统一做。</p>
 <table>
 <thead><tr><th>code</th><th>Go 侧的典型来源</th><th>算服务端故障吗</th><th>客户端该做什么</th></tr></thead>
@@ -316,8 +475,23 @@ func (s *orderServer) GetOrder(ctx context.Context, req *pb.GetOrderRequest) (*p
 </tbody>
 </table>
 <p>客户端侧的判读有个细节常被忽略：<code>status.FromError</code> 的第二个返回值表示「这个 error 到底是不是服务端返回的 status」。<strong>为 false 时说明它是本地错误</strong>（连不上、序列化失败、本地 ctx 取消），此时拿到的码只是被填成了 Unknown 或 Canceled，不能用来做业务分支。另外，把 status 用 <code>fmt.Errorf</code> 包一层之后还能不能被识别出来，取决于 grpc-go 版本——<strong>不要依赖这个解包行为</strong>，跨层传递时要么原样返回，要么显式重建 status。</p>
+<div class="mermaid">
+flowchart TB
+    E["一次调用返回了错误"] --> Q1{"status.FromError 的第二个返回值"}
+    Q1 -->|"false：本地错误"| LOC["连接、序列化或本地取消，先查客户端配置"]
+    Q1 -->|"true：服务端返回的 status"| Q2{"code 属于哪一类"}
+    Q2 -->|"Canceled、InvalidArgument、NotFound"| NO["不重试，也不该计入服务端错误率"]
+    Q2 -->|"Unimplemented"| VER["版本或路由问题，重试没用"]
+    Q2 -->|"Unavailable、ResourceExhausted"| Q3{"这个方法幂等吗"}
+    Q2 -->|"DeadlineExceeded"| Q3
+    Q3 -->|"不幂等"| IDEM["先补幂等键，再谈重试"]
+    Q3 -->|"幂等"| Q4{"服务端响应头已经回来了吗"}
+    Q4 -->|"已经回来"| MAN["框架不会再自动重试，只能业务层自己发起"]
+    Q4 -->|"还没回来"| CFG["交给 retryPolicy，并且一定配上 retryThrottling"]
+</div>
 
-<h2>客户端：惰性连接与 service config</h2>
+<h2>② 原理 · 客户端：惰性连接与 service config</h2>
+<p>搞清这一节，能解决「从 Dial 迁到 NewClient 后测试全挂」与「启动时以为连上了其实没有」。</p>
 <p><code>grpc.Dial</code> 已经废弃，换成 <code>grpc.NewClient</code>。这次替换不是改个名字，有两个行为差异会直接让代码跑不起来。</p>
 <p>第一，<strong>它不建连就返回</strong>，通道处于 IDLE，第一次 RPC 才触发连接。因此 <code>err == nil</code> 完全不代表服务端活着，拿它当启动期健康检查是错的；想预热就显式调 <code>Connect()</code>，因为 <code>NewClient</code> <strong>不支持</strong> <code>WithBlock</code> 那一组选项。第二，<strong>默认解析器从 passthrough 变成了 dns</strong>，目标串会走 DNS 解析路径；测试里用自定义拨号器时必须显式写 <code>passthrough:///</code> 前缀，否则它会真的去解析一个不存在的域名——这是从 Dial 迁过来时最典型的翻车点。</p>
 <div class="mermaid">
@@ -340,73 +514,6 @@ stateDiagram-v2
     Down --> [*]
 </div>
 <p>停在 TRANSIENT_FAILURE 时，默认行为是<strong>快速失败</strong>：调用立刻返回 Unavailable 而不是等着重连。加 <code>grpc.WaitForReady(true)</code> 会改成阻塞到通道就绪或 deadline 到期——它把「连不上」从立即失败变成了超时，用在启动期依赖上合适，用在在线请求上会放大故障时的排队。</p>
-<pre><code class="language-go">// service config 随连接下发，按方法配。重试绝不能一刀切全开。
-const svcCfg = `{
-  "methodConfig": [{
-    "name": [{"service": "order.v1.OrderService", "method": "GetOrder"}],
-    "timeout": "2s",
-    "retryPolicy": {
-      "maxAttempts": 4,
-      "initialBackoff": "0.05s",
-      "maxBackoff": "1s",
-      "backoffMultiplier": 2,
-      "retryableStatusCodes": ["UNAVAILABLE"]
-    }
-  }],
-  "retryThrottling": {"maxTokens": 100, "tokenRatio": 0.1},
-  "loadBalancingConfig": [{"round_robin": {}}]
-}`
-
-func newClient(target string) (pb.OrderServiceClient, func() error, error) {
-	// NewClient 取代了已废弃的 Dial。两个必须知道的行为差异：
-	// 1) 它不建连就返回，通道处于 IDLE，第一次调用才触发连接。
-	//    所以这里 err 为 nil 不代表服务端活着，别拿它当健康检查。
-	// 2) 默认解析器是 dns（Dial 是 passthrough），写 "127.0.0.1:9090" 也会走 DNS 路径；
-	//    要配自定义拨号器必须显式写 "passthrough:///xxx"。
-	cc, err := grpc.NewClient(target,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultServiceConfig(svcCfg),
-		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                30 * time.Second, // 不能小于服务端的 MinTime，否则被 GOAWAY 踢掉
-			Timeout:             10 * time.Second,
-			PermitWithoutStream: true,
-		}),
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	cc.Connect() // 想启动时预热就显式调它；NewClient 不支持 WithBlock
-	return pb.NewOrderServiceClient(cc), cc.Close, nil
-}
-
-func getOrder(ctx context.Context, c pb.OrderServiceClient, id string) (*pb.Order, error) {
-	// 客户端默认没有 deadline。不设的话，服务端一卡这个调用就一直挂着。
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	o, err := c.GetOrder(ctx, &amp;pb.GetOrderRequest{Id: id})
-	if err != nil {
-		// 第二个返回值的含义是「这个 error 到底是不是服务端返回的 status」。
-		// 为 false 说明是本地错误（连不上、序列化失败、本地 ctx 取消），
-		// 这时候拿 code 去做业务分支是错的 —— 它只是被填成了 Unknown 或 Canceled。
-		st, ok := status.FromError(err)
-		if !ok {
-			return nil, fmt.Errorf("local failure: %w", err)
-		}
-		// 另外：用 fmt.Errorf 把 status 包一层之后还能不能被识别，取决于 grpc-go 版本。
-		// 跨层传递时不要依赖解包，要么原样返回，要么显式重建一个 status。
-		switch st.Code() {
-		case codes.NotFound:
-			return nil, ErrOrderNotFound
-		case codes.Unavailable, codes.DeadlineExceeded:
-			// 走到这里说明 service config 的重试已经用完了，这是最终失败
-			return nil, ErrRetryLater
-		}
-		return nil, fmt.Errorf("%s: %s", st.Code(), st.Message())
-	}
-	return o, nil
-}</code></pre>
 <table>
 <thead><tr><th>service config 字段</th><th>含义</th><th>容易配错的地方</th></tr></thead>
 <tbody>
@@ -418,23 +525,34 @@ func getOrder(ctx context.Context, c pb.OrderServiceClient, id string) (*pb.Orde
 <tr><td>重试的生效窗口</td><td>只在还没收到服务端响应头之前</td><td>所以流式调用里，自动重试基本只在建流阶段有用</td></tr>
 </tbody>
 </table>
-<div class="mermaid">
-flowchart TB
-    E["一次调用返回了错误"] --> Q1{"status.FromError 的第二个返回值"}
-    Q1 -->|"false：本地错误"| LOC["连接、序列化或本地取消，先查客户端配置"]
-    Q1 -->|"true：服务端返回的 status"| Q2{"code 属于哪一类"}
-    Q2 -->|"Canceled、InvalidArgument、NotFound"| NO["不重试，也不该计入服务端错误率"]
-    Q2 -->|"Unimplemented"| VER["版本或路由问题，重试没用"]
-    Q2 -->|"Unavailable、ResourceExhausted"| Q3{"这个方法幂等吗"}
-    Q2 -->|"DeadlineExceeded"| Q3
-    Q3 -->|"不幂等"| IDEM["先补幂等键，再谈重试"]
-    Q3 -->|"幂等"| Q4{"服务端响应头已经回来了吗"}
-    Q4 -->|"已经回来"| MAN["框架不会再自动重试，只能业务层自己发起"]
-    Q4 -->|"还没回来"| CFG["交给 retryPolicy，并且一定配上 retryThrottling"]
-</div>
 
-<h2>流式接口的资源释放与泄漏排查</h2>
+<h2>② 原理 · 流式接口的资源释放与泄漏排查</h2>
+<p>搞清这一节，能解决「协程数单调上涨」「没有请求 CPU 也不降」这两类线上现象。</p>
 <p>流式调用的泄漏几乎都来自同一个误解：<strong>以为流会自己关</strong>。客户端侧只要没读到结束标志就提前退出循环，这条流在传输层依然存在，读循环协程也不会退出。标准写法是创建流之前用可取消的上下文包一层并立刻 <code>defer cancel()</code>，这样无论从哪个分支返回都会把流关掉。服务端侧对应的规则是：<strong>handler 一返回流就结束</strong>，所以在 handler 里起的协程必须在返回前收敛，否则它们会拿着一个已取消的上下文继续跑。</p>
+<pre><code class="language-go">// 服务端流的客户端侧：不读到结束就退出会泄漏，必须靠 cancel 收尾。
+func firstN(ctx context.Context, c pb.OrderServiceClient, n int) ([]*pb.Order, error) {
+	// 这两行是流式调用的标准写法。少了 defer cancel()，一旦提前 break，
+	// 这条流在传输层不会关闭，读循环协程也不退出，表现就是协程数单调上涨。
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := c.ListOrders(ctx, &amp;pb.ListOrdersRequest{})
+	if err != nil {
+		return nil, err
+	}
+	var out []*pb.Order
+	for len(out) &lt; n {
+		o, err := stream.Recv()
+		if errors.Is(err, io.EOF) { // 服务端正常结束了流
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, nil // 提前返回是安全的，因为 defer cancel() 会把流关掉
+}</code></pre>
 <table>
 <thead><tr><th>现象</th><th>查什么</th><th>怎么判读</th></tr></thead>
 <tbody>
@@ -446,7 +564,8 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>优雅停机：GracefulStop 与 K8s 的配合</h2>
+<h2>② 原理 · 优雅停机：GracefulStop 与 K8s 的配合</h2>
+<p>搞清这一节，能解决「每次发布都有一小批 Unavailable」和「进程收到 SIGTERM 后永不退出」。</p>
 <p><code>GracefulStop</code> 的语义是：关闭监听、给已有连接发 GOAWAY、<strong>然后一直等到所有在途调用结束</strong>。问题就在「一直等」上——长生命周期的流式调用不会自己结束，于是进程永远不退，最后被编排系统强杀。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -477,66 +596,32 @@ sequenceDiagram
 <tr><td><code>MaxConnectionAge</code></td><td>服务端 keepalive 参数</td><td>不限</td><td>不设则老连接永不重连，扩容出来的实例长期没有流量</td></tr>
 </tbody>
 </table>
-<p>还有一个容易被忽略的前提：<strong>gRPC 是长连接，摘掉 Endpoints 并不会断开已建立的连接</strong>。真正让客户端换实例的是 GOAWAY。所以顺序必须是「先让新连接不再选到我（摘流），再对老连接发 GOAWAY（GracefulStop）」，反过来做就会在窗口期里制造一批失败请求。</p>
+<p>还有一个容易被忽略的前提：<strong>gRPC 是长连接，摘掉 Endpoints 并不会断开已建立的连接</strong>。真正让客户端换实例的是 GOAWAY。所以顺序必须是「先让新连接不再选到我（摘流），再对老连接发 GOAWAY（GracefulStop）」，反过来做就会在窗口期里制造一批失败请求。探针与 preStop 的完整语义见站内 <a href="../../../devops/kubernetes/">Kubernetes</a>。</p>
 
-<h2>测试与可观测的接入位置</h2>
-<p>测试用 <code>bufconn</code>：在进程内跑真实的 gRPC 栈，真编解码、真拦截器链、真 status 码，不占端口也不会有端口冲突。它比手写一个 mock client 有价值得多，因为<strong>拦截器链也被覆盖到了</strong>——鉴权拦截器把错误吞成 OK 这类问题，只有走真实栈才测得出来。</p>
-<p>可观测这边，<strong>用 StatsHandler 而不是拦截器</strong>接 OpenTelemetry：官方的拦截器式接法已标记废弃，而 StatsHandler 能拿到逐条消息的事件，流式调用的观测才准确；它又比拦截器链更靠外，所以你在日志拦截器里可以直接取到已经解好的追踪标识。代价是它只能观测、不能修改请求或中断调用，那些仍然要放在拦截器里做。</p>
-<pre><code class="language-go">// bufconn：在进程内跑真实的 gRPC 栈 —— 真编解码、真拦截器链、真 status 码，
-// 不占端口也不会有端口冲突。比手写 mock client 有价值得多，因为它能测到拦截器。
-func startTestServer(t *testing.T, srv pb.OrderServiceServer) pb.OrderServiceClient {
-	t.Helper()
-	lis := bufconn.Listen(1024 * 1024)
-	s := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(recoveryUnary, logUnary), // 拦截器要一起测，否则线上才发现它吞了错误
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-	)
-	pb.RegisterOrderServiceServer(s, srv)
-	go func() { _ = s.Serve(lis) }()
+<h2>③ 场景 · 不同项目形态该配到哪一步</h2>
+<p>上面所有手段不必一次做全。下表按项目形态给该做到哪一步，以及停在这里的理由。</p>
+<table>
+<thead><tr><th>场景</th><th>该做到哪一步</th><th>为什么停在这里</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>单仓库、proto 与实现一起发版</td><td>两条链挂 recover 与日志、客户端设 deadline、<code>bufconn</code> 测试；可考虑关掉强制嵌入让编译器帮你发现未实现方法</td><td>proto 与实现同时上线，编译期报错是最便宜的信号</td><td>低，一次性配置</td></tr>
+<tr><td>多团队共用 proto 仓库</td><td>保留默认嵌入，加 CI 断言检查未实现方法，并在 CI 做破坏性变更检查</td><td>关掉嵌入会让一次 proto 变更卡住所有实现方的构建</td><td>要自己写 CI 检查，见站内 <a href="../protobuf/">Protobuf 的编码与模式演进</a></td></tr>
+<tr><td>被 Kubernetes 编排</td><td>原生 gRPC 探针 + 置 NOT_SERVING + 摘流等待 + <code>GracefulStop</code> 套超时，<code>terminationGracePeriodSeconds</code> 大于在途请求耗时加摘流窗口</td><td>摘 Endpoints 不会断开已建连接，让客户端换实例的只有 GOAWAY</td><td>中，停机流程要按集群实测调参</td></tr>
+<tr><td>有长生命周期流式接口</td><td>业务自己监听停机信号主动关流，并给 <code>GracefulStop</code> 配强制超时</td><td><code>GracefulStop</code> 会无限等在途流，不主动关就等于永不退出</td><td>中，要在流循环里处理停机信号</td></tr>
+<tr><td>大报文或大结果集</td><td>改分块流，不要调大 <code>MaxRecvMsgSize</code> 了事</td><td>整条消息必须同时驻留内存，调大只是把报错换成 OOM</td><td>中，客户端要改成流式消费</td></tr>
+<tr><td>需要观测流式接口</td><td>用 <code>StatsHandler</code>（otelgrpc）而不是拦截器接 OpenTelemetry</td><td>拦截器只看到「一次调用」，拿不到逐条消息事件；官方拦截器式接法已废弃</td><td>低，但要注意它不能改请求或中断调用，见站内 <a href="../../../observability/tracing/">链路追踪</a></td></tr>
+<tr><td>调用方是浏览器或第三方</td><td>不要直接暴露 grpc-go 服务，改 gRPC-Web、Connect 或另出 HTTP 网关</td><td>浏览器读不到 trailer，也控制不了 HTTP/2 帧</td><td>多一层协议转换，见站内 <a href="../grpc/">gRPC 的传输机制与工程落地</a></td></tr>
+<tr><td>前后端同为 TypeScript 且同仓</td><td>别引 IDL 与代码生成，考虑端到端类型推导</td><td>代码生成的价值来自跨语言，同语言同仓时收不回工具链成本</td><td>失去跨语言能力，见站内 <a href="../../trpc/">tRPC 的端到端类型安全</a></td></tr>
+</tbody>
+</table>
 
-	// 关键的一行：NewClient 默认走 dns 解析器，必须写 passthrough 前缀，
-	// 否则它会真的去解析 "bufnet" 这个域名然后失败。用旧的 Dial 时没这个问题。
-	cc, err := grpc.NewClient("passthrough:///bufnet",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return lis.DialContext(ctx)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = cc.Close(); s.Stop(); _ = lis.Close() })
-	return pb.NewOrderServiceClient(cc)
-}
+<p>这篇在 RPC 簇里承接 gRPC 传输篇，落到 Go 的具体实现；再往下一步是 Protobuf 的编码与模式演进，也就是「改 schema 之前要自查什么」。Go 侧的协程与 context 基础见站内 <a href="../../../programming/go/concurrency/">Go 并发编程</a>，测试组织方式见站内 <a href="../../../programming/testing/">测试工程</a>。</p>
 
-// 服务端流的客户端侧：不读到结束就退出会泄漏，必须靠 cancel 收尾。
-func firstN(ctx context.Context, c pb.OrderServiceClient, n int) ([]*pb.Order, error) {
-	// 这两行是流式调用的标准写法。少了 defer cancel()，一旦提前 break，
-	// 这条流在传输层不会关闭，读循环协程也不退出，表现就是协程数单调上涨。
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+<p class="cluster-nav">同主题路径：<a href="../grpc/">← 上一步：gRPC 的传输机制与工程落地</a> · <a href="../protobuf/">下一步：Protobuf 的编码与模式演进 →</a></p>
 
-	stream, err := c.ListOrders(ctx, &amp;pb.ListOrdersRequest{})
-	if err != nil {
-		return nil, err
-	}
-	var out []*pb.Order
-	for len(out) &lt; n {
-		o, err := stream.Recv()
-		if errors.Is(err, io.EOF) { // 服务端正常结束了流
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, o)
-	}
-	return out, nil // 提前返回是安全的，因为 defer cancel() 会把流关掉
-}</code></pre>
-
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
 <li><strong>只在一元链上挂了 recover。</strong>流式方法里的 panic 会直接打挂进程，两条链是独立的。</li>
 <li><strong>以为 grpc-go 会帮你兜 panic。</strong>它不会；而且 recover 只救同一个 goroutine，handler 里 <code>go</code> 出去的协程要各自带。</li>
@@ -554,9 +639,10 @@ func firstN(ctx context.Context, c pb.OrderServiceClient, n int) ([]*pb.Order, e
 <li><strong>直接调 <code>Stop</code>，或者 <code>GracefulStop</code> 不带超时。</strong>前者截断在途请求，后者遇到长连流就永不退出。</li>
 <li><strong>停机时先 GracefulStop 再摘流。</strong>顺序反了，窗口期内会有一批请求确定失败。</li>
 <li><strong>用 mock 出来的 client 做测试。</strong>拦截器、编解码、status 映射全都测不到，用 <code>bufconn</code> 跑真实栈。</li>
+<li><strong>只装了 <code>protoc-gen-go</code> 就以为代码生成配好了。</strong>服务桩要靠 <code>protoc-gen-go-grpc</code>，症状是编译报「找不到 RegisterXxxServer」。</li>
     </ul>
 </div>
-                    </div>
+</div>
                 </article>
                 <nav class="article-nav">
                     <a class="nav-prev" href="../grpc/"><span class="nav-label">← 上一篇</span><span class="nav-title">gRPC</span></a>

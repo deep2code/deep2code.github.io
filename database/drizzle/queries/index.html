@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Drizzle 查询构建深度解析：select().from().where() 与 SQL 的一对一映射、and/or/eq/inArray 条件构造器、join 四种形态与返回的扁平元组形状（这与 ORM 直觉不同）、query API 的 with 嵌套如何生成单条 json 聚合 SQL 而不是 N+1、sql 模板参数化避免注入、事务与 savepoint 嵌套事务、prepared statement 复用。">
+    <meta name="description" content="Drizzle 查询三段式：先给四类查询的标准写法——带可选筛选的列表查询、要嵌套形状的 db.query 关系查询、要聚合统计的 join、要写多表的事务与行锁，并划出 where 的类型安全边界与什么时候该直接写 sql 模板；再讲透链式方法与 SQL 关键字的逐词映射、条件构造器的九个陷阱（eq 与 null、inArray 空数组）、join 四种形态返回扁平元组这一与 ORM 直觉相反的行为、query API 的 with 如何生成单条 json 聚合 SQL 而不是 N+1、sql 模板的参数化边界与 sql.raw 的注入面、offset 与游标分页的差异、事务与 savepoint 语义、prepared statement 与连接池的冲突；最后给按需求选查询方式的取舍矩阵与不适用边界。">
     <meta name="keywords" content="Drizzle ORM,查询与操作,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/drizzle/queries/">
     <meta property="og:title" content="查询构建：关系查询、join 与事务 - Drizzle ORM - 资深码农">
-    <meta property="og:description" content="Drizzle 查询构建深度解析：select().from().where() 与 SQL 的一对一映射、and/or/eq/inArray 条件构造器、join 四种形态与返回的扁平元组形状（这与 ORM 直觉不同）、query API 的 with 嵌套如何生成单条 json 聚合 SQL 而不是 N+1、sql 模板参数化避免注入、事务与 savepoint 嵌套事务、prepared statement 复用。">
+    <meta property="og:description" content="Drizzle 查询三段式：先给四类查询的标准写法——带可选筛选的列表查询、要嵌套形状的 db.query 关系查询、要聚合统计的 join、要写多表的事务与行锁，并划出 where 的类型安全边界与什么时候该直接写 sql 模板；再讲透链式方法与 SQL 关键字的逐词映射、条件构造器的九个陷阱（eq 与 null、inArray 空数组）、join 四种形态返回扁平元组这一与 ORM 直觉相反的行为、query API 的 with 如何生成单条 json 聚合 SQL 而不是 N+1、sql 模板的参数化边界与 sql.raw 的注入面、offset 与游标分页的差异、事务与 savepoint 语义、prepared statement 与连接池的冲突；最后给按需求选查询方式的取舍矩阵与不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/drizzle/queries/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="查询构建：关系查询、join 与事务 - Drizzle ORM">
-    <meta name="twitter:description" content="Drizzle 查询构建深度解析：select().from().where() 与 SQL 的一对一映射、and/or/eq/inArray 条件构造器、join 四种形态与返回的扁平元组形状（这与 ORM 直觉不同）、query API 的 with 嵌套如何生成单条 json 聚合 SQL 而不是 N+1、sql 模板参数化避免注入、事务与 savepoint 嵌套事务、prepared statement 复用。">
+    <meta name="twitter:description" content="Drizzle 查询三段式：先给四类查询的标准写法——带可选筛选的列表查询、要嵌套形状的 db.query 关系查询、要聚合统计的 join、要写多表的事务与行锁，并划出 where 的类型安全边界与什么时候该直接写 sql 模板；再讲透链式方法与 SQL 关键字的逐词映射、条件构造器的九个陷阱（eq 与 null、inArray 空数组）、join 四种形态返回扁平元组这一与 ORM 直觉相反的行为、query API 的 with 如何生成单条 json 聚合 SQL 而不是 N+1、sql 模板的参数化边界与 sql.raw 的注入面、offset 与游标分页的差异、事务与 savepoint 语义、prepared statement 与连接池的冲突；最后给按需求选查询方式的取舍矩阵与不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,7 +73,146 @@
                     <div class="article-content">
 <p>Drizzle 的查询构建器几乎是 SQL 的逐词映射。这带来一个实际好处：你不需要在脑子里维护「ORM 语法 → SQL」的翻译表；但也带来一个认知陷阱——<strong>join 的返回形状是 SQL 的形状，不是 ORM 的形状</strong>。这篇把查询构建、关系查询、原生片段、事务四块讲清。</p>
 
-<h2>select 链与 SQL 的一对一映射</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：四类查询的标准写法——带可选筛选的列表查询、要嵌套形状的关系查询、要聚合统计的 join、要写多张表的事务；再给 <code>where</code> 能表达到哪一步、越过边界时该怎么用 <code>sql</code> 模板，以及先用 <code>toSQL()</code> 确认生成了什么的习惯。</li>
+        <li><strong>② 原理</strong>：链式方法与 SQL 关键字的逐词映射、条件构造器的九个陷阱、四种 join 的返回形状为什么是扁平元组、<code>db.query</code> 如何用一条 SQL 拿到嵌套结果、<code>sql</code> 模板的参数化边界与 <code>sql.raw</code> 的注入面、offset 与游标分页的差异、事务与 savepoint 的语义、prepared statement 与连接池的冲突。</li>
+        <li><strong>③ 场景</strong>：按需求选查询方式的取舍矩阵、什么时候该放弃构建器直接写 SQL，以及不适用边界。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 四类查询的标准写法</h2>
+
+<p>日常查询几乎都能归到下面四类。<strong>先按类型选形态，再抠细节</strong>：要嵌套对象就别用 join，要聚合统计就别用 <code>db.query</code>，要写多表就一定进事务。每种写法背后的机制见原理层。</p>
+
+<table>
+<thead><tr><th>要做什么</th><th>标准写法</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>列表页，筛选条件有的传有的不传</td><td><code>and()</code> 里用三元表达式，不满足就返回 <code>undefined</code></td><td><code>undefined</code> 会被自动跳过，所以不需要手动拼条件数组</td></tr>
+<tr><td>返回嵌套 JSON（用户带他的文章）</td><td><code>db.query.users.findMany({ with: { posts: ... } })</code></td><td>初始化 <code>drizzle()</code> 时必须传 <code>schema</code>，且表要定义 <code>relations()</code></td></tr>
+<tr><td>聚合统计（每个作者几篇文章）</td><td><code>leftJoin</code> 加 <code>groupBy</code> 加 <code>count()</code></td><td><code>select</code> 里的非聚合列必须全部出现在 <code>groupBy</code> 里</td></tr>
+<tr><td>一次操作写多张表</td><td><code>db.transaction(async (tx) =&gt; ...)</code>，内部全部用 <code>tx</code></td><td>回调里误用外层 <code>db</code> 会走另一条连接，那条语句根本不在事务里</td></tr>
+<tr><td>扣库存这类先判断再写的操作</td><td><code>.for('update')</code> 加锁，或直接用带条件的原子更新</td><td>行锁只有在事务内才有意义；更新值用 SQL 表达式而不是先读到内存再算</td></tr>
+<tr><td>翻页</td><td>浅分页用 <code>limit/offset</code>，深分页改游标</td><td>排序必须带一个唯一列做 tiebreaker，否则同值行会漏或重复</td></tr>
+<tr><td>插入或更新（upsert）</td><td>PostgreSQL 用 <code>onConflictDoUpdate</code></td><td>MySQL 是 <code>onDuplicateKeyUpdate</code> 且没有 <code>returning()</code></td></tr>
+<tr><td>确认一条查询到底生成了什么</td><td>对查询对象调 <code>toSQL()</code> 打印 SQL 与参数</td><td>评审与排查都从这一步开始，比猜快得多</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-typescript">import { db } from './db';
+import { users, posts, orders, inventory } from './schema';
+import { eq, and, gt, gte, lt, or, ilike, desc, count, sql } from 'drizzle-orm';
+
+// 1) 列表查询：可选筛选 + 稳定排序 + 分页
+const rows = await db
+  .select({ id: posts.id, title: posts.title, createdAt: posts.createdAt })
+  .from(posts)
+  .where(and(
+    eq(posts.status, 1),
+    // 条件不满足时返回 undefined，and() 会整条跳过，不用手工拼条件数组
+    keyword ? ilike(posts.title, `%${keyword}%`) : undefined,
+    authorId ? eq(posts.authorId, authorId) : undefined,
+  ))
+  // 第二个排序列是 tiebreaker：没有它，同一时间戳的行在翻页时会漏或重复
+  .orderBy(desc(posts.createdAt), desc(posts.id))
+  .limit(20);
+
+// 2) 要嵌套形状：用 db.query，一条 SQL 返回嵌套对象，不是 N+1
+const withPosts = await db.query.users.findMany({
+  columns: { id: true, displayName: true },
+  with: {
+    posts: {
+      columns: { id: true, title: true },
+      orderBy: (p, { desc }) =&gt; desc(p.createdAt),
+      limit: 5,          // 这个 limit 是「每个用户取几篇」
+    },
+  },
+  limit: 20,             // 这个 limit 是「取几个用户」，两者语义不同
+});
+
+// 3) 要聚合统计：用 join，接受扁平结果
+const stat = await db
+  .select({ author: users.displayName, total: count(posts.id) })
+  .from(users)
+  .leftJoin(posts, eq(posts.authorId, users.id))
+  .groupBy(users.id, users.displayName)   // 非聚合列一个都不能漏
+  .having(gt(count(posts.id), 0));
+
+// 4) 写多张表：事务内所有语句都必须用 tx
+const created = await db.transaction(async (tx) =&gt; {
+  const [order] = await tx
+    .insert(orders)
+    .values({ userId, totalAmount: '199.00' })   // numeric 列用字符串，避免浮点误差
+    .returning();
+
+  // 行锁只在事务内有意义，锁持有到提交
+  const [stock] = await tx
+    .select()
+    .from(inventory)
+    .where(eq(inventory.sku, sku))
+    .for('update');
+
+  if (!stock || stock.quantity &lt; qty) {
+    throw new Error('库存不足');   // 抛异常即回滚，不需要手动 rollback
+  }
+
+  await tx
+    .update(inventory)
+    // 用 SQL 表达式做减法，而不是把值读到内存里算完再写回去
+    .set({ quantity: sql`${inventory.quantity} - ${qty}` })
+    .where(eq(inventory.sku, sku));
+
+  return order;
+});</code></pre>
+
+<h2>① 用法 · where 能表达到哪一步，越界了怎么写</h2>
+
+<p>构建器不是万能的，判断标准很简单：<strong>值能参数化的，用构建器；结构性的东西（列名、函数、窗口、CTE），用 <code>sql</code> 模板</strong>。下表是这条线的具体位置。</p>
+
+<table>
+<thead><tr><th>需求</th><th>构建器能表达吗</th><th>怎么写</th><th>边界在哪</th></tr></thead>
+<tbody>
+<tr><td>等值、范围、IN、模糊、判空</td><td>能</td><td><code>eq</code>、<code>gte</code>、<code>inArray</code>、<code>ilike</code>、<code>isNull</code></td><td><code>eq(col, null)</code> 不等于 <code>isNull</code>；<code>inArray</code> 传空数组会得到恒假条件</td></tr>
+<tr><td>可选条件、条件分组</td><td>能</td><td>三元表达式返回 <code>undefined</code>，<code>and</code> 与 <code>or</code> 自动加括号</td><td>不要自己拼字符串，括号漏了语义就变了</td></tr>
+<tr><td>聚合与 <code>having</code></td><td>能</td><td><code>count</code>、<code>sum</code> 加 <code>having</code></td><td><code>having</code> 只作用于聚合结果，普通列条件要放 <code>where</code></td></tr>
+<tr><td>窗口函数</td><td>不能</td><td><code>sql&lt;number&gt;`row_number() over (...)`</code></td><td>不写泛型时推导成 <code>unknown</code>，会把 unknown 一路传到调用方</td></tr>
+<tr><td>方言特有操作符（JSONB 包含、全文检索、数组）</td><td>部分</td><td>方言辅助函数或 <code>sql</code> 模板</td><td>这些片段换数据库就不可移植，要集中放在一层里</td></tr>
+<tr><td>动态列名、动态排序字段</td><td><strong>不能参数化</strong></td><td>白名单映射到列对象再传给 <code>orderBy</code></td><td>标识符无法用占位符，<code>sql.raw</code> 拼接等于把注入面直接暴露出来</td></tr>
+<tr><td>CTE 与递归查询</td><td>有限</td><td><code>db.$with(...)</code>，复杂递归直接 <code>db.execute(sql`...`)</code></td><td>硬套构建器写递归会比手写 SQL 更难读，这时候就该直接写 SQL</td></tr>
+<tr><td>批量写入与 upsert</td><td>能</td><td><code>values([...])</code> 一次插多行，冲突用 <code>onConflictDoUpdate</code></td><td>单条语句的参数个数有驱动上限，超大批量要自己切片</td></tr>
+</tbody>
+</table>
+
+<pre><code class="language-typescript">// 写之前先确认它生成了什么：任何查询对象都能打印 SQL 与参数
+const q = db.select().from(posts).where(eq(posts.authorId, authorId));
+console.log(q.toSQL());
+// { sql: 'select ... where "posts"."author_id" = $1', params: [authorId] }
+
+// 构建器表达不了的部分用 sql 模板：值走 ${} 插值会变成占位符参数，是安全的
+const ranked = await db
+  .select({
+    id: posts.id,
+    // 泛型只声明返回类型，必须写，否则下游全是 unknown
+    rank: sql&lt;number&gt;`row_number() over (
+      partition by ${posts.authorId} order by ${posts.createdAt} desc
+    )`.as('rank'),
+  })
+  .from(posts);
+
+// 动态排序字段：标识符不能参数化，唯一安全做法是白名单映射到列对象
+const SORTABLE = { createdAt: posts.createdAt, title: posts.title } as const;
+function orderByField(field: string) {
+  const col = SORTABLE[field as keyof typeof SORTABLE];
+  if (!col) throw new Error('invalid sort field');   // 不在白名单直接拒绝
+  return desc(col);
+}
+// 绝对不要写 sql.raw(`order by ${field}`)：它完全绕过参数化</code></pre>
+
+<h2>② 原理 · select 链与 SQL 的一对一映射</h2>
+
+<p>搞清这一节能解决「这段链式调用最终跑的是哪条 SQL」。</p>
 
 <p>Drizzle 的链式方法名和调用顺序几乎就是 SQL 关键字的顺序。理解这个映射之后，写 Drizzle 查询等于写 SQL。</p>
 
@@ -136,7 +275,9 @@ const perRole = await db
   .groupBy(users.role)
   .having(gt(count(users.id), 5));</code></pre>
 
-<h2>条件构造器全表</h2>
+<h2>② 原理 · 条件构造器全表</h2>
+
+<p>搞清这一节能解决「条件写了但没起作用」和「查出来的结果莫名少了一批行」。</p>
 
 <p>条件构造器是纯函数，返回一个 SQL 片段对象。它们可以自由组合、提取成变量、放进数组，这让复杂筛选逻辑很容易拆分。</p>
 
@@ -155,7 +296,9 @@ const perRole = await db
 </tbody>
 </table>
 
-<h2>join 的四种形态与返回形状</h2>
+<h2>② 原理 · join 的四种形态与返回形状</h2>
+
+<p>搞清这一节能解决「明明只有 20 个用户，为什么返回了 60 行」。</p>
 
 <p>这是从其他 ORM 转过来最容易踩的坑。<strong>Drizzle 的 join 返回扁平的元组结构，不是嵌套对象</strong>。</p>
 
@@ -232,7 +375,9 @@ const detail = await db
   .leftJoin(posts, eq(orders.postId, posts.id))
   .where(gte(orders.createdAt, new Date('2026-09-01')));</code></pre>
 
-<h2>query API：嵌套结果但没有 N+1</h2>
+<h2>② 原理 · query API：嵌套结果但没有 N+1</h2>
+
+<p>搞清这一节能解决「要嵌套 JSON 又不想在循环里查子表」。</p>
 
 <p><code>db.query</code> 是 Drizzle 的关系查询 API，它需要初始化时传入 <code>schema</code> 且表定义了 <code>relations()</code>。它的价值在于：<strong>返回嵌套的对象结构，但生成的是单条带 json 聚合的 SQL，不是 N+1</strong>。</p>
 
@@ -284,7 +429,9 @@ const one = await db.query.users.findFirst({
 // 注意：with 里的 limit 是「每个父记录的子记录数」
 // 而外层 limit 是父记录数。两者语义不同，容易混淆</code></pre>
 
-<h2>sql 模板：原生片段与注入防护</h2>
+<h2>② 原理 · sql 模板：原生片段与注入防护</h2>
+
+<p>搞清这一节能解决「哪种写法是参数化的、哪种直接把注入面暴露出去」。</p>
 
 <p>查询构建器覆盖不了的场景（窗口函数、数据库特有函数、复杂表达式）用 <code>sql</code> 模板。<strong>模板插值 <code>${}</code> 会被转成占位符参数，是安全的</strong>；但 <code>sql.raw()</code> 完全绕过参数化，绝不能传用户输入。</p>
 
@@ -344,20 +491,22 @@ await db
     setWhere: sql`${users.displayName} is distinct from '张三'`,
   });</code></pre>
 
-<h2>分页：offset 与游标</h2>
+<h2>② 原理 · 分页：offset 与游标</h2>
 
-<p><code>limit + offset</code> 在大 offset 下会坍塌——数据库必须扫过并丢弃前 N 行。offset 10 万时延迟能从毫秒级涨到秒级。游标分页（keyset pagination）用 <code>WHERE sort_col &lt; last_value</code> 代替 offset，可以走索引，延迟与页码无关。</p>
+<p>搞清这一节能解决「翻到后面越来越慢」和「翻页时有的行看两遍、有的行没见过」。</p>
+
+<p><code>limit + offset</code> 在大 offset 下会坍塌——数据库必须扫过并丢弃前 N 行，而且这部分工作不会因为有索引而消失。游标分页（keyset pagination）用 <code>WHERE sort_col &lt; last_value</code> 代替 offset，每页都只定位一次，延迟与页码无关。</p>
 
 <table>
 <thead><tr><th>维度</th><th>offset 分页</th><th>游标分页</th></tr></thead>
 <tbody>
-<tr><td>第 1 页延迟</td><td>约 2ms</td><td>约 2ms</td></tr>
-<tr><td>第 1000 页（offset 2 万）</td><td>约 80ms</td><td>约 2ms</td></tr>
-<tr><td>第 5000 页（offset 10 万）</td><td>约 400ms 起</td><td>约 2ms</td></tr>
-<tr><td>能否跳页</td><td>可以</td><td>不能，只能上一页下一页</td></tr>
-<tr><td>数据插入时</td><td>会重复或漏数据</td><td>结果稳定</td></tr>
-<tr><td>需要总页数</td><td>可以（但 count 本身也慢）</td><td>通常不提供</td></tr>
-<tr><td>索引要求</td><td>无特殊要求</td><td>排序列必须有索引且需唯一 tiebreaker</td></tr>
+<tr><td>延迟随页码的变化</td><td>线性增长：offset 越大，被扫过再丢弃的行越多</td><td>基本不变：每页都是一次索引定位加取 N 行</td></tr>
+<tr><td>深分页时的主要成本</td><td>扫描并丢弃前面所有行，页码越深越贵</td><td>无额外成本，代价只在必须有合适的索引</td></tr>
+<tr><td>能否跳到任意页</td><td>可以</td><td>不能，只能上一页下一页</td></tr>
+<tr><td>翻页期间有数据插入或删除</td><td>结果会重复或漏行，因为偏移量的含义变了</td><td>结果稳定，游标锚定在具体的行值上</td></tr>
+<tr><td>能否给出总页数</td><td>可以，但 <code>count</code> 本身在大表上也慢</td><td>通常不提供，改成「还有更多」</td></tr>
+<tr><td>索引要求</td><td>无特殊要求</td><td>排序列必须有索引，且要带唯一列做 tiebreaker</td></tr>
+<tr><td>具体数值</td><td colspan="2">别抄别人的毫秒数：差距取决于表宽度、索引、缓存命中与页码，要用就在自己库上对同一条 SQL 实测</td></tr>
 </tbody>
 </table>
 
@@ -390,7 +539,9 @@ async function cursorPage(cursor?: { createdAt: Date; id: string }) {
 // 需要 (created_at DESC, id DESC) 的复合索引才能走索引扫描
 // 游标的对外编码方式（base64 opaque cursor）详见站内 API 设计篇</code></pre>
 
-<h2>事务、savepoint 与 prepared statement</h2>
+<h2>② 原理 · 事务、savepoint 与 prepared statement</h2>
+
+<p>搞清这一节能解决「事务里明明抛了异常，数据却还在」这个最隐蔽的一类 bug。</p>
 
 <p><code>db.transaction(cb)</code> 的回调收到一个 <code>tx</code> 对象。<strong>回调里必须用 <code>tx</code> 而不是外层的 <code>db</code></strong>——用 <code>db</code> 的语句会从连接池取另一条连接，完全不在这个事务里。这是最隐蔽的事务 bug。</p>
 
@@ -472,9 +623,36 @@ const u2 = await findByEmail.execute({ email: 'c@d.com' });  // 复用计划
 // 注意：连接池里不同连接的 prepared statement 不共享
 // 用 PgBouncer 的 transaction pooling 模式会让 prepared statement 失效</code></pre>
 
-<div class="callout callout-tip">
-    <div class="callout-icon">✅</div>
-    <div class="callout-title">最容易踩的坑</div>
+<h2>③ 场景 · 查询方式怎么选</h2>
+
+<p>同一份数据有好几种取法，区别不在「能不能取到」，而在<strong>往返次数、结果形状、SQL 可控性</strong>三者的权衡。下表按真实需求排开。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>接口要返回嵌套 JSON（详情页、树形数据）</td><td><code>db.query</code> 的 <code>with</code> 嵌套</td><td>一次往返拿到嵌套结果，不需要手动聚合，也不是 N+1</td><td>SQL 由 Drizzle 生成，要靠 <code>toSQL()</code> 才看得到；复杂过滤表达力不如手写</td></tr>
+<tr><td>报表、统计、分组聚合</td><td>手写 <code>join</code> 加 <code>groupBy</code></td><td>聚合与分组必须精确控制 SQL，嵌套结果反而是负担</td><td>返回扁平元组，展示层要自己整形</td></tr>
+<tr><td>子表数据量大、或子表要单独缓存</td><td>先查主表，再用 <code>inArray</code> 批量查子表，在应用层拼</td><td>两次往返换来两份可独立缓存、独立限流的数据</td><td>多一次往返，拼装逻辑要自己写且要注意顺序</td></tr>
+<tr><td>在循环里按需查子表</td><td><strong>不要这么做</strong></td><td>这就是 N+1，往返次数随结果集线性增长</td><td>压测时看起来还行，数据一多就把数据库连接占满</td></tr>
+<tr><td>窗口函数、递归 CTE、方言特有操作符</td><td><code>sql</code> 模板，或整条 <code>db.execute(sql`...`)</code></td><td>硬套构建器写这些会比手写 SQL 更难读也更易错</td><td>这些片段不可移植，要集中放在一个模块里，换库时只改这一处</td></tr>
+<tr><td>用户可选排序字段</td><td>白名单映射到列对象</td><td>标识符无法参数化，白名单是唯一安全做法</td><td>新增可排序字段要改代码，不能配置化</td></tr>
+<tr><td>深分页（导出、爬取、无限滚动）</td><td>游标分页，排序列加唯一 tiebreaker</td><td>延迟与页码无关，且翻页期间数据变动不会漏行重行</td><td>不能跳页、通常不给总数，产品形态要配合</td></tr>
+<tr><td>高频固定查询（登录、鉴权这类）</td><td><code>prepare()</code> 复用预编译语句</td><td>省掉每次的解析与规划开销</td><td>与某些连接池的事务级复用模式冲突，用之前先确认部署形态</td></tr>
+<tr><td>先判断再写的并发操作（扣库存、抢券）</td><td>带条件的原子更新并检查影响行数，或 <code>for('update')</code> 加锁</td><td>「先查再写」在并发下两个请求都会通过判断</td><td>行锁会串行化同一行的写入，锁持有时间必须尽量短</td></tr>
+</tbody>
+</table>
+
+<p><strong>不适用边界</strong>：本篇只讲怎么用 Drizzle 把查询写对。表和类型怎么定义在上一篇 <a href="../intro/">Drizzle 上手：schema 定义与类型推导</a>；迁移怎么生成与在生产怎么应用在下一篇 <a href="../migrations/">迁移管理：生成、应用与生产流程</a>；该不该用 Drizzle 在 <a href="../">Drizzle 的设计：SQL-first 的类型安全 ORM</a>；<code>sql.raw</code> 的注入面、参数化的真实边界与绕过手法在 <a href="../../../api/security/sql-injection/">SQL 注入</a>；这条查询为什么走不上索引、执行计划怎么判读在 <a href="../../optimization/index/">索引设计与优化</a> 与 <a href="../../optimization/slow-query/">慢查询治理</a>；隔离级别、行锁范围与 MVCC 可见性在 <a href="../../postgresql/mvcc-transaction/">PostgreSQL MVCC 与事务</a>（MySQL 侧在 <a href="../../mysql/">MySQL 深度原理</a>）；游标对外怎么编码、分页接口怎么设计在 <a href="../../../api/design/restful/">RESTful 接口设计</a>；跨服务的事务与幂等不在本篇范围，见站内分布式事务相关文章。</p>
+
+<p>这条路径上，上一篇把结构与类型定好，本篇把读写写对，下一篇解决「schema 改了之后怎么安全地让生产库跟上」。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../intro/">← 上一步：Drizzle 上手：schema 定义与类型推导</a> · <a href="../migrations/">下一步：迁移管理：生成、应用与生产流程 →</a></p>
+
+<h2>最容易踩的坑</h2>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">前两条最常见，且都不会报错</div>
 <ul>
 <li><strong>join 返回扁平元组不是嵌套对象</strong>：leftJoin 后每行是 { users: {...}, posts: {...} }，一对多会产生重复行。需要嵌套形状用 db.query 的 with，不要指望 join 自动聚合。</li>
 <li><strong>事务回调里误用外层 db</strong>：必须用 tx。用 db 的语句从连接池取另一条连接，不在事务内，失败也不会回滚。这个 bug 在测试里很难发现。</li>
@@ -485,7 +663,7 @@ const u2 = await findByEmail.execute({ email: 'c@d.com' });  // 复用计划
 <li><strong>sql 模板没标注返回类型</strong>：sql`...` 默认推导为 unknown，需要 sql&lt;number&gt;`...` 显式标注，否则下游类型全是 unknown。</li>
 <li><strong>db.query 的 with 里的 limit 语义</strong>：它限制的是每个父记录的子记录数，不是总数。与外层 limit 混淆会拿到意外的数据量。</li>
 <li><strong>游标分页缺少 tiebreaker</strong>：只按 createdAt 做游标，相同时间戳的行会被跳过或重复。必须加一个唯一列（通常是主键）做次级排序。</li>
-<li><strong>大 offset 分页</strong>：offset 10 万时数据库要扫描并丢弃 10 万行，延迟从毫秒涨到几百毫秒。深分页场景必须换游标。</li>
+<li><strong>大 offset 分页</strong>：offset 很大时数据库要先扫过并丢弃前面所有行，延迟随页码线性增长，且加索引也去不掉这部分工作。深分页场景必须换游标。</li>
 <li><strong>PgBouncer 与 prepared statement 冲突</strong>：transaction pooling 模式下连接会在语句间切换，prepared statement 失效报错。要么用 session pooling，要么关掉 prepare。</li>
 <li><strong>groupBy 漏列</strong>：select 里的非聚合列必须全部出现在 groupBy 中，PostgreSQL 会直接报错（MySQL 在非严格模式下静默返回任意值，更危险）。</li>
 <li><strong>returning() 在 MySQL 不可用</strong>：MySQL 不支持 RETURNING，insert 后需要单独查一次或用 insertId。代码在 PG 上跑通换到 MySQL 会报错。</li>

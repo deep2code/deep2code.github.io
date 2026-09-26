@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Kafka 性能调优的完整方法论：先用 kafka-producer-perf-test 与 kafka-consumer-perf-test 建立基线并读懂 records/sec、MB/sec、p99 等输出字段；用一张表说清 linger.ms、batch.size、fetch.min.bytes、acks、压缩这五个旋钮分别把吞吐和延迟拉向哪边；给出从 Producer、Broker 到 Consumer 的瓶颈定位路径与每个判断点该看的指标；解读 UnderReplicatedPartitions、RequestHandlerAvgIdlePercent 等 Broker 指标并说明 num.io.threads 怎么调；对照四种压缩算法，讲清 Broker 端 compression.type 必须保持 producer 的原因；分析 page cache 冷读击穿、分区数过多导致顺序写退化，以及与 RabbitMQ、RocketMQ、Pulsar 的性能特征差异。">
+        <meta name="description" content="Kafka 性能三段式：先给建立基线的五个步骤（producer-perf-test 与 consumer-perf-test 怎么用、输出里只看 records/sec、MB/sec 与 p99 这几个数）、瓶颈定位的六步固定顺序与对应命令、调优旋钮速查；再讲为什么必须先有基线、五个旋钮把吞吐与延迟拉向哪边、瓶颈定位判定树、Broker 线程池五段与 UnderReplicatedPartitions 等指标的健康区间、压缩算法选型与 Broker 端 compression.type 必须保持 producer 的原因、冷读击穿 page cache 与分区过多导致顺序写退化；最后给按症状选动作的决策矩阵、与 RabbitMQ 和 RocketMQ 和 Pulsar 的性能特征对照，以及调优后的回归清单。">
     <meta name="keywords" content="Kafka性能优化,RabbitMQ,RocketMQ,消息队列对比,技术选型,吞吐">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/performance/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照 - 资深码农">
-    <meta property="og:description" content="Kafka 性能调优的完整方法论：先用 kafka-producer-perf-test 与 kafka-consumer-perf-test 建立基线并读懂 records/sec、MB/sec、p99 等输出字段；用一张表说清 linger.ms、batch.size、fetch.min.bytes、acks、压缩这五个旋钮分别把吞吐和延迟拉向哪边；给出从 Producer、Broker 到 Consumer 的瓶颈定位路径与每个判断点该看的指标；解读 UnderReplicatedPartitions、RequestHandlerAvgIdlePercent 等 Broker 指标并说明 num.io.threads 怎么调；对照四种压缩算法，讲清 Broker 端 compression.type 必须保持 producer 的原因；分析 page cache 冷读击穿、分区数过多导致顺序写退化，以及与 RabbitMQ、RocketMQ、Pulsar 的性能特征差异。">
+    <meta property="og:description" content="Kafka 性能三段式：先给建立基线的五个步骤（producer-perf-test 与 consumer-perf-test 怎么用、输出里只看 records/sec、MB/sec 与 p99 这几个数）、瓶颈定位的六步固定顺序与对应命令、调优旋钮速查；再讲为什么必须先有基线、五个旋钮把吞吐与延迟拉向哪边、瓶颈定位判定树、Broker 线程池五段与 UnderReplicatedPartitions 等指标的健康区间、压缩算法选型与 Broker 端 compression.type 必须保持 producer 的原因、冷读击穿 page cache 与分区过多导致顺序写退化；最后给按症状选动作的决策矩阵、与 RabbitMQ 和 RocketMQ 和 Pulsar 的性能特征对照，以及调优后的回归清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/performance/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照">
-    <meta name="twitter:description" content="Kafka 性能调优的完整方法论：先用 kafka-producer-perf-test 与 kafka-consumer-perf-test 建立基线并读懂 records/sec、MB/sec、p99 等输出字段；用一张表说清 linger.ms、batch.size、fetch.min.bytes、acks、压缩这五个旋钮分别把吞吐和延迟拉向哪边；给出从 Producer、Broker 到 Consumer 的瓶颈定位路径与每个判断点该看的指标；解读 UnderReplicatedPartitions、RequestHandlerAvgIdlePercent 等 Broker 指标并说明 num.io.threads 怎么调；对照四种压缩算法，讲清 Broker 端 compression.type 必须保持 producer 的原因；分析 page cache 冷读击穿、分区数过多导致顺序写退化，以及与 RabbitMQ、RocketMQ、Pulsar 的性能特征差异。">
+    <meta name="twitter:description" content="Kafka 性能三段式：先给建立基线的五个步骤（producer-perf-test 与 consumer-perf-test 怎么用、输出里只看 records/sec、MB/sec 与 p99 这几个数）、瓶颈定位的六步固定顺序与对应命令、调优旋钮速查；再讲为什么必须先有基线、五个旋钮把吞吐与延迟拉向哪边、瓶颈定位判定树、Broker 线程池五段与 UnderReplicatedPartitions 等指标的健康区间、压缩算法选型与 Broker 端 compression.type 必须保持 producer 的原因、冷读击穿 page cache 与分区过多导致顺序写退化；最后给按症状选动作的决策矩阵、与 RabbitMQ 和 RocketMQ 和 Pulsar 的性能特征对照，以及调优后的回归清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="架构与分布式">
     <meta property="article:tag" content="Kafka,性能优化,消息队列对比,技术选型">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 性能调优的完整方法论：先用 kafka-producer-perf-test 与 kafka-consumer-perf-test 建立基线并读懂 records/sec、MB/sec、p99 等输出字段；用一张表说清 linger.ms、batch.size、fetch.min.bytes、acks、压缩这五个旋钮分别把吞吐和延迟拉向哪边；给出从 Producer、Broker 到 Consumer 的瓶颈定位路径与每个判断点该看的指标；解读 UnderReplicatedPartitions、RequestHandlerAvgIdlePercent 等 Broker 指标并说明 num.io.threads 怎么调；对照四种压缩算法，讲清 Broker 端 compression.type 必须保持 producer 的原因；分析 page cache 冷读击穿、分区数过多导致顺序写退化，以及与 RabbitMQ、RocketMQ、Pulsar 的性能特征差异。","url":"https://www.yijunjun.asia/architecture/kafka/performance/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/performance/"},"articleSection":"后端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 性能三段式：先给建立基线的五个步骤（producer-perf-test 与 consumer-perf-test 怎么用、输出里只看 records/sec、MB/sec 与 p99 这几个数）、瓶颈定位的六步固定顺序与对应命令、调优旋钮速查；再讲为什么必须先有基线、五个旋钮把吞吐与延迟拉向哪边、瓶颈定位判定树、Broker 线程池五段与 UnderReplicatedPartitions 等指标的健康区间、压缩算法选型与 Broker 端 compression.type 必须保持 producer 的原因、冷读击穿 page cache 与分区过多导致顺序写退化；最后给按症状选动作的决策矩阵、与 RabbitMQ 和 RocketMQ 和 Pulsar 的性能特征对照，以及调优后的回归清单。","url":"https://www.yijunjun.asia/architecture/kafka/performance/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/performance/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "消息队列对比", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,34 +90,32 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>零拷贝在什么条件下会失效、分段日志与稀疏索引怎么支撑顺序写，这些原理详见站内 Kafka 深度原理一篇。这篇只讲操作层面：<strong>怎么测出基线、怎么定位瓶颈在哪一侧、每个旋钮往哪个方向拧、以及「Kafka 更快」这个结论的边界在哪里</strong>。</p>
+<p>这篇只讲操作层面：<strong>怎么测出基线、怎么定位瓶颈在哪一侧、每个旋钮往哪个方向拧、以及「Kafka 更快」这个结论的边界在哪里</strong>。零拷贝在什么条件下失效、分段日志怎么支撑顺序写，这些机制在 <a href="../">主干篇</a>。</p>
 
-<h2>没有基线的调参就是猜</h2>
-
-<p>调优最常见的失败模式是：一次改五个参数，跑十几秒压测，看到数字变好就发布上线，三天后出问题完全不知道回滚哪一项。正确流程是先固定变量测出一组基线数字，然后一次只动一个参数、重跑同样的压测、只比较与基线的差值。</p>
-
-<div class="mermaid">
-stateDiagram-v2
-    [*] --> 明确目标
-    明确目标 --> 建立基线: 写下目标吞吐与可接受的 p99
-    建立基线 --> 定位瓶颈: 记录吞吐与 p99 作为对照
-    定位瓶颈 --> 改一个参数: 确认瓶颈在哪一侧
-    改一个参数 --> 重跑压测: 只改一项 其余保持不变
-    重跑压测 --> 有改善: 与基线比较
-    重跑压测 --> 无改善或变差: 与基线比较
-    有改善 --> 更新基线: 固化到配置管理
-    无改善或变差 --> 回滚该参数
-    回滚该参数 --> 定位瓶颈
-    更新基线 --> 是否达标
-    是否达标 --> 定位瓶颈: 未达标 继续下一轮
-    是否达标 --> 回归验证: 已达标
-    回归验证 --> [*]
-    note right of 建立基线
-        压测时长至少 5 分钟 让 page cache 进入稳态
-        先确认压测机到 Broker 的网络带宽不是瓶颈
-        不要用全速模式测延迟 那只能测饱和吞吐
-    end note
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：建立基线的五个步骤（<code>kafka-producer-perf-test</code> 与 <code>kafka-consumer-perf-test</code> 怎么用、输出里只看哪几个数）、瓶颈定位的固定顺序与对应命令，以及调优旋钮速查。</li>
+        <li><strong>② 原理</strong>：为什么必须先有基线、五个旋钮各自把吞吐与延迟拉向哪边、瓶颈定位的判定树、Broker 线程池与 <code>UnderReplicatedPartitions</code> 等指标的健康区间、压缩算法选型与 Broker 端 <code>compression.type</code> 为什么必须保持 <code>producer</code>、冷读为什么会击穿 page cache、分区过多为什么让顺序写退化。</li>
+        <li><strong>③ 场景</strong>：按症状选动作的决策矩阵、与 RabbitMQ 和 RocketMQ 和 Pulsar 的性能特征对照，以及调完之后必须跑的回归清单。</li>
+    </ul>
 </div>
+
+<h2>① 用法 · 建立基线与定位瓶颈的固定顺序</h2>
+
+<p>调参的第一步不是改参数，是<strong>把一组可对比的数字记下来</strong>。按下面五步走，每一步的产出都要写进文档。</p>
+
+<table>
+<thead><tr><th>步骤</th><th>怎么做</th><th>看哪几个数</th><th>常见错误</th></tr></thead>
+<tbody>
+<tr><td>① 写下目标</td><td>明确目标吞吐（条每秒与 MB 每秒）和可接受的 p99</td><td>两个目标值</td><td>没有目标就调参，最后不知道该停在哪</td></tr>
+<tr><td>② 排除环境因素</td><td>先确认压测机到 Broker 的网络带宽、以及压测机自身 CPU 不是瓶颈</td><td>网卡额定带宽与实测 <code>MB/sec</code></td><td>MB/sec 已经贴着千兆网卡上限了还在调 <code>batch.size</code></td></tr>
+<tr><td>③ 测固定速率下的延迟</td><td><code>--throughput</code> 设成略低于目标的值，跑满 5 分钟以上</td><td><code>99th</code> 与 <code>99.9th</code></td><td>用 <code>--throughput -1</code> 测延迟，那测的是排队而不是延迟</td></tr>
+<tr><td>④ 测饱和吞吐</td><td><code>--throughput -1</code> 打满，只看吞吐不看延迟</td><td><code>records/sec</code> 与 <code>MB/sec</code></td><td>只跑十几秒，page cache 还没进稳态，得到一个永远达不到的乐观值</td></tr>
+<tr><td>⑤ 一次只改一个参数</td><td>用完全相同的压测参数重跑，只比较与基线的差值</td><td>吞吐与 p99 的<strong>差值</strong></td><td>一次改五个，好坏都不知道是哪一项带来的，出问题无法回滚</td></tr>
+</tbody>
+</table>
 
 <pre><code class="language-bash"># ---------- 生产端基线：固定速率，测延迟分布 ----------
 kafka-producer-perf-test.sh \
@@ -146,58 +144,34 @@ kafka-consumer-perf-test.sh --bootstrap-server kafka-1:9092 \
 #   nMsg.sec, rebalance.time.ms, fetch.time.ms, fetch.MB.sec, fetch.nMsg.sec
 </code></pre>
 
+<p>输出里绝大多数字段可以忽略，真正要判读的是下面这几个：</p>
+
 <table>
 <thead><tr><th>输出字段</th><th>含义</th><th>怎么判读</th></tr></thead>
 <tbody>
 <tr><td><code>records/sec</code></td><td>条数吞吐</td><td>与业务峰值 QPS 对比。条数吞吐低而 MB/sec 高，说明消息体偏大，瓶颈在带宽而不在请求数</td></tr>
-<tr><td><code>MB/sec</code></td><td>字节吞吐</td><td>直接和网卡带宽对比。千兆网卡理论上限约 125MB/s，压到 100MB/s 以上就别再调客户端参数了，先换万兆</td></tr>
+<tr><td><code>MB/sec</code></td><td>字节吞吐</td><td>直接和网卡带宽对比。贴近网卡上限时就别再调客户端参数了，先解决带宽</td></tr>
 <tr><td><code>avg latency</code></td><td>从 send 进缓冲到收到确认的平均耗时</td><td><strong>它包含 linger.ms 的等待</strong>，所以调大 linger 后它上升是正常现象，不代表变慢</td></tr>
 <tr><td><code>max latency</code></td><td>最大单次耗时</td><td>参考价值低，一次 GC 或 leader 切换就能把它拉到几秒</td></tr>
 <tr><td><code>99th</code> 与 <code>99.9th</code></td><td>尾部延迟</td><td>真正要盯的指标。平均值低而 p99 高一个数量级，几乎都是 Broker 侧 GC 停顿或磁盘抖动，调客户端参数没用</td></tr>
 <tr><td><code>rebalance.time.ms</code></td><td>消费端建组耗时</td><td>超过几秒说明分区多或 <code>session.timeout.ms</code> 偏大，会显著拖慢发布期间的恢复速度</td></tr>
 <tr><td><code>fetch.MB.sec</code></td><td>剔除建组时间后的纯拉取速率</td><td>它和 <code>MB.sec</code> 差距大，说明时间主要花在建组上，不是拉取慢</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
-<h2>五个旋钮：吞吐与延迟是一对矛盾</h2>
+<p>基线有了之后，瓶颈定位<strong>按固定顺序走</strong>，不要跳步。每一步都有明确的判据和「判据为真时下一步该做什么」：</p>
 
 <table>
-<thead><tr><th>旋钮</th><th>调大的方向</th><th>对吞吐</th><th>对单条延迟</th><th>副作用</th></tr></thead>
+<thead><tr><th>顺序</th><th>先确认什么</th><th>用什么看</th><th>判定为瓶颈的信号</th><th>该做什么</th></tr></thead>
 <tbody>
-<tr><td><code>linger.ms</code></td><td>0 调到 5 至 20</td><td>显著提升，攒批变大、请求数下降、压缩率上升</td><td>最多增加所设的毫秒数</td><td>崩溃时缓冲区丢失窗口变大</td></tr>
-<tr><td><code>batch.size</code></td><td>16KB 调到 64 至 128KB</td><td>提升，但 <code>linger.ms</code> 为 0 时几乎无效</td><td>基本不变</td><td>单请求变大，p99 抖动加剧；<code>buffer.memory</code> 更易被少数分区吃满</td></tr>
-<tr><td><code>fetch.min.bytes</code></td><td>1 调到 64KB 至 1MB</td><td>消费侧提升，Broker 请求数下降明显</td><td>最多增加 <code>fetch.max.wait.ms</code></td><td>低流量 Topic 上只增延迟不增吞吐</td></tr>
-<tr><td><code>acks</code></td><td>从 all 降到 1</td><td>提升，尤其跨机房部署时</td><td>降低</td><td><strong>用可靠性换性能</strong>，leader 换届即丢消息，绝大多数业务不该动这一项</td></tr>
-<tr><td>压缩</td><td>none 改为 lz4 或 zstd</td><td>网络与磁盘吞吐显著提升</td><td>增加压缩与解压耗时，通常在毫秒级以内</td><td>Producer 与 Consumer 的 CPU 上升；Broker 端算法设错会解压重压并让零拷贝失效</td></tr>
-</tbody></table>
-
-<div class="callout callout-tip">
-    <div class="callout-icon">✅</div>
-    <div class="callout-title">只改一项的话，改 linger.ms</div>
-    <p>默认 0 意味着几乎不攒批，一条消息一个请求，网络往返数被放大到极致，压缩也压不出效果。调到 10 毫秒通常能让吞吐翻几倍，代价是每条消息最多多等 10 毫秒。这是整个 Kafka 调优里投入产出比最高的一个改动，而且风险极低。</p>
-</div>
-
-<h2>瓶颈定位：先分侧，再分资源</h2>
-
-<div class="mermaid">
-flowchart TB
-    S["吞吐不达标或延迟偏高"] --> Q0{"Producer 的<br/>缓冲区是否常满"}
-    Q0 -- 是 --> Q1{"Broker 的请求处理<br/>线程是否忙"}
-    Q0 -- 否 --> QC{"消费侧 Lag<br/>是否持续上涨"}
-    Q1 -- 忙 --> B1["Broker 侧瓶颈<br/>看 RequestHandlerAvgIdlePercent"]
-    Q1 -- 不忙 --> P1["Producer 侧瓶颈<br/>看客户端 CPU 与 batch 排队时间"]
-    B1 --> Q2{"磁盘 await 与<br/>util 是否偏高"}
-    Q2 -- 是 --> R1["磁盘瓶颈<br/>查是否有冷读击穿 page cache<br/>看 LogFlushRateAndTimeMs"]
-    Q2 -- 否 --> Q3{"网卡带宽<br/>是否接近上限"}
-    Q3 -- 是 --> R2["网络瓶颈<br/>开压缩 或扩机器 或换万兆"]
-    Q3 -- 否 --> Q4{"GC 停顿是否<br/>出现在 p99 时间点"}
-    Q4 -- 是 --> R3["GC 瓶颈<br/>堆不要超过 6 至 8GB<br/>剩余内存留给 page cache"]
-    Q4 -- 否 --> R4["看 UnderReplicatedPartitions<br/>复制跟不上则调 num.replica.fetchers"]
-    P1 --> R5["提高 linger.ms 与 batch.size<br/>或增加 Producer 实例"]
-    QC -- 是 --> Q5{"消费进程 CPU<br/>是否跑满"}
-    Q5 -- 否 --> R6["下游 IO 才是瓶颈<br/>加 Consumer 无效 要改批量或异步"]
-    Q5 -- 是 --> R7["并发度不足<br/>先确认实例数是否已等于分区数"]
-    QC -- 否 --> R8["瓶颈不在 MQ 链路<br/>回去看上游生产速率"]
-</div>
+<tr><td>第一步</td><td>是不是网络或压测机自己的问题</td><td><code>sar -n DEV 2</code>，压测机 <code>top</code></td><td>网卡吞吐贴近额定带宽</td><td>开压缩、扩机器或换更高带宽，调客户端参数无效</td></tr>
+<tr><td>第二步</td><td>瓶颈在生产侧还是 Broker 侧</td><td>Producer 端 buffer 是否常满，Broker 的 <code>RequestHandlerAvgIdlePercent</code></td><td>buffer 满而 Broker 线程空闲</td><td>是生产侧：提高 <code>linger.ms</code> 与 <code>batch.size</code>，或加 Producer 实例</td></tr>
+<tr><td>第三步</td><td>Broker 侧是磁盘还是 GC</td><td><code>iostat -xm 2</code> 看 await 与 %util，<code>jstat -gcutil</code></td><td>await 上百毫秒，或 Full GC 出现在 p99 时间点</td><td>磁盘问题换盘或分散 <code>log.dirs</code>；GC 问题把堆压到 6 到 8GB</td></tr>
+<tr><td>第四步</td><td>复制是否跟得上</td><td><code>UnderReplicatedPartitions</code></td><td>持续非零</td><td>先查网络与磁盘，再考虑调大 <code>num.replica.fetchers</code></td></tr>
+<tr><td>第五步</td><td>消费侧是 Kafka 慢还是下游慢</td><td>消费进程 CPU 与下游接口 p99</td><td>Lag 涨而消费进程 CPU 很低</td><td><strong>瓶颈在下游 IO</strong>，加 Consumer 实例完全无效，要改批量或异步</td></tr>
+<tr><td>第六步</td><td>并发度是否已到上限</td><td>实例数与分区数</td><td>实例数已等于分区数</td><td>先扩分区（代价见 <a href="../topic-partition/">分区设计</a>），再扩实例</td></tr>
+</tbody>
+</table>
 
 <pre><code class="language-bash"># Broker 侧四项基础资源，压测时开四个窗口同时看
 top -H -p $(pgrep -f kafka.Kafka)          # 哪类线程在吃 CPU，data-plane 还是 replica-fetcher
@@ -219,7 +193,100 @@ for m in \
 done
 </code></pre>
 
-<h2>Broker 侧指标判读与线程池调参</h2>
+<p>调优旋钮速查。<strong>默认值随版本变化，落地前以对应版本文档或 <code>kafka-configs.sh --describe</code> 输出为准</strong>；起步值只是起点，必须用第 ⑤ 步的方法验证：</p>
+
+<table>
+<thead><tr><th>旋钮</th><th>作用</th><th>常见默认值</th><th>起步值与什么时候改</th></tr></thead>
+<tbody>
+<tr><td><code>linger.ms</code></td><td>攒批等待时间</td><td>0</td><td>先改这一项，取 5 到 20；延迟预算极紧才保持 0</td></tr>
+<tr><td><code>batch.size</code></td><td>单批字节上限</td><td>16KB</td><td>64KB 起步；注意它乘以分区数不能吃满 <code>buffer.memory</code></td></tr>
+<tr><td><code>compression.type</code>（Producer）</td><td>压缩算法</td><td><code>none</code></td><td>文本类消息用 zstd，CPU 紧张用 lz4；已压缩的二进制保持 none</td></tr>
+<tr><td><code>compression.type</code>（Broker）</td><td>是否重新压缩</td><td><code>producer</code></td><td><strong>永远不要改</strong>，改了会解压重压并让零拷贝失效</td></tr>
+<tr><td><code>fetch.min.bytes</code></td><td>单次拉取的最小字节数</td><td>1</td><td>大流量 topic 调到 64KB 以上；低流量 topic 不要动，只会加延迟</td></tr>
+<tr><td><code>num.io.threads</code></td><td>Broker 请求处理线程数</td><td>8</td><td><code>RequestHandlerAvgIdlePercent</code> 低于 0.3 时才调，起步取 CPU 核数的一到两倍</td></tr>
+<tr><td><code>num.network.threads</code></td><td>Broker socket 读写线程数</td><td>3</td><td>连接数多或开了 TLS 时调大；TLS 的开销远高于明文</td></tr>
+<tr><td><code>num.replica.fetchers</code></td><td>副本拉取线程数</td><td>1</td><td><code>UnderReplicatedPartitions</code> 持续非零且已排除网络磁盘问题时，调到 2 到 4</td></tr>
+<tr><td>JVM 堆</td><td>只服务网络缓冲与元数据</td><td>发行包脚本给的默认值偏小</td><td>6 到 8GB 并固定 Xms 等于 Xmx，<strong>剩余内存全部留给 page cache</strong></td></tr>
+<tr><td><code>acks</code></td><td>持久性与延迟的权衡</td><td>3.0 起为 <code>all</code></td><td>调优时<strong>不要动它</strong>，降到 1 是拿可靠性换性能</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 为什么必须先有基线</h2>
+
+<p>调优最常见的失败模式是：一次改五个参数，跑十几秒压测，看到数字变好就发布上线，三天后出问题完全不知道回滚哪一项。正确流程是先固定变量测出一组基线数字，然后一次只动一个参数、重跑同样的压测、只比较与基线的差值。</p>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> 明确目标
+    明确目标 --> 建立基线: 写下目标吞吐与可接受的 p99
+    建立基线 --> 定位瓶颈: 记录吞吐与 p99 作为对照
+    定位瓶颈 --> 改一个参数: 确认瓶颈在哪一侧
+    改一个参数 --> 重跑压测: 只改一项 其余保持不变
+    重跑压测 --> 有改善: 与基线比较
+    重跑压测 --> 无改善或变差: 与基线比较
+    有改善 --> 更新基线: 固化到配置管理
+    无改善或变差 --> 回滚该参数
+    回滚该参数 --> 定位瓶颈
+    更新基线 --> 是否达标
+    是否达标 --> 定位瓶颈: 未达标 继续下一轮
+    是否达标 --> 回归验证: 已达标
+    回归验证 --> [*]
+    note right of 建立基线
+        压测时长至少 5 分钟 让 page cache 进入稳态
+        先确认压测机到 Broker 的网络带宽不是瓶颈
+        不要用全速模式测延迟 那只能测饱和吞吐
+    end note
+</div>
+
+<h2>② 原理 · 五个旋钮：吞吐与延迟是一对矛盾</h2>
+
+<p>搞清这张表能避免一类无效调参：明明瓶颈在别处，却反复拧同一个旋钮。</p>
+
+<table>
+<thead><tr><th>旋钮</th><th>调大的方向</th><th>对吞吐</th><th>对单条延迟</th><th>副作用</th></tr></thead>
+<tbody>
+<tr><td><code>linger.ms</code></td><td>0 调到 5 至 20</td><td>显著提升，攒批变大、请求数下降、压缩率上升</td><td>最多增加所设的毫秒数</td><td>崩溃时缓冲区丢失窗口变大</td></tr>
+<tr><td><code>batch.size</code></td><td>16KB 调到 64 至 128KB</td><td>提升，但 <code>linger.ms</code> 为 0 时几乎无效</td><td>基本不变</td><td>单请求变大，p99 抖动加剧；<code>buffer.memory</code> 更易被少数分区吃满</td></tr>
+<tr><td><code>fetch.min.bytes</code></td><td>1 调到 64KB 至 1MB</td><td>消费侧提升，Broker 请求数下降明显</td><td>最多增加 <code>fetch.max.wait.ms</code></td><td>低流量 Topic 上只增延迟不增吞吐</td></tr>
+<tr><td><code>acks</code></td><td>从 all 降到 1</td><td>提升，尤其跨机房部署时</td><td>降低</td><td><strong>用可靠性换性能</strong>，leader 换届即丢消息，绝大多数业务不该动这一项</td></tr>
+<tr><td>压缩</td><td>none 改为 lz4 或 zstd</td><td>网络与磁盘吞吐显著提升</td><td>增加压缩与解压耗时，通常在毫秒级以内</td><td>Producer 与 Consumer 的 CPU 上升；Broker 端算法设错会解压重压并让零拷贝失效</td></tr>
+</tbody>
+</table>
+
+<div class="callout callout-tip">
+    <div class="callout-icon">✅</div>
+    <div class="callout-title">只改一项的话，改 linger.ms</div>
+    <p>默认 0 意味着几乎不攒批，一条消息一个请求，网络往返数被放大到极致，压缩也压不出效果。调到 10 毫秒通常能让吞吐有量级上的改善，代价是每条消息最多多等 10 毫秒。这是整个 Kafka 调优里投入产出比最高的一个改动，而且风险极低。</p>
+</div>
+
+<h2>② 原理 · 瓶颈定位的判定树</h2>
+
+<p>用法层给的是线性顺序，这张图给的是完整分支：<strong>先分侧，再分资源</strong>。</p>
+
+<div class="mermaid">
+flowchart TB
+    S["吞吐不达标或延迟偏高"] --> Q0{"Producer 的<br/>缓冲区是否常满"}
+    Q0 -- 是 --> Q1{"Broker 的请求处理<br/>线程是否忙"}
+    Q0 -- 否 --> QC{"消费侧 Lag<br/>是否持续上涨"}
+    Q1 -- 忙 --> B1["Broker 侧瓶颈<br/>看 RequestHandlerAvgIdlePercent"]
+    Q1 -- 不忙 --> P1["Producer 侧瓶颈<br/>看客户端 CPU 与 batch 排队时间"]
+    B1 --> Q2{"磁盘 await 与<br/>util 是否偏高"}
+    Q2 -- 是 --> R1["磁盘瓶颈<br/>查是否有冷读击穿 page cache<br/>看 LogFlushRateAndTimeMs"]
+    Q2 -- 否 --> Q3{"网卡带宽<br/>是否接近上限"}
+    Q3 -- 是 --> R2["网络瓶颈<br/>开压缩 或扩机器 或换更高带宽"]
+    Q3 -- 否 --> Q4{"GC 停顿是否<br/>出现在 p99 时间点"}
+    Q4 -- 是 --> R3["GC 瓶颈<br/>堆不要超过 6 至 8GB<br/>剩余内存留给 page cache"]
+    Q4 -- 否 --> R4["看 UnderReplicatedPartitions<br/>复制跟不上则调 num.replica.fetchers"]
+    P1 --> R5["提高 linger.ms 与 batch.size<br/>或增加 Producer 实例"]
+    QC -- 是 --> Q5{"消费进程 CPU<br/>是否跑满"}
+    Q5 -- 否 --> R6["下游 IO 才是瓶颈<br/>加 Consumer 无效 要改批量或异步"]
+    Q5 -- 是 --> R7["并发度不足<br/>先确认实例数是否已等于分区数"]
+    QC -- 否 --> R8["瓶颈不在 MQ 链路<br/>回去看上游生产速率"]
+</div>
+
+<h2>② 原理 · Broker 侧线程池与指标判读</h2>
+
+<p>搞清这张图能解决「加线程到底该加哪一层」。请求在 Broker 内部要穿过网络层、请求队列、IO 层、炼狱和复制层五段，任何一段满了都表现为 p99 上升。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -260,9 +327,12 @@ flowchart TB
 <tr><td><code>RequestQueueSize</code></td><td>接近 0</td><td>持续堆积说明 IO 线程处理不过来，会反压到网络层并拉高 p99</td><td>与 <code>RequestHandlerAvgIdlePercent</code> 一起看，先扩 IO 线程再考虑扩机器</td></tr>
 <tr><td>Full GC 次数</td><td>长时间为 0</td><td>出现 Full GC 时 Broker 会短暂失联，可能触发 ISR 收缩和 leader 切换</td><td>堆控制在 6 到 8GB，把剩余物理内存全部留给 page cache，用 G1 并设合理的停顿目标</td></tr>
 <tr><td><code>TotalTimeMs</code> 各阶段分解</td><td>以本地处理为主</td><td>如果时间集中在 remote 阶段，说明在等副本确认，不是 Broker 慢</td><td>去看复制链路而不是加线程。这个分解能避免大量误判</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
-<h2>压缩算法选型与 Broker 端的致命默认值</h2>
+<h2>② 原理 · 压缩算法选型与 Broker 端的致命默认值</h2>
+
+<p>搞清这一节能解决「集群 CPU 莫名升高」这一类现象。</p>
 
 <table>
 <thead><tr><th>算法</th><th>压缩率</th><th>压缩速度</th><th>CPU 开销</th><th>适用场景</th></tr></thead>
@@ -272,7 +342,8 @@ flowchart TB
 <tr><td>lz4</td><td>中</td><td>最快</td><td>最低</td><td>对 CPU 敏感、消息体小、追求最低延迟的场景</td></tr>
 <tr><td>zstd</td><td>高，接近 gzip</td><td>快</td><td>中等，可通过压缩级别调节</td><td><strong>现在的首选</strong>。压缩率接近 gzip 而速度接近 lz4，JSON 这类文本型消息收益最大</td></tr>
 <tr><td>none</td><td>无</td><td>无</td><td>无</td><td>消息本身已是压缩过的二进制，例如图片、已压缩的 Protobuf 负载</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
@@ -280,7 +351,9 @@ flowchart TB
     <p>这个参数默认值是 <code>producer</code>，意思是原样保存 Producer 送来的压缩格式。一旦你在 Broker 上指定了具体算法而它与 Producer 不同，Broker 就要把<strong>每一个批次解压再重新压缩</strong>，后果有两个：CPU 消耗成倍上升；消费时无法再用 sendfile 直接把 page cache 里的数据送到网卡，<strong>零拷贝失效</strong>。同样的机制也解释了为什么老版本客户端接入会让集群 CPU 莫名升高——消息格式向下转换同样会让零拷贝失效。</p>
 </div>
 
-<h2>page cache、冷读与分区数</h2>
+<h2>② 原理 · page cache、冷读与分区数</h2>
+
+<p>搞清这条链路能解释一个让人费解的现象：某个消费者开始追历史数据，全集群的实时消费者一起变慢。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -310,12 +383,15 @@ sequenceDiagram
 <tr><td>剩余物理内存</td><td>全部留给 page cache，越多越好</td><td>热数据能不能全落在缓存里，直接决定读路径是走内存还是走磁盘</td></tr>
 <tr><td>冷读隔离</td><td>历史数据回溯任务要限速，或安排在业务低峰</td><td>一个追几小时前数据的消费者足以把整个 Broker 的缓存命中率打穿</td></tr>
 <tr><td><code>log.segment.bytes</code></td><td>默认 1GB，一般不动</td><td>调太小会让段文件数量和文件句柄暴涨，索引与清理开销上升；调太大则清理粒度变粗，磁盘回收不及时</td></tr>
-<tr><td>retention 设置</td><td>按业务最坏恢复时间设，不要盲目留 7 天以上</td><td>保留期越长，冷数据越多，一次误操作的全量重放代价也越大</td></tr>
-<tr><td>分区数</td><td>按目标吞吐估算后留一到两倍余量，单 Broker 尽量不超过两千</td><td>分区多则同时被追加写的文件多，<strong>顺序写在磁盘层面退化成随机写</strong>，机械盘上退化尤其剧烈；还会推高句柄数与 Rebalance 耗时</td></tr>
+<tr><td>retention 设置</td><td>按业务最坏恢复时间设，不要盲目留很久</td><td>保留期越长，冷数据越多，一次误操作的全量重放代价也越大</td></tr>
+<tr><td>分区数</td><td>按目标吞吐估算后留一到两倍余量，单 Broker 的分区副本数控制在千级</td><td>分区多则同时被追加写的文件多，<strong>顺序写在磁盘层面退化成随机写</strong>，机械盘上退化尤其剧烈；还会推高句柄数与 Rebalance 耗时</td></tr>
 <tr><td>多数据目录</td><td><code>log.dirs</code> 配多块独立物理盘而不是一个 RAID 卷</td><td>Kafka 自己会把分区分散到不同目录，等效获得并行 IO，且单盘故障只影响部分分区</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
-<h2>Consumer 侧调优：大多数时候瓶颈不在 Kafka</h2>
+<h2>② 原理 · Consumer 侧：大多数时候瓶颈不在 Kafka</h2>
+
+<p>搞清这张表能省下大量无效扩容。消费慢的六种症状里，只有两种真的和 Kafka 有关。</p>
 
 <table>
 <thead><tr><th>症状</th><th>先看什么</th><th>真实原因</th><th>正确动作</th></tr></thead>
@@ -326,15 +402,34 @@ sequenceDiagram
 <tr><td>吞吐低但延迟也低，网络请求数很高</td><td><code>fetch.min.bytes</code> 与 <code>max.partition.fetch.bytes</code></td><td>每次拉得太少，请求数被放大</td><td>调大这两项，让单次拉取带回更多数据</td></tr>
 <tr><td>Lag 只集中在少数分区</td><td>各分区 Lag 分布</td><td>key 分布倾斜造成热点分区</td><td>换分区键或加盐；单纯扩分区不解决倾斜</td></tr>
 <tr><td>消费很快但内存吃紧</td><td><code>max.partition.fetch.bytes</code> 乘以分区数</td><td>单次拉取的总量等于它乘以被分配的分区数，分区多时内存占用可观</td><td>按被分配分区数反算总量，必要时降低单分区上限</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
-<h2>与 RabbitMQ、RocketMQ、Pulsar 的性能特征对照</h2>
+<h2>③ 场景 · 按症状选动作</h2>
+
+<p>下表把前面的机制反向映射成「我现在看到这个现象，该做什么、代价是什么」。</p>
+
+<table>
+<thead><tr><th>症状</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>吞吐不够，延迟预算宽松</td><td><code>linger.ms</code> 调到 10 到 20，<code>batch.size</code> 到 64KB，压缩用 zstd</td><td>攒批把单条协议开销摊到接近零，压缩再减一次网络与磁盘量</td><td>每条消息多等最多 linger 的毫秒数；崩溃时缓冲区丢失窗口变大</td></tr>
+<tr><td>吞吐不够，但要求低延迟</td><td>保持 <code>linger.ms</code> 很小，改为加分区与加 Producer 实例横向扩</td><td>延迟预算不允许攒批，只能靠并行度换吞吐</td><td>分区数上去之后句柄、选举耗时与生产端内存同步上涨</td></tr>
+<tr><td>p99 比平均值高一个数量级</td><td>先查 Broker 的 GC 与磁盘 await，不要动客户端参数</td><td>尾部延迟几乎总是来自 Broker 侧停顿或磁盘抖动</td><td>可能要换盘或压缩堆大小，属于运维变更</td></tr>
+<tr><td>集群 CPU 莫名升高</td><td>查 Broker 与 Topic 级 <code>compression.type</code> 是否被写死、是否有老版本客户端</td><td>解压重压与消息格式向下转换都会让零拷贝失效</td><td>需要推动客户端升级，周期较长</td></tr>
+<tr><td>有人要跑历史回溯任务</td><td>限速或安排在低峰，必要时用单独的消费集群</td><td>冷读会把活跃段从 page cache 挤出去，连带拖慢实时消费者</td><td>回溯任务变慢；独立集群意味着额外成本</td></tr>
+<tr><td>Lag 涨而消费进程很闲</td><td>去优化下游，不要加 Consumer</td><td>瓶颈在下游 IO，Kafka 侧毫无压力</td><td>需要改代码做批量或异步化</td></tr>
+<tr><td>被要求「再快一点」但已到网卡上限</td><td>开压缩或加 Broker，别再调客户端参数</td><td>带宽是物理上限，参数拧不动它</td><td>加 Broker 后需要重分配分区来平衡数据，且必须限流</td></tr>
+<tr><td>要求亚毫秒级端到端延迟</td><td>重新评估选型，这不是 Kafka 的强项</td><td>攒批、顺序写、零拷贝都需要流量密度才发挥</td><td>换 MQ 的迁移成本，判断依据见 <a href="../../messaging/compare/">消息队列选型</a></td></tr>
+</tbody>
+</table>
+
+<h2>③ 场景 · 横向对照与调优后的回归清单</h2>
 
 <table>
 <thead><tr><th>维度</th><th>Kafka</th><th>RabbitMQ</th><th>RocketMQ</th><th>Pulsar</th></tr></thead>
 <tbody>
-<tr><td>单机吞吐量级</td><td>数十万条每秒，百 MB 每秒级</td><td>万级到数万条每秒，单队列更低</td><td>十万条每秒级</td><td>十万条每秒级</td></tr>
-<tr><td>单条端到端延迟</td><td>毫秒到数十毫秒，受攒批影响</td><td><strong>亚毫秒到毫秒，最低且最稳</strong></td><td>毫秒级</td><td>毫秒级，多副本写 BookKeeper 有额外开销</td></tr>
+<tr><td>单机吞吐量级</td><td>最高，字节吞吐可达百 MB 每秒级</td><td>最低，单队列更低</td><td>介于两者之间</td><td>接近 Kafka</td></tr>
+<tr><td>单条端到端延迟</td><td>毫秒到数十毫秒，受攒批影响</td><td><strong>最低且最稳</strong></td><td>毫秒级</td><td>毫秒级，多副本写 BookKeeper 有额外开销</td></tr>
 <tr><td>消息回溯</td><td>原生支持，按位点或时间任意重放</td><td>不支持，消费即删除</td><td>支持，按时间回溯</td><td>原生支持，且可分层存储到对象存储</td></tr>
 <tr><td>延迟消息</td><td>不支持，需自建延迟 Topic 或外部调度</td><td>支持，靠死信加 TTL 或插件</td><td><strong>原生支持，固定延迟级别</strong></td><td>原生支持，任意时长</td></tr>
 <tr><td>路由能力</td><td>弱，只有 Topic 加分区</td><td><strong>强，Exchange 支持直连、主题、扇出等多种模式</strong></td><td>中，支持 Tag 过滤与 SQL92 过滤</td><td>中，支持多租户与命名空间隔离</td></tr>
@@ -342,7 +437,8 @@ sequenceDiagram
 <tr><td>运维复杂度</td><td>中，KRaft 之后不再依赖 ZooKeeper</td><td><strong>低，单体部署简单</strong></td><td>中，NameServer 加 Broker</td><td><strong>高，Broker 与 BookKeeper 分离，组件最多</strong></td></tr>
 <tr><td>扩容代价</td><td>较高，加 Broker 后需要迁移分区来重新平衡数据</td><td>低但受单队列上限约束</td><td>中</td><td><strong>低，存储计算分离，加节点不搬数据</strong></td></tr>
 <tr><td>最适合</td><td>数据管道、日志、埋点、流处理源</td><td>任务分发、RPC 式异步、复杂路由</td><td>电商交易链路，需要事务消息与延迟消息</td><td>多租户平台、需要长期存储与弹性扩容</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
@@ -350,31 +446,40 @@ sequenceDiagram
     <p>Kafka 的高吞吐来自攒批、顺序写和零拷贝，这三项都需要一定的流量密度才能发挥。单条消息、低 QPS、要求亚毫秒响应的场景下，攒批反而成了纯粹的延迟来源，此时 RabbitMQ 的逐条投递模型更快也更稳。选型时先问清楚场景是「管道」还是「任务分发」：前者选 Kafka，后者 RabbitMQ 往往是更省心的答案。拿一个量级完全不同的压测结果去证明某个 MQ「更快」，基本没有参考价值。</p>
 </div>
 
-<h2>调优后必须跑的回归清单</h2>
+<p>调完之后必须跑一遍回归。<strong>性能改善不能以悄悄降低可靠性为代价</strong>，下表第二、三、四项专门用来防这件事：</p>
 
 <table>
 <thead><tr><th>检查项</th><th>怎么验证</th><th>通过标准</th></tr></thead>
 <tbody>
 <tr><td>吞吐与 p99 同时改善或至少不退化</td><td>用与基线完全相同的压测参数重跑</td><td>吞吐提升且 p99 不高于基线的 1.2 倍</td></tr>
-<tr><td>可靠性配置未被顺带改坏</td><td>用 kafka-configs 逐项核对 <code>acks</code>、<code>min.insync.replicas</code>、<code>unclean.leader.election.enable</code></td><td>与可靠性清单完全一致，调性能不能偷偷降可靠性</td></tr>
+<tr><td>可靠性配置未被顺带改坏</td><td>用 kafka-configs 逐项核对 <code>acks</code>、<code>min.insync.replicas</code>、<code>unclean.leader.election.enable</code></td><td>与 <a href="../reliability/">可靠性清单</a> 完全一致，调性能不能偷偷降可靠性</td></tr>
 <tr><td>消息大小上限三处一致</td><td>核对客户端 <code>max.request.size</code>、Broker <code>message.max.bytes</code>、Topic 级 <code>max.message.bytes</code></td><td>三者匹配，最大消息能正常通过</td></tr>
 <tr><td>Broker 端压缩未被写死</td><td>查 Broker 与 Topic 级 <code>compression.type</code></td><td>保持 <code>producer</code></td></tr>
 <tr><td>消费端不会被踢出组</td><td>用最慢的下游耗时乘以 <code>max.poll.records</code></td><td>明显小于 <code>max.poll.interval.ms</code></td></tr>
 <tr><td>故障下的表现</td><td>杀掉 leader Broker 后重跑压测</td><td>吞吐短暂下降后恢复，无消息丢失</td></tr>
 <tr><td>冷读场景</td><td>启动一个从最早位点开始的消费者，同时观察实时消费者的延迟</td><td>实时消费者 p99 不出现数量级恶化，否则需要做冷读隔离或限速</td></tr>
 <tr><td>内存与 GC</td><td>持续压测 30 分钟观察 <code>jstat</code></td><td>无 Full GC，堆使用平稳</td></tr>
-</tbody></table>
+</tbody>
+</table>
+
+<p><strong>不适用边界</strong>：这一篇解决「快不快」，解决不了「丢不丢」，两者的配置经常互相拉扯，可靠性侧的底线见上一篇 <a href="../reliability/">可靠性落地</a>。分区数与倾斜在 <a href="../topic-partition/">分区设计</a>；客户端代码与线程模型在 <a href="../producer-consumer/">生产者与消费者实战</a>；主机层与磁盘规划在 <a href="../install/">生产级部署</a>；零拷贝与分段日志的机制回到 <a href="../">主干篇</a>。如果目标是亚毫秒延迟或复杂路由，调参给不了答案，回到 <a href="../intro/">选型边界</a> 与 <a href="../../messaging/compare/">消息队列选型</a>。</p>
+
+<p>这一篇是这条路径的最后一站：从选型、部署、分区、客户端、可靠性走到性能，剩下的工作是把基线数字与告警固化下来，让下一次「变慢了」有据可查。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../reliability/">← 上一步：Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费</a></p>
+
+<h2>最容易踩的坑</h2>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">性能调优的十二个高频翻车点</div>
     <ul>
         <li><strong>用全速模式去测延迟</strong>：把 throughput 设为 -1 时客户端一定被打到饱和，测出来的延迟只反映排队，没有任何参考价值。</li>
         <li><strong>压测只跑十几秒</strong>：page cache 还没进稳态，数据全在缓存里，得到的是一个永远达不到的乐观值。</li>
         <li><strong>一次改五个参数</strong>：结果好坏都不知道是哪一项带来的，出问题时无法回滚。</li>
-        <li><strong>没先确认网络带宽</strong>：MB/sec 已经贴着千兆网卡的上限了，还在反复调 <code>batch.size</code>。</li>
+        <li><strong>没先确认网络带宽</strong>：MB/sec 已经贴着网卡上限了，还在反复调 <code>batch.size</code>。</li>
         <li><strong>在 Broker 上写死 compression.type</strong>：触发解压重压，CPU 成倍上升并让零拷贝失效。</li>
-        <li><strong>把 JVM 堆调到 32GB</strong>：Kafka 靠 page cache 而不是堆，堆越大 GC 停顿越长，还抢走了缓存内存，p99 直接恶化。</li>
+        <li><strong>把 JVM 堆调到几十 GB</strong>：Kafka 靠 page cache 而不是堆，堆越大 GC 停顿越长，还抢走了缓存内存，p99 直接恶化。</li>
         <li><strong>靠 log.flush.interval.messages 提高可靠性</strong>：吞吐掉一个数量级，而持久性该靠副本数和机架分散来保证。</li>
         <li><strong>无限加分区</strong>：分区多到同时有大量段文件被追加写，顺序写退化成随机写，吞吐反而下降，Rebalance 也变慢。</li>
         <li><strong>Lag 涨了就加 Consumer 实例</strong>：实例数超过分区数后纯属空转，真瓶颈在下游 IO 时加实例只会让下游更慢。</li>

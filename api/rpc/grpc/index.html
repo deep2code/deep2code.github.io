@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="gRPC 的行为几乎都由 HTTP/2 决定：一次调用就是一条流，状态码放在末尾 HEADERS 帧的 trailers 里，吞吐被连接级与流级两层流控窗口卡住。本文讲清帧与流的映射、四种调用模式的适用边界、deadline 为什么必须端到端传播、长连接如何让四层负载均衡失效以及 client-side LB 与 xDS 的取舍、status code 里哪些真的可重试、keepalive 与中间代理空闲回收造成的偶发断连、流式调用的背压与内存风险，以及拦截器与 stats.Handler 的职责分层。">
+        <meta name="description" content="gRPC 按用法、原理、场景三段组织：先给一次可用调用必须配对的四件事——deadline 端到端传播、错误码按可决策性选、keepalive 与中间代理对齐、连接与负载均衡成对配置，每件都给客户端与服务端各自的配置和验证命令；再讲清一个 RPC 等于一条 HTTP/2 流的映射、trailer 里的三件套结果、两级流控窗口与 BDP 动态调窗、四种调用模式的结束与背压、连接状态机、拦截器两条独立链；最后按单机、ClusterIP、headless、七层代理、跨区、浏览器直调给出必配项清单。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/api/rpc/grpc/">
     <!-- Open Graph -->
     <meta property="og:title" content="gRPC 的传输机制与工程落地 - 资深码农">
-    <meta property="og:description" content="gRPC 的行为几乎都由 HTTP/2 决定：一次调用就是一条流，状态码放在末尾 HEADERS 帧的 trailers 里，吞吐被连接级与流级两层流控窗口卡住。本文讲清帧与流的映射、四种调用模式的适用边界、deadline 为什么必须端到端传播、长连接如何让四层负载均衡失效以及 client-side LB 与 xDS 的取舍、status code 里哪些真的可重试、keepalive 与中间代理空闲回收造成的偶发断连、流式调用的背压与内存风险，以及拦截器与 stats.Handler 的职责分层。">
+    <meta property="og:description" content="gRPC 按用法、原理、场景三段组织：先给一次可用调用必须配对的四件事——deadline 端到端传播、错误码按可决策性选、keepalive 与中间代理对齐、连接与负载均衡成对配置，每件都给客户端与服务端各自的配置和验证命令；再讲清一个 RPC 等于一条 HTTP/2 流的映射、trailer 里的三件套结果、两级流控窗口与 BDP 动态调窗、四种调用模式的结束与背压、连接状态机、拦截器两条独立链；最后按单机、ClusterIP、headless、七层代理、跨区、浏览器直调给出必配项清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/rpc/grpc/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="gRPC 的传输机制与工程落地 - 资深码农">
-    <meta name="twitter:description" content="gRPC 的行为几乎都由 HTTP/2 决定：一次调用就是一条流，状态码放在末尾 HEADERS 帧的 trailers 里，吞吐被连接级与流级两层流控窗口卡住。本文讲清帧与流的映射、四种调用模式的适用边界、deadline 为什么必须端到端传播、长连接如何让四层负载均衡失效以及 client-side LB 与 xDS 的取舍、status code 里哪些真的可重试、keepalive 与中间代理空闲回收造成的偶发断连、流式调用的背压与内存风险，以及拦截器与 stats.Handler 的职责分层。">
+    <meta name="twitter:description" content="gRPC 按用法、原理、场景三段组织：先给一次可用调用必须配对的四件事——deadline 端到端传播、错误码按可决策性选、keepalive 与中间代理对齐、连接与负载均衡成对配置，每件都给客户端与服务端各自的配置和验证命令；再讲清一个 RPC 等于一条 HTTP/2 流的映射、trailer 里的三件套结果、两级流控窗口与 BDP 动态调窗、四种调用模式的结束与背压、连接状态机、拦截器两条独立链；最后按单机、ClusterIP、headless、七层代理、跨区、浏览器直调给出必配项清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="接口、协议与安全">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"gRPC 的传输机制与工程落地","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"gRPC 的行为几乎都由 HTTP/2 决定：一次调用就是一条流，状态码放在末尾 HEADERS 帧的 trailers 里，吞吐被连接级与流级两层流控窗口卡住。本文讲清帧与流的映射、四种调用模式的适用边界、deadline 为什么必须端到端传播、长连接如何让四层负载均衡失效以及 client-side LB 与 xDS 的取舍、status code 里哪些真的可重试、keepalive 与中间代理空闲回收造成的偶发断连、流式调用的背压与内存风险，以及拦截器与 stats.Handler 的职责分层。","url":"https://www.yijunjun.asia/api/rpc/grpc/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/api/rpc/grpc/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"gRPC 的传输机制与工程落地","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"gRPC 按用法、原理、场景三段组织：先给一次可用调用必须配对的四件事——deadline 端到端传播、错误码按可决策性选、keepalive 与中间代理对齐、连接与负载均衡成对配置，每件都给客户端与服务端各自的配置和验证命令；再讲清一个 RPC 等于一条 HTTP/2 流的映射、trailer 里的三件套结果、两级流控窗口与 BDP 动态调窗、四种调用模式的结束与背压、连接状态机、拦截器两条独立链；最后按单机、ClusterIP、headless、七层代理、跨区、浏览器直调给出必配项清单。","url":"https://www.yijunjun.asia/api/rpc/grpc/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/api/rpc/grpc/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "接口、协议与安全", "item": "https://www.yijunjun.asia/api/"}, {"position": 3, "name": "gRPC 2026", "item": "https://www.yijunjun.asia/api/rpc/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -88,13 +88,196 @@
             <span class="meta-item">🏷️ gRPC</span>
         </div>
     </header>
-    <p>gRPC 的「意外行为」大多不在 IDL 层，而在传输层：一次调用就是一条 HTTP/2 流，结果码藏在末尾 HEADERS 帧里，单流吞吐被两级窗口卡住，长连接让四层负载均衡形同虚设。编码与兼容性见站内 <a href="../protobuf/">Protobuf 的编码与模式演进</a>，框架抽象与选型见站内 <a href="../">RPC 框架的抽象层次与选型</a>。</p>
+<p>gRPC 的「意外行为」大多不在 IDL 层，而在传输层：一次调用就是一条 HTTP/2 流，结果码藏在末尾 HEADERS 帧里，单流吞吐被两级窗口卡住，长连接让四层负载均衡形同虚设。编码与兼容性见站内 <a href="../protobuf/">Protobuf 的编码与模式演进</a>，框架抽象与选型见站内 <a href="../">RPC 框架的抽象层次与选型</a>。</p>
 
-    <h2>一次调用在 HTTP/2 上的真实形状</h2>
-    <p>gRPC 把 HTTP/2 的原语直接借来当语义单位：<strong>一个 RPC = 一条 stream</strong>，请求头是 HEADERS 帧，消息体是 DATA 帧，结果码是末尾那个带 END_STREAM 的 HEADERS 帧（trailer）。理解这个映射，后面的坑都能自己推出来。</p>
-    <p>两个容易被忽略的细节：第一，<strong>DATA 帧里不是裸的 protobuf</strong>，每条消息前面有 5 字节前缀——1 字节压缩标志加 4 字节大端长度，所以「消息边界」是 gRPC 自己维护的，不是靠帧边界；第二，<strong>流 ID 是 31 位且只增不回收</strong>，客户端用奇数、服务端用偶数，用尽之后这条连接只能被 GOAWAY 关掉重建，这也是为什么框架必须实现连接轮换。</p>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一次可用的 gRPC 调用必须配对好的四件事——deadline 端到端传、错误码按可决策性选、keepalive 与中间代理对齐、连接与负载均衡成对配置，每件都给客户端与服务端各自要做什么以及怎么验证。</li>
+        <li><strong>② 原理</strong>：为什么这四件事必须成对——一个 RPC 等于一条 HTTP/2 流的映射关系、两级流控窗口、四种调用模式的结束与背压、连接状态机、trailer 里的三件套错误模型、拦截器与 stats.Handler 的分层。</li>
+        <li><strong>③ 场景</strong>：单机、ClusterIP、headless 原生 LB、七层代理、跨区、浏览器直调各要配哪几项，以及什么时候不该用 gRPC。</li>
+    </ul>
+</div>
 
-    <div class="mermaid">
+<h2>① 用法 · 一次调用要配对的四件事</h2>
+<p>gRPC 的配置几乎没有「只改一端就生效」的项。把下面四件事按「客户端做什么 + 服务端做什么 + 怎么验证」配成对，线上 90% 的偶发 UNAVAILABLE、调用挂住、新实例没流量就不会出现。为什么必须成对、各自背后是什么机制，见下一节起的原理部分。</p>
+
+<pre><code class="language-go">// ===== 客户端：一个通道配好 LB、超时、重试、keepalive，不要在每个调用点重复写 =====
+const svcCfg = `{
+  "loadBalancingConfig": [{"round_robin": {}}],
+  "methodConfig": [{
+    "name": [{"service": "order.v1.OrderService"}],
+    "timeout": "1.5s",
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "0.05s",
+      "maxBackoff": "0.5s",
+      "backoffMultiplier": 2,
+      "retryableStatusCodes": ["UNAVAILABLE"]
+    }
+  }],
+  "retryThrottling": {"maxTokens": 100, "tokenRatio": 0.1}
+}`
+
+cc, err := grpc.NewClient(
+    // 必须是 headless Service：ClusterIP 只解析出一个虚拟 IP，round_robin 无从下手
+    "dns:///order.prod.svc.cluster.local:8080",
+    grpc.WithTransportCredentials(creds),
+    grpc.WithDefaultServiceConfig(svcCfg),
+    grpc.WithKeepaliveParams(keepalive.ClientParameters{
+        Time:                30 * time.Second, // 必须大于服务端 EnforcementPolicy.MinTime，否则被 GOAWAY 踢下线
+        Timeout:             10 * time.Second,
+        PermitWithoutStream: true,             // 空闲期也探活，否则最容易被中间设备静默回收的正是空闲连接
+    }),
+    // 显式设窗口会关闭 grpc-go 的 BDP 动态调窗，跨区链路通常越调越慢
+    // grpc.WithInitialWindowSize(1&lt;&lt;20),
+)
+if err != nil {
+    return err
+}
+defer cc.Close()</code></pre>
+
+<pre><code class="language-go">// ===== 服务端：与上面逐项对齐 =====
+srv := grpc.NewServer(
+    grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+        // 默认 5 分钟。这个值必须小于所有客户端的 keepalive Time，否则客户端探活即被踢
+        MinTime:             15 * time.Second,
+        PermitWithoutStream: true,
+    }),
+    grpc.KeepaliveParams(keepalive.ServerParameters{
+        MaxConnectionIdle:     5 * time.Minute,  // 默认无穷，设了才回收闲连接
+        MaxConnectionAge:      30 * time.Minute, // 默认无穷，设了扩容出来的新实例才分得到流量
+        MaxConnectionAgeGrace: 15 * time.Second, // 给在途 RPC 的收尾时间，太短会打断长调用
+    }),
+    grpc.MaxConcurrentStreams(200),   // 限制单连接并发流，防单个客户端打满服务端
+    grpc.MaxRecvMsgSize(4*1024*1024), // 与客户端保持一致，避免一端报错一端无感
+    // 顺序即嵌套顺序，第一个最外层；观测放最外层才能记录到 panic 被转成 INTERNAL 的那次调用
+    grpc.ChainUnaryInterceptor(metricsUnary, recoveryUnary, authUnary, limitUnary),
+    // 漏掉这一行是高频安全事故：流式方法会完全绕过上面所有 unary 拦截器，等于没有鉴权
+    grpc.ChainStreamInterceptor(metricsStream, recoveryStream, authStream),
+)</code></pre>
+
+<pre><code class="language-bash"># 验证 1：错误码与 details 都在 trailer 里，只有带 -vv 才看得到；curl 永远看不到
+grpcurl -vv -plaintext -d '{"id":"o-1"}' localhost:8080 order.v1.OrderService/CreateOrder
+
+# 验证 2：deadline 是否真的传到了服务端。-max-time 会被翻译成 grpc-timeout 头
+# 在服务端 handler 里打印 ctx 的剩余时间，它应当略小于这里给的值，而不是「没有 deadline」
+grpcurl -vv -plaintext -max-time 1.5 -d '{"id":"o-1"}' localhost:8080 order.v1.OrderService/CreateOrder
+
+# 验证 3：连接层到底发生了什么（解析、LB 选点、状态迁移、GOAWAY 原因）
+GRPC_GO_LOG_SEVERITY_LEVEL=info GRPC_GO_LOG_VERBOSITY_LEVEL=2 ./client 2&gt;&amp;1 | grep -E 'GOAWAY|SubConn|resolver'
+
+# 验证 4：断连周期是不是等于某个中间设备的空闲回收时间——间隔稳定就是最强信号
+# 若断连间隔恰好等于四层负载均衡或代理的 idle timeout，问题在链路而不在业务代码</code></pre>
+
+<table>
+    <thead>
+        <tr>
+            <th>要配的这件事</th>
+            <th>怎么做</th>
+            <th>怎么验证它真的生效了</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>deadline 端到端传</td>
+            <td>客户端给每次调用设 deadline（或用 service config 的 <code>timeout</code>）；服务端 handler 用上游 ctx 派生下游调用，并拒绝或兜底「没有 deadline」的请求</td>
+            <td>在每个服务入口打印 <code>ctx.Deadline()</code> 的剩余时间，逐跳应递减；出现 <code>ok == false</code> 就是中间某处用了 <code>context.Background()</code></td>
+        </tr>
+        <tr>
+            <td>错误码按可决策性选</td>
+            <td>参数错用 INVALID_ARGUMENT，状态不允许用 FAILED_PRECONDITION，不可用用 UNAVAILABLE；结构化信息放 details，不要塞进 message 文本</td>
+            <td><code>grpcurl -vv</code> 看 trailer 里的 <code>grpc-status</code> 与 <code>grpc-status-details-bin</code>；再看客户端重试指标——INVALID_ARGUMENT 被重试说明码选错了</td>
+        </tr>
+        <tr>
+            <td>keepalive 与代理配合</td>
+            <td>客户端 <code>Time</code> 大于服务端 <code>MinTime</code>，并开 <code>PermitWithoutStream</code>；同时确认链路上所有代理的空闲与读超时都大于探活间隔</td>
+            <td>日志里不应出现 <code>too_many_pings</code>；空闲若干分钟后再发一次调用必须直接成功，而不是先失败一次再恢复</td>
+        </tr>
+        <tr>
+            <td>连接与负载均衡成对配</td>
+            <td>客户端 <code>dns:///</code> 指向 headless Service 加 <code>round_robin</code>（或走七层代理）；服务端配 <code>MaxConnectionAge</code> 周期性打散长连接</td>
+            <td>扩容一个实例，观察它的 QPS 是否在一个 <code>MaxConnectionAge</code> 周期内上来；channelz 里 SubChannel 数应等于后端实例数而不是 1</td>
+        </tr>
+        <tr>
+            <td>两条拦截器链都挂上</td>
+            <td><code>ChainUnaryInterceptor</code> 与 <code>ChainStreamInterceptor</code> 都注册，顺序为观测、recover、认证、限流</td>
+            <td>写一个流式方法不带凭证去调，必须被鉴权拦住；如果它畅通无阻，说明只挂了 unary 链</td>
+        </tr>
+        <tr>
+            <td>消息大小上限两端一致</td>
+            <td>服务端 <code>MaxRecvMsgSize</code> 与客户端 <code>WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(...))</code> 取同一个值</td>
+            <td>构造一条略超上限的消息，报错应发生在接收端并返回 RESOURCE_EXHAUSTED；如果发送端毫无反应就说明只配了一端</td>
+        </tr>
+        <tr>
+            <td>重试只开一处</td>
+            <td>service config 里的 <code>retryPolicy</code> 只列真正安全的码（通常只有 UNAVAILABLE），并开 <code>retryThrottling</code>；业务代码里不要再包一层</td>
+            <td>注入一次下游不可用，统计最下游收到的请求数，它应等于 <code>maxAttempts</code> 而不是它的平方</td>
+        </tr>
+        <tr>
+            <td>优雅下线</td>
+            <td>先从注册或 Service 端点摘除，等一个传播周期，再调 <code>GracefulStop</code> 让服务端发 GOAWAY 跑完在途流</td>
+            <td>滚动发布时观察客户端 UNAVAILABLE 曲线：每替换一个实例都出现一小段错误，就是摘流与停服顺序反了</td>
+        </tr>
+    </tbody>
+</table>
+
+<table>
+    <thead>
+        <tr>
+            <th>配对项</th>
+            <th>客户端侧</th>
+            <th>服务端侧</th>
+            <th>只配一端的症状</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>探活间隔</td>
+            <td><code>keepalive.ClientParameters.Time</code>，小于 10 秒会被库抬到 10 秒</td>
+            <td><code>EnforcementPolicy.MinTime</code>，默认 5 分钟</td>
+            <td>客户端探得比服务端允许的更频繁，收到带 <code>too_many_pings</code> 的 GOAWAY，然后重连风暴</td>
+        </tr>
+        <tr>
+            <td>空闲期探活</td>
+            <td><code>PermitWithoutStream: true</code>，默认 false</td>
+            <td><code>EnforcementPolicy.PermitWithoutStream: true</code></td>
+            <td>只有客户端开，服务端把无流 PING 判为违规；两端都不开，空闲连接被中间设备静默回收</td>
+        </tr>
+        <tr>
+            <td>连接寿命</td>
+            <td>依赖 GOAWAY 后重连并重解析</td>
+            <td><code>MaxConnectionAge</code> 加 <code>Grace</code>，默认无穷</td>
+            <td>不设则扩容后新实例长期空载；Grace 太短则在途长调用被打断</td>
+        </tr>
+        <tr>
+            <td>消息上限</td>
+            <td><code>MaxCallRecvMsgSize</code> / <code>MaxCallSendMsgSize</code></td>
+            <td><code>MaxRecvMsgSize</code>，grpc-go 接收侧默认 4MB</td>
+            <td>发送端不限、接收端受限，表现为发送方无错误而接收方 RESOURCE_EXHAUSTED，排查方向容易搞反</td>
+        </tr>
+        <tr>
+            <td>超时</td>
+            <td>调用 ctx 的 deadline，或 service config 的 <code>timeout</code></td>
+            <td>用上游 ctx 派生下游，并给无 deadline 请求兜底</td>
+            <td>只有客户端设，服务端仍会跑完整个请求，上游走后变成幽灵请求</td>
+        </tr>
+        <tr>
+            <td>trailer 透传</td>
+            <td>依赖请求头 <code>te: trailers</code></td>
+            <td>结果码写在末尾 HEADERS 帧</td>
+            <td>中间代理剥掉 <code>te</code> 或不支持 trailer，客户端表现为调用挂住或状态永远 UNKNOWN</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>② 原理 · 一次调用在 HTTP/2 上的真实形状</h2>
+<p>搞清这个映射，能解决「HTTP 200 但客户端报错」「curl 调通了但看不到错误」「代理后面调用永远挂住」这三类现象。</p>
+<p>gRPC 把 HTTP/2 的原语直接借来当语义单位：<strong>一个 RPC = 一条 stream</strong>，请求头是 HEADERS 帧，消息体是 DATA 帧，结果码是末尾那个带 END_STREAM 的 HEADERS 帧（trailer）。理解这个映射，后面的坑都能自己推出来。</p>
+<p>两个容易被忽略的细节：第一，<strong>DATA 帧里不是裸的 protobuf</strong>，每条消息前面有 5 字节前缀——1 字节压缩标志加 4 字节大端长度，所以「消息边界」是 gRPC 自己维护的，不是靠帧边界；第二，<strong>流 ID 是 31 位且只增不回收</strong>，客户端用奇数、服务端用偶数，用尽之后这条连接只能被 GOAWAY 关掉重建，这也是为什么框架必须实现连接轮换。</p>
+
+<div class="mermaid">
 flowchart TB
     subgraph L1["应用与拦截层"]
         STUB["生成的 Stub 与 Handler"]
@@ -124,51 +307,51 @@ flowchart TB
     FC --> TLS
     CTL --> TLS
     TLS --> TCP
-    </div>
+</div>
 
-    <table>
-        <thead>
-            <tr>
-                <th>HTTP/2 元素</th>
-                <th>在 gRPC 里承担什么</th>
-                <th>出问题时的表面症状</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>HEADERS（首个）</td>
-                <td>开流，携带 :path 为 /包名.服务/方法、content-type、te: trailers、grpc-timeout、grpc-encoding、元数据</td>
-                <td>路径拼错返回 UNIMPLEMENTED；代理剥掉 te 头导致 trailer 被吞</td>
-            </tr>
-            <tr>
-                <td>DATA</td>
-                <td>承载消息，每条消息 5 字节前缀（压缩标志 + 大端长度）</td>
-                <td>单消息超限报 ResourceExhausted；长度前缀被中间件改写则解码错位</td>
-            </tr>
-            <tr>
-                <td>HEADERS（末尾 trailer）</td>
-                <td>真正的调用结果：grpc-status、grpc-message、grpc-status-details-bin</td>
-                <td>HTTP 200 但业务失败；不支持 trailer 的代理让客户端永远等不到结束</td>
-            </tr>
-            <tr>
-                <td>RST_STREAM</td>
-                <td>取消：客户端 cancel、deadline 到期、服务端拒绝单条流</td>
-                <td>服务端看到 context canceled，误以为是自己的 bug</td>
-            </tr>
-            <tr>
-                <td>PING</td>
-                <td>keepalive 探活与 RTT / BDP 估算</td>
-                <td>探测过频被对端 GOAWAY，报 too_many_pings</td>
-            </tr>
-            <tr>
-                <td>GOAWAY</td>
-                <td>优雅关闭，带 last-stream-id，已受理的流继续跑</td>
-                <td>滚动发布时客户端短暂 UNAVAILABLE；不重试就变成业务错误</td>
-            </tr>
-        </tbody>
-    </table>
+<table>
+    <thead>
+        <tr>
+            <th>HTTP/2 元素</th>
+            <th>在 gRPC 里承担什么</th>
+            <th>出问题时的表面症状</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>HEADERS（首个）</td>
+            <td>开流，携带 :path 为 /包名.服务/方法、content-type、te: trailers、grpc-timeout、grpc-encoding、元数据</td>
+            <td>路径拼错返回 UNIMPLEMENTED；代理剥掉 te 头导致 trailer 被吞</td>
+        </tr>
+        <tr>
+            <td>DATA</td>
+            <td>承载消息，每条消息 5 字节前缀（压缩标志 + 大端长度）</td>
+            <td>单消息超限报 ResourceExhausted；长度前缀被中间件改写则解码错位</td>
+        </tr>
+        <tr>
+            <td>HEADERS（末尾 trailer）</td>
+            <td>真正的调用结果：grpc-status、grpc-message、grpc-status-details-bin</td>
+            <td>HTTP 200 但业务失败；不支持 trailer 的代理让客户端永远等不到结束</td>
+        </tr>
+        <tr>
+            <td>RST_STREAM</td>
+            <td>取消：客户端 cancel、deadline 到期、服务端拒绝单条流</td>
+            <td>服务端看到 context canceled，误以为是自己的 bug</td>
+        </tr>
+        <tr>
+            <td>PING</td>
+            <td>keepalive 探活与 RTT / BDP 估算</td>
+            <td>探测过频被对端 GOAWAY，报 too_many_pings</td>
+        </tr>
+        <tr>
+            <td>GOAWAY</td>
+            <td>优雅关闭，带 last-stream-id，已受理的流继续跑</td>
+            <td>滚动发布时客户端短暂 UNAVAILABLE；不重试就变成业务错误</td>
+        </tr>
+    </tbody>
+</table>
 
-    <div class="mermaid">
+<div class="mermaid">
 sequenceDiagram
     autonumber
     participant C as 客户端
@@ -186,143 +369,148 @@ sequenceDiagram
     C->>S: PING 探活
     S-->>C: PING ACK
     S-->>C: GOAWAY 优雅下线，新流去新连接，在途流跑完
-    </div>
+</div>
 
-    <h3>流控：吞吐上限是窗口除以 RTT</h3>
-    <p>HTTP/2 有<strong>两级流控窗口</strong>：连接级和流级。协议默认值都是 65535 字节，其中连接级窗口只能靠 WINDOW_UPDATE 放大，SETTINGS 里的 INITIAL_WINDOW_SIZE 只作用于流。单条流的稳态吞吐上限就是一道除法：<code>窗口 / RTT</code>。64KB 窗口配 100ms 的跨区 RTT，大约 640KB/s——无论你的带宽有多富余。</p>
-    <p>所以 grpc-go 默认<strong>不是</strong>固定 64KB，它用 PING 做 BDP 估算动态放大窗口（4MB 量级）。反直觉的结论是：<strong>显式设置 <code>WithInitialWindowSize</code> 会关闭动态调窗</strong>，把窗口钉死在你给的值上——不少「照帖子调优反而变慢」就是手动设成 1MB 后比自动调窗还小。gRPC-Java 的默认值与 Go 不同（1 MiB 量级），跨语言压测别当同一套参数。</p>
+<h3>流控：吞吐上限是窗口除以 RTT</h3>
+<p>HTTP/2 有<strong>两级流控窗口</strong>：连接级和流级。协议默认值都是 65535 字节，其中连接级窗口只能靠 WINDOW_UPDATE 放大，SETTINGS 里的 INITIAL_WINDOW_SIZE 只作用于流。单条流的稳态吞吐上限就是一道除法：<code>窗口 / RTT</code>。64KB 窗口配 100ms 的跨区 RTT，大约 640KB/s——无论你的带宽有多富余。</p>
+<p>所以 grpc-go 默认<strong>不是</strong>固定 64KB，它用 PING 做 BDP 估算动态放大窗口（4MB 量级）。反直觉的结论是：<strong>显式设置 <code>WithInitialWindowSize</code> 会关闭动态调窗</strong>，把窗口钉死在你给的值上——不少「照帖子调优反而变慢」就是手动设成 1MB 后比自动调窗还小。gRPC-Java 的默认值与 Go 不同（1 MiB 量级），跨语言压测别当同一套参数。</p>
 
-    <table>
-        <thead>
-            <tr>
-                <th>参数（grpc-go）</th>
-                <th>默认值</th>
-                <th>调大的收益</th>
-                <th>调错的后果</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>InitialWindowSize（流级）</td>
-                <td>64KB 起，BDP 动态放大</td>
-                <td>高 RTT 大报文场景提升单流吞吐</td>
-                <td>一旦显式设置就关闭动态调窗，跨区链路可能更慢</td>
-            </tr>
-            <tr>
-                <td>InitialConnWindowSize（连接级）</td>
-                <td>同上，动态</td>
-                <td>同一连接上多流并发时不互相挤压</td>
-                <td>设得比流级窗口还小，等于给所有流加了总闸</td>
-            </tr>
-            <tr>
-                <td>MaxRecvMsgSize</td>
-                <td>4MB</td>
-                <td>放行大报文</td>
-                <td>反序列化需整条消息驻留内存，并发一高就 OOM</td>
-            </tr>
-            <tr>
-                <td>MaxSendMsgSize</td>
-                <td>实际不限</td>
-                <td>—</td>
-                <td>发送端不报错、接收端报 ResourceExhausted，排查方向容易搞反</td>
-            </tr>
-            <tr>
-                <td>MaxConcurrentStreams（服务端）</td>
-                <td>各实现不同，HTTP/2 协议层不发即视为无限</td>
-                <td>限制单客户端并发深度，保护服务端</td>
-                <td>不设则一个客户端可打满服务端；设太小表现为客户端排队但服务端 CPU 很低</td>
-            </tr>
-        </tbody>
-    </table>
+<table>
+    <thead>
+        <tr>
+            <th>参数（grpc-go）</th>
+            <th>默认值</th>
+            <th>调大的收益</th>
+            <th>调错的后果</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>InitialWindowSize（流级）</td>
+            <td>64KB 起，BDP 动态放大</td>
+            <td>高 RTT 大报文场景提升单流吞吐</td>
+            <td>一旦显式设置就关闭动态调窗，跨区链路可能更慢</td>
+        </tr>
+        <tr>
+            <td>InitialConnWindowSize（连接级）</td>
+            <td>同上，动态</td>
+            <td>同一连接上多流并发时不互相挤压</td>
+            <td>设得比流级窗口还小，等于给所有流加了总闸</td>
+        </tr>
+        <tr>
+            <td>MaxRecvMsgSize</td>
+            <td>4MB</td>
+            <td>放行大报文</td>
+            <td>反序列化需整条消息驻留内存，并发一高就 OOM</td>
+        </tr>
+        <tr>
+            <td>MaxSendMsgSize</td>
+            <td>实际不限</td>
+            <td>—</td>
+            <td>发送端不报错、接收端报 ResourceExhausted，排查方向容易搞反</td>
+        </tr>
+        <tr>
+            <td>MaxConcurrentStreams（服务端）</td>
+            <td>各实现不同，HTTP/2 协议层不发即视为无限</td>
+            <td>限制单客户端并发深度，保护服务端</td>
+            <td>不设则一个客户端可打满服务端；设太小表现为客户端排队但服务端 CPU 很低</td>
+        </tr>
+    </tbody>
+</table>
 
-    <h2>四种调用模式的适用边界</h2>
-    <p>教科书讲四种模式只说「几请求几响应」，真正决定选型的是另外三件事：<strong>谁决定流何时结束、背压从哪来、失败之后还能不能重试</strong>。</p>
+<h2>② 原理 · 四种调用模式、背压与内存</h2>
+<p>搞清这一节，能解决「流式接口为什么重试不生效」「双向流为什么莫名死锁」「为什么调大消息上限之后变成了 OOM」。</p>
+<p>教科书讲四种模式只说「几请求几响应」，真正决定选型的是另外三件事：<strong>谁决定流何时结束、背压从哪来、失败之后还能不能重试</strong>。</p>
 
-    <table>
-        <thead>
-            <tr>
-                <th>模式</th>
-                <th>谁决定结束</th>
-                <th>背压来源</th>
-                <th>框架能否重试</th>
-                <th>适用与典型误用</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>Unary</td>
-                <td>服务端返回即结束</td>
-                <td>无（一来一回）</td>
-                <td>可以，未收到响应消息前都可重试</td>
-                <td>绝大多数业务接口；误用是为了「省连接」把批量塞进一个巨型请求</td>
-            </tr>
-            <tr>
-                <td>服务端流</td>
-                <td>服务端 return 或客户端 cancel</td>
-                <td>客户端不 Recv，窗口耗尽后服务端 Send 阻塞</td>
-                <td>收到首条消息后即提交，基本不可重试</td>
-                <td>大结果集分页推送、日志订阅；误用是当消息队列用，客户端一断就丢数据</td>
-            </tr>
-            <tr>
-                <td>客户端流</td>
-                <td>客户端 CloseSend 后服务端返回</td>
-                <td>服务端不 Recv，客户端 Send 阻塞</td>
-                <td>不可重试，已发送的部分无法幂等重放</td>
-                <td>分块上传、批量打点；误用是忘记 CloseSend，服务端一直等，直到 deadline</td>
-            </tr>
-            <tr>
-                <td>双向流</td>
-                <td>两端各自半关闭</td>
-                <td>双向窗口，任一端不读都会把对端写住</td>
-                <td>不可重试，必须应用层自己做续传</td>
-                <td>长连接交互、实时同步；误用是在同一个协程里先写完再读，直接死锁</td>
-            </tr>
-        </tbody>
-    </table>
+<table>
+    <thead>
+        <tr>
+            <th>模式</th>
+            <th>谁决定结束</th>
+            <th>背压来源</th>
+            <th>框架能否重试</th>
+            <th>适用与典型误用</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Unary</td>
+            <td>服务端返回即结束</td>
+            <td>无（一来一回）</td>
+            <td>可以，未收到响应消息前都可重试</td>
+            <td>绝大多数业务接口；误用是为了「省连接」把批量塞进一个巨型请求</td>
+        </tr>
+        <tr>
+            <td>服务端流</td>
+            <td>服务端 return 或客户端 cancel</td>
+            <td>客户端不 Recv，窗口耗尽后服务端 Send 阻塞</td>
+            <td>收到首条消息后即提交，基本不可重试</td>
+            <td>大结果集分页推送、日志订阅；误用是当消息队列用，客户端一断就丢数据</td>
+        </tr>
+        <tr>
+            <td>客户端流</td>
+            <td>客户端 CloseSend 后服务端返回</td>
+            <td>服务端不 Recv，客户端 Send 阻塞</td>
+            <td>不可重试，已发送的部分无法幂等重放</td>
+            <td>分块上传、批量打点；误用是忘记 CloseSend，服务端一直等，直到 deadline</td>
+        </tr>
+        <tr>
+            <td>双向流</td>
+            <td>两端各自半关闭</td>
+            <td>双向窗口，任一端不读都会把对端写住</td>
+            <td>不可重试，必须应用层自己做续传</td>
+            <td>长连接交互、实时同步；误用是在同一个协程里先写完再读，直接死锁</td>
+        </tr>
+    </tbody>
+</table>
 
-    <div class="callout callout-warning">
-        <div class="callout-icon">⚠️</div>
-        <div class="callout-title">流式不是「更快的 unary」</div>
-        <p>流式把一次调用的生命周期拉长到分钟级，于是所有调用粒度的治理手段都失效：重试无效、超时变成整条流的总时长、熔断统计不到中途失败、发布时 GOAWAY 会打断在途流。除非确实需要增量下发，否则优先 unary 加分页。</p>
-    </div>
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">流式不是「更快的 unary」</div>
+    <p>流式把一次调用的生命周期拉长到分钟级，于是所有调用粒度的治理手段都失效：重试无效、超时变成整条流的总时长、熔断统计不到中途失败、发布时 GOAWAY 会打断在途流。除非确实需要增量下发，否则优先 unary 加分页。</p>
+</div>
 
-    <h2>deadline 必须端到端传播</h2>
-    <p>gRPC 的超时不是「客户端自己等多久」，而是<strong>一个随请求走的预算</strong>：客户端把剩余时间写进 <code>grpc-timeout</code> 头，服务端据此生成带 deadline 的 context，再派生给下游。这条链只要断一环，后面全是裸奔。</p>
-    <p>先纠正一个流传很广的说法：<strong>deadline 传播不需要两端时钟同步</strong>。线上传的是相对剩余时间（如 <code>1800m</code> 表示 1800 毫秒），每跳自己换算，时钟偏移无关。另一个常见误解是「反正 gRPC 会传播取消，不设超时也没事」——取消确实会通过 RST_STREAM 传下去让服务端 context 被 cancel，但那要求客户端真的退出；如果客户端本身也在无限等待，整条链就一起挂住。</p>
+<p>好消息是 gRPC 自带背压：窗口耗尽时 <code>Send</code> 会阻塞，生产者自然被拖慢。坏消息是<strong>只要你在应用层加了无界缓冲，背压就被你自己旁路掉了</strong>——常见写法是开一个协程把数据源源不断塞进没有容量上限的 channel，再由另一个协程 Send，队列在内存里越堆越高，直到 OOM。</p>
+<p>具体风险有四类：<strong>巨型单消息</strong>，整条消息必须同时驻留内存，靠调大 MaxRecvMsgSize 只是把报错换成 OOM，应改分块流；<strong>客户端提前 break 且不 cancel</strong>，流与缓冲不释放，连接上残留活跃流；<strong>双向流单协程先写后读</strong>，双方窗口互相耗尽，死锁到 deadline 为止，读写必须分两个协程；<strong>handler 忽略 ctx.Done</strong>，客户端早已离开，服务端协程还在跑。</p>
 
-    <table>
-        <thead>
-            <tr>
-                <th>做法</th>
-                <th>下游看到什么</th>
-                <th>故障时的后果</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>用上游 ctx 派生下游调用</td>
-                <td>grpc-timeout 逐跳递减</td>
-                <td>上游一超时，整条链同步收敛，资源及时释放</td>
-            </tr>
-            <tr>
-                <td>用空白 context 发起下游</td>
-                <td>下游完全没有 deadline</td>
-                <td>上游早已返回，下游还在跑「幽灵请求」，线程与连接池被吃干</td>
-            </tr>
-            <tr>
-                <td>每跳各自写死超时且总和大于入口</td>
-                <td>下游超时永远等不到触发</td>
-                <td>入口先超时，下游继续消耗资源，重试叠加后打成雪崩</td>
-            </tr>
-            <tr>
-                <td>WaitForReady 开着且无 deadline</td>
-                <td>连接不可用时调用不失败</td>
-                <td>调用无限挂起，监控上表现为「无错误但无响应」</td>
-            </tr>
-        </tbody>
-    </table>
+<h2>② 原理 · deadline 为什么必须端到端传播</h2>
+<p>搞清这条，能解决「上游已经返回错误，下游日志里却还在处理同一个请求」。</p>
+<p>gRPC 的超时不是「客户端自己等多久」，而是<strong>一个随请求走的预算</strong>：客户端把剩余时间写进 <code>grpc-timeout</code> 头，服务端据此生成带 deadline 的 context，再派生给下游。这条链只要断一环，后面全是裸奔。</p>
+<p>先纠正一个流传很广的说法：<strong>deadline 传播不需要两端时钟同步</strong>。线上传的是相对剩余时间（如 <code>1800m</code> 表示 1800 毫秒），每跳自己换算，时钟偏移无关。另一个常见误解是「反正 gRPC 会传播取消，不设超时也没事」——取消确实会通过 RST_STREAM 传下去让服务端 context 被 cancel，但那要求客户端真的退出；如果客户端本身也在无限等待，整条链就一起挂住。</p>
 
-    <pre><code class="language-go">func (s *orderServer) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*pb.CreateOrderResponse, error) {
+<table>
+    <thead>
+        <tr>
+            <th>做法</th>
+            <th>下游看到什么</th>
+            <th>故障时的后果</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>用上游 ctx 派生下游调用</td>
+            <td>grpc-timeout 逐跳递减</td>
+            <td>上游一超时，整条链同步收敛，资源及时释放</td>
+        </tr>
+        <tr>
+            <td>用空白 context 发起下游</td>
+            <td>下游完全没有 deadline</td>
+            <td>上游早已返回，下游还在跑「幽灵请求」，线程与连接池被吃干</td>
+        </tr>
+        <tr>
+            <td>每跳各自写死超时且总和大于入口</td>
+            <td>下游超时永远等不到触发</td>
+            <td>入口先超时，下游继续消耗资源，重试叠加后打成雪崩</td>
+        </tr>
+        <tr>
+            <td>WaitForReady 开着且无 deadline</td>
+            <td>连接不可用时调用不失败</td>
+            <td>调用无限挂起，监控上表现为「无错误但无响应」</td>
+        </tr>
+    </tbody>
+</table>
+
+<pre><code class="language-go">func (s *orderServer) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*pb.CreateOrderResponse, error) {
     // 1) 先看上游给了多少预算。没有 deadline 的请求要么拒绝，要么兜一个默认值，
     //    绝不能让它无限期占着工作协程。
     dl, ok := ctx.Deadline()
@@ -354,10 +542,11 @@ sequenceDiagram
     return &amp;pb.CreateOrderResponse{}, nil
 }</code></pre>
 
-    <h2>连接、状态机与负载均衡的难点</h2>
-    <p>gRPC 的连接不是「连上或没连上」两态，而是一个有退避的状态机。这个状态机解释了滚动发布期间的抖动、扩容后新实例没流量、以及 <code>WaitForReady</code> 到底改变了什么。</p>
+<h2>② 原理 · 连接状态机与负载均衡的核心矛盾</h2>
+<p>搞清这一节，能解决「扩容了但新 Pod 没流量」「滚动发布期间一小段 UNAVAILABLE」「WaitForReady 到底改了什么」。</p>
+<p>gRPC 的连接不是「连上或没连上」两态，而是一个有退避的状态机。</p>
 
-    <div class="mermaid">
+<div class="mermaid">
 stateDiagram-v2
     [*] --> IDLE
     IDLE --> CONNECTING: 首个 RPC 或 LB 要求建连
@@ -373,11 +562,11 @@ stateDiagram-v2
         默认快速失败，此状态下发起的 RPC 立刻返回 UNAVAILABLE
         打开 WaitForReady 则改为挂起等待，此时若没有 deadline 就是永久挂起
     end note
-    </div>
+</div>
 
-    <p>核心矛盾一句话说清：<strong>负载均衡发生在连接层，而负载发生在流层</strong>。一条 HTTP/2 长连接建好之后，成千上万个流都走同一个后端，四层负载均衡再也没有决策机会。雪上加霜的是，gRPC 默认的 LB 策略是 <code>pick_first</code>，而 Kubernetes 的 ClusterIP 只解析出一个虚拟 IP——客户端眼里就只有一个地址，谈不上均衡。</p>
+<p>核心矛盾一句话说清：<strong>负载均衡发生在连接层，而负载发生在流层</strong>。一条 HTTP/2 长连接建好之后，成千上万个流都走同一个后端，四层负载均衡再也没有决策机会。雪上加霜的是，gRPC 默认的 LB 策略是 <code>pick_first</code>，而 Kubernetes 的 ClusterIP 只解析出一个虚拟 IP——客户端眼里就只有一个地址，谈不上均衡。</p>
 
-    <div class="mermaid">
+<div class="mermaid">
 flowchart TB
     Q1{"客户端能用 gRPC 原生 LB 吗"}
     Q1 -->|"能，语言栈统一"| Q2{"能拿到后端地址列表吗"}
@@ -390,266 +579,280 @@ flowchart TB
     P3 --> P5["检查代理的 idle timeout 与 trailer 支持"]
     P1 --> P6["服务端配 MaxConnectionAge 周期性打散长连接"]
     P2 --> P6
-    </div>
+</div>
 
-    <table>
-        <thead>
-            <tr>
-                <th>方案</th>
-                <th>均衡粒度</th>
-                <th>扩容感知</th>
-                <th>客户端改造</th>
-                <th>主要代价</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>ClusterIP 四层转发</td>
-                <td>按连接</td>
-                <td>只有重连才换后端</td>
-                <td>无</td>
-                <td>长连接下几乎等于不均衡</td>
-            </tr>
-            <tr>
-                <td>headless + round_robin</td>
-                <td>按请求</td>
-                <td>依赖重解析触发时机</td>
-                <td>需支持原生 LB 与服务配置</td>
-                <td>客户端要维护到所有后端的连接，后端多时连接数放大</td>
-            </tr>
-            <tr>
-                <td>七层代理（Envoy / 网关）</td>
-                <td>按请求</td>
-                <td>控制面秒级</td>
-                <td>无</td>
-                <td>多一跳延迟与一套运维；必须确认代理透传 trailer</td>
-            </tr>
-            <tr>
-                <td>xDS proxyless</td>
-                <td>按请求，支持权重与哈希</td>
-                <td>控制面秒级</td>
-                <td>需要支持 xDS 的 gRPC 版本</td>
-                <td>控制面强耦合，各语言支持度不齐</td>
-            </tr>
-        </tbody>
-    </table>
+<table>
+    <thead>
+        <tr>
+            <th>方案</th>
+            <th>均衡粒度</th>
+            <th>扩容感知</th>
+            <th>客户端改造</th>
+            <th>主要代价</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>ClusterIP 四层转发</td>
+            <td>按连接</td>
+            <td>只有重连才换后端</td>
+            <td>无</td>
+            <td>长连接下几乎等于不均衡</td>
+        </tr>
+        <tr>
+            <td>headless + round_robin</td>
+            <td>按请求</td>
+            <td>依赖重解析触发时机</td>
+            <td>需支持原生 LB 与服务配置</td>
+            <td>客户端要维护到所有后端的连接，后端多时连接数放大</td>
+        </tr>
+        <tr>
+            <td>七层代理（Envoy / 网关）</td>
+            <td>按请求</td>
+            <td>控制面秒级</td>
+            <td>无</td>
+            <td>多一跳延迟与一套运维；必须确认代理透传 trailer</td>
+        </tr>
+        <tr>
+            <td>xDS proxyless</td>
+            <td>按请求，支持权重与哈希</td>
+            <td>控制面秒级</td>
+            <td>需要支持 xDS 的 gRPC 版本</td>
+            <td>控制面强耦合，各语言支持度不齐</td>
+        </tr>
+    </tbody>
+</table>
 
-    <p>两个实战要点：<strong>服务端配 <code>MaxConnectionAge</code></strong>，让连接到龄后发 GOAWAY 迫使客户端重连重解析，扩容的新实例才分得到流量，这比任何客户端策略都可靠；<strong>重解析不是定时轮询</strong>，grpc-go 的 DNS resolver 主要在连接失败或 LB 请求时触发且有最小间隔（30 秒量级），缩容后旧地址会被继续持有，必须配合优雅下线。</p>
+<p>两个实战要点：<strong>服务端配 <code>MaxConnectionAge</code></strong>，让连接到龄后发 GOAWAY 迫使客户端重连重解析，扩容的新实例才分得到流量，这比任何客户端策略都可靠；<strong>重解析不是定时轮询</strong>，grpc-go 的 DNS resolver 主要在连接失败或 LB 请求时触发且有最小间隔（30 秒量级），缩容后旧地址会被继续持有，必须配合优雅下线。ClusterIP 这个虚拟 IP 的转发真相见站内 <a href="../../../devops/kubernetes/">Kubernetes</a>。</p>
 
-    <pre><code class="language-go">// 客户端通道配置：LB、重试、keepalive 一次配好，不要在每个调用点重复
-const svcCfg = `{
-  "loadBalancingConfig": [{"round_robin": {}}],
-  "methodConfig": [{
-    "name": [{"service": "order.v1.OrderService"}],
-    "timeout": "1.5s",
-    "retryPolicy": {
-      "maxAttempts": 3,
-      "initialBackoff": "0.05s",
-      "maxBackoff": "0.5s",
-      "backoffMultiplier": 2,
-      "retryableStatusCodes": ["UNAVAILABLE"]
-    }
-  }],
-  "retryThrottling": {"maxTokens": 100, "tokenRatio": 0.1}
-}`
+<h2>② 原理 · 错误模型：status code 与 details</h2>
+<p>搞清这一节，能解决「客户端为什么疯狂刷新 token」「为什么对着 DEADLINE_EXCEEDED 重试毫无效果」。</p>
+<p>gRPC 的错误是<strong>结构化的三件套</strong>：<code>grpc-status</code>（整数码）、<code>grpc-message</code>（百分号编码的文本）、<code>grpc-status-details-bin</code>（base64 的 <code>google.rpc.Status</code>，里面可以放 ErrorInfo、BadRequest、RetryInfo 等 Any）。三件套都在 trailer 里，这就是 curl 看不到错误的根因。</p>
+<p>选码的原则是「让调用方能据此决策」。最常见的错用是全部返回 INTERNAL 或 UNKNOWN，调用方无法判断该重试还是该报错；其次是把 INVALID_ARGUMENT 和 FAILED_PRECONDITION 混用——前者表示参数本身不对，<strong>重试多少次都不会成功</strong>；后者表示参数没问题但系统状态不允许，状态变了以后重试是有意义的。</p>
 
-cc, err := grpc.NewClient(
-    // 必须是 headless Service，否则解析出来只有一个 ClusterIP，round_robin 无从下手
-    "dns:///order.prod.svc.cluster.local:8080",
-    grpc.WithTransportCredentials(creds),
-    grpc.WithDefaultServiceConfig(svcCfg),
-    grpc.WithKeepaliveParams(keepalive.ClientParameters{
-        // 小于 10s 会被库抬到 10s；而且必须大于服务端 EnforcementPolicy.MinTime
-        Time:                30 * time.Second,
-        Timeout:             10 * time.Second,
-        PermitWithoutStream: true, // 空闲期也探活，防中间设备静默回收连接
-    }),
-    // 注意：显式设窗口会关闭 grpc-go 的 BDP 动态调窗，跨区链路慎用
-    // grpc.WithInitialWindowSize(1&lt;&lt;20),
-)</code></pre>
+<table>
+    <thead>
+        <tr>
+            <th>状态码</th>
+            <th>语义要点</th>
+            <th>可否重试</th>
+            <th>典型成因</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>UNAVAILABLE</td>
+            <td>当前不可用，请求很可能没被执行</td>
+            <td>可以，需退避与预算</td>
+            <td>连接断开、GOAWAY、后端未就绪、代理 5xx 映射</td>
+        </tr>
+        <tr>
+            <td>DEADLINE_EXCEEDED</td>
+            <td>预算耗尽，执行结果未知</td>
+            <td>同一 deadline 内重试无意义</td>
+            <td>下游慢、预算切得太小、重试吃掉剩余预算</td>
+        </tr>
+        <tr>
+            <td>RESOURCE_EXHAUSTED</td>
+            <td>配额或资源不足</td>
+            <td>视成因，限流可退避重试，超大消息不可</td>
+            <td>限流、超过 MaxRecvMsgSize、并发流耗尽</td>
+        </tr>
+        <tr>
+            <td>ABORTED</td>
+            <td>并发冲突，事务被中止</td>
+            <td>需业务层带新状态重试</td>
+            <td>乐观锁失败、CAS 冲突</td>
+        </tr>
+        <tr>
+            <td>FAILED_PRECONDITION</td>
+            <td>系统状态不满足前置条件</td>
+            <td>不应盲目重试</td>
+            <td>资源未初始化、状态机不允许此操作</td>
+        </tr>
+        <tr>
+            <td>INVALID_ARGUMENT</td>
+            <td>参数不合法，与状态无关</td>
+            <td>不可重试</td>
+            <td>校验失败、枚举越界</td>
+        </tr>
+        <tr>
+            <td>UNIMPLEMENTED</td>
+            <td>方法不存在或未注册</td>
+            <td>不可重试</td>
+            <td>proto 与部署版本不一致、代理路径改写、404 映射</td>
+        </tr>
+        <tr>
+            <td>CANCELLED</td>
+            <td>调用方主动取消</td>
+            <td>不该重试</td>
+            <td>上游超时后关闭、客户端退出；服务端日志里大量出现说明上游预算不够</td>
+        </tr>
+        <tr>
+            <td>INTERNAL / UNKNOWN</td>
+            <td>服务端异常，副作用不确定</td>
+            <td>不可自动重试</td>
+            <td>panic 被兜底、编解码错误、非 gRPC 异常直接冒出</td>
+        </tr>
+        <tr>
+            <td>UNAUTHENTICATED / PERMISSION_DENIED</td>
+            <td>身份缺失 / 身份有效但无权</td>
+            <td>不可重试（换凭证除外）</td>
+            <td>token 过期用前者、越权用后者，混用会让客户端疯狂刷新 token</td>
+        </tr>
+    </tbody>
+</table>
 
-    <h2>错误模型：status code 与 details</h2>
-    <p>gRPC 的错误是<strong>结构化的三件套</strong>：<code>grpc-status</code>（整数码）、<code>grpc-message</code>（百分号编码的文本）、<code>grpc-status-details-bin</code>（base64 的 <code>google.rpc.Status</code>，里面可以放 ErrorInfo、BadRequest、RetryInfo 等 Any）。三件套都在 trailer 里，这就是 curl 看不到错误的根因。</p>
-    <p>选码的原则是「让调用方能据此决策」。最常见的错用是全部返回 INTERNAL 或 UNKNOWN，调用方无法判断该重试还是该报错；其次是把 INVALID_ARGUMENT 和 FAILED_PRECONDITION 混用——前者表示参数本身不对，<strong>重试多少次都不会成功</strong>；后者表示参数没问题但系统状态不允许，状态变了以后重试是有意义的。</p>
+<p>框架重试还有一条少有人知的规则：<strong>调用一旦「提交」就不再重试</strong>——客户端收到本次尝试的任何响应消息后重试即退出，这也是流式几乎无法自动重试的原因。<code>retryThrottling</code> 则是令牌桶式重试预算，失败率高时会主动停掉重试。Go 侧从 <code>error</code> 还原状态码与 details 的正确写法见站内 <a href="../grpc-go/">Go 中 gRPC 服务的工程实践</a>。</p>
 
-    <table>
-        <thead>
-            <tr>
-                <th>状态码</th>
-                <th>语义要点</th>
-                <th>可否重试</th>
-                <th>典型成因</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>UNAVAILABLE</td>
-                <td>当前不可用，请求很可能没被执行</td>
-                <td>可以，需退避与预算</td>
-                <td>连接断开、GOAWAY、后端未就绪、代理 5xx 映射</td>
-            </tr>
-            <tr>
-                <td>DEADLINE_EXCEEDED</td>
-                <td>预算耗尽，执行结果未知</td>
-                <td>同一 deadline 内重试无意义</td>
-                <td>下游慢、预算切得太小、重试吃掉剩余预算</td>
-            </tr>
-            <tr>
-                <td>RESOURCE_EXHAUSTED</td>
-                <td>配额或资源不足</td>
-                <td>视成因，限流可退避重试，超大消息不可</td>
-                <td>限流、超过 MaxRecvMsgSize、并发流耗尽</td>
-            </tr>
-            <tr>
-                <td>ABORTED</td>
-                <td>并发冲突，事务被中止</td>
-                <td>需业务层带新状态重试</td>
-                <td>乐观锁失败、CAS 冲突</td>
-            </tr>
-            <tr>
-                <td>FAILED_PRECONDITION</td>
-                <td>系统状态不满足前置条件</td>
-                <td>不应盲目重试</td>
-                <td>资源未初始化、状态机不允许此操作</td>
-            </tr>
-            <tr>
-                <td>INVALID_ARGUMENT</td>
-                <td>参数不合法，与状态无关</td>
-                <td>不可重试</td>
-                <td>校验失败、枚举越界</td>
-            </tr>
-            <tr>
-                <td>UNIMPLEMENTED</td>
-                <td>方法不存在或未注册</td>
-                <td>不可重试</td>
-                <td>proto 与部署版本不一致、代理路径改写、404 映射</td>
-            </tr>
-            <tr>
-                <td>CANCELLED</td>
-                <td>调用方主动取消</td>
-                <td>不该重试</td>
-                <td>上游超时后关闭、客户端退出；服务端日志里大量出现说明上游预算不够</td>
-            </tr>
-            <tr>
-                <td>INTERNAL / UNKNOWN</td>
-                <td>服务端异常，副作用不确定</td>
-                <td>不可自动重试</td>
-                <td>panic 被兜底、编解码错误、非 gRPC 异常直接冒出</td>
-            </tr>
-            <tr>
-                <td>UNAUTHENTICATED / PERMISSION_DENIED</td>
-                <td>身份缺失 / 身份有效但无权</td>
-                <td>不可重试（换凭证除外）</td>
-                <td>token 过期用前者、越权用后者，混用会让客户端疯狂刷新 token</td>
-            </tr>
-        </tbody>
-    </table>
+<h2>② 原理 · keepalive 与中间代理造成的偶发断连</h2>
+<p>搞清这一节，能解决「服务端没重启，客户端却周期性报 UNAVAILABLE」——这类问题几乎全在链路上，不在业务代码里。</p>
+<p>链路上任何一个中间设备都可能回收「看起来空闲」的 TCP 连接，而 HTTP/2 长连接在没有流的时候确实一个字节都不发。</p>
 
-    <p>框架重试还有一条少有人知的规则：<strong>调用一旦「提交」就不再重试</strong>——客户端收到本次尝试的任何响应消息后重试即退出，这也是流式几乎无法自动重试的原因。<code>retryThrottling</code> 则是令牌桶式重试预算，失败率高时会主动停掉重试。</p>
+<table>
+    <thead>
+        <tr>
+            <th>参数 / 设备</th>
+            <th>典型默认值</th>
+            <th>作用</th>
+            <th>配错的现象</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>客户端 keepalive Time</td>
+            <td>关闭（不主动探活）</td>
+            <td>多久发一次 PING</td>
+            <td>不开启则连接被中间设备静默回收，下次调用才发现</td>
+        </tr>
+        <tr>
+            <td>PermitWithoutStream</td>
+            <td>false</td>
+            <td>无活跃流时是否允许探活</td>
+            <td>保持 false 时空闲连接不被探测，正是最容易被回收的时段</td>
+        </tr>
+        <tr>
+            <td>服务端 EnforcementPolicy.MinTime</td>
+            <td>5 分钟</td>
+            <td>允许的最小 ping 间隔</td>
+            <td>客户端探测更频繁则收到 too_many_pings 的 GOAWAY，形成重连风暴</td>
+        </tr>
+        <tr>
+            <td>服务端 MaxConnectionAge / Grace</td>
+            <td>无穷</td>
+            <td>连接最大寿命与收尾期</td>
+            <td>不设则扩容后新实例长期没流量；Grace 太短会打断在途长调用</td>
+        </tr>
+        <tr>
+            <td>云上四层负载均衡空闲超时</td>
+            <td>数十秒到数百秒（AWS NLB 为 350 秒）</td>
+            <td>回收空闲 TCP 流</td>
+            <td>断连间隔恰好等于该值，是最强的判定信号</td>
+        </tr>
+        <tr>
+            <td>Nginx grpc_read_timeout</td>
+            <td>60 秒</td>
+            <td>读上游的超时</td>
+            <td>长流或慢响应被代理提前切断，客户端看到 UNAVAILABLE 而服务端一切正常</td>
+        </tr>
+    </tbody>
+</table>
 
-    <h2>keepalive 与中间代理造成的偶发断连</h2>
-    <p>「服务端明明没重启，客户端却周期性报 UNAVAILABLE」几乎都是这一节的问题。链路上任何一个中间设备都可能回收「看起来空闲」的 TCP 连接，而 HTTP/2 长连接在没有流的时候确实一个字节都不发。</p>
+<p>代理侧的超时参数全景与 <code>grpc_pass</code> 的配置要点见站内 <a href="../../../devops/nginx/">Nginx 实践</a>。</p>
 
-    <table>
-        <thead>
-            <tr>
-                <th>参数 / 设备</th>
-                <th>典型默认值</th>
-                <th>作用</th>
-                <th>配错的现象</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>客户端 keepalive Time</td>
-                <td>关闭（不主动探活）</td>
-                <td>多久发一次 PING</td>
-                <td>不开启则连接被中间设备静默回收，下次调用才发现</td>
-            </tr>
-            <tr>
-                <td>PermitWithoutStream</td>
-                <td>false</td>
-                <td>无活跃流时是否允许探活</td>
-                <td>保持 false 时空闲连接不被探测，正是最容易被回收的时段</td>
-            </tr>
-            <tr>
-                <td>服务端 EnforcementPolicy.MinTime</td>
-                <td>5 分钟</td>
-                <td>允许的最小 ping 间隔</td>
-                <td>客户端探测更频繁则收到 too_many_pings 的 GOAWAY，形成重连风暴</td>
-            </tr>
-            <tr>
-                <td>服务端 MaxConnectionAge / Grace</td>
-                <td>无穷</td>
-                <td>连接最大寿命与收尾期</td>
-                <td>不设则扩容后新实例长期没流量；Grace 太短会打断在途长调用</td>
-            </tr>
-            <tr>
-                <td>云上四层负载均衡空闲超时</td>
-                <td>数十秒到数百秒（AWS NLB 为 350 秒）</td>
-                <td>回收空闲 TCP 流</td>
-                <td>断连间隔恰好等于该值，是最强的判定信号</td>
-            </tr>
-            <tr>
-                <td>Nginx grpc_read_timeout</td>
-                <td>60 秒</td>
-                <td>读上游的超时</td>
-                <td>长流或慢响应被代理提前切断，客户端看到 UNAVAILABLE 而服务端一切正常</td>
-            </tr>
-        </tbody>
-    </table>
+<h2>② 原理 · 拦截器与 stats.Handler 的职责分层</h2>
+<p>搞清这一节，能解决「为什么 panic 的那次调用在监控里凭空消失」「为什么流式接口绕过了鉴权」。</p>
+<p>拦截器不是「随便加个 hook」，它有明确的层次约束。<strong>unary 与 stream 是两套完全独立的链</strong>，注册顺序即嵌套顺序（第一个最外层）。至于观测粒度，拦截器只能看到「一次调用」，看不到单条消息与压缩后的字节数——需要这类指标必须用 <code>stats.Handler</code>，它挂在传输层，能拿到每条消息的收发事件和连接级事件。</p>
+<p>推荐的层次：最外层放指标、追踪与访问日志，它必须覆盖 panic 被转换后的返回，放到 recovery 内侧那次调用就会在监控里凭空消失；次外层是 panic 恢复并统一转成 INTERNAL；中间层做认证与租户上下文注入，先确定身份才能按身份限流；内层做限流与并发隔离。</p>
+<p>排查手段也分层：调用级用 <code>grpcurl -vv</code> 看 trailer 与 details；通道级打开 <code>GRPC_GO_LOG_SEVERITY_LEVEL=info</code> 与 <code>GRPC_GO_LOG_VERBOSITY_LEVEL=2</code> 看解析、LB 与连接状态迁移；连接级用 channelz 查看每个 SubChannel 的状态与流计数；再往下才是抓包看帧。顺序搞反会浪费大量时间。指标与追踪怎么落地见站内 <a href="../../../observability/tracing/">链路追踪</a>。</p>
 
-    <pre><code class="language-go">srv := grpc.NewServer(
-    grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-        // 默认 5 分钟。客户端探测更频繁就会被 GOAWAY + too_many_pings 踢掉，
-        // 所以这个值必须小于所有客户端的 keepalive Time。
-        MinTime:             15 * time.Second,
-        PermitWithoutStream: true,
-    }),
-    grpc.KeepaliveParams(keepalive.ServerParameters{
-        Time:                  2 * time.Hour,    // 默认值，服务端主动探活间隔
-        Timeout:               20 * time.Second, // 默认值
-        MaxConnectionIdle:     5 * time.Minute,  // 默认无穷，设了才回收闲连接
-        MaxConnectionAge:      30 * time.Minute, // 默认无穷，设了才会周期性打散长连接
-        MaxConnectionAgeGrace: 15 * time.Second, // 给在途 RPC 的收尾时间
-    }),
-    grpc.MaxConcurrentStreams(200),   // 限制单连接并发流，防单客户端打满
-    grpc.MaxRecvMsgSize(4*1024*1024), // 与客户端保持一致，避免一端报错一端无感
-    // 顺序即嵌套顺序：第一个最外层。观测在最外层，才能记录到 panic 被转成 INTERNAL 的那次调用
-    grpc.ChainUnaryInterceptor(metricsUnary, recoveryUnary, authUnary, limitUnary),
-    // 漏掉这一行是高频事故：流式接口会完全绕过上面所有 unary 拦截器，等于没有鉴权
-    grpc.ChainStreamInterceptor(metricsStream, recoveryStream, authStream),
-)</code></pre>
+<h2>③ 场景 · 部署形态决定你必须配哪几项</h2>
+<p>同一份 gRPC 代码，换个部署形态要配的东西完全不同。下表按部署形态给必须配的项，缺哪一项会以什么形式暴雷。</p>
 
-    <h2>流式调用的背压与内存</h2>
-    <p>好消息是 gRPC 自带背压：窗口耗尽时 <code>Send</code> 会阻塞，生产者自然被拖慢。坏消息是<strong>只要你在应用层加了无界缓冲，背压就被你自己旁路掉了</strong>——常见写法是开一个协程把数据源源不断塞进无缓冲上限的 channel，再由另一个协程 Send，队列在内存里越堆越高，直到 OOM。</p>
+<table>
+    <thead>
+        <tr>
+            <th>部署形态</th>
+            <th>必须配的项</th>
+            <th>为什么</th>
+            <th>代价</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>单机或 compose，客户端与服务端直连</td>
+            <td>只需 deadline 与消息上限两端一致</td>
+            <td>没有中间设备，也不存在均衡问题，配多了只是噪声</td>
+            <td>几乎为零</td>
+        </tr>
+        <tr>
+            <td>Kubernetes ClusterIP</td>
+            <td>改 headless 加 <code>round_robin</code>，或前置七层代理；服务端配 <code>MaxConnectionAge</code></td>
+            <td>ClusterIP 是四层转发，长连接建好后所有流固定落在一个 Pod</td>
+            <td>改 Service 类型或多维护一跳代理</td>
+        </tr>
+        <tr>
+            <td>headless 加客户端原生 LB</td>
+            <td><code>MaxConnectionAge</code> 加优雅下线，客户端准备好重解析</td>
+            <td>DNS 重解析不是定时轮询，缩容后旧地址会被继续持有</td>
+            <td>客户端要维护到所有后端的连接，后端多时连接数放大</td>
+        </tr>
+        <tr>
+            <td>经过 Nginx 或 Envoy 等七层代理</td>
+            <td>确认代理启用 HTTP/2 与 trailer 透传，并把读超时、空闲超时调到大于探活间隔与最长流时长</td>
+            <td>结果码在 trailer 里，代理不透传就等于调用永远收不到结束</td>
+            <td>多一跳延迟；代理参数成为新的故障源</td>
+        </tr>
+        <tr>
+            <td>跨可用区或跨地域</td>
+            <td>别手动设窗口（保留 BDP 动态调窗）；重新分配超时预算；压缩按报文大小选择</td>
+            <td>单流吞吐等于窗口除以 RTT，高 RTT 下手动钉死窗口通常更慢</td>
+            <td>预算分配要重算，跨区带宽与延迟都要计入</td>
+        </tr>
+        <tr>
+            <td>浏览器或外部第三方调用</td>
+            <td>换 gRPC-Web 加代理、Connect 协议，或另出一层 HTTP 加 JSON 网关</td>
+            <td>浏览器控制不了 HTTP/2 帧也读不到 trailer，标准 gRPC 在这里不可达</td>
+            <td>多一套协议转换与文档，见站内 <a href="../../design/frontend-contract/">前后端接口契约</a></td>
+        </tr>
+        <tr>
+            <td>长时间流式（订阅、同步）</td>
+            <td>应用层自己做续传与断点，代理与服务端超时都要覆盖最长流时长</td>
+            <td>流式不可自动重试，GOAWAY 与代理读超时都会打断在途流</td>
+            <td>要写状态续传逻辑，实现复杂度明显上升</td>
+        </tr>
+    </tbody>
+</table>
 
-    <p>具体风险有四类：<strong>巨型单消息</strong>，整条消息必须同时驻留内存，靠调大 MaxRecvMsgSize 只是把报错换成 OOM，应改分块流；<strong>客户端提前 break 且不 cancel</strong>，流与缓冲不释放，连接上残留活跃流；<strong>双向流单协程先写后读</strong>，双方窗口互相耗尽，死锁到 deadline 为止，读写必须分两个协程；<strong>handler 忽略 ctx.Done</strong>，客户端早已离开，服务端协程还在跑。</p>
+<div class="callout callout-warning">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-title">这些需求换方案比调 gRPC 更省</div>
+    <p>要削峰、扇出或可重放，用消息传递，见站内 <a href="../../../architecture/messaging/">消息队列</a>；要给第三方开放接口，出一层 HTTP 加 JSON 并按版本治理，见站内 <a href="../../design/versioning/">API 版本治理</a>；要在同一个 TypeScript 仓库里做前后端类型安全，IDL 与代码生成的成本收不回来，见站内 <a href="../../trpc/">tRPC 的端到端类型安全</a>。</p>
+</div>
 
-    <h2>拦截器的职责分层</h2>
-    <p>拦截器不是「随便加个 hook」，它有明确的层次约束。<strong>unary 与 stream 是两套完全独立的链</strong>，注册顺序即嵌套顺序（第一个最外层）。至于观测粒度，拦截器只能看到「一次调用」，看不到单条消息与压缩后的字节数——需要这类指标必须用 <code>stats.Handler</code>，它挂在传输层，能拿到每条消息的收发事件和连接级事件。</p>
+<p>这篇在 RPC 簇里承接「框架抽象与选型」，讲的是 gRPC 这一种实现的传输层真相；再往下是 Go 侧的服务实现细节，然后是 Protobuf 的编码与兼容性。</p>
 
-    <p>推荐的层次：最外层放指标、追踪与访问日志，它必须覆盖 panic 被转换后的返回，放到 recovery 内侧那次调用就会在监控里凭空消失；次外层是 panic 恢复并统一转成 INTERNAL；中间层做认证与租户上下文注入，先确定身份才能按身份限流；内层做限流与并发隔离。</p>
+<p class="cluster-nav">同主题路径：<a href="../">← 上一步：RPC 框架的抽象层次与选型</a> · <a href="../grpc-go/">下一步：Go 中 gRPC 服务的工程实践 →</a></p>
 
-    <p>排查手段也分层：调用级用 <code>grpcurl -v</code> 看 trailer 与 details；通道级打开 <code>GRPC_GO_LOG_SEVERITY_LEVEL=info</code> 与 <code>GRPC_GO_LOG_VERBOSITY_LEVEL=2</code> 看解析、LB 与连接状态迁移；连接级用 channelz 查看每个 SubChannel 的状态与流计数；再往下才是抓包看帧。顺序搞反会浪费大量时间。</p>
-
-    <h2>最容易踩的坑</h2>
-    <div class="callout callout-danger">
-        <div class="callout-icon">❌</div>
-        <div class="callout-title">避坑清单</div>
-        <ul>
-            <li>用 ClusterIP 暴露 gRPC 服务，以为 Kubernetes 会自动均衡。长连接下所有流都落在一个 Pod 上，必须换 headless 加 round_robin，或走七层代理。</li>
-            <li>只在客户端设了超时，没有让 deadline 随请求传播。上游一走，下游变成没人要的幽灵请求，继续吃连接池和线程。</li>
-            <li>用空白 context 调下游，一句 <code>context.Background()</code> 就把整条预算链剪断，而且这种代码在压测中完全正常，只在故障时爆炸。</li>
-            <li>客户端 keepalive 间隔小于服务端 MinTime（默认 5 分钟），被 GOAWAY 带 too_many_pings 踢下线，然后重连风暴。</li>
-            <li>忘了服务端 MaxConnectionAge。扩容出来的新实例一直没流量，监控上是老实例 CPU 高、新实例接近空载。</li>
-            <li>只注册 UnaryInterceptor，流式方法绕过鉴权、限流、日志全部生效不了——这是安全事故而不是功能缺陷。</li>
-            <li>对 DEADLINE_EXCEEDED 配置重试。重试与首次尝试共享同一份预算，结果是压力翻倍而成功率不变。</li>
-            <li>流式调用没读到 EOF 就丢弃，或双向流在单个协程里先写完再读，前者泄漏流后者直接死锁。</li>
-            <li>把大结果集塞进一条消息，靠调大 MaxRecvMsgSize 解决。并发一起来就是内存尖刺，正确做法是分块流。</li>
-            <li>中间代理未透传 trailer 或未启用 HTTP/2，客户端表现为调用挂住或状态永远是 UNKNOWN，先确认 te 头与 h2 配置再怀疑业务代码。</li>
-        </ul>
-    </div>
+<h2>最容易踩的坑</h2>
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">避坑清单</div>
+    <ul>
+        <li>用 ClusterIP 暴露 gRPC 服务，以为 Kubernetes 会自动均衡。长连接下所有流都落在一个 Pod 上，必须换 headless 加 round_robin，或走七层代理。</li>
+        <li>只在客户端设了超时，没有让 deadline 随请求传播。上游一走，下游变成没人要的幽灵请求，继续吃连接池和线程。</li>
+        <li>用空白 context 调下游，一句 <code>context.Background()</code> 就把整条预算链剪断，而且这种代码在压测中完全正常，只在故障时爆炸。</li>
+        <li>客户端 keepalive 间隔小于服务端 MinTime（默认 5 分钟），被 GOAWAY 带 too_many_pings 踢下线，然后重连风暴。</li>
+        <li>忘了服务端 MaxConnectionAge。扩容出来的新实例一直没流量，监控上是老实例 CPU 高、新实例接近空载。</li>
+        <li>只注册 UnaryInterceptor，流式方法绕过鉴权、限流、日志全部生效不了——这是安全事故而不是功能缺陷。</li>
+        <li>对 DEADLINE_EXCEEDED 配置重试。重试与首次尝试共享同一份预算，结果是压力翻倍而成功率不变。</li>
+        <li>流式调用没读到 EOF 就丢弃，或双向流在单个协程里先写完再读，前者泄漏流后者直接死锁。</li>
+        <li>把大结果集塞进一条消息，靠调大 MaxRecvMsgSize 解决。并发一起来就是内存尖刺，正确做法是分块流。</li>
+        <li>中间代理未透传 trailer 或未启用 HTTP/2，客户端表现为调用挂住或状态永远是 UNKNOWN，先确认 te 头与 h2 配置再怀疑业务代码。</li>
+        <li>照着调优帖显式设 <code>WithInitialWindowSize</code>。这一行会关闭 BDP 动态调窗，跨区链路上多半比不设更慢。</li>
+        <li>用 curl 调 gRPC 接口然后困惑「为什么返回 200 却没数据」。结果码在 trailer 里，要用 <code>grpcurl -vv</code>。</li>
+    </ul>
+</div>
 </article>
                 <nav class="article-nav">
                     <a class="nav-prev" href="../../../devops/nginx/rtmp/"><span class="nav-label">← 上一篇</span><span class="nav-title">编译</span></a>

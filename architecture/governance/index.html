@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="把服务注册发现、配置中心、流量入口放在一起讲：三者本质都是控制面下发加数据面执行，都必须做本地缓存与弱依赖降级。内容包括三者的职责边界与缺失后果、基础设施可用性的三条硬要求、推送与拉取在延迟与连接数上的取舍、服务发现为什么应该选 AP 而不是 CP、注册与配置合并到同一组件的故障域权衡，以及把控制面放进请求关键路径这类常见反模式。">
+    <meta name="description" content="服务治理三段式：先给「这三块哪些该用平台能力、哪些还得自己留」的判断表、六步落地清单、就绪与摘流的最小配置和弱依赖验收命令，再讲注册发现、配置中心、网关同构的控制面加数据面结构、弱依赖的三条硬要求、推送与长轮询在延迟与连接数上的交换、服务发现为什么应该选 AP，最后给注册与配置合一还是分开的决策矩阵、先补哪一块的判断路径与六类反模式。">
     <meta name="keywords" content="配置中心与服务发现,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/governance/">
     <meta property="og:title" content="服务治理的三块基础设施：注册发现、配置、网关 - 资深码农">
-    <meta property="og:description" content="把服务注册发现、配置中心、流量入口放在一起讲：三者本质都是控制面下发加数据面执行，都必须做本地缓存与弱依赖降级。内容包括三者的职责边界与缺失后果、基础设施可用性的三条硬要求、推送与拉取在延迟与连接数上的取舍、服务发现为什么应该选 AP 而不是 CP、注册与配置合并到同一组件的故障域权衡，以及把控制面放进请求关键路径这类常见反模式。">
+    <meta property="og:description" content="服务治理三段式：先给「这三块哪些该用平台能力、哪些还得自己留」的判断表、六步落地清单、就绪与摘流的最小配置和弱依赖验收命令，再讲注册发现、配置中心、网关同构的控制面加数据面结构、弱依赖的三条硬要求、推送与长轮询在延迟与连接数上的交换、服务发现为什么应该选 AP，最后给注册与配置合一还是分开的决策矩阵、先补哪一块的判断路径与六类反模式。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/governance/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="服务治理的三块基础设施：注册发现、配置、网关 - 资深码农">
-    <meta name="twitter:description" content="把服务注册发现、配置中心、流量入口放在一起讲：三者本质都是控制面下发加数据面执行，都必须做本地缓存与弱依赖降级。内容包括三者的职责边界与缺失后果、基础设施可用性的三条硬要求、推送与拉取在延迟与连接数上的取舍、服务发现为什么应该选 AP 而不是 CP、注册与配置合并到同一组件的故障域权衡，以及把控制面放进请求关键路径这类常见反模式。">
+    <meta name="twitter:description" content="服务治理三段式：先给「这三块哪些该用平台能力、哪些还得自己留」的判断表、六步落地清单、就绪与摘流的最小配置和弱依赖验收命令，再讲注册发现、配置中心、网关同构的控制面加数据面结构、弱依赖的三条硬要求、推送与长轮询在延迟与连接数上的交换、服务发现为什么应该选 AP，最后给注册与配置合一还是分开的决策矩阵、先补哪一块的判断路径与六类反模式。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -73,9 +73,81 @@
                     <div class="article-content">
 <p><strong>本篇是专题主干，只讲三者的共性、边界与可用性设计</strong>，具体机制分别在三篇子文里展开：服务端存储模型与推送实现见 <a href="config-center/">配置中心的服务端机制与选型</a>，注册发现的健康检查与摘除延迟见 <a href="service-discovery/">服务注册发现的机制与故障模式</a>，网关的数据面实现与部署形态见 <a href="gateway/">网关的数据面实现与部署形态</a>。应用侧怎么用配置（配置四分类、能否热更新的判断、两阶段变更）见 <a href="config-client/">微服务配置中心的应用侧实践</a>，网关该放什么不该放什么见 <a href="api-gateway/">API 网关的责任边界</a>，Nginx 的请求处理阶段与限流形态见 <a href="../../devops/nginx/">Nginx 深入</a>。</p>
 
-<h2>三块基础设施其实是同一种架构</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一张「这三块哪些该用平台能力、哪些还得自己留」的判断表，按顺序执行的落地清单与最小平台侧配置，以及一组能直接敲的弱依赖验收命令。</li>
+        <li><strong>② 原理</strong>：三者同构的控制面加数据面结构、缺一块时团队实际会用什么绕法、弱依赖的三条硬要求、推送与拉取在延迟与连接数上的直接交换、服务发现为什么应该选 AP。</li>
+        <li><strong>③ 场景</strong>：注册与配置合一还是分开的决策矩阵、现状评估下先补哪一块的判断路径、六类反模式与对应的正确做法。</li>
+    </ul>
+</div>
 
-<p>很多人把注册中心、配置中心、网关当成三门独立技术来学，结果是每换一个组件就要重新踩一遍坑。它们的内部结构其实完全同构：<strong>一个保存权威数据的控制面，一个在请求路径上真正干活的数据面，中间是一条把变更同步过去的传播链路</strong>。注册中心的权威数据是实例列表，配置中心的是配置版本，网关的是路由与插件规则，仅此而已。</p>
+<h2>① 用法 · 这三块哪些该用平台能力、哪些还得自己留</h2>
+
+<p>工程上的标准动作不是「把三个组件都装上」，而是先分清哪些能力能从平台白拿、哪些拿了之后还必须自己补一块。下表按能力项拆开，右两列是这件事上最容易出现的认知偏差：以为交给平台就完事了，实际上漏掉的部分会在半年后以故障形式回来。原因见原理层。</p>
+
+<table>
+<thead><tr><th>能力项</th><th>平台能白拿的部分</th><th>必须自己留的部分</th><th>全交给平台会漏什么</th></tr></thead>
+<tbody>
+<tr><td>实例地址解析</td><td>Kubernetes 的 Service 加 CoreDNS，或云厂商内网负载均衡</td><td>调用方侧的失败摘除、重试与熔断</td><td>Service 是 VIP 级转发，调用方看不到实例级成功率，做不了同机房优先与按权重灰度</td></tr>
+<tr><td>实例上下线</td><td><code>readinessProbe</code> 控制 Endpoints 的增删</td><td>进程内「先摘流、再停止接新请求、最后退出」的顺序</td><td>Endpoints 变更到转发规则生效是异步的，进程立刻退出就会在这个窗口里丢请求</td></tr>
+<tr><td>配置下发</td><td>ConfigMap 与 Secret 的挂载与环境变量注入</td><td>变更的分批灰度、版本记录与一键回滚</td><td>ConfigMap 没有灰度与审批；改了 ConfigMap 不重建 Pod，进程也不会自己重读</td></tr>
+<tr><td>南北向入口</td><td>Ingress 或云负载均衡提供 TLS 终止与按域名路径路由</td><td>认证、限流规则、一键封禁与流量画像</td><td>Ingress 的高级能力靠 controller 私有注解表达，换一个 controller 就要重写</td></tr>
+<tr><td>东西向治理</td><td>Service Mesh 的 sidecar 统一做超时、重试、熔断</td><td>业务语义上的降级路径：返回什么算可接受的退化结果</td><td>Mesh 只知道请求失败了，不知道哪个空结果是业务能接受的，没有降级的熔断只是更快地报错</td></tr>
+<tr><td>服务间鉴权</td><td>Mesh 的 mTLS 与 NetworkPolicy 提供网络层身份</td><td>应用层的调用方身份、配额与审计</td><td>网络层只能回答「能不能连」，回答不了「这个调用方允许调这个接口多少次」</td></tr>
+<tr><td>实例元数据</td><td>标签能表达版本、机房这类静态维度</td><td>注册元数据的键名约定与路由规则的消费方</td><td>平台标签不参与转发决策，想按版本切流仍要额外的 Service 子集或 Mesh 规则</td></tr>
+</tbody></table>
+
+<p>判断完之后按下面的顺序落地。这个顺序不能调换：没有第一步的弱依赖兜底，后面每加一块基础设施都是在给全站增加一个单点。</p>
+
+<table>
+<thead><tr><th>步骤</th><th>做什么</th><th>验收标准</th><th>跳过的后果</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>确认所有客户端 SDK 都落本地快照，并允许控制面不可达时冷启动</td><td>断开控制面后重启业务进程，进程仍能起来并提供服务</td><td>控制面故障期间任何一次重启或扩容都拉不起来，故障无法自愈</td></tr>
+<tr><td>2</td><td>把远程交互全部移出请求路径，只留后台线程刷新</td><td>控制面被防火墙丢包时业务接口仍返回 200，只是不再感知变更</td><td>控制面的 QPS 变成业务 QPS 的倍数，控制面一抖动全站超时</td></tr>
+<tr><td>3</td><td>推送之外再叠加一次定时全量拉取，并给刷新失败埋指标</td><td>指标里能看到刷新成功次数与失败次数，两者都不为常数 0</td><td>推送链路静默中断后无人发现，数据面长期停留在旧数据上</td></tr>
+<tr><td>4</td><td>补齐调用方侧的失败摘除、重试与熔断</td><td>强杀一个实例后，调用方错误率在秒级回落而不是持续报错</td><td>本地缓存兜底反而变成持续把流量打到已死实例</td></tr>
+<tr><td>5</td><td>把就绪与摘流的时序对齐，注册早于就绪、下线晚于摘流</td><td>滚动发布全程外部错误数为 0，具体做法见 <a href="service-discovery/">注册发现篇</a></td><td>每次发布都有一小批 502 或连接被重置，被当成「偶发抖动」长期忍受</td></tr>
+<tr><td>6</td><td>给控制面自身埋点与独立告警通道</td><td>能看到推送耗时、活跃连接数、客户端失败率、配置版本分布</td><td>基础设施的故障要靠业务报障才发现，根因告警被业务告警刷没</td></tr>
+</tbody></table>
+
+<p>第五步里「用平台能力」的最小正确写法只有几行，但这几行决定了发布期间会不会丢请求：</p>
+
+<pre><code class="language-yaml">        # 摘流由就绪探针负责，不要指望 liveness 探针，它失败的动作是重启而不是摘除
+        readinessProbe:
+          httpGet: {path: /readyz, port: 8080}
+          periodSeconds: 2                 # 周期决定了摘除延迟的下限，越大则发布窗口里的失败越多
+          failureThreshold: 2
+        lifecycle:
+          preStop:
+            exec:
+              # 收到终止信号后先什么都不做地等一会，让转发规则先把这个实例摘掉
+              command: ["sh", "-c", "sleep 5"]
+        # 必须大于 preStop 的等待时间加上最长一个请求的处理时间，否则会被强杀
+        terminationGracePeriodSeconds: 30</code></pre>
+
+<p>下面这组命令用来验收前四步，在预发环境跑一遍比读代码可靠得多。第二条和第三条是真正能筛出问题的：</p>
+
+<pre><code class="language-bash"># 1. 看客户端有没有落快照：没有这个目录就说明冷启动一定强依赖控制面
+ls -l /root/nacos/config /root/nacos/naming 2&gt;/dev/null   # Nacos Java 客户端默认快照位置
+ls -l ${HOME}/logs/apollo-cache/                          # Apollo 本地缓存文件
+
+# 2. 把控制面打成黑洞，观察业务是否仍然正常处理请求（关键验证）
+iptables -I OUTPUT -p tcp --dport 8848 -j DROP            # 丢弃到 Nacos 的出向流量
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/api/ping  # 期望仍是 200
+iptables -D OUTPUT -p tcp --dport 8848 -j DROP            # 验证完立刻恢复
+
+# 3. 在断连状态下重启业务进程，确认能靠快照起来（最容易翻车的一步）
+systemctl restart my-service &amp;&amp; journalctl -u my-service -n 50 | grep -i -E 'snapshot|fallback|fail'
+
+# 4. 检查推送链路是否真的活着：ESTABLISHED 数应约等于实例数，长期为 0 说明退化成了定时拉取
+ss -tanp | grep ':8848' | awk '{print $1}' | sort | uniq -c
+</code></pre>
+
+<h2>② 原理 · 三块基础设施其实是同一种架构</h2>
+
+<p>搞清这一节能解决的现象是：每换一个治理组件就要重新踩一遍同样的坑。很多人把注册中心、配置中心、网关当成三门独立技术来学，其实它们的内部结构完全同构：<strong>一个保存权威数据的控制面，一个在请求路径上真正干活的数据面，中间是一条把变更同步过去的传播链路</strong>。注册中心的权威数据是实例列表，配置中心的是配置版本，网关的是路由与插件规则，仅此而已。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -118,9 +190,9 @@ flowchart TB
 <tr><td>合适的一致性取向</td><td>AP</td><td>偏 CP：写要准，读可缓存</td><td>控制面偏 CP，数据面最终一致</td></tr>
 </tbody></table>
 
-<h2>缺了哪一块会发生什么</h2>
+<h2>② 原理 · 缺了哪一块会发生什么</h2>
 
-<p>三块基础设施不是「架构好看」才加的，每一块都对应一个没有它就绕不过去的具体痛点。下表是常见的真实绕法，以及绕法后来一定会付出的代价。</p>
+<p>搞清这一节能解决的现象是：有人问「不上这套东西行不行」时，你能准确说出代价落在哪里。三块基础设施不是「架构好看」才加的，每一块都对应一个没有它就绕不过去的具体痛点。下表是常见的真实绕法，以及绕法后来一定会付出的代价。</p>
 
 <table>
 <thead><tr><th>缺失项</th><th>直接后果</th><th>团队实际会怎么绕</th><th>绕法的代价</th></tr></thead>
@@ -131,9 +203,9 @@ flowchart TB
 <tr><td>三块都有但各自为政</td><td>网关不知道实例列表，配置不影响路由</td><td>网关里再维护一份静态 upstream</td><td>实例变更后网关继续打到死实例，出现「业务内部调用正常，从外部进来就 502」的诡异现象</td></tr>
 </tbody></table>
 
-<h2>核心要求：基础设施挂了，业务也要能继续跑</h2>
+<h2>② 原理 · 基础设施挂了，业务也要能继续跑</h2>
 
-<p>这三个组件有一个共同的危险属性：<strong>全站都依赖它们</strong>。一个业务服务挂了影响一个功能，注册中心挂了可能影响所有调用。既然无法把它们做成永不故障，唯一正确的设计方向就是让业务对它们保持弱依赖。落地下来只有三条，但很少有团队三条都做到。</p>
+<p>搞清这一节能解决的现象是：控制面一次重启就引发全站雪崩。这三个组件有一个共同的危险属性：<strong>全站都依赖它们</strong>。一个业务服务挂了影响一个功能，注册中心挂了可能影响所有调用。既然无法把它们做成永不故障，唯一正确的设计方向就是让业务对它们保持弱依赖。落地下来只有三条，但很少有团队三条都做到。</p>
 
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
@@ -214,9 +286,9 @@ func (c *Cache) Run(ctx context.Context) {
 }
 </code></pre>
 
-<h2>推送还是拉取：延迟与连接数的直接交换</h2>
+<h2>② 原理 · 推送还是拉取：延迟与连接数的直接交换</h2>
 
-<p>变更怎么从控制面到数据面，只有三种实现，选择本质上是拿服务端资源换变更延迟。<strong>结论是生产环境应该同时用推送和定时拉取</strong>，前者拿延迟，后者防止推送链路静默失败——只靠推送的系统几乎无法发现漏推，往往要等到排障时才发现某几个实例的配置停留在一周前。</p>
+<p>搞清这一节能解决的现象是：改了配置为什么半分钟才生效，以及为什么实例数一涨控制面就撑不住。变更怎么从控制面到数据面，只有三种实现，选择本质上是拿服务端资源换变更延迟。<strong>结论是生产环境应该同时用推送和定时拉取</strong>，前者拿延迟，后者防止推送链路静默失败——只靠推送的系统几乎无法发现漏推，往往要等到排障时才发现某几个实例的配置停留在一周前。</p>
 
 <table>
 <thead><tr><th>机制</th><th>变更可见延迟</th><th>服务端连接数</th><th>服务端资源特征</th><th>典型实现</th><th>什么情况下会失效</th></tr></thead>
@@ -226,9 +298,9 @@ func (c *Cache) Run(ctx context.Context) {
 <tr><td>gRPC 双向流</td><td>百毫秒级</td><td>每客户端 1 条长连接，多路复用</td><td>连接复用后内存优于长轮询，但要处理 keepalive 与半开连接</td><td>Nacos 2.x、Apollo 新版、Envoy xDS</td><td>NAT 或防火墙静默丢弃空闲连接，未配 keepalive 时表现为「连接看着是通的但推送不再到达」</td></tr>
 </tbody></table>
 
-<h2>一致性取舍：服务发现应该选 AP</h2>
+<h2>② 原理 · 一致性取舍：服务发现应该选 AP</h2>
 
-<p>这是三块基础设施里最容易选错的一处。很多人凭直觉觉得「注册信息当然要强一致，不然读到过期的实例怎么办」，于是选了 ZooKeeper 或强一致读的 etcd 来做注册中心。<strong>这个直觉是错的。</strong></p>
+<p>搞清这一节能解决的现象是：一个交换机抖动为什么能让全站服务调用同时中断。这是三块基础设施里最容易选错的一处。很多人凭直觉觉得「注册信息当然要强一致，不然读到过期的实例怎么办」，于是选了 ZooKeeper 或强一致读的 etcd 来做注册中心。<strong>这个直觉是错的。</strong></p>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
@@ -248,37 +320,22 @@ func (c *Cache) Run(ctx context.Context) {
 <tr><td>结论</td><td>服务发现的默认选择</td><td>配置与协调场景的默认选择，不要拿来做注册中心</td></tr>
 </tbody></table>
 
-<h2>注册与配置要不要合到一个组件</h2>
+<h2>③ 场景 · 注册与配置合一还是分开</h2>
 
 <p>Nacos、Consul、etcd 都能同时承担注册和配置，所以这是个真实的选择题。<strong>合一的收益是少运维一套组件，代价是共享了故障域和容量</strong>：一次配置发布把服务端打满，注册链路一起受影响；一次为配置做的版本升级，风险范围覆盖了服务发现。</p>
 
 <table>
-<thead><tr><th>方案</th><th>运维成本</th><th>故障域</th><th>权限与审批</th><th>一致性适配</th><th>适合谁</th></tr></thead>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
 <tbody>
-<tr><td>合一，Nacos 同时做两件事</td><td>最低，一套部署一套监控</td><td>共享，注册风暴与配置操作互相影响</td><td>需确认能按命名空间分别授权，否则改配置的人也能改注册数据</td><td>临时实例用 Distro 协议偏 AP，持久数据用 Raft，算是分别适配</td><td>服务数几十到几百、运维人力有限的团队</td></tr>
-<tr><td>合一，etcd 同时做两件事</td><td>低，但要自己包一层发现语义</td><td>共享，且 etcd 是 CP，注册风暴会撞上写入吞吐上限</td><td>依赖 RBAC 前缀授权，粒度够用</td><td>不理想：用 CP 存储承载高频心跳，容量和可用性都吃亏</td><td>已深度使用 K8s 生态、注册量不大的场景</td></tr>
-<tr><td>分开，Nacos 做注册加 Apollo 做配置</td><td>高，两套部署、两套告警、两套升级</td><td>隔离，一边挂了另一边正常</td><td>配置侧可以有独立的审批流与操作审计</td><td>各取所长：注册走 AP，配置走强一致加关系库</td><td>对配置审计与灰度要求高、有平台团队的组织</td></tr>
-<tr><td>不引入独立注册中心，用 K8s Service 与 Endpoints</td><td>最低，平台自带</td><td>与集群控制面共享</td><td>走 K8s RBAC</td><td>Endpoints 由控制器维护，语义足够</td><td>全量容器化、不需要跨集群发现的团队</td></tr>
+<tr><td>服务数几十到几百、没有专职平台团队</td><td>合一，用 Nacos 同时做注册与配置</td><td>临时实例走 Distro 协议偏 AP，持久化数据走 Raft，两类数据分别适配</td><td>故障域共享，注册风暴与配置操作互相影响；要确认能按命名空间分别授权，否则改配置的人也能改注册数据</td></tr>
+<tr><td>已深度使用 Kubernetes 生态、注册量不大</td><td>合一，用 etcd 承担，但自己包一层发现语义</td><td>复用已有的 etcd 运维经验与 RBAC 前缀授权</td><td>用 CP 存储承载高频心跳，容量与可用性都吃亏，注册风暴会直接撞上写入吞吐上限</td></tr>
+<tr><td>对配置审计与灰度要求高、有平台团队</td><td>分开，Nacos 做注册加 Apollo 做配置</td><td>各取所长，注册走 AP，配置走强一致加关系库，并且一边挂了另一边正常</td><td>两套部署、两套告警、两套升级流程，人力成本明显上升</td></tr>
+<tr><td>全量容器化且不需要跨集群发现</td><td>不引入独立注册中心，直接用 Service 与 Endpoints</td><td>Endpoints 由控制器维护，语义足够，权限走 RBAC</td><td>与集群控制面共享故障域；只有 VIP 级负载均衡，实例级灰度要另外补 Mesh</td></tr>
+<tr><td>半个集群还在用 Eureka 这类存量组件</td><td>新服务接新注册中心，存量走双注册过渡</td><td>一次性替换的回滚成本极高，双注册能让两套列表在过渡期都完整</td><td>过渡期内实例信息写两份，要额外确认下线时两边都摘干净</td></tr>
+<tr><td>多语言技术栈，Java 之外还有 Go 与 Node</td><td>把发现与治理下沉到 sidecar 或直接用平台原生机制</td><td>SDK 型方案要为每种语言维护一套，能力与版本很难对齐</td><td>多一跳本地代理，排障时要区分是业务的问题还是 sidecar 的问题</td></tr>
 </tbody></table>
 
-<p>除了技术维度，选型里有一半是组织因素，而且往往更决定成败：<strong>技术栈语言分布</strong>，只有 Java 时 Nacos 或 Apollo 的 SDK 体验最好，多语言时更应该把发现下沉到 sidecar 或直接用 K8s 原生机制；<strong>谁负责值班</strong>，没有专职平台团队就不要选需要维护 MySQL 加多个独立进程的方案；<strong>是否已有存量</strong>，半个集群在用 Eureka 时，比起一次性替换，更稳的是新服务接新注册中心加双注册过渡。</p>
-
-<pre><code class="language-bash"># 验证「弱依赖」是否真的成立，这几条在预发环境跑一遍比看代码可靠
-# 1. 看客户端有没有落快照：没有这个目录就说明冷启动一定强依赖控制面
-ls -l /root/nacos/config /root/nacos/naming 2&gt;/dev/null   # Nacos Java 客户端默认快照位置
-ls -l ${HOME}/logs/apollo-cache/                          # Apollo 本地缓存文件
-
-# 2. 把控制面打成黑洞，观察业务是否仍然正常处理请求（关键验证）
-iptables -I OUTPUT -p tcp --dport 8848 -j DROP            # 丢弃到 Nacos 的出向流量
-curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/api/ping  # 期望仍是 200
-iptables -D OUTPUT -p tcp --dport 8848 -j DROP            # 验证完立刻恢复
-
-# 3. 在断连状态下重启业务进程，确认能靠快照起来（最容易翻车的一步）
-systemctl restart my-service &amp;&amp; journalctl -u my-service -n 50 | grep -i -E 'snapshot|fallback|fail'
-
-# 4. 检查推送链路是否真的活着：ESTABLISHED 数应约等于实例数，长期为 0 说明退化成了定时拉取
-ss -tanp | grep ':8848' | awk '{print $1}' | sort | uniq -c
-</code></pre>
+<p>除了技术维度，选型里有一半是组织因素，而且往往更决定成败：<strong>技术栈语言分布</strong>决定 SDK 型方案的成本，<strong>谁负责值班</strong>决定能不能选需要维护 MySQL 加多个独立进程的方案，<strong>是否已有存量</strong>决定是替换还是过渡。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -297,7 +354,7 @@ flowchart TB
     Q4 -- "否" --> A6["维持现状<br/>先补监控与容量"]
 </div>
 
-<h2>反模式：这三块最常被做错的地方</h2>
+<h2>③ 场景 · 反模式与不适用边界</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>为什么有人这么做</th><th>后果</th><th>正确做法</th></tr></thead>
@@ -310,9 +367,17 @@ flowchart TB
 <tr><td>三块之间互相强依赖</td><td>网关从配置中心取路由，配置中心又从注册中心找地址</td><td>形成环状依赖，冷启动时互相等待，一个挂全挂</td><td>控制面之间的依赖必须可降级，冷启动路径上用静态配置打破环</td></tr>
 </tbody></table>
 
+<p><strong>不适用边界</strong>：这三块基础设施解决的是「服务之间怎么找到彼此、参数怎么改、流量从哪进来」，它们解决不了服务该怎么拆——那一层在 <a href="../microservices/">微服务拆分</a>；跨服务的数据一致性不在它们职责内，分布式事务见 <a href="../distributed/transaction/">分布式事务</a>，幂等落地见 <a href="../distributed/idempotency/">幂等设计</a>；全局限流的算法与实现见 <a href="../distributed/rate-limit/">分布式限流</a>；「变更生效了没有、哪个实例还是旧版本」这类问题要靠指标与链路才能回答，见 <a href="../../observability/">可观测性系列</a>；容器编排层面的服务抽象与发布机制在 <a href="../../devops/kubernetes/">Kubernetes 系列</a>。</p>
+
+<p>这条路径接下来按「注册发现 → 配置 → 网关 → 熔断限流」展开：下一步先把实例列表这件事讲透，它是另外几块的地基，也是最容易在发布窗口里丢请求的一环。</p>
+
+<p class="cluster-nav">同主题路径：<a href="service-discovery/">下一步：服务注册发现的机制与故障模式 →</a></p>
+
+<h2>最容易踩的坑</h2>
+
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">这些坑每条都对应一次真实故障</div>
     <ul>
     <li>用 ZooKeeper 做注册中心且跨机房三节点部署，一次网络抖动失去多数派后全站无法发现服务。</li>
     <li>配置 SDK 不落本地快照，配置中心宕机期间任何业务实例重启都起不来，故障从「不能改配置」升级为「不能重启」。</li>
@@ -326,9 +391,9 @@ flowchart TB
     <li>认为「合一能少一个组件」就把所有元数据都塞进注册中心，单实例元数据膨胀到几十 KB，推送流量放大几十倍。</li>
     <li>控制面没有容量保护，一次全站滚动重启时所有实例同时拉全量，把控制面打挂形成雪崩。</li>
     <li>基础设施升级不灰度，一次性替换全部节点，客户端兼容性问题在生产才暴露且无法回退。</li>
+    <li>只用 <code>readinessProbe</code> 摘流却不配 <code>preStop</code> 等待，进程在转发规则更新完成之前就退出，每次发布都丢一小批请求。</li>
     </ul>
 </div>
-
                     </div>
                 </article>
             </main>

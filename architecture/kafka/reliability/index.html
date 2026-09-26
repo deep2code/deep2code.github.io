@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="按环节逐个消灭 Kafka 的消息丢失与重复：画出从 send 到业务落库的全链路并标出六个丢消息点，每处给出防护手段与验证方法；提供可直接抄的 Producer、Broker、Consumer 三端生产级配置清单并注明不配的后果；对比消费端幂等的四种实现，指出先查后插在并发下并不幂等；给出把位点写进业务库、与数据写在同一本地事务的代码；讲清原地阻塞重试会卡死整个分区，如何用重试 Topic 加死信 Topic 以及顺序性与重试的折中，并给出故障注入验证清单与对账兜底。">
+        <meta name="description" content="Kafka 可靠性三段式：先给六个环节逐个验证的可执行清单（每一项都有配置动作、注入动作与通过判据）、可直接抄的三端配置、故障注入命令与可靠性参数速查；再讲六个丢点各自的丢失机制、写完就落盘为什么是错的、三副本加 min.insync.replicas=2 的可用性代价、消费端幂等四种实现的失效条件、位点与业务数据同事务的写法与三个隐含约束、原地阻塞重试为什么卡死整个分区、顺序性与重试的硬矛盾；最后给按业务等级选可靠性组合的决策矩阵与对账兜底。">
     <meta name="keywords" content="Kafka可靠性,Exactly-Once,幂等,事务API,死信队列,消息不丢失">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/reliability/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费 - 资深码农">
-    <meta property="og:description" content="按环节逐个消灭 Kafka 的消息丢失与重复：画出从 send 到业务落库的全链路并标出六个丢消息点，每处给出防护手段与验证方法；提供可直接抄的 Producer、Broker、Consumer 三端生产级配置清单并注明不配的后果；对比消费端幂等的四种实现，指出先查后插在并发下并不幂等；给出把位点写进业务库、与数据写在同一本地事务的代码；讲清原地阻塞重试会卡死整个分区，如何用重试 Topic 加死信 Topic 以及顺序性与重试的折中，并给出故障注入验证清单与对账兜底。">
+    <meta property="og:description" content="Kafka 可靠性三段式：先给六个环节逐个验证的可执行清单（每一项都有配置动作、注入动作与通过判据）、可直接抄的三端配置、故障注入命令与可靠性参数速查；再讲六个丢点各自的丢失机制、写完就落盘为什么是错的、三副本加 min.insync.replicas=2 的可用性代价、消费端幂等四种实现的失效条件、位点与业务数据同事务的写法与三个隐含约束、原地阻塞重试为什么卡死整个分区、顺序性与重试的硬矛盾；最后给按业务等级选可靠性组合的决策矩阵与对账兜底。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/reliability/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费">
-    <meta name="twitter:description" content="按环节逐个消灭 Kafka 的消息丢失与重复：画出从 send 到业务落库的全链路并标出六个丢消息点，每处给出防护手段与验证方法；提供可直接抄的 Producer、Broker、Consumer 三端生产级配置清单并注明不配的后果；对比消费端幂等的四种实现，指出先查后插在并发下并不幂等；给出把位点写进业务库、与数据写在同一本地事务的代码；讲清原地阻塞重试会卡死整个分区，如何用重试 Topic 加死信 Topic 以及顺序性与重试的折中，并给出故障注入验证清单与对账兜底。">
+    <meta name="twitter:description" content="Kafka 可靠性三段式：先给六个环节逐个验证的可执行清单（每一项都有配置动作、注入动作与通过判据）、可直接抄的三端配置、故障注入命令与可靠性参数速查；再讲六个丢点各自的丢失机制、写完就落盘为什么是错的、三副本加 min.insync.replicas=2 的可用性代价、消费端幂等四种实现的失效条件、位点与业务数据同事务的写法与三个隐含约束、原地阻塞重试为什么卡死整个分区、顺序性与重试的硬矛盾；最后给按业务等级选可靠性组合的决策矩阵与对账兜底。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="架构与分布式">
     <meta property="article:tag" content="Kafka,可靠性,事务,消息语义">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"按环节逐个消灭 Kafka 的消息丢失与重复：画出从 send 到业务落库的全链路并标出六个丢消息点，每处给出防护手段与验证方法；提供可直接抄的 Producer、Broker、Consumer 三端生产级配置清单并注明不配的后果；对比消费端幂等的四种实现，指出先查后插在并发下并不幂等；给出把位点写进业务库、与数据写在同一本地事务的代码；讲清原地阻塞重试会卡死整个分区，如何用重试 Topic 加死信 Topic 以及顺序性与重试的折中，并给出故障注入验证清单与对账兜底。","url":"https://www.yijunjun.asia/architecture/kafka/reliability/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/reliability/"},"articleSection":"后端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 可靠性三段式：先给六个环节逐个验证的可执行清单（每一项都有配置动作、注入动作与通过判据）、可直接抄的三端配置、故障注入命令与可靠性参数速查；再讲六个丢点各自的丢失机制、写完就落盘为什么是错的、三副本加 min.insync.replicas=2 的可用性代价、消费端幂等四种实现的失效条件、位点与业务数据同事务的写法与三个隐含约束、原地阻塞重试为什么卡死整个分区、顺序性与重试的硬矛盾；最后给按业务等级选可靠性组合的决策矩阵与对账兜底。","url":"https://www.yijunjun.asia/architecture/kafka/reliability/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/reliability/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "消息可靠性", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,9 +90,119 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>ISR 与 HW 水位的语义、acks 与 <code>min.insync.replicas</code> 的组合推演、幂等 Producer 的 PID 加序列号机制、事务的边界在哪，这些原理详见站内 Kafka 深度原理一篇。这篇只做工程落地：<strong>把消息从 send 到业务落库的链路切成六段，一段一段把丢失和重复消灭掉，并且给出怎么验证真的消灭了</strong>。</p>
+<p>这篇只做工程落地：<strong>把消息从 send 到业务落库的链路切成六段，一段一段把丢失和重复消灭掉，并且给出怎么验证真的消灭了</strong>。ISR 与 HW 水位的语义、acks 组合的推演、幂等 PID 机制这些原理在 <a href="../">主干篇</a>。</p>
 
-<h2>先把六个丢消息的环节标出来</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：六个环节逐个验证的可执行清单（每一项都有配置动作、注入动作与通过判据）、可直接抄的三端配置、故障注入命令，以及可靠性参数速查。</li>
+        <li><strong>② 原理</strong>：六个丢点各自的丢失机制与「写完就落盘」这个误解、三副本加 <code>min.insync.replicas=2</code> 的可用性代价、消费端幂等四种实现的失效条件（先查后插为什么不是幂等）、位点与业务数据同事务的写法与三个隐含约束、原地阻塞重试为什么会卡死整个分区、顺序性与重试的硬矛盾。</li>
+        <li><strong>③ 场景</strong>：按业务等级选可靠性组合与它的代价，以及为什么任何 MQ 方案都还需要对账兜底。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 六个环节逐个验证的清单</h2>
+
+<p>下表是这一篇的骨干：<strong>左边六行就是全部丢消息的位置，一行也不能跳过</strong>。配置动作照做，验证动作在预发或压测环境实际跑一遍——可靠性只能被验证，不能被声明。</p>
+
+<table>
+<thead><tr><th>丢点</th><th>丢失机制</th><th>怎么防</th><th>怎么验证防住了</th></tr></thead>
+<tbody>
+<tr><td>一、Producer 缓冲区</td><td><code>send</code> 只是入队，进程被杀时 accumulator 里的数据随内存消失</td><td>关闭钩子里 <code>flush()</code> 加带超时的 <code>close()</code>；<code>linger.ms</code> 不要设太大；关键链路加本地 WAL</td><td>压测中对进程发 SIGTERM，按序号核对；再发一次 SIGKILL，观察丢失条数是否落在 <code>linger.ms</code> 窗口内的量级</td></tr>
+<tr><td>二、acks 不足</td><td><code>acks=0</code> 不等确认，<code>acks=1</code> 只等 leader 落 page cache，leader 换届即丢</td><td><code>acks=all</code> 加 <code>enable.idempotence=true</code></td><td>用 kafka-configs 确认实际生效值，再 kill leader 观察 Producer 侧是否只出现重试日志而无缺号</td></tr>
+<tr><td>三、ISR 收缩</td><td>ISR 只剩 leader 时 <code>acks=all</code> 等价于 <code>acks=1</code></td><td>Broker 端 <code>min.insync.replicas=2</code>，写入宁可失败也不假成功</td><td>用防火墙阻断 follower 的 Fetch 流量，观察 <code>UnderReplicatedPartitions</code> 大于零且 Producer 收到 NotEnoughReplicas</td></tr>
+<tr><td>四、未刷盘</td><td>Kafka 默认不按条刷盘，靠副本冗余而不是 fsync</td><td>不要去调 <code>log.flush.interval.messages</code>，而是把副本分散到<strong>不同机架或可用区</strong>；真正怕整机房断电就上跨机房复制</td><td>同时断掉同一机架上的多台 Broker，检查是否有数据缺失；机架感知配置用 <code>broker.rack</code> 核对</td></tr>
+<tr><td>五、先提交后处理</td><td>自动提交或手动提交位置写错，位点已推进而消息未处理</td><td><code>enable.auto.commit=false</code>，处理完再提交，位点值记得是 <code>offset + 1</code></td><td>在处理逻辑中间抛异常并重启，检查这批消息是否被重新消费</td></tr>
+<tr><td>六、落库失败</td><td>业务处理成功、位点已提交，但数据库事务回滚</td><td>位点写进业务库，与业务数据在<strong>同一个本地事务</strong>提交</td><td>在提交事务前后两个位置分别注入崩溃，核对是否分别表现为整批重放和不重复</td></tr>
+</tbody>
+</table>
+
+<p>配置按下面三段抄，注释写的是「不配会怎样」。三段必须一起配齐，只配一端等于没配：</p>
+
+<pre><code class="language-properties"># ============ Producer 端 ============
+acks=all                                       # 不配：leader 换届即丢
+enable.idempotence=true                        # 不配：重试会产生重复，3.0 起默认 true
+max.in.flight.requests.per.connection=5        # 大于 5 且开幂等会启动失败
+delivery.timeout.ms=120000                     # 重试的总时间上限，重试次数不是真正边界
+request.timeout.ms=30000
+retry.backoff.ms=100
+max.block.ms=5000                              # 不配：buffer 满时业务线程被拖住 60 秒
+linger.ms=10                                   # 攒批，同时也是崩溃丢失窗口的权衡点
+compression.type=zstd
+
+# ============ Broker 端 server.properties ============
+default.replication.factor=3                   # 不配：默认 1 副本，掉一台就丢分区
+min.insync.replicas=2                          # 不配：ISR 收缩时 acks=all 退化成 acks=1
+unclean.leader.election.enable=false           # 不配：落后副本可能当选 leader 并截断已确认数据
+auto.create.topics.enable=false                # 不配：打错 Topic 名会自动建出 1 副本的 Topic
+offsets.topic.replication.factor=3             # 不配：位点 Topic 单副本，掉一台全组位点丢失
+transaction.state.log.replication.factor=3
+transaction.state.log.min.isr=2
+replica.lag.time.max.ms=30000                  # 判定 follower 掉出 ISR 的时间阈值
+log.retention.hours=168                        # 保留期要长于最坏情况下的故障处理时间
+
+# ============ Consumer 端 ============
+enable.auto.commit=false                       # 不配：默认周期性自动提交，崩溃即丢
+auto.offset.reset=latest                       # 对账类任务用 none，宁可报错不要静默跳过
+isolation.level=read_committed                 # 上游用事务时不配会读到未提交消息
+max.poll.records=100                           # 与单条处理耗时相乘要远小于下面这项
+max.poll.interval.ms=300000
+</code></pre>
+
+<p>配完之后跑注入。下面这套动作与上表的六行一一对应，先建立一个带自增序号的基准流，最后按序号比对：<strong>缺号即丢，重号即幂等失效</strong>。</p>
+
+<pre><code class="language-bash"># 基准：持续发送带自增序号的消息，最后按序号比对，缺号即丢、重号即幂等失效
+kafka-producer-perf-test.sh --topic reliability-test --num-records 2000000 \
+  --record-size 512 --throughput 20000 \
+  --producer-props bootstrap.servers=kafka-1:9092 acks=all enable.idempotence=true
+
+# 注入一：干掉 leader 所在的 Broker，先确认谁是 leader
+kafka-topics.sh --bootstrap-server kafka-1:9092 --describe --topic reliability-test
+# 输出里 Leader 字段就是目标节点，Isr 字段列出当前同步副本
+sudo systemctl kill -s SIGKILL kafka
+
+# 注入二：隔断 follower 的复制流量，制造 ISR 收缩
+sudo iptables -A INPUT -s 10.0.0.12 -p tcp --dport 9092 -j DROP
+# 预期：UnderReplicatedPartitions 大于 0，Producer 侧出现 NotEnoughReplicas
+kafka-run-class.sh kafka.tools.JmxTool --object-name \
+  'kafka.server:type=ReplicaManager,name=UnderReplicatedPartitions' \
+  --jmx-url service:jmx:rmi:///jndi/rmi://kafka-1:9999/jmxrmi --one-time true
+
+# 注入三：把数据盘写满，观察 Broker 的行为
+sudo fallocate -l 50G /data/kafka/ballast.tmp
+
+# 注入四：消费端强杀，检查是否整批重放而非跳过
+kill -9 $(pgrep -f order-processor)
+
+# 验证：比对两端条数与序号连续性
+kafka-consumer-groups.sh --bootstrap-server kafka-1:9092 --describe --group order-processor
+kafka-console-consumer.sh --bootstrap-server kafka-1:9092 --topic reliability-test \
+  --from-beginning --timeout-ms 60000 2&gt;/dev/null | wc -l
+
+# 自查：确认 Topic 级配置没有偷偷覆盖 Broker 级，这一步最容易漏
+kafka-configs.sh --bootstrap-server kafka-1:9092 \
+  --entity-type topics --entity-name reliability-test --describe</code></pre>
+
+<p>可靠性相关参数速查。<strong>默认值随版本变化，落地前以对应版本文档或 <code>kafka-configs.sh --describe</code> 输出为准</strong>：</p>
+
+<table>
+<thead><tr><th>参数</th><th>作用</th><th>常见默认值</th><th>不改的后果</th></tr></thead>
+<tbody>
+<tr><td><code>min.insync.replicas</code></td><td>ISR 少于此数就拒写</td><td>1</td><td><code>acks=all</code> 形同虚设，这是可靠性配置里最危险的一个默认值</td></tr>
+<tr><td><code>unclean.leader.election.enable</code></td><td>是否允许落后副本当 leader</td><td><code>false</code></td><td>默认是安全的，但应急操作里常被打开，打开即接受已确认数据被截断</td></tr>
+<tr><td><code>enable.auto.commit</code></td><td>是否周期性自动提交位点</td><td><code>true</code></td><td>崩溃时已提交但未处理的那一段消息永久丢失</td></tr>
+<tr><td><code>isolation.level</code></td><td>是否只读已提交事务消息</td><td><code>read_uncommitted</code></td><td>上游用事务时会读到后来被回滚的消息</td></tr>
+<tr><td><code>log.flush.interval.messages</code></td><td>多少条主动 fsync 一次</td><td>实际等同于不主动刷盘</td><td><strong>不要动它</strong>，调小会让吞吐掉一个数量级，收益远小于把副本分散到不同机架</td></tr>
+<tr><td><code>replica.lag.time.max.ms</code></td><td>follower 多久没跟上就踢出 ISR</td><td>30 秒</td><td>调太小会让 ISR 频繁抖动，配合 <code>min.insync.replicas</code> 造成间歇性拒写</td></tr>
+<tr><td><code>offsets.topic.replication.factor</code></td><td>位点内部主题的副本数</td><td>常见为 1</td><td>该副本所在节点一挂，全站消费组位点不可读写</td></tr>
+<tr><td><code>retention.ms</code></td><td>数据保留窗口</td><td>7 天</td><td>短于最坏情况下的故障处理时间，位点越界后按 <code>auto.offset.reset</code> 静默跳位</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 六个丢点各自的丢失机制</h2>
+
+<p>搞清这张图能解决一个常见的错误方向：以为「配了 acks=all 就没事了」，实际六个环节里它只覆盖一个。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -129,57 +239,13 @@ flowchart TB
     C3 -.- L6["丢点六<br/>处理成功但落库失败"]
 </div>
 
-<table>
-<thead><tr><th>丢点</th><th>丢失机制</th><th>怎么防</th><th>怎么验证防住了</th></tr></thead>
-<tbody>
-<tr><td>一、Producer 缓冲区</td><td><code>send</code> 只是入队，进程被杀时 accumulator 里的数据随内存消失</td><td>关闭钩子里 <code>flush()</code> 加带超时的 <code>close()</code>；<code>linger.ms</code> 不要设太大；关键链路加本地 WAL</td><td>压测中对进程发 SIGTERM，按序号核对；再发一次 SIGKILL，观察丢失条数是否等于 <code>linger.ms</code> 窗口内的量级</td></tr>
-<tr><td>二、acks 不足</td><td><code>acks=0</code> 不等确认，<code>acks=1</code> 只等 leader 落 page cache，leader 换届即丢</td><td><code>acks=all</code> 加 <code>enable.idempotence=true</code></td><td>用 kafka-configs 确认实际生效值，再 kill leader 观察 Producer 侧是否只出现重试日志而无缺号</td></tr>
-<tr><td>三、ISR 收缩</td><td>ISR 只剩 leader 时 <code>acks=all</code> 等价于 <code>acks=1</code></td><td>Broker 端 <code>min.insync.replicas=2</code>，写入宁可失败也不假成功</td><td>用防火墙阻断 follower 的 Fetch 流量，观察 <code>UnderReplicatedPartitions</code> 大于零且 Producer 收到 NotEnoughReplicas</td></tr>
-<tr><td>四、未刷盘</td><td>Kafka 默认不按条刷盘，靠副本冗余而不是 fsync</td><td>不要去调 <code>log.flush.interval.messages</code>，而是把副本分散到<strong>不同机架或可用区</strong>；真正怕整机房断电就上跨机房复制</td><td>同时断掉同一机架上的多台 Broker，检查是否有数据缺失；机架感知配置用 <code>broker.rack</code> 核对</td></tr>
-<tr><td>五、先提交后处理</td><td>自动提交或手动提交位置写错，位点已推进而消息未处理</td><td><code>enable.auto.commit=false</code>，处理完再提交，位点值记得是 <code>offset + 1</code></td><td>在处理逻辑中间抛异常并重启，检查这批消息是否被重新消费</td></tr>
-<tr><td>六、落库失败</td><td>业务处理成功、位点已提交，但数据库事务回滚</td><td>位点写进业务库，与业务数据在<strong>同一个本地事务</strong>提交</td><td>在提交事务前后两个位置分别注入崩溃，核对是否分别表现为整批重放和不重复</td></tr>
-</tbody></table>
-
 <div class="echart-container" id="kafka-reliability-levels"></div>
-
 
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">「Kafka 写完就落盘了所以不会丢」是错的</div>
-    <p>Kafka 默认把刷盘完全交给操作系统，<code>log.flush.interval.messages</code> 默认是一个极大值，也就是不主动 fsync。它的持久化保障来自<strong>多副本</strong>而不是磁盘同步写。反过来，把刷盘间隔调成 1 条一刷会让吞吐掉一个数量级，还让顺序写退化成频繁 fsync，收益远小于代价。正确的投入方向是副本数、机架分散和 <code>min.insync.replicas</code>。</p>
+    <p>Kafka 默认把刷盘完全交给操作系统，<code>log.flush.interval.messages</code> 的默认值大到实际等同于不主动 fsync。它的持久化保障来自<strong>多副本</strong>而不是磁盘同步写。反过来，把刷盘间隔调成一条一刷会让吞吐掉一个数量级，还让顺序写退化成频繁 fsync，收益远小于代价。正确的投入方向是副本数、机架分散和 <code>min.insync.replicas</code>。</p>
 </div>
-
-<h2>可以直接抄的三端配置清单</h2>
-
-<pre><code class="language-properties"># ============ Producer 端 ============
-acks=all                                       # 不配：leader 换届即丢
-enable.idempotence=true                        # 不配：重试会产生重复，3.0 起默认 true
-max.in.flight.requests.per.connection=5        # 大于 5 且开幂等会启动失败
-delivery.timeout.ms=120000                     # 重试的总时间上限，重试次数不是真正边界
-request.timeout.ms=30000
-retry.backoff.ms=100
-max.block.ms=5000                              # 不配：buffer 满时业务线程被拖住 60 秒
-linger.ms=10                                   # 攒批，同时也是崩溃丢失窗口的权衡点
-compression.type=zstd
-
-# ============ Broker 端 server.properties ============
-default.replication.factor=3                   # 不配：默认 1 副本，掉一台就丢分区
-min.insync.replicas=2                          # 不配：ISR 收缩时 acks=all 退化成 acks=1
-unclean.leader.election.enable=false           # 不配：落后副本可能当选 leader 并截断已确认数据
-auto.create.topics.enable=false                # 不配：打错 Topic 名会自动建出 1 副本的 Topic
-offsets.topic.replication.factor=3             # 不配：位点 Topic 单副本，掉一台全组位点丢失
-transaction.state.log.replication.factor=3
-transaction.state.log.min.isr=2
-replica.lag.time.max.ms=30000                  # 判定 follower 掉出 ISR 的时间阈值
-log.retention.hours=168                        # 保留期要长于最坏情况下的故障处理时间
-
-# ============ Consumer 端 ============
-enable.auto.commit=false                       # 不配：默认每 5 秒自动提交，崩溃即丢
-auto.offset.reset=latest                       # 对账类任务用 none，宁可报错不要静默跳过
-isolation.level=read_committed                 # 上游用事务时不配会读到未提交消息
-max.poll.records=100                           # 与单条处理耗时相乘要远小于下面这项
-max.poll.interval.ms=300000
-</code></pre>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
@@ -187,9 +253,25 @@ max.poll.interval.ms=300000
     <p>这个组合意味着<strong>最多只能坏一台</strong>。坏两台时 ISR 只剩一个，写入会直接被拒绝，可用性换来了一致性。如果业务无法接受写入被拒，唯一正确的做法是把副本数提到 5、<code>min.insync.replicas</code> 保持 2，而不是偷偷把它降回 1。降回 1 等于把丢消息的概率重新打开，而且这种改动往往发生在半夜的应急操作里，事后没人记得改回来。</p>
 </div>
 
-<h2>重复是必然的：消费端幂等的四种实现</h2>
+<h2>② 原理 · 故障注入的结果怎么判读</h2>
 
-<p>只要位点提交和业务处理不在一个原子操作里，重复就无法从协议层消除。Rebalance、消费者重启、提交超时都会让同一批消息被再消费一次。所以可靠性工程的下半场不是「避免重复」，而是<strong>让重复不产生副作用</strong>。</p>
+<p>用法层给了注入动作，这里给的是「看到什么算通过、看到什么说明哪一项配置没生效」。判定错了比不做注入更危险。</p>
+
+<table>
+<thead><tr><th>注入手段</th><th>预期现象</th><th>判定通过</th><th>出现异常说明什么</th></tr></thead>
+<tbody>
+<tr><td>SIGKILL leader Broker</td><td>Producer 短暂出现 NotLeaderOrFollower 并自动重试，几秒内恢复</td><td>序号无缺失，消费端总条数不变</td><td>有缺号说明 <code>acks</code> 或 <code>unclean.leader.election.enable</code> 配错了</td></tr>
+<tr><td>iptables 阻断 follower</td><td><code>UnderReplicatedPartitions</code> 大于 0，ISR 收缩</td><td><code>min.insync.replicas=2</code> 时写入被拒绝并抛 NotEnoughReplicas</td><td>写入居然还成功，说明 <code>min.insync.replicas</code> 没生效，或 Topic 级配置覆盖了 Broker 级</td></tr>
+<tr><td>数据盘写满</td><td>Broker 日志出现 IOException，该 Broker 上的分区下线</td><td>其他 Broker 上的副本接管，客户端只是短暂报错</td><td>整个集群写入不可用，说明分区副本分布不均或副本数不足</td></tr>
+<tr><td>SIGKILL Consumer</td><td>Rebalance 后另一成员从上次提交位点继续</td><td>有重复处理但结果一致，没有跳过</td><td>有跳过说明位点提交早于处理，或开了自动提交</td></tr>
+<tr><td>SIGTERM Producer</td><td>关闭钩子执行 flush 与 close</td><td>零丢失</td><td>有丢失说明关闭钩子没注册，或用了零超时的 close</td></tr>
+<tr><td>业务逻辑注入随机异常</td><td>失败消息进重试 Topic，超限进死信</td><td>主 Topic 的 Lag 不因失败而堆积</td><td>Lag 持续上涨说明在做原地阻塞重试</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 重复是必然的：消费端幂等的四种实现</h2>
+
+<p>搞清这一节能解决一个方向性错误：花大力气「消除重复」，而不是让重复无害。只要位点提交和业务处理不在一个原子操作里，重复就无法从协议层消除。Rebalance、消费者重启、提交超时都会让同一批消息被再消费一次。所以可靠性工程的下半场不是「避免重复」，而是<strong>让重复不产生副作用</strong>。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -212,11 +294,14 @@ flowchart TB
 <tr><td>Redis 去重键</td><td>用消息 ID 做 SETNX 加过期时间，已存在则跳过</td><td>中，只能当前置优化</td><td>Redis 与数据库之间没有原子性：SETNX 成功后进程崩溃，消息永久丢失；Redis 主从切换丢键会放过重复；键过期后老消息重投又会被处理一次</td></tr>
 <tr><td>业务天然幂等</td><td>整体覆盖写、置为终态、幂等的 HTTP PUT 语义</td><td>高且成本最低</td><td>只要出现累加、追加、发通知、扣库存这类操作就不再幂等；「把状态改成已支付」幂等，但「余额加 100」不幂等</td></tr>
 <tr><td>先查询再插入</td><td>先 SELECT 判断存在，不存在再 INSERT</td><td><strong>不是幂等实现</strong></td><td>并发下两个线程同时查到不存在然后都插入。重复消费往往是成批同时到达的，恰好是最容易触发这个竞态的场景</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
-<h2>位点和业务数据放进同一个本地事务</h2>
+<p>这几种实现的通用形态与取舍，见站内 <a href="../../distributed/idempotency/">幂等设计</a>。</p>
 
-<p>下游是关系型数据库时，这是实现端到端精确一次的<strong>唯一可靠路径</strong>。Kafka 自带的事务只能保证「读 Kafka、写 Kafka、提交位点」这三件事的原子性，跨到外部数据库它管不了。做法是把位点当作普通业务数据存进业务库，让数据库的事务同时覆盖业务写入和位点推进。</p>
+<h2>② 原理 · 位点和业务数据放进同一个本地事务</h2>
+
+<p>搞清这一节能解决丢点六：下游是关系型数据库时，这是实现端到端精确一次的<strong>唯一可靠路径</strong>。Kafka 自带的事务只能保证「读 Kafka、写 Kafka、提交位点」这三件事的原子性，跨到外部数据库它管不了。做法是把位点当作普通业务数据存进业务库，让数据库的事务同时覆盖业务写入和位点推进。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -306,7 +391,7 @@ public void run() {
     <p>第一，位点表和业务表必须在<strong>同一个数据库实例</strong>里，分库了就退化成分布式事务问题。第二，每个分区一个事务，分区多时事务数量上升，要控制 <code>max.poll.records</code> 避免单事务过大导致长事务和锁等待。第三，运维不能再用 kafka-consumer-groups 脚本看 Lag，因为 <code>__consumer_offsets</code> 里根本没有位点，必须自己上报位点与 LEO 的差值到监控。</p>
 </div>
 
-<h2>重试与死信：为什么不能原地阻塞重试</h2>
+<h2>② 原理 · 为什么不能原地阻塞重试</h2>
 
 <p>一个分区在同一个消费组内只会被一个成员串行消费，这意味着<strong>卡在一条消息上就等于卡住整个分区</strong>。原地睡眠重试三次每次五秒，这条消息后面排队的几万条消息就一起延迟十五秒；如果下游是持续故障，等待时间会迅速突破 <code>max.poll.interval.ms</code>，成员被踢出组、触发 Rebalance、分区转给别人后依然卡在同一条消息上，形成一个自我放大的故障循环。</p>
 
@@ -340,11 +425,12 @@ stateDiagram-v2
 <tr><td>分级延迟 Topic</td><td>为每个延迟级别建一个 Topic，例如 retry-5s、retry-30s</td><td>无影响</td><td>破坏</td><td>需要精确延迟梯度且量大的场景，代价是 Topic 数量膨胀</td></tr>
 <tr><td>按 key 暂停</td><td>失败的 key 记入暂停表，同 key 后续消息直接转存待处理队列，其他 key 正常处理</td><td>轻微</td><td>同 key 内保持</td><td>既要顺序又不能卡分区的折中方案，代价是需要维护暂停状态</td></tr>
 <tr><td>死信 Topic</td><td>超过重试上限后转存，并带上原 Topic、分区、位点、异常栈</td><td>无影响</td><td>不适用</td><td>所有方案的最后一道兜底，必须配告警和重投工具，否则等于垃圾桶</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
-<h2>顺序性和重试的冲突没有完美解</h2>
+<h2>② 原理 · 顺序性和重试的冲突没有完美解</h2>
 
-<p>这是一对硬矛盾：<strong>跳过失败消息会乱序，阻塞重试会卡分区</strong>。真正需要做的是先问清楚顺序的粒度。业务上几乎从不需要「全局有序」，通常只需要「同一个订单、同一个用户的事件有序」，这个粒度正好对应按 key 哈希到同一分区。于是折中方案就有了落点：</p>
+<p>这是一对硬矛盾：<strong>跳过失败消息会乱序，阻塞重试会卡分区</strong>。真正需要做的是先问清楚顺序的粒度。业务上几乎从不需要「全局有序」，通常只需要「同一个订单、同一个用户的事件有序」，这个粒度正好对应按 key 哈希到同一分区（见 <a href="../topic-partition/">分区设计</a>）。于是折中方案就有了落点：</p>
 
 <table>
 <thead><tr><th>方案</th><th>做法</th><th>代价</th><th>什么情况下不成立</th></tr></thead>
@@ -353,59 +439,39 @@ stateDiagram-v2
 <tr><td>消息版本号兜底</td><td>消息体带业务版本号或时间戳，消费端用条件更新丢弃旧版本</td><td>需要下游支持条件更新</td><td>事件不是幂等的覆盖语义，例如增量扣减</td></tr>
 <tr><td>把顺序需求下推到存储</td><td>消费端只做写入，顺序由数据库的状态机和乐观锁保证</td><td>数据库压力上升</td><td>下游不是数据库，比如是第三方接口</td></tr>
 <tr><td>整批回退位点</td><td>失败时不提交位点并 <code>seek</code> 回批次起点，整批重放</td><td>会重复处理已成功的消息，必须配合幂等</td><td>故障是持续性的，会变成无限重放打爆下游，需要加熔断</td></tr>
-</tbody></table>
+</tbody>
+</table>
 
-<h2>故障注入：可靠性只能被验证，不能被声明</h2>
+<h2>③ 场景 · 按业务等级选可靠性组合</h2>
 
-<pre><code class="language-bash"># 基准：持续发送带自增序号的消息，最后按序号比对，缺号即丢、重号即幂等失效
-kafka-producer-perf-test.sh --topic reliability-test --num-records 2000000 \
-  --record-size 512 --throughput 20000 \
-  --producer-props bootstrap.servers=kafka-1:9092 acks=all enable.idempotence=true
-
-# 注入一：干掉 leader 所在的 Broker，先确认谁是 leader
-kafka-topics.sh --bootstrap-server kafka-1:9092 --describe --topic reliability-test
-# 输出里 Leader 字段就是目标节点，Isr 字段列出当前同步副本
-sudo systemctl kill -s SIGKILL kafka
-
-# 注入二：隔断 follower 的复制流量，制造 ISR 收缩
-sudo iptables -A INPUT -s 10.0.0.12 -p tcp --dport 9092 -j DROP
-# 预期：UnderReplicatedPartitions 大于 0，Producer 侧出现 NotEnoughReplicas
-kafka-run-class.sh kafka.tools.JmxTool --object-name \
-  'kafka.server:type=ReplicaManager,name=UnderReplicatedPartitions' \
-  --jmx-url service:jmx:rmi:///jndi/rmi://kafka-1:9999/jmxrmi --one-time true
-
-# 注入三：把数据盘写满，观察 Broker 的行为
-sudo fallocate -l 50G /data/kafka/ballast.tmp
-
-# 注入四：消费端强杀，检查是否整批重放而非跳过
-kill -9 $(pgrep -f order-processor)
-
-# 验证：比对两端条数与序号连续性
-kafka-consumer-groups.sh --bootstrap-server kafka-1:9092 --describe --group order-processor
-kafka-console-consumer.sh --bootstrap-server kafka-1:9092 --topic reliability-test \
-  --from-beginning --timeout-ms 60000 2&gt;/dev/null | wc -l
-</code></pre>
+<p>不是所有链路都值得付「一条都不能丢」的代价。下表按业务等级给出完整组合，代价列是选了它就必须一起接受的东西。</p>
 
 <table>
-<thead><tr><th>注入手段</th><th>预期现象</th><th>判定通过</th><th>出现异常说明什么</th></tr></thead>
+<thead><tr><th>业务等级</th><th>组合怎么定</th><th>为什么</th><th>代价</th></tr></thead>
 <tbody>
-<tr><td>SIGKILL leader Broker</td><td>Producer 短暂出现 NotLeaderOrFollower 并自动重试，几秒内恢复</td><td>序号无缺失，消费端总条数不变</td><td>有缺号说明 <code>acks</code> 或 <code>unclean.leader.election.enable</code> 配错了</td></tr>
-<tr><td>iptables 阻断 follower</td><td><code>UnderReplicatedPartitions</code> 大于 0，ISR 收缩</td><td><code>min.insync.replicas=2</code> 时写入被拒绝并抛 NotEnoughReplicas</td><td>写入居然还成功，说明 <code>min.insync.replicas</code> 没生效，或 Topic 级配置覆盖了 Broker 级</td></tr>
-<tr><td>数据盘写满</td><td>Broker 日志出现 IOException，该 Broker 上的分区下线</td><td>其他 Broker 上的副本接管，客户端只是短暂报错</td><td>整个集群写入不可用，说明分区副本分布不均或副本数不足</td></tr>
-<tr><td>SIGKILL Consumer</td><td>Rebalance 后另一成员从上次提交位点继续</td><td>有重复处理但结果一致，没有跳过</td><td>有跳过说明位点提交早于处理，或开了自动提交</td></tr>
-<tr><td>SIGTERM Producer</td><td>关闭钩子执行 flush 与 close</td><td>零丢失</td><td>有丢失说明关闭钩子没注册，或用了零超时的 close</td></tr>
-<tr><td>业务逻辑注入随机异常</td><td>失败消息进重试 Topic，超限进死信</td><td>主 Topic 的 Lag 不因失败而堆积</td><td>Lag 持续上涨说明在做原地阻塞重试</td></tr>
-</tbody></table>
+<tr><td>资金、订单状态（一条都不能丢）</td><td>RF=3 加 <code>min.insync.replicas=2</code> 加 <code>acks=all</code> 加幂等；消费端位点与业务数据同事务；死信加告警加重投工具</td><td>六个丢点全覆盖，重复靠唯一索引兜住</td><td>坏两台就拒写；不能再用脚本看 Lag，要自己上报；事务粒度受 <code>max.poll.records</code> 约束</td></tr>
+<tr><td>业务事件（允许重复不允许丢）</td><td><code>acks=all</code> 加幂等；消费端关自动提交、处理完提交；唯一索引或状态机条件更新</td><td>至少一次加业务幂等，是性价比最高的组合</td><td>重复必然存在，每个下游动作都要幂等审查</td></tr>
+<tr><td>埋点、日志（允许少量丢）</td><td><code>acks=1</code>，可开自动提交，不做去重</td><td>吞吐与成本优先</td><td>leader 换届窗口内丢；崩溃时丢自动提交周期内的量</td></tr>
+<tr><td>下游是第三方接口</td><td>至少一次加幂等令牌，失败走重试 Topic，不做原地阻塞</td><td>外部系统不受你的事务控制</td><td>需要对方支持幂等键；顺序被重试打破，要能容忍</td></tr>
+<tr><td>可用性优先于一致性</td><td>把 RF 提到 5 并保持 <code>min.insync.replicas=2</code></td><td>提高「还能写」的容错台数，而不是降低确认要求</td><td>成本上升、跨区流量增加；<strong>绝不能改成 min.insync.replicas=1</strong></td></tr>
+<tr><td>怕整机房断电</td><td>机架或可用区感知加跨机房复制，而不是调刷盘参数</td><td>Kafka 的持久化来自副本冗余</td><td>跨区 RTT 抬高 <code>acks=all</code> 的写延迟，跨区流量要额外付费</td></tr>
+<tr><td>已经出事，要评估丢了多少</td><td>按序号或业务主键做全量比对，同时查死信条数</td><td>只有对账能给出确定答案</td><td>需要预先设计好可比对的唯一序列，事后补很难</td></tr>
+</tbody>
+</table>
 
-<h2>对账是最后一道防线，任何 MQ 方案都要有</h2>
-
-<p>上面所有手段加起来，能把丢失概率压到很低，但压不到零。跨系统的最终一致只能靠<strong>对账加补偿</strong>兜底，这不是 Kafka 的缺陷，换成任何 MQ 都一样。落地上通常是三件事：生产端在发消息的同一个本地事务里记一张待确认表；定时任务扫出超过阈值仍未被下游确认的记录并重投；每天按业务维度做一次全量或增量比对，差异进人工工单。</p>
+<p>上面所有手段加起来，能把丢失概率压到很低，但压不到零。跨系统的最终一致只能靠<strong>对账加补偿</strong>兜底，这不是 Kafka 的缺陷，换成任何 MQ 都一样（通用模式见 <a href="../../messaging/reliable/">可靠消息投递</a>）。落地上通常是三件事：生产端在发消息的同一个本地事务里记一张待确认表；定时任务扫出超过阈值仍未被下游确认的记录并重投；每天按业务维度做一次全量或增量比对，差异进人工工单。</p>
 
 <p>再加一个容易被忽略的点：<strong>死信 Topic 必须配告警和重投工具</strong>。只写不读的死信 Topic 等于一个垃圾桶，故障发生一个月后才有人发现里面积了十万条消息，这种事情非常常见。最小可用的工具是一个能按时间范围和错误类型筛选、支持批量重投回原 Topic 的脚本，以及死信条数非零就触发的告警。</p>
 
+<p><strong>不适用边界</strong>：这一篇解决「不丢不重」，解决不了「不慢」。吞吐上不去、延迟毛刺、瓶颈在哪是下一篇 <a href="../performance/">性能调优与压测</a>；客户端代码怎么写在 <a href="../producer-consumer/">生产者与消费者实战</a>；副本分布与机架感知在 <a href="../topic-partition/">分区设计</a>；集群参数在 <a href="../install/">生产级部署</a>。如果你的需求是延迟消息或单条精细重试，Kafka 这一层给不了，回到 <a href="../intro/">选型边界</a>。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../producer-consumer/">← 上一步：Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环</a> · <a href="../performance/">下一步：Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照 →</a></p>
+
+<h2>最容易踩的坑</h2>
+
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">可靠性落地的十二个高频翻车点</div>
     <ul>
         <li><strong>只配了 acks=all 没配 min.insync.replicas</strong>：ISR 收缩到 1 时静默退化成 acks=1，故障时才发现丢了数据。</li>
         <li><strong>unclean.leader.election.enable 被打开</strong>：为了恢复可用性打开它，落后的副本当选 leader，已经确认给客户端的消息被截断，这是最难解释清楚的一类数据丢失。</li>

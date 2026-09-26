@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="把 Cookie Session、自包含令牌、OIDC 与 SAML 放进同一个坐标系：认证状态存在服务端还是客户端、信任边界在单体内还是跨组织，才是选型的真正变量。讲清 Session 为什么至今仍是大量场景的最优解、Token 解决的是另一组问题、网关到下游用可信请求头还是透传令牌、服务间认证的 mTLS 与客户端凭证模式，以及从需求到方案的决策路径和常见反模式。">
+    <meta name="description" content="认证方案选型按用法、原理、场景三段组织：先给「这个系统该选会话 Cookie、自签令牌还是外部 IdP」的判断表、三条路各自的最小落地清单与可直接跑的验收命令（登出后旧令牌必须 401、登录后必须换会话 ID）；再把状态归属与信任边界两个维度展开，讲清 Session 为什么仍是大量场景的最优解、Token 解决的是另一组问题、网关到下游用可信请求头还是透传令牌、服务间认证的 mTLS 与客户端凭证模式；最后给从需求到方案的判断路径、反模式对照与安全细节的查阅指引。">
     <meta name="keywords" content="认证授权,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/auth/">
     <meta property="og:title" content="认证与授权的协议全景：从 Cookie Session 到 Token 与联邦 - 资深码农">
-    <meta property="og:description" content="把 Cookie Session、自包含令牌、OIDC 与 SAML 放进同一个坐标系：认证状态存在服务端还是客户端、信任边界在单体内还是跨组织，才是选型的真正变量。讲清 Session 为什么至今仍是大量场景的最优解、Token 解决的是另一组问题、网关到下游用可信请求头还是透传令牌、服务间认证的 mTLS 与客户端凭证模式，以及从需求到方案的决策路径和常见反模式。">
+    <meta property="og:description" content="认证方案选型按用法、原理、场景三段组织：先给「这个系统该选会话 Cookie、自签令牌还是外部 IdP」的判断表、三条路各自的最小落地清单与可直接跑的验收命令（登出后旧令牌必须 401、登录后必须换会话 ID）；再把状态归属与信任边界两个维度展开，讲清 Session 为什么仍是大量场景的最优解、Token 解决的是另一组问题、网关到下游用可信请求头还是透传令牌、服务间认证的 mTLS 与客户端凭证模式；最后给从需求到方案的判断路径、反模式对照与安全细节的查阅指引。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/auth/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="认证与授权的协议全景：从 Cookie Session 到 Token 与联邦 - 资深码农">
-    <meta name="twitter:description" content="把 Cookie Session、自包含令牌、OIDC 与 SAML 放进同一个坐标系：认证状态存在服务端还是客户端、信任边界在单体内还是跨组织，才是选型的真正变量。讲清 Session 为什么至今仍是大量场景的最优解、Token 解决的是另一组问题、网关到下游用可信请求头还是透传令牌、服务间认证的 mTLS 与客户端凭证模式，以及从需求到方案的决策路径和常见反模式。">
+    <meta name="twitter:description" content="认证方案选型按用法、原理、场景三段组织：先给「这个系统该选会话 Cookie、自签令牌还是外部 IdP」的判断表、三条路各自的最小落地清单与可直接跑的验收命令（登出后旧令牌必须 401、登录后必须换会话 ID）；再把状态归属与信任边界两个维度展开，讲清 Session 为什么仍是大量场景的最优解、Token 解决的是另一组问题、网关到下游用可信请求头还是透传令牌、服务间认证的 mTLS 与客户端凭证模式；最后给从需求到方案的判断路径、反模式对照与安全细节的查阅指引。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -71,7 +71,186 @@
     </header>
     <p>关于认证方案的讨论几乎总是被压缩成一句「用 Session 还是用 JWT」，然后迅速跑偏成立场之争。这个问法本身就是错的：它把两个正交的维度混成了一个。真正决定方案的是<strong>认证状态放在哪里</strong>，以及<strong>信任边界有多大</strong>。这篇不讲攻防参数，只把从 Cookie 会话到自包含令牌、再到跨组织联邦的各种机制放进同一个坐标系，讲清每一步演进是被什么需求逼出来的、各自付出了什么代价。密码哈希参数、令牌存放位置的攻防、算法混淆与越权的机理，站内安全专题已经写透，本文只在需要的地方指路。</p>
 
-    <h2>先建立坐标系：状态存在哪，信任边界到哪</h2>
+    <div class="callout callout-info">
+        <div class="callout-icon">💡</div>
+        <div class="callout-title">这篇怎么读</div>
+        <ul>
+            <li><strong>① 用法</strong>：会话 Cookie、自签令牌、外部 IdP 三条路怎么选，每条路的最小落地清单，以及用命令验收「撤销是否真的生效」。</li>
+            <li><strong>② 原理</strong>：状态归属与信任边界两个维度撑起的四个象限，Session 的能力来源与存储对照，Token 被什么需求逼出来，身份如何跨服务传递，服务自身怎么认证，SAML 与 OIDC 各占什么位置。</li>
+            <li><strong>③ 场景</strong>：从需求到方案的判断路径、六类反模式的真实后果，以及每种安全细节该去站内哪一篇查。</li>
+        </ul>
+    </div>
+
+    <h2>① 用法 · 这个系统该选哪套：判断表、最小落地清单与验收命令</h2>
+    <p>落地时能选的只有三条路，加一种混合形态：<strong>会话 Cookie</strong>（状态在服务端，客户端只拿一个 ID）、<strong>自签令牌</strong>（访问令牌加刷新令牌，任意节点本地验签）、<strong>外部 IdP</strong>（身份由别人签发，OIDC 或 SAML），以及<strong>混合</strong>（令牌只做传输载体，服务端仍保留会话记录）。判断只需要问四件事：客户端有没有非浏览器的；能不能归一到同域；封禁与强制下线要不要即时生效；账号是自有还是来自外部。为什么这四件事就能定方案，见下一节起的坐标系。</p>
+    <p>这一层最要紧的不是「怎么登录成功」，而是<strong>怎么验收「失效真的失效了」</strong>。下面三段命令分别对应三条路的验收点，任选其一抄走即可，每一条都是线上真实出过事的地方。</p>
+    <pre><code class="language-bash"># ===== 路线一：会话 Cookie。验三件事：属性齐、登录后换 ID、双超时 =====
+curl -s -D- -o /dev/null -X POST https://app.example.com/login \
+  -d 'username=alice' -d 'password=REDACTED' | grep -i '^set-cookie'
+# 同一行里必须同时出现 HttpOnly、Secure、SameSite；缺 HttpOnly 等于把会话交给任意脚本，
+# Domain 出现父域（形如 .example.com）就意味着任何一个子域被拿下都能拿到全站会话
+
+# 会话固定自查：匿名先取一个 sid，带着它登录，登录后的 sid 必须是新的
+SID1=$(curl -s -D- -o /dev/null https://app.example.com/ | awk -F'[=;]' '/[Ss]et-[Cc]ookie: sid/{print $2}')
+SID2=$(curl -s -D- -o /dev/null -b "sid=$SID1" -X POST https://app.example.com/login \
+  -d 'username=alice' -d 'password=REDACTED' | awk -F'[=;]' '/[Ss]et-[Cc]ookie: sid/{print $2}')
+[ "$SID1" != "$SID2" ] &amp;&amp; echo 'ok: 登录后重新生成了会话 ID'
+
+# ===== 路线二：自签令牌。验收点是撤销，而不是能不能登录 =====
+AT=$(curl -s -X POST https://app.example.com/auth/login \
+  -d 'username=alice' -d 'password=REDACTED' | jq -r .access_token)
+curl -s -o /dev/null -w '登出前 %{http_code}\n' -H "Authorization: Bearer $AT" https://app.example.com/api/me
+curl -s -X POST https://app.example.com/auth/logout -H "Authorization: Bearer $AT" -o /dev/null
+curl -s -o /dev/null -w '登出后 %{http_code}\n' -H "Authorization: Bearer $AT" https://app.example.com/api/me
+# 期望 200 然后 401。登出后仍是 200，说明「登出」只清了客户端存储，
+# 令牌在有效期内依然可用——这一条是验收硬指标，不是可选项
+
+# ===== 路线三：外部 IdP。先读发现文档，别等接完才发现缺能力 =====
+curl -s https://idp.example.com/.well-known/openid-configuration | jq '{issuer,
+  authorization_endpoint, token_endpoint, jwks_uri, end_session_endpoint,
+  code_challenge_methods_supported, id_token_signing_alg_values_supported}'
+# code_challenge_methods_supported 里没有 S256 就等于这家不支持 PKCE；
+# 没有 end_session_endpoint 意味着单点登出要靠自己兜（见本簇工程实践篇）</code></pre>
+    <table>
+        <thead>
+            <tr>
+                <th>系统特征</th>
+                <th>该选哪套</th>
+                <th>先验证什么</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>只有浏览器客户端，前后端同域或能由反向代理归一到同域</td>
+                <td>Cookie + 服务端会话，会话存 Redis</td>
+                <td>会话 ID 熵与登录后换 ID；idle 与 absolute 两个超时都真的生效</td>
+            </tr>
+            <tr>
+                <td>业务要求封禁、强制下线、会话列表，且生效延迟必须接近零</td>
+                <td>必须有服务端会话记录：Cookie 会话，或「令牌 + 刷新令牌记录」的混合形态</td>
+                <td>管理端封禁后下一个请求就是 401；会话列表能单独删掉一条</td>
+            </tr>
+            <tr>
+                <td>同时服务 App、小程序、SPA，跨域，账号体系自有</td>
+                <td>访问令牌 + 刷新令牌轮换，令牌放请求头</td>
+                <td>登出后旧令牌 401；并发刷新不会把用户互相踢下线</td>
+            </tr>
+            <tr>
+                <td>接第三方账号登录（微信、Google 等）</td>
+                <td>OIDC 授权码 + PKCE，绝不在自己页面收对方密码</td>
+                <td>发现文档支持 S256；<code>id_token</code> 的 <code>iss</code>、<code>aud</code>、<code>nonce</code> 三项校验已落地</td>
+            </tr>
+            <tr>
+                <td>要卖给企业客户，对接对方的身份提供方</td>
+                <td>内部统一 OIDC，只认 SAML 的客户用独立适配层承接</td>
+                <td>业务代码里没有任何 XML 断言解析；断言校验走成熟库的严格模式</td>
+            </tr>
+            <tr>
+                <td>调用方是服务而不是人：定时任务、服务间调用、数据同步</td>
+                <td>mTLS 或 OAuth2 客户端凭证模式，不要复用用户令牌</td>
+                <td>不带证书或不带凭证时必须被拒；令牌被客户端缓存而不是每次业务请求都换一次</td>
+            </tr>
+            <tr>
+                <td>内部工具、单机部署、没有多端计划</td>
+                <td>框架自带的 Cookie 会话，不要引入令牌体系</td>
+                <td>Cookie 三属性与两个超时；别为「无状态」付出密钥分发与刷新并发的成本</td>
+            </tr>
+        </tbody>
+    </table>
+    <table>
+        <thead>
+            <tr>
+                <th>方案</th>
+                <th>最小落地清单（少一条就不算做完）</th>
+                <th>实践中最常漏的一条</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Cookie + 服务端会话</td>
+                <td>会话 ID 来自密码学安全随机源且至少 128 位熵；Cookie 配 <code>HttpOnly</code> 与 <code>Secure</code>、<code>Domain</code> 不写父域；登录成功后换新 ID 并删旧记录；idle 与 absolute 双超时；改密码与封禁按用户维度清掉全部会话；会话存储做高可用并给读取设超时与降级</td>
+                <td>改密码只改了密码表，其他设备的会话仍然在线</td>
+            </tr>
+            <tr>
+                <td>自签令牌（访问 + 刷新）</td>
+                <td>访问令牌 5 到 15 分钟；刷新令牌一次性轮换并记录家族；验签带算法白名单并校验 <code>iss</code> 与 <code>aud</code> 与 <code>exp</code>；服务端为刷新令牌保留记录以支持踢设备；登出时撤销刷新令牌并清记录；客户端做单飞刷新</td>
+                <td>刷新并发把整个令牌家族判成复用并作废，用户莫名被登出</td>
+            </tr>
+            <tr>
+                <td>外部 IdP（OIDC）</td>
+                <td>授权码模式加 PKCE 且方法为 S256；<code>state</code> 存服务端会话、一次性使用；校验 <code>id_token</code> 的签名与 <code>iss</code>、<code>aud</code>、<code>nonce</code>；外部身份唯一键用「提供方标识 + 提供方内用户 ID」；邮箱相同也不自动合并；端点从发现文档取而不是硬编码</td>
+                <td>拿 <code>access_token</code> 当身份凭证用，等于把登录判断建在错误的受众上</td>
+            </tr>
+            <tr>
+                <td>混合：令牌做传输，服务端仍存会话</td>
+                <td>先确定唯一真相源，另一套只做适配；访问令牌保持短有效期；会话表一行对应一个设备；用户表上加一个「此刻之前签发的令牌全部失效」的时间点字段</td>
+                <td>两套逻辑并存却互不知情，登出只清了其中一套</td>
+            </tr>
+        </tbody>
+    </table>
+    <table>
+        <thead>
+            <tr>
+                <th>关键参数</th>
+                <th>作用</th>
+                <th>默认值</th>
+                <th>什么时候必须改</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>会话空闲超时（idle）</td>
+                <td>无操作多久后会话失效</td>
+                <td>各框架不一，以框架配置与会话存储里实际 TTL 为准</td>
+                <td>后台与管理端调短（如 30 分钟），并且必须同时配绝对上限</td>
+            </tr>
+            <tr>
+                <td>会话绝对超时（absolute）</td>
+                <td>单个会话的最长寿命，与活跃度无关</td>
+                <td>多数框架默认没有这一项</td>
+                <td>一律显式配（如 12 小时），否则被盗会话靠定时请求就能无限续命</td>
+            </tr>
+            <tr>
+                <td>Cookie 的 <code>Domain</code></td>
+                <td>决定哪些主机能拿到这个 Cookie</td>
+                <td>留空表示仅当前主机</td>
+                <td>不需要跨子域共享就保持留空；需要共享时明确列出并评估子域被接管的风险</td>
+            </tr>
+            <tr>
+                <td>访问令牌有效期</td>
+                <td>它同时就是「无法吊销」的窗口长度</td>
+                <td>各授权服务器不同，以令牌响应里的 <code>expires_in</code> 为准</td>
+                <td>一律压到 5 到 15 分钟，长期性交给刷新令牌，不要靠调长它来减少刷新请求</td>
+            </tr>
+            <tr>
+                <td>刷新令牌轮换与宽限期</td>
+                <td>每次刷新换新并检测复用；宽限期用来容忍并发刷新</td>
+                <td>部分授权服务器默认不轮换</td>
+                <td>轮换一律开启，宽限期取 10 到 30 秒，越短越安全但要配合客户端单飞刷新</td>
+            </tr>
+            <tr>
+                <td>JWKS 公钥缓存 TTL</td>
+                <td>决定密钥轮换后多久所有验签方都能拿到新公钥</td>
+                <td>各库默认不同，以所用库文档为准</td>
+                <td>取 5 到 15 分钟，并给未命中回源加限流与负缓存</td>
+            </tr>
+            <tr>
+                <td>验签时的时钟偏移容忍</td>
+                <td>吸收多机 NTP 漂移，避免零星 401</td>
+                <td>多数库默认不容忍</td>
+                <td>设 30 到 60 秒；再大就等于放宽了过期判断</td>
+            </tr>
+            <tr>
+                <td>网关注入的身份请求头</td>
+                <td>把网关校验结果传给下游</td>
+                <td>无默认行为，外部同名头是否被清空完全取决于你的配置</td>
+                <td>只要采用身份头方案，就必须先清空外部同名头再写入</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>② 原理 · 先建立坐标系：状态存在哪，信任边界到哪</h2>
+    <p>搞清这两个维度，能解决「为什么别人家用 Token 我们用 Session 也没问题」——两者不在同一条进化链上，而是落在不同象限。</p>
     <p>第一个维度是认证状态的归属。<strong>服务端有状态</strong>意味着客户端手里只有一个不可猜测的引用（会话 ID），全部真实信息在服务端；<strong>客户端自包含</strong>意味着身份信息本身被签名后交给客户端携带，服务端不需要保存任何东西就能验证真伪。第二个维度是信任边界：进程内的单体应用、同一组织内互相信任程度有限的多个服务、以及完全跨组织（用户的身份由别人家的系统认证）。这两个维度交叉出四个象限，每个象限都有明确的主流方案，跨象限硬搬才是大部分事故的来源。</p>
     <div class="mermaid">
 flowchart TB
@@ -92,7 +271,8 @@ flowchart TB
 </div>
     <p>把方案摆进象限之后有个直接的推论：<strong>「Token 比 Session 先进」是错的</strong>。它们不在同一条进化链上，而是在不同象限里各自最优。真正会随时间演进的是信任边界——当产品从一个 Web 应用长成 Web 加 App 加开放 API 加企业客户 SSO，你会在坐标系里同时占住多个象限，此时需要的是清晰的分层，而不是把所有场景塞进一种机制。</p>
 
-    <h2>Cookie + Session：它至今仍是大量场景的最优解</h2>
+    <h2>② 原理 · Cookie + Session：它至今仍是大量场景的最优解</h2>
+    <p>搞清它的能力来自哪里，能解决「要不要为了时髦换成令牌」：它的三个优势全部来自「状态在我手里」这一件事。</p>
     <p>机制本身很朴素：登录成功后服务端生成一个高熵随机串作为会话 ID，把用户身份写进服务端存储，再通过 <code>Set-Cookie</code> 把这个 ID 交给浏览器；后续请求浏览器自动携带，服务端用 ID 反查状态。它的三个优势都来自「状态在我手里」：<strong>可即时吊销</strong>（删掉记录，下一个请求就是未登录）、<strong>凭证本身不含信息</strong>（拿到 ID 也读不出任何东西）、<strong>浏览器自动管理</strong>（前端不需要写任何存取逻辑，配上 <code>HttpOnly</code> 后 JS 根本读不到，XSS 想偷也偷不走值）。</p>
     <pre><code class="language-go">// 服务端会话：Cookie 里只放不可猜的 ID，真实状态在 Redis
 sid := randomToken(32) // 32 字节 CSPRNG，base64url 后 43 字符；不要用 UUIDv4 当会话 ID
@@ -179,7 +359,8 @@ stateDiagram-v2
         <p>同时满足这几条就不要引入令牌体系：只有浏览器客户端；前后端同域部署或能通过反向代理归一到同域；需要随时封禁账号或强制下线；团队规模不大、不想自己维护密钥分发与轮换。这套组合用框架自带能力半天就能上线，而自包含令牌方案的隐性成本（刷新并发、密钥轮换、登出其他设备）往往要在上线三个月后才开始付。</p>
     </div>
 
-    <h2>为什么会出现 Token：它解决的是另一组问题</h2>
+    <h2>② 原理 · 为什么会出现 Token：它解决的是另一组问题</h2>
+    <p>搞清令牌被什么需求逼出来，能解决「上了令牌之后为什么反而多了一堆事要处理」。</p>
     <p>Cookie 会话的前提是「客户端是浏览器，且浏览器愿意自动带 Cookie」。三件事打破了这个前提。一是<strong>移动端与前后端分离</strong>：原生 App 没有 Cookie 的天然承载，SPA 常常和 API 不同域，跨站带 Cookie 需要放宽 <code>SameSite</code> 并处理预检请求，配置复杂度迅速超过收益。二是<strong>微服务的无状态校验</strong>：每个服务为了知道「你是谁」都去查一次会话存储，会让会话存储变成全站最热的单点。三是<strong>跨组织</strong>：用户的身份由别人的系统认证，对方只能给你一份签名断言，不可能给你一个能查的会话 ID。</p>
     <table>
         <thead>
@@ -234,7 +415,8 @@ stateDiagram-v2
     </table>
     <p>看这张表的正确方式是找<strong>你真正在意的那一行</strong>。如果业务要求封禁一秒内生效，第一行就已经判定了方案，后面几行的优势都换不回来。令牌的结构、验签必校验项与密钥轮换见站内 <a href="jwt/">JWT 的结构与验签机制</a>，令牌该放哪里、放错会被什么攻击拿走见站内 <a href="../security/auth-security/">越权与鉴权安全</a>。</p>
 
-    <h2>服务间的用户身份传递：可信请求头还是透传令牌</h2>
+    <h2>② 原理 · 服务间的用户身份传递：可信请求头还是透传令牌</h2>
+    <p>搞清两种做法的信任模型，能解决一类无痕越权：加一个请求头就变成任意用户，而日志里看起来完全正常。</p>
     <p>网关校验完令牌之后，下游怎么知道当前用户是谁？两种做法，区别不在性能而在<strong>信任模型</strong>。可信请求头是「网络边界可信」假设下的产物：网关把 <code>X-Auth-User-Id</code> 之类的头注入进去，下游读头即用。这套方案有一个绝对前提——<strong>下游必须无法被外部直连</strong>，否则任何人加一个请求头就完成了身份伪造，而且这类越权在日志里看起来和正常请求一模一样。透传令牌则让每个服务各自验签，代价是每跳都要验签、每个服务都要接入密钥分发。</p>
     <div class="mermaid">
 sequenceDiagram
@@ -315,7 +497,8 @@ sequenceDiagram
         </tbody>
     </table>
 
-    <h2>服务与服务之间的认证：这里没有用户</h2>
+    <h2>② 原理 · 服务与服务之间的认证：这里没有用户</h2>
+    <p>搞清服务身份与用户身份的区别，能解决「审计里分不清这次调用是谁发起的」以及静态密钥泄露后无法收回的问题。</p>
     <p>上一节讲的是「把用户身份带下去」，这一节讲的是完全不同的一件事：<strong>调用方本身就是一个服务</strong>，没有用户参与。定时任务去拉数据、订单服务调库存服务扣减、数据同步作业写入数仓，这些调用需要的是服务自己的身份。最常见的错误是复用某个用户的长期令牌，或者写一个永不轮换的静态 API Key 塞进配置中心，后者的后果是密钥泄露后无从追溯也无法快速收回。</p>
     <table>
         <thead>
@@ -373,7 +556,8 @@ openssl s_client -connect inventory.internal:8443 -brief &lt;/dev/null 2&gt;&amp
 # 输出里出现 requested client certificate 之类的提示才说明对端开了双向校验；
 # 不带证书还能拿到 200，说明 mTLS 只是配了没生效。</code></pre>
 
-    <h2>联邦身份：SAML 与 OIDC 各自的位置</h2>
+    <h2>② 原理 · 联邦身份：SAML 与 OIDC 各自的位置</h2>
+    <p>搞清两套协议的位置，能解决「为什么都 2026 年了还要支持 XML 断言」这个每接一家企业客户都会被问的问题。</p>
     <p>跨组织场景下，认证发生在别人家。用户在自己公司的身份提供方登录，你的系统只收到一份签名过的断言。这个模型有两套主流协议：SAML 2.0 是 XML 时代的企业标准，OIDC 是构建在 OAuth 2.0 之上的现代身份层。技术上 OIDC 全面更易用，但<strong>SAML 不会消失</strong>——企业客户的存量身份系统就是 SAML，采购清单常把它列为硬性要求。</p>
     <table>
         <thead>
@@ -418,7 +602,7 @@ openssl s_client -connect inventory.internal:8443 -brief &lt;/dev/null 2&gt;&amp
     </table>
     <p>工程上的建议是<strong>内部只认一种协议</strong>：把 OIDC 作为系统内部的统一身份语言，SAML 用一个独立的适配服务承接，转换成内部 OIDC 语义后再进业务。不要让 XML 断言解析和业务代码搅在一起，否则每接一家企业客户都要改业务逻辑。OIDC 的端点、令牌类型与接入清单见站内 <a href="oauth2/">OAuth 2.0 与 OIDC 的协议细节</a>。</p>
 
-    <h2>从需求到方案：一张判断路径</h2>
+    <h2>③ 场景 · 从需求到方案：一张判断路径</h2>
     <p>把前面几节压缩成可执行的判断顺序。注意第一个分叉是「调用方是人还是服务」，这一步搞错会导致后面全部推理跑偏——大量系统的服务间调用之所以长成用用户令牌互调的样子，就是因为一开始没分这一叉。</p>
     <div class="mermaid">
 flowchart TB
@@ -437,7 +621,7 @@ flowchart TB
     Q4 -->|否| P["纯自包含令牌<br/>有效期 5-15 分钟"]
 </div>
 
-    <h2>反模式，以及安全细节该去哪查</h2>
+    <h2>③ 场景 · 反模式对照，以及安全细节该去哪查</h2>
     <table>
         <thead>
             <tr>
@@ -505,6 +689,10 @@ flowchart TB
             </tr>
         </tbody>
     </table>
+
+    <p><strong>这篇在整条路径里的位置：</strong>本篇只负责选型与分层，选定之后的三件事各有专篇——令牌格式、必校验项与密钥轮换见 <a href="jwt/">JWT 的结构与验签机制</a>；接第三方登录与企业 SSO 的报文细节见 <a href="oauth2/">OAuth 2.0 与 OIDC 的协议细节</a>；上线后才暴露的刷新并发、会话管理、单点登出、降级见 <a href="best-practices/">认证系统的工程实践</a>。攻防参数（密码哈希、越权、令牌存放位置）不在本簇展开，见 <a href="../security/auth-security/">越权与鉴权安全</a>；网关侧的身份头下发与限流配置见 <a href="../../devops/nginx/">Nginx 实践</a>。</p>
+
+    <p class="cluster-nav">同主题路径：<a href="jwt/">下一步：JWT 的结构与验签机制 →</a></p>
 
     <h2>最容易踩的坑</h2>
     <div class="callout callout-danger">

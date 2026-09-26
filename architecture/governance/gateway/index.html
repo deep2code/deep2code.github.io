@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="从实现层讲网关：Nginx 与 OpenResty 的多进程加 Lua 架构与 Envoy 的单进程多线程加 xDS 动态配置有什么本质差异，LDS 与 RDS 与 CDS 与 EDS 四类资源如何免 reload 热更新，reload 为什么会切断长连接，网关与服务网格在南北向与东西向上的分工与取舍，按业务线拆多组网关的拆分维度，长连接场景下内存与文件句柄的容量估算，限流数据放本地还是集中式，按路由模板打点避免指标基数爆炸，以及网关配置发布的校验、灰度与自动回滚流程。">
+    <meta name="description" content="网关数据面三段式：先给选部署形态的五个步骤（按变更频率与长连接比例定路线、拆几组、按什么算容量）与上线验收命令，再讲多进程加 Lua 与单进程加 xDS 的架构差异、四类资源独立推送、reload 对长连接的真实代价、与服务网格的南北向东西向分工、容量瓶颈在 CPU 还是内存句柄、限流计数放哪里、指标标签为什么必须收敛，最后给拆多组网关的场景矩阵、配置发布流水线与七类反模式。">
     <meta name="keywords" content="配置中心与服务发现,API 网关,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/governance/gateway/">
     <meta property="og:title" content="网关的数据面实现与部署形态 - 配置中心与服务发现 - 资深码农">
-    <meta property="og:description" content="从实现层讲网关：Nginx 与 OpenResty 的多进程加 Lua 架构与 Envoy 的单进程多线程加 xDS 动态配置有什么本质差异，LDS 与 RDS 与 CDS 与 EDS 四类资源如何免 reload 热更新，reload 为什么会切断长连接，网关与服务网格在南北向与东西向上的分工与取舍，按业务线拆多组网关的拆分维度，长连接场景下内存与文件句柄的容量估算，限流数据放本地还是集中式，按路由模板打点避免指标基数爆炸，以及网关配置发布的校验、灰度与自动回滚流程。">
+    <meta property="og:description" content="网关数据面三段式：先给选部署形态的五个步骤（按变更频率与长连接比例定路线、拆几组、按什么算容量）与上线验收命令，再讲多进程加 Lua 与单进程加 xDS 的架构差异、四类资源独立推送、reload 对长连接的真实代价、与服务网格的南北向东西向分工、容量瓶颈在 CPU 还是内存句柄、限流计数放哪里、指标标签为什么必须收敛，最后给拆多组网关的场景矩阵、配置发布流水线与七类反模式。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/governance/gateway/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="网关的数据面实现与部署形态 - 配置中心与服务发现">
-    <meta name="twitter:description" content="从实现层讲网关：Nginx 与 OpenResty 的多进程加 Lua 架构与 Envoy 的单进程多线程加 xDS 动态配置有什么本质差异，LDS 与 RDS 与 CDS 与 EDS 四类资源如何免 reload 热更新，reload 为什么会切断长连接，网关与服务网格在南北向与东西向上的分工与取舍，按业务线拆多组网关的拆分维度，长连接场景下内存与文件句柄的容量估算，限流数据放本地还是集中式，按路由模板打点避免指标基数爆炸，以及网关配置发布的校验、灰度与自动回滚流程。">
+    <meta name="twitter:description" content="网关数据面三段式：先给选部署形态的五个步骤（按变更频率与长连接比例定路线、拆几组、按什么算容量）与上线验收命令，再讲多进程加 Lua 与单进程加 xDS 的架构差异、四类资源独立推送、reload 对长连接的真实代价、与服务网格的南北向东西向分工、容量瓶颈在 CPU 还是内存句柄、限流计数放哪里、指标标签为什么必须收敛，最后给拆多组网关的场景矩阵、配置发布流水线与七类反模式。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,9 +73,59 @@
                     <div class="article-content">
 <p><strong>本篇只写实现层与部署层</strong>：两条技术路线的架构差异、xDS 动态配置、与服务网格的关系、部署拓扑与容量规划、配置发布流程。网关的责任边界（责任链模型、为什么不放业务逻辑、认证与鉴权的分工、重试风暴、超时预算分配、六种网关选型）在 <a href="../api-gateway/">API 网关的责任边界</a> 里写透了；Nginx 的 11 个处理阶段、location 优先级、proxy_buffering、上游长连接与 limit_req 三形态见 <a href="../../../devops/nginx/">Nginx 深入</a>；三块治理基础设施的共性见 <a href="../">服务治理的三块基础设施</a>。</p>
 
-<h2>两条技术路线：多进程加 Lua，与单进程加 xDS</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：选数据面形态的五个步骤（按变更频率与长连接比例决定路线、拆几组、按什么算容量、配置怎么发），以及上线前后逐条敲的验收命令。</li>
+        <li><strong>② 原理</strong>：多进程加 Lua 与单进程加 xDS 的架构差异、四类 xDS 资源为什么能独立推送、reload 对长连接的真实代价、网关与服务网格的南北向东西向分工、容量瓶颈在 CPU 还是内存句柄、限流计数放哪里、指标标签为什么必须收敛。</li>
+        <li><strong>③ 场景</strong>：按五个维度拆多组网关的收益与代价、配置发布流水线与自动回滚、七类反模式与不适用边界。</li>
+    </ul>
+</div>
 
-<p>市面上所有网关，数据面本质只有两条路线。<strong>第一条是 Nginx 血脉</strong>：master 加多 worker 的多进程模型，配置来自静态文件，扩展通过 Lua（OpenResty、APISIX、Kong）实现。<strong>第二条是 Envoy 血脉</strong>：单进程多线程，配置完全由控制面通过 xDS 协议动态下发，扩展通过 WASM 或 C++ filter 实现。这个差异决定了两类网关在「配置变更能不能不重启生效」这件事上的根本不同。</p>
+<h2>① 用法 · 选部署形态的五个步骤与验收命令</h2>
+
+<p>数据面形态一旦定下来，换的成本很高（配置模型、排障姿势、监控口径全都要重做），所以按下面的顺序一次问清。每一步的判断依据都是可量化的现状，不是偏好，原因见原理层。</p>
+
+<table>
+<thead><tr><th>步骤</th><th>问什么</th><th>怎么选</th><th>选错的后果</th></tr></thead>
+<tbody>
+<tr><td>1 变更频率</td><td>上游实例列表与路由一天变多少次</td><td>一天几次以内，Nginx 或 OpenResty 系足够；容器环境里滚动更新频繁，选带动态配置的 APISIX、Kong 或 Envoy</td><td>高频变更下靠 reload 顶着，运维动作被放大到每台网关，耗时不可控</td></tr>
+<tr><td>2 长连接比例</td><td>WebSocket、gRPC 流、SSE 占多少</td><td>长连接占比高，走 xDS 路线；必须留在 Nginx 系时，至少把长连接单独拆一组网关</td><td>每次 reload 都按 <code>worker_shutdown_timeout</code> 批量切连接，被当成「偶发掉线」</td></tr>
+<tr><td>3 是否已用或将用网格</td><td>东西向治理现在靠 SDK 还是 sidecar</td><td>已经在用或计划用网格，边缘直接上 Envoy，与 sidecar 共用一套 xDS 与指标口径</td><td>边缘和网格两套配置模型、两套限流重试语义，规则长期不一致</td></tr>
+<tr><td>4 拆几组</td><td>核心与非核心、对外与管理后台、长短连接、机房</td><td>至少按业务线与流量性质拆两刀，多机房时每机房一组</td><td>一组网关全站共用，任何业务线的配置错误或洪峰都是全站事故</td></tr>
+<tr><td>5 按什么算容量</td><td>主要流量是短连接转发、TLS 新建、还是长连接驻留</td><td>短连接按 CPU 算，TLS 按每秒新建握手数单独算，长连接按内存与句柄算，常态负载压在五成以下</td><td>按总 QPS 一刀切估算，大促时先挂的是网关自己</td></tr>
+</tbody></table>
+
+<p>形态定了之后，下面这些命令是上线前后的固定动作。<strong>第一组和第四组是最容易被跳过、却最能提前发现问题的</strong>：</p>
+
+<pre><code class="language-bash"># 一、配置校验：两条路线各自的「上线前必须过」的一步
+nginx -t -c /etc/nginx/nginx.conf                # Nginx 系：语法校验
+nginx -T | grep -c 'server '                     # 打印最终合并后的配置，确认 include 的都生效了
+envoy --mode validate -c /etc/envoy/envoy.yaml    # Envoy 系：只校验不启动
+
+# 二、Envoy 生效配置核对：以进程里真正生效的为准，不要看仓库里的文件
+curl -sS localhost:9901/config_dump | python3 -m json.tool | head -50
+curl -sS localhost:9901/clusters | grep -E 'health_flags|cx_active' | head -20
+# 判读：health_flags 里出现 failed 表示该端点已被摘除；cx_active 是当前活跃连接数
+
+# 三、控制面连接状态：这是 xDS 路线最重要的一个指标，断连后配置会静默僵化
+curl -sS localhost:9901/stats | grep -E 'control_plane.connected_state|update_(success|rejected)'
+# connected_state 为 0 即已断连；update_rejected 非 0 说明控制面下发了数据面不接受的配置
+
+# 四、容量水位：长连接场景下句柄先到顶，CPU 还很闲
+ss -s | head -5                                   # 当前连接数总览
+cat /proc/$(pgrep -o envoy)/limits | grep 'open files'   # 进程级句柄上限
+sysctl fs.file-nr net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_max 2&gt;/dev/null
+# 判读：连接数接近 conntrack_max 时会静默丢包，表现为「偶发连接失败但日志没有记录」
+
+# 五、上游总连接数：扩网关之前先算这一项，它会随网关实例数线性放大
+curl -sS localhost:9901/stats | grep -E 'upstream_cx_active' | head -10
+</code></pre>
+
+<h2>② 原理 · 两条技术路线：多进程加 Lua，与单进程加 xDS</h2>
+
+<p>搞清这一节能解决的现象是：同样是改一行上游地址，一边不中断、一边掉连接。市面上所有网关，数据面本质只有两条路线。<strong>第一条是 Nginx 血脉</strong>：master 加多 worker 的多进程模型，配置来自静态文件，扩展通过 Lua（OpenResty、APISIX、Kong）实现。<strong>第二条是 Envoy 血脉</strong>：单进程多线程，配置完全由控制面通过 xDS 协议动态下发，扩展通过 WASM 或 C++ filter 实现。这个差异决定了两类网关在「配置变更能不能不重启生效」这件事上的根本不同。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -121,9 +171,9 @@ flowchart TB
 <tr><td>适合场景</td><td>南北向入口、已有 Nginx 运维经验、变更频率不高</td><td>变更频繁、实例数多、需要与服务网格统一数据面</td></tr>
 </tbody></table>
 
-<h2>xDS 为什么关键，以及 reload 的隐性代价</h2>
+<h2>② 原理 · xDS 为什么关键，以及 reload 的隐性代价</h2>
 
-<p>「改配置 reload 一下」在实例数少、变更不频繁时完全够用。问题出现在两个条件叠加之后：<strong>后端实例数量多且经常变化</strong>（容器环境里扩缩容与滚动更新是常态），<strong>网关实例本身也有几十台</strong>。此时每次变更都要在所有网关实例上执行 reload，动作放大、耗时不可控，而且 reload 有实打实的副作用。</p>
+<p>搞清这一节能解决的现象是：每次网关发布，长连接业务就掉一批线。「改配置 reload 一下」在实例数少、变更不频繁时完全够用。问题出现在两个条件叠加之后：<strong>后端实例数量多且经常变化</strong>（容器环境里扩缩容与滚动更新是常态），<strong>网关实例本身也有几十台</strong>。此时每次变更都要在所有网关实例上执行 reload，动作放大、耗时不可控，而且 reload 有实打实的副作用。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -241,9 +291,9 @@ if not ok then ngx.log(ngx.ERR, "set_current_peer failed: ", err) return ngx.exi
 balancer.set_timeouts(1, 3, 5)                   -- 连接、发送、读取超时，必须小于上游预算
 </code></pre>
 
-<h2>网关与服务网格：南北向与东西向</h2>
+<h2>② 原理 · 网关与服务网格：南北向与东西向</h2>
 
-<p>两者经常被混为一谈，划清边界其实很简单：<strong>网关处理南北向流量</strong>（外部进入内部），关注认证、对外协议、统一入口与外部限流；<strong>网格处理东西向流量</strong>（服务之间互相调用），关注重试、超时、熔断、双向 TLS 与调用拓扑。<strong>Envoy 能同时扮演两者</strong>，Istio 的入口网关本身就是一个 Envoy，只是配置的是南北向策略。</p>
+<p>搞清这一节能解决的现象是：网格上了半年，排障时间反而变长。两者经常被混为一谈，划清边界其实很简单：<strong>网关处理南北向流量</strong>（外部进入内部），关注认证、对外协议、统一入口与外部限流；<strong>网格处理东西向流量</strong>（服务之间互相调用），关注重试、超时、熔断、双向 TLS 与调用拓扑。<strong>Envoy 能同时扮演两者</strong>，Istio 的入口网关本身就是一个 Envoy，只是配置的是南北向策略。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -262,25 +312,9 @@ flowchart TB
 
 <p>网格最被低估的成本是<strong>排障复杂度</strong>：流量被透明劫持后，一个 503 可能来自应用、来自本端 sidecar、来自对端 sidecar，也可能来自控制面下发的配置。团队需要专门积累这类经验，也要习惯用代理的 admin 接口去看当前生效的配置。服务数不多时，这个成本换不回相应收益。</p>
 
-<h2>部署拓扑：为什么要拆多组网关</h2>
+<h2>② 原理 · 容量规划：短连接看 CPU，长连接看内存与句柄</h2>
 
-<p>网关在 LB 之后还是之前？标准答案是<strong>四层 LB 在前、网关在后</strong>：LB 只做四层转发与健康检查，负责把流量均摊到网关实例，网关做七层处理。公有云环境通常是云 LB 加网关组，自建则是 LVS 或硬件负载均衡加网关组。网关实例必须无状态，会话、限流计数、缓存都不能只存在于单实例内存里，否则实例替换就会丢状态。</p>
-
-<p>更重要的决策是<strong>拆成几组</strong>。全站一组网关的问题非常直接：任何一个业务线的配置错误、插件异常、流量突增都会影响所有业务。<strong>按维度拆多组是常见且正确的做法</strong>，代价是实例数与配置管理成本上升，所以拆分维度要对齐故障隔离诉求，而不是对齐组织架构。</p>
-
-<table>
-<thead><tr><th>拆分维度</th><th>怎么拆</th><th>隔离了什么风险</th><th>代价</th><th>建议</th></tr></thead>
-<tbody>
-<tr><td>按业务线</td><td>交易、内容、支付各一组</td><td>一个业务线的配置错误或流量洪峰不影响其他业务线</td><td>实例数倍增，配置模板要统一维护</td><td>最推荐的第一刀，尤其是有核心与非核心之分时</td></tr>
-<tr><td>按流量性质</td><td>对外开放 API 与内部管理后台分开</td><td>管理后台的弱认证与调试接口不暴露在对外入口上</td><td>多一组域名与证书管理</td><td>安全收益很高，强烈建议拆</td></tr>
-<tr><td>按协议</td><td>普通 HTTP 与 WebSocket、gRPC 流分开</td><td>长连接组的配置尽量不变，避免被别人的 reload 波及</td><td>需要区分域名或端口</td><td>长连接量大时必拆</td></tr>
-<tr><td>按机房或可用区</td><td>每个机房一组，各自对接本机房注册中心</td><td>机房级故障被隔离，跨机房调用显式化</td><td>需要上层 DNS 或全局 LB 做机房级调度</td><td>多机房部署的标准做法</td></tr>
-<tr><td>按大客户或租户</td><td>为个别超大流量客户单独一组</td><td>大客户流量波动不影响公共入口</td><td>运维对象增多，容易失控</td><td>只在确有超大单一来源时才做</td></tr>
-</tbody></table>
-
-<h2>容量规划：短连接看 CPU，长连接看内存与句柄</h2>
-
-<p>网关是全站流量的必经点，<strong>不能按满负载规划</strong>。常态单实例负载建议控制在五成以下，才有空间承接单实例故障时的流量转移与突发。估算分两类场景，瓶颈完全不同。</p>
+<p>搞清这一节能解决的现象是：CPU 只用了三成，网关却开始拒连接。网关是全站流量的必经点，<strong>不能按满负载规划</strong>。常态单实例负载建议控制在五成以下，才有空间承接单实例故障时的流量转移与突发。估算分两类场景，瓶颈完全不同。</p>
 
 <table>
 <thead><tr><th>场景</th><th>主要瓶颈</th><th>量级参考</th><th>估算方式</th><th>容易忽略的点</th></tr></thead>
@@ -298,9 +332,9 @@ flowchart TB
     <p>这是容量规划里最反直觉的一条：<strong>上游总连接数等于网关实例数乘以每实例连接池大小</strong>。把网关从 10 台扩到 40 台，如果每实例对每个上游保持 100 条长连接，上游承受的连接数就从 1000 涨到 4000。对连接敏感的后端（例如按连接分配线程或内存的服务）可能直接被打挂。扩容网关时必须同步下调单实例连接池上限。</p>
 </div>
 
-<h2>限流、灰度与流量镜像的数据面实现</h2>
+<h2>② 原理 · 限流、灰度与流量镜像的数据面实现</h2>
 
-<p>限流的算法与参数在 <a href="../../distributed/rate-limit/">限流</a> 和 <a href="../../../devops/nginx/">Nginx 深入</a> 里已经写过，这里只讲数据面的一个实现选择：<strong>计数放在哪里</strong>。这个决定直接影响阈值准不准以及每请求的开销。</p>
+<p>搞清这一节能解决的现象是：限流阈值配了 1000，实际却在 300 就开始拒绝。限流的算法与参数在 <a href="../../distributed/rate-limit/">限流</a> 和 <a href="../../../devops/nginx/">Nginx 深入</a> 里已经写过，这里只讲数据面的一个实现选择：<strong>计数放在哪里</strong>。这个决定直接影响阈值准不准以及每请求的开销。</p>
 
 <table>
 <thead><tr><th>方案</th><th>怎么工作</th><th>阈值准确度</th><th>每请求开销</th><th>失效场景</th></tr></thead>
@@ -314,9 +348,9 @@ flowchart TB
 
 <p>灰度与流量镜像在数据面的实现都依赖路由的加权与复制能力。灰度是<strong>按权重或请求属性把流量分给不同的上游集群</strong>，按请求头或用户标识做一致性分流比纯随机百分比更实用，因为同一用户始终落在同一版本上，体验一致也便于排查。流量镜像是<strong>把请求复制一份异步发给影子集群，并丢弃其响应</strong>，用于用真实流量验证新版本。镜像有两个必须注意的点：镜像流量不能触达写接口或真实的下游依赖，否则会产生脏数据；镜像本身会给网关增加约一倍的出向连接开销，要计入容量。</p>
 
-<h2>可观测性：网关是最佳采集点，但标签要收敛</h2>
+<h2>② 原理 · 可观测性：网关是最佳采集点，但标签要收敛</h2>
 
-<p>网关能看到所有外部请求的完整信息：状态码、耗时、上游、路由、客户端特征，是<strong>采集黄金信号的最佳位置</strong>——业务侧指标可能因为各服务埋点不一致而无法横向比较，网关侧则天然统一。但正因为流量全打这里，<strong>指标基数是第一号风险</strong>。</p>
+<p>搞清这一节能解决的现象是：监控系统被网关自己的指标打挂。网关能看到所有外部请求的完整信息：状态码、耗时、上游、路由、客户端特征，是<strong>采集黄金信号的最佳位置</strong>——业务侧指标可能因为各服务埋点不一致而无法横向比较，网关侧则天然统一。但正因为流量全打这里，<strong>指标基数是第一号风险</strong>。</p>
 
 <table>
 <thead><tr><th>标签选择</th><th>基数量级</th><th>后果</th><th>正确做法</th></tr></thead>
@@ -353,7 +387,26 @@ max by (instance) (gateway_active_connections) / 100000
 min by (instance) (envoy_control_plane_connected_state) == 0
 </code></pre>
 
-<h2>配置发布：全站风险最高的一次变更</h2>
+<h2>③ 场景 · 部署拓扑：拆几组网关，以及不适用边界</h2>
+
+<p>网关在 LB 之后还是之前？标准答案是<strong>四层 LB 在前、网关在后</strong>：LB 只做四层转发与健康检查，负责把流量均摊到网关实例，网关做七层处理。公有云环境通常是云 LB 加网关组，自建则是 LVS 或硬件负载均衡加网关组。网关实例必须无状态，会话、限流计数、缓存都不能只存在于单实例内存里，否则实例替换就会丢状态。</p>
+
+<p>更重要的决策是<strong>拆成几组</strong>。全站一组网关的问题非常直接：任何一个业务线的配置错误、插件异常、流量突增都会影响所有业务。<strong>按维度拆多组是常见且正确的做法</strong>，代价是实例数与配置管理成本上升，所以拆分维度要对齐故障隔离诉求，而不是对齐组织架构。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么拆</th><th>隔离了什么风险</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>有明确的核心与非核心业务</td><td>按业务线拆，交易、内容、支付各一组</td><td>一个业务线的配置错误或流量洪峰不影响其他业务线</td><td>实例数倍增，配置模板要统一维护；这是最推荐的第一刀</td></tr>
+<tr><td>对外 API 与内部管理后台共用入口</td><td>按流量性质拆两组，各自独立域名与证书</td><td>管理后台的弱认证与调试接口不暴露在对外入口上</td><td>多一组域名与证书管理，安全收益很高</td></tr>
+<tr><td>WebSocket 或 gRPC 流量占比高</td><td>按协议拆，长连接单独一组</td><td>长连接组的配置尽量不变，不被别人的 reload 波及</td><td>需要区分域名或端口，长连接量大时必拆</td></tr>
+<tr><td>多机房或多可用区部署</td><td>每机房一组，各自对接本机房注册中心</td><td>机房级故障被隔离，跨机房调用显式化</td><td>需要上层 DNS 或全局 LB 做机房级调度</td></tr>
+<tr><td>有单个超大流量客户或租户</td><td>为其单独一组网关</td><td>大客户流量波动不影响公共入口</td><td>运维对象增多，容易失控，只在确有超大单一来源时才做</td></tr>
+<tr><td>刚起步、服务数不多</td><td>先不拆，一组网关加完善的监控与限流</td><td>—</td><td>拆得太早会让配置管理成本远超收益，但要提前规划好拆分维度</td></tr>
+</tbody></table>
+
+<p><strong>不适用边界</strong>：本篇不回答「哪些能力该进网关」，那是 <a href="../api-gateway/">API 网关的责任边界</a> 的内容；东西向调用的熔断、限流、降级参数怎么定见 <a href="../circuit-breaker/">熔断限流降级与舱壁隔离</a>；上游端点从哪来、摘除延迟为什么是四段见 <a href="../service-discovery/">服务注册发现</a>；路由与插件配置的版本、审批与灰度机制见 <a href="../config-center/">配置中心的服务端机制与选型</a>；Nginx 的处理阶段、location 优先级与限流三形态见 <a href="../../../devops/nginx/">Nginx 深入</a>；限流算法本身见 <a href="../../distributed/rate-limit/">分布式限流</a>；指标与链路的存储与查询在 <a href="../../../observability/metrics/">指标体系</a> 与 <a href="../../../observability/tracing/opentelemetry/">OpenTelemetry 实战</a>。</p>
+
+<h2>③ 场景 · 配置发布与反模式</h2>
 
 <p>一次错误的网关配置能让全站 502，而且故障是瞬时全量的，没有任何缓冲。因此网关配置必须像代码一样管理：<strong>入库、评审、自动校验、灰度、可自动回滚</strong>。手工登录机器改配置文件是最危险的做法——它既没有评审，也没有版本，故障时没人知道改了什么。</p>
 
@@ -413,8 +466,6 @@ for batch in "10.0.3.12 10.0.3.13" "10.0.3.14 10.0.3.15 10.0.3.16"; do
 done
 </code></pre>
 
-<h2>反模式</h2>
-
 <table>
 <thead><tr><th>反模式</th><th>为什么有人这么做</th><th>后果</th><th>正确做法</th></tr></thead>
 <tbody>
@@ -427,9 +478,15 @@ done
 <tr><td>指标用原始路径做标签</td><td>看板上能看到每个 URL 很方便</td><td>时间序列爆炸，监控系统被网关自己的指标打挂</td><td>用路由模板收敛标签，明细查日志与链路</td></tr>
 </tbody></table>
 
+<p>在这条路径上，上一篇划清了网关的责任边界，本篇把它落到具体的进程模型、部署拓扑与发布流程；最后一步回到调用方自己：当下游真的开始失败时，熔断、限流、降级与舱壁隔离的参数该怎么定。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../api-gateway/">← 上一步：API 网关的责任边界：不放业务逻辑、流量治理与重试风暴</a> · <a href="../circuit-breaker/">下一步：熔断限流降级与舱壁隔离：状态机参数、慢调用熔断与容量反推 →</a></p>
+
+<h2>最容易踩的坑</h2>
+
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">这些坑几乎都发生在「配置看起来没问题」的时候</div>
     <ul>
     <li>为了让 reload 更快把 worker_shutdown_timeout 调成几秒，长连接业务每次发布都批量掉线。</li>
     <li>Envoy 与控制面之间不开 keepalive，NAT 静默断连后配置停止更新，进程看起来完全正常。</li>
@@ -443,9 +500,10 @@ done
     <li>访问日志同步写本地磁盘且没有缓冲，高峰期磁盘 IO 成为瓶颈，请求延迟整体抬升。</li>
     <li>网关只做了一组且与后端服务混部，后端把节点资源打满时入口一起不可用。</li>
     <li>配置只做了语法校验没有语义校验，一个指向不存在 upstream 的路由通过了流水线，上线即 502。</li>
+    <li>只看仓库里的配置文件排障，不看数据面进程里真正生效的配置，结论经常是错的。</li>
+    <li>OpenResty 的端点同步定时器在所有 worker 上都跑了一遍，注册中心被自己的网关打出成倍 QPS。</li>
     </ul>
 </div>
-
                     </div>
                 </article>
             </main>

@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Drizzle schema 定义完全指南：pgTable/mysqlTable 的列类型与约束、索引与外键的正确写法、$inferSelect 与 $inferInsert 两个推导类型的关键差异（插入类型里有默认值的列是可选的）、relations() 只服务关系查询而不产生数据库外键这个常见误解、多 schema 与枚举、以及 schema 文件按领域拆分的组织方式。">
+    <meta name="description" content="Drizzle schema 三段式：先给能直接跑的最小可用形态——四个文件打通 schema 定义、类型导出、连接实例与迁移配置，配「要表达什么 → 怎么写 → 注意什么」速查表；再讲透表定义三个参数的语义、列类型与约束链对 DDL 与推导类型的各自影响、$inferSelect 与 $inferInsert 为什么形状不同（插入类型里有默认值的列是可选的）、relations() 只服务关系查询而不产生外键这个常见误解、索引与复合约束写法及版本差异、多 schema、循环引用与自引用为什么必须延迟求值；最后给按规模选组织方式、类型校验边界放哪里、哪些列类型选择上线后几乎改不动的取舍矩阵。">
     <meta name="keywords" content="Drizzle ORM,Drizzle ORM 入门,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/drizzle/intro/">
     <meta property="og:title" content="Drizzle 上手：schema 定义与类型推导 - Drizzle ORM - 资深码农">
-    <meta property="og:description" content="Drizzle schema 定义完全指南：pgTable/mysqlTable 的列类型与约束、索引与外键的正确写法、$inferSelect 与 $inferInsert 两个推导类型的关键差异（插入类型里有默认值的列是可选的）、relations() 只服务关系查询而不产生数据库外键这个常见误解、多 schema 与枚举、以及 schema 文件按领域拆分的组织方式。">
+    <meta property="og:description" content="Drizzle schema 三段式：先给能直接跑的最小可用形态——四个文件打通 schema 定义、类型导出、连接实例与迁移配置，配「要表达什么 → 怎么写 → 注意什么」速查表；再讲透表定义三个参数的语义、列类型与约束链对 DDL 与推导类型的各自影响、$inferSelect 与 $inferInsert 为什么形状不同（插入类型里有默认值的列是可选的）、relations() 只服务关系查询而不产生外键这个常见误解、索引与复合约束写法及版本差异、多 schema、循环引用与自引用为什么必须延迟求值；最后给按规模选组织方式、类型校验边界放哪里、哪些列类型选择上线后几乎改不动的取舍矩阵。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/drizzle/intro/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Drizzle 上手：schema 定义与类型推导 - Drizzle ORM">
-    <meta name="twitter:description" content="Drizzle schema 定义完全指南：pgTable/mysqlTable 的列类型与约束、索引与外键的正确写法、$inferSelect 与 $inferInsert 两个推导类型的关键差异（插入类型里有默认值的列是可选的）、relations() 只服务关系查询而不产生数据库外键这个常见误解、多 schema 与枚举、以及 schema 文件按领域拆分的组织方式。">
+    <meta name="twitter:description" content="Drizzle schema 三段式：先给能直接跑的最小可用形态——四个文件打通 schema 定义、类型导出、连接实例与迁移配置，配「要表达什么 → 怎么写 → 注意什么」速查表；再讲透表定义三个参数的语义、列类型与约束链对 DDL 与推导类型的各自影响、$inferSelect 与 $inferInsert 为什么形状不同（插入类型里有默认值的列是可选的）、relations() 只服务关系查询而不产生外键这个常见误解、索引与复合约束写法及版本差异、多 schema、循环引用与自引用为什么必须延迟求值；最后给按规模选组织方式、类型校验边界放哪里、哪些列类型选择上线后几乎改不动的取舍矩阵。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -69,7 +69,115 @@
                     <div class="article-content">
 <p>Drizzle 的 schema 就是 TypeScript 代码——没有 DSL、没有 <code>.prisma</code> 文件、没有代码生成步骤。这个设计让类型推导变得直接：表定义本身就携带类型信息，编辑器不需要等 generate 就能给出补全。这篇讲清 schema 定义的每个环节和类型推导的实际用法。</p>
 
-<h2>表定义的基本结构</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一份能直接跑起来的最小 schema——两张表、一个关系、一个 <code>db</code> 实例、一份配置，加上用 <code>$inferSelect</code> 与 <code>$inferInsert</code> 写出的增查函数；再给「要表达什么 → 怎么写 → 注意什么」速查表和 <code>drizzle.config.ts</code> 各字段的作用。</li>
+        <li><strong>② 原理</strong>：表定义三个参数的语义、列类型与约束链对 DDL 和推导类型各自的影响、两套推导类型为什么形状不同、<code>relations()</code> 与 <code>.references()</code> 的六维差异、索引与复合约束的写法与版本差异、多 schema、循环引用与自引用为什么必须延迟求值。</li>
+        <li><strong>③ 场景</strong>：按项目规模选 schema 组织方式、类型边界该放在哪里、哪些列类型选择在上线后几乎改不动，以及不适用边界。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 最小可用：四个文件跑通 schema 与类型推导</h2>
+
+<p>下面四段按顺序放进项目就能跑。<strong>先把这条链路打通，再回原理层看每个环节为什么这么写</strong>：schema 定义 → 类型导出 → 连接实例 → 迁移配置。</p>
+
+<pre><code class="language-typescript">// 1) src/schema/index.ts —— 两张表加一个关系，够用的最小形态
+import { pgTable, uuid, text, integer, timestamp, boolean, index } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+
+export const users = pgTable('users', {
+  // 对象的 key 是 TS 属性名，字符串参数是数据库里的真实列名，两者可以不同
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull().unique(),
+  displayName: text('display_name').notNull(),
+  age: integer('age'),                     // 没写 notNull，所以推导出来带 null
+  isActive: boolean('is_active').notNull().default(true),
+  // PostgreSQL 上几乎总该带时区，否则同一时刻在不同部署地会算出不同结果
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const posts = pgTable('posts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  title: text('title').notNull(),
+  // 只有 .references() 会真的生成外键；relations() 不会
+  authorId: uuid('author_id').notNull().references(() =&gt; users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) =&gt; [
+  // 列表页「某作者的文章按时间倒序」靠这条索引，条件与排序都在索引里
+  index('posts_author_created_idx').on(t.authorId, t.createdAt.desc()),
+]);
+
+// relations 只服务于 db.query 的 with 嵌套，不产生任何 DDL
+export const usersRelations = relations(users, ({ many }) =&gt; ({ posts: many(posts) }));
+export const postsRelations = relations(posts, ({ one }) =&gt; ({
+  author: one(users, { fields: [posts.authorId], references: [users.id] }),
+}));</code></pre>
+
+<pre><code class="language-typescript">// 2) src/schema/types.ts —— 类型只从表定义推导，不要手写接口
+import type { users, posts } from './index';
+
+export type User = typeof users.$inferSelect;      // 查出来的行：所有列都在
+export type NewUser = typeof users.$inferInsert;   // 插入参数：有默认值的列是可选的
+export type Post = typeof posts.$inferSelect;
+
+// 3) src/db.ts —— 连接实例
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import * as schema from './schema';
+
+const client = postgres(process.env.DATABASE_URL!, { max: 20, connect_timeout: 10 });
+// 必须传 schema，否则 db.query 关系查询整个不可用（只影响 query API，不影响 select）
+export const db = drizzle(client, { schema });
+
+// 用推导类型写业务函数：入参出参都不用手写字段列表
+export async function createUser(input: NewUser): Promise&lt;User&gt; {
+  // input 里不需要 id、isActive、createdAt —— 它们都有默认值，所以是可选的
+  const [row] = await db.insert(users).values(input).returning();
+  return row;
+}
+
+await createUser({ email: 'a@b.com', displayName: '张三' });   // 通过
+// await createUser({ email: 'a@b.com' });                     // 编译期报错：缺 displayName</code></pre>
+
+<pre><code class="language-typescript">// 4) drizzle.config.ts —— drizzle-kit 靠它找到 schema 并生成迁移
+import { defineConfig } from 'drizzle-kit';
+
+export default defineConfig({
+  dialect: 'postgresql',
+  schema: './src/schema/index.ts',   // 指向统一入口；拆了文件也只填这一个
+  out: './drizzle',                  // 迁移 SQL 与快照的输出目录，要提交进版本库
+  dbCredentials: { url: process.env.DATABASE_URL! },
+  verbose: true,                     // 打印将要执行的 SQL，评审时靠它看清动作
+  strict: true,                      // 危险操作前二次确认，别在 CI 里关掉
+});
+// 之后只有两条命令：drizzle-kit generate 生成迁移，drizzle-kit migrate 应用迁移。
+// 生产流程与不可逆变更的处理见本簇最后一篇。</code></pre>
+
+<h2>① 用法 · 列与约束速查：要表达什么，就怎么写</h2>
+
+<p>这张表覆盖日常写 schema 时九成的动作。右列是这一处最常见的翻车方式——其中一半属于「不报错但行为不对」，所以值得逐行看一遍。</p>
+
+<table>
+<thead><tr><th>要表达什么</th><th>怎么写</th><th>注意什么</th></tr></thead>
+<tbody>
+<tr><td>数据库是 snake_case，代码想用 camelCase</td><td>对象 key 写 <code>displayName</code>，字符串参数写 <code>'display_name'</code></td><td>报「column does not exist」时先查字符串参数，不是查 TS 属性名</td></tr>
+<tr><td>一列可以为空</td><td>什么都不加，不写 <code>.notNull()</code></td><td>它在 <code>$inferSelect</code> 里带 <code>| null</code>，在 <code>$inferInsert</code> 里是可选</td></tr>
+<tr><td>金额</td><td><code>numeric('amount', { precision: 12, scale: 2 })</code></td><td>推导成字符串，这是为了不丢精度；不要 <code>parseFloat</code> 之后直接算</td></tr>
+<tr><td>时间</td><td><code>timestamp('created_at', { withTimezone: true })</code></td><td>漏掉 <code>withTimezone</code> 会生成不带时区的类型，后期改它属于重写级变更</td></tr>
+<tr><td>取值固定的状态</td><td>小整数列加 <code>check()</code>，或用 <code>pgEnum</code></td><td>枚举取值以后要增删的话别用 <code>pgEnum</code>，它的迁移 diff 支持有限</td></tr>
+<tr><td>半结构化扩展字段</td><td><code>jsonb('metadata').$type&lt;T&gt;()</code></td><td><code>$type</code> 是编译期断言，运行时零校验，脏数据会以「正确类型」进入代码</td></tr>
+<tr><td>复合唯一、复合主键、部分索引</td><td>都写在第三个参数里，返回数组</td><td>单列唯一可以用链式 <code>.unique()</code>，复合的一律不行</td></tr>
+<tr><td>多对多</td><td>中间表加复合主键，并且<strong>给中间表也定义 <code>relations()</code></strong></td><td>漏掉中间表的 relations 时，<code>with</code> 嵌套会静默返回空数组</td></tr>
+<tr><td>树形、自引用</td><td><code>.references((): AnyPgColumn =&gt; categories.id)</code> 并给 relations 加 <code>relationName</code></td><td>不标注类型会报循环引用；不配对 <code>relationName</code> 无法区分父与子方向</td></tr>
+<tr><td>真外键与级联</td><td><code>.references(() =&gt; users.id, { onDelete: 'cascade' })</code></td><td><code>relations()</code> 不生成外键，两者互不替代</td></tr>
+</tbody>
+</table>
+
+<h2>② 原理 · 表定义的基本结构</h2>
+
+<p>搞清这一节能解决「同一个字段在代码里叫一个名字、在库里叫另一个名字」这类改名需求该怎么落。</p>
 
 <p>每种数据库有专属的表定义函数：PostgreSQL 用 <code>pgTable</code>，MySQL 用 <code>mysqlTable</code>，SQLite 用 <code>sqliteTable</code>。它们的第一个参数是数据库里的真实表名，第二个参数是列定义对象，第三个参数（可选）是索引和约束的定义。</p>
 
@@ -105,7 +213,9 @@ export const users = pgTable('users', {
   uniqueIndex('users_email_lower_idx').on(table.email),
 ]);</code></pre>
 
-<h2>列类型与约束的完整对照</h2>
+<h2>② 原理 · 列类型与约束的完整对照</h2>
+
+<p>搞清这一节能解决「这个列该选什么类型、加了约束之后插入代码要不要改」。</p>
 
 <p>Drizzle 的列类型直接映射到数据库原生类型，不做抽象磨平。这意味着你需要知道目标数据库有什么类型，但也意味着你能用到所有原生能力。</p>
 
@@ -139,7 +249,9 @@ export const users = pgTable('users', {
 </tbody>
 </table>
 
-<h2>类型推导：$inferSelect 与 $inferInsert</h2>
+<h2>② 原理 · 类型推导：$inferSelect 与 $inferInsert</h2>
+
+<p>搞清这一节能解决「插入时 TS 要求我传 id 和 createdAt」这类明显不对的类型报错。</p>
 
 <p>这是 Drizzle 类型系统最实用的部分。同一张表有两套类型，因为「查出来的数据」和「插入时要提供的数据」形状不同。</p>
 
@@ -204,7 +316,9 @@ type UserSummary = Pick&lt;User, 'id' | 'email' | 'displayName'&gt;;
 // 数据库里如果是 { color: 'red' }，TS 以为是 { theme: string }
 // 需要运行时校验请配合 zod 在边界处 parse</code></pre>
 
-<h2>relations() 与真外键的区别</h2>
+<h2>② 原理 · relations() 与真外键的区别</h2>
+
+<p>搞清这一节能解决「关系都定义了，为什么库里还能插进指向不存在用户的文章」。</p>
 
 <p>这是 Drizzle 新手最大的误解来源。<code>relations()</code> 和 <code>.references()</code> 是两件完全不同的事：</p>
 
@@ -282,7 +396,9 @@ export const postsToTagsRelations = relations(postsToTags, ({ one }) =&gt; ({
 }));
 // 多对多必须为中间表也定义 relations，否则 with 嵌套查不到</code></pre>
 
-<h2>索引、复合约束与多 schema</h2>
+<h2>② 原理 · 索引、复合约束与多 schema</h2>
+
+<p>搞清这一节能解决「索引写了却没出现在迁移文件里」这种静默失效。</p>
 
 <p>单列的唯一约束用链式 <code>.unique()</code>，但复合索引、复合唯一、复合主键、部分索引都必须在 <code>pgTable</code> 的第三个参数里定义。</p>
 
@@ -324,7 +440,9 @@ export const invoices = billingSchema.table('invoices', {
 // 生成的 SQL 会带 schema 前缀：SELECT * FROM "auth"."sessions"
 // drizzle.config.ts 里需要配置 schemaFilter 才能让 drizzle-kit 识别</code></pre>
 
-<h2>schema 文件的组织方式</h2>
+<h2>② 原理 · schema 文件的组织方式</h2>
+
+<p>搞清这一节能解决「拆完文件后 drizzle-kit 少扫了表、db.query 少了几张表」。</p>
 
 <p>单文件塞几十张表会变成几千行的巨石文件。推荐按业务领域拆分，然后统一导出：</p>
 
@@ -385,7 +503,9 @@ const client = postgres(process.env.DATABASE_URL!, { max: 20 });
 export const db = drizzle(client, { schema });
 // 传 schema 才能用 db.query.users.findMany({ with: { posts: true } })</code></pre>
 
-<h2>循环引用与延迟求值</h2>
+<h2>② 原理 · 循环引用与延迟求值</h2>
+
+<p>搞清这一节能解决「拆文件之后编译报 circular reference，或者运行时某张表是 undefined」。</p>
 
 <p>拆分文件后必然遇到循环引用：<code>users.ts</code> 里的表被 <code>posts.ts</code> 引用，而 <code>posts.ts</code> 又被 <code>users.ts</code> 的 relations 引用。</p>
 
@@ -416,9 +536,35 @@ export const categoriesRelations = relations(categories, ({ one, many }) =&gt; (
   }),
 }));</code></pre>
 
-<div class="callout callout-tip">
-    <div class="callout-icon">✅</div>
-    <div class="callout-title">最容易踩的坑</div>
+<h2>③ 场景 · 不同规模与需求下的取舍</h2>
+
+<p>schema 层的决定分两类：<strong>组织方式随时能改，列类型选择上线后几乎改不动</strong>。下表把两类分别标出来。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>十张表以内的小项目</td><td>单个 <code>schema.ts</code>，类型直接用 <code>$inferInsert</code></td><td>结构一眼看完，额外分层没有收益</td><td>表一多就难导航，多人改同一文件时 git 冲突频繁</td></tr>
+<tr><td>十到一百张表</td><td>按业务领域拆文件，<code>index.ts</code> 统一 re-export</td><td>drizzle-kit 与 <code>db.query</code> 都需要一个总入口来看到全部表</td><td>跨文件引用必须用箭头函数延迟求值，否则循环引用</td></tr>
+<tr><td>多团队 monorepo、上百张表</td><td>按服务拆包，各包独立迁移目录</td><td>各服务能独立发布，迁移互不阻塞</td><td>跨包关系无法用 <code>relations()</code> 表达，只能在应用层拼装</td></tr>
+<tr><td>来自 HTTP 请求体的输入</td><td>先用运行时校验库解析，再把结果交给 <code>$inferInsert</code> 类型的参数</td><td>推导类型与 <code>$type</code> 都只在编译期生效，运行时零校验</td><td>多一层校验 schema，要和表定义保持同步</td></tr>
+<tr><td>金额、税率、库存这类高精度数值</td><td><code>numeric</code> 列，用字符串或十进制库运算</td><td>推导成字符串正是为了不产生浮点误差</td><td>不能直接做算术，要封装一层计算函数</td></tr>
+<tr><td>多地区部署、跨时区业务</td><td>所有时间列一律带时区</td><td>不带时区的类型会丢掉偏移量，同一时刻算出不同结果</td><td>这属于上线后最难改的一类：改类型要重写全表并校验全部历史数据</td></tr>
+<tr><td>状态取值以后会增删</td><td>用小整数或文本列加 <code>check()</code>，不用 <code>pgEnum</code></td><td>枚举增删值的迁移 diff 支持有限，删值基本要手写 SQL</td><td>失去数据库原生枚举的可读性，得靠列注释与应用枚举维持语义</td></tr>
+<tr><td>多租户或模块隔离</td><td><code>pgSchema</code> 分 namespace，并配 <code>schemaFilter</code></td><td>不配的话 drizzle-kit 只扫默认 schema，其他 schema 的变更不进迁移</td><td>每次迁移要按 schema 逐个执行，要处理执行到一半失败的中间态</td></tr>
+</tbody>
+</table>
+
+<p><strong>不适用边界</strong>：本篇只讲 schema 与类型。<code>select</code>、join、<code>db.query</code> 的 <code>with</code>、事务与什么时候该直接写 SQL 在下一篇 <a href="../queries/">查询构建：关系查询、join 与事务</a>；迁移怎么生成、怎么在生产按顺序应用、不可逆变更怎么处理在 <a href="../migrations/">迁移管理：生成、应用与生产流程</a>；该不该用 Drizzle 的判断在上一篇 <a href="../">Drizzle 的设计：SQL-first 的类型安全 ORM</a>；表结构本身该怎么设计（范式、冗余、主键选型）在 <a href="../../design/">范式与反范式：数据库设计的取舍</a>；索引该建在哪几列、顺序怎么排在 <a href="../../optimization/index/">索引设计与优化</a>；<code>timestamptz</code>、<code>numeric</code>、<code>jsonb</code> 这些类型在数据库侧的存储与语义细节在 <a href="../../postgresql/datatypes/">PostgreSQL 数据类型</a>；已有数据的表怎么安全加约束、改类型在 <a href="../../design/index-design/">模式演进与约束设计</a>。</p>
+
+<p>这条路径上，上一篇决定了用不用 Drizzle，本篇把表和类型定下来，下一篇开始用它们查数据。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../">← 上一步：Drizzle 的设计：SQL-first 的类型安全 ORM</a> · <a href="../queries/">下一步：查询构建：关系查询、join 与事务 →</a></p>
+
+<h2>最容易踩的坑</h2>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">这里大半是「不报错但行为不对」的坑</div>
 <ul>
 <li><strong>relations() 不生成外键</strong>：它只服务 db.query 的 with 嵌套。需要数据库外键必须用 .references()。这两者可以只有一个，也可以都有，互不影响。</li>
 <li><strong>多对多必须给中间表也定义 relations</strong>：只给两端的表定义 relations 而漏掉中间表，with 嵌套查询会静默返回空数组，不报错。</li>

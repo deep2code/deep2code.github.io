@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="柔性事务的难点不在选方案，而在落地细节。本篇给出本地消息表的完整 DDL 与投递任务实现（乐观锁抢占防多实例重复投递、指数退避、死信告警、分区归档）、RocketMQ 事务消息回查接口为什么依赖本地事务留痕、TCC 事务记录表如何用一张表同时解决空回滚悬挂与幂等、Saga 状态机表设计与补偿失败的人工介入兜底、中间态巡检 SQL 与处置策略、对账任务设计与修复幂等、以及全局事务 ID 贯穿日志链路的可观测性要求。">
+    <meta name="description" content="柔性事务三段式：先给八项落地清单（漏了哪一项会在扩容、下游故障、数据量上涨时爆）、TCC 三个接口的最小可用 SQL、Saga 编排器的最小骨架与补偿失败四级处置，再讲本地消息表 DDL 每个字段的作用与四种归档、投递任务的抢占与退避与超时回收、事务消息回查为何依赖本地留痕、TCC 一张表收口幂等与空回滚与悬挂、Saga 状态机流转、中间态巡检 SQL、对账两层做法与全局事务 ID 贯穿，最后给按业务形态的落地决策矩阵与反模式。">
     <meta name="keywords" content="分布式系统,分布式事务,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/distributed/transaction/">
     <meta property="og:title" content="柔性事务的实现细节与失败处理 - 分布式系统 - 资深码农">
-    <meta property="og:description" content="柔性事务的难点不在选方案，而在落地细节。本篇给出本地消息表的完整 DDL 与投递任务实现（乐观锁抢占防多实例重复投递、指数退避、死信告警、分区归档）、RocketMQ 事务消息回查接口为什么依赖本地事务留痕、TCC 事务记录表如何用一张表同时解决空回滚悬挂与幂等、Saga 状态机表设计与补偿失败的人工介入兜底、中间态巡检 SQL 与处置策略、对账任务设计与修复幂等、以及全局事务 ID 贯穿日志链路的可观测性要求。">
+    <meta property="og:description" content="柔性事务三段式：先给八项落地清单（漏了哪一项会在扩容、下游故障、数据量上涨时爆）、TCC 三个接口的最小可用 SQL、Saga 编排器的最小骨架与补偿失败四级处置，再讲本地消息表 DDL 每个字段的作用与四种归档、投递任务的抢占与退避与超时回收、事务消息回查为何依赖本地留痕、TCC 一张表收口幂等与空回滚与悬挂、Saga 状态机流转、中间态巡检 SQL、对账两层做法与全局事务 ID 贯穿，最后给按业务形态的落地决策矩阵与反模式。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/distributed/transaction/">
     <meta property="og:site_name" content="资深码农">
@@ -26,12 +26,12 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="柔性事务的实现细节与失败处理">
-    <meta name="twitter:description" content="柔性事务的难点不在选方案，而在落地细节。本篇给出本地消息表的完整 DDL 与投递任务实现（乐观锁抢占防多实例重复投递、指数退避、死信告警、分区归档）、RocketMQ 事务消息回查接口为什么依赖本地事务留痕、TCC 事务记录表如何用一张表同时解决空回滚悬挂与幂等、Saga 状态机表设计与补偿失败的人工介入兜底、中间态巡检 SQL 与处置策略、对账任务设计与修复幂等、以及全局事务 ID 贯穿日志链路的可观测性要求。">
+    <meta name="twitter:description" content="柔性事务三段式：先给八项落地清单（漏了哪一项会在扩容、下游故障、数据量上涨时爆）、TCC 三个接口的最小可用 SQL、Saga 编排器的最小骨架与补偿失败四级处置，再讲本地消息表 DDL 每个字段的作用与四种归档、投递任务的抢占与退避与超时回收、事务消息回查为何依赖本地留痕、TCC 一张表收口幂等与空回滚与悬挂、Saga 状态机流转、中间态巡检 SQL、对账两层做法与全局事务 ID 贯穿，最后给按业务形态的落地决策矩阵与反模式。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "本地消息表的投递任务部署多个实例会重复发消息吗？", "acceptedAnswer": {"@type": "Answer", "text": "如果只是简单地扫描待投递记录然后发送，一定会重复。两个实例在同一时刻扫到同一批记录，各发一次。正确做法是扫描之后用一条带条件的 UPDATE 抢占：把状态从待投递改成投递中，同时写入本实例标识和抢占时间，只有受影响行数为 1 的记录才真正发送。抢占之后如果进程崩溃，记录会一直停在投递中状态，所以还需要一个超时回收逻辑，把抢占时间超过阈值的记录改回待投递。即使做了抢占，消息本身仍可能因为发送成功但状态回写失败而重复投递，所以消费端必须幂等，这是柔性事务不可省的前提。"}}, {"@type": "Question", "name": "RocketMQ 事务消息的回查接口应该怎么实现？", "acceptedAnswer": {"@type": "Answer", "text": "回查的职责是回答一个问题：这个事务 ID 对应的本地事务最终提交了没有。Broker 在半消息长时间没收到二次确认时会发起回查，回查方法需要根据事务 ID 查出本地状态并返回提交、回滚或未知。这里有个被大量忽略的前提：本地事务必须留下可按事务 ID 查询的痕迹。如果本地事务只是更新了一张业务表而没有记录事务 ID，回查时就无法判断，只能返回未知，于是半消息会被反复回查直到超过次数限制后丢弃，业务出现下游没收到消息的静默不一致。所以实现时要在本地事务内插入一条带事务 ID 的记录，回查读这条记录。另外回查可能发生多次，实现必须幂等且只读。"}}, {"@type": "Question", "name": "TCC 的空回滚和悬挂为什么要靠一张事务记录表解决？", "acceptedAnswer": {"@type": "Answer", "text": "空回滚是指 Try 因为超时或网络问题没执行，协调者却发起了 Cancel，这时 Cancel 什么都不该做但必须返回成功。悬挂是指 Try 的请求在网络里延迟，Cancel 先到并完成，Try 才姗姗来迟地执行，于是预留的资源再也没人释放。两个问题的共同解法是让分支事务在数据库里留下状态：Cancel 执行时如果找不到 Try 的记录，就插入一条已回滚记录并直接返回成功，这就解决了空回滚；Try 执行时先检查是否已存在已回滚记录，存在则直接拒绝，这就解决了悬挂。再加上对同一分支 ID 的唯一约束，幂等也一并解决。一张表三个问题，比在业务代码里散落判断可靠得多。"}}, {"@type": "Question", "name": "Saga 的补偿操作失败了怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "补偿失败是柔性事务真正的硬骨头，必须设计明确的兜底链条，绝不能静默丢弃。可行的处置顺序是：先按指数退避重试若干次，覆盖网络抖动与下游短时不可用；重试达到上限后把流程实例标记为补偿失败并投入人工介入队列，同时触发告警，通知里必须带全局事务 ID 与卡住的步骤；运营或值班同学在后台通过幂等的补偿接口手动重放，或者做数据修正。设计上还有两条硬要求：补偿接口必须幂等，因为它会被重试很多次；补偿操作应该尽可能设计成不会失败的形式，比如把扣减库存的补偿做成插入一条返还流水而不是直接改库存，插入操作的失败面比更新小得多。"}}, {"@type": "Question", "name": "为什么柔性事务一定要做对账？", "acceptedAnswer": {"@type": "Answer", "text": "因为所有基于重试和补偿的机制都有漏网概率：消息超过重试上限进了死信、巡检任务自己挂了一段时间、代码 bug 导致状态机卡在中间态、人工处理时改错了数据。这些情况在系统内部看起来都是正常的，只有拿两侧数据做比对才能发现。对账的设计要点是明确四件事：对什么（通常是两侧的金额汇总与逐笔明细）、多久对一次（核心资金按小时，一般业务按天）、发现差异后自动修复还是告警（能明确判定方向且修复幂等的可自动，涉及资金的一律先告警）、以及修复本身必须幂等且留痕。对账是最后一道防线，没有它就等于把不一致的发现时间交给用户投诉。"}}, {"@type": "Question", "name": "柔性事务的中间态可以直接展示给用户吗？", "acceptedAnswer": {"@type": "Answer", "text": "不能直接把内部状态暴露出去。用户看到处理中、待补偿、补偿失败这类术语只会产生困惑并反复提单。正确做法是在业务状态和内部事务状态之间做一层映射：对用户只呈现处理中、成功、失败三种确定语义，内部的中间态一律归入处理中，并给出明确的预期时间和查询入口。另一个关键点是失败态必须在真正终态确定后才展示，中间态下展示失败会引导用户重复下单。同时接口要返回稳定的业务单号，让用户在客服沟通时能定位，后台再用全局事务 ID 关联到具体卡住的步骤。"}}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Saga 的最小可用骨架应该怎么写？", "acceptedAnswer": {"@type": "Answer", "text": "三件东西就够：一张状态机表、一个能被反复调用的推进函数、一条补偿失败的出口。状态机表记录流程实例 ID、流程类型、当前步骤、方向（正向或逆向）、已完成步骤列表、上下文快照、重试次数与下次重试时间。推进函数每次只推进一步并立刻落库，这样进程在任何位置崩溃都能从库里续上；加载实例时用带行锁的查询，防止两个驱动者同时推进同一个实例。正向步骤失败不要原地重试正向，直接把方向改成逆向并落库，由下一轮驱动执行补偿。补偿失败则退避重试同一步、不推进进度，超过上限后把状态标记为补偿失败并告警转人工。每步补偿成功后要重置重试计数，否则上一步的失败次数会吃掉下一步的重试预算。"}}, {"@type": "Question", "name": "本地消息表的投递任务部署多个实例会重复发消息吗？", "acceptedAnswer": {"@type": "Answer", "text": "如果只是简单地扫描待投递记录然后发送，一定会重复。两个实例在同一时刻扫到同一批记录，各发一次。正确做法是扫描之后用一条带条件的 UPDATE 抢占：把状态从待投递改成投递中，同时写入本实例标识和抢占时间，只有受影响行数为 1 的记录才真正发送。抢占之后如果进程崩溃，记录会一直停在投递中状态，所以还需要一个超时回收逻辑，把抢占时间超过阈值的记录改回待投递。即使做了抢占，消息本身仍可能因为发送成功但状态回写失败而重复投递，所以消费端必须幂等，这是柔性事务不可省的前提。"}}, {"@type": "Question", "name": "RocketMQ 事务消息的回查接口应该怎么实现？", "acceptedAnswer": {"@type": "Answer", "text": "回查的职责是回答一个问题：这个事务 ID 对应的本地事务最终提交了没有。Broker 在半消息长时间没收到二次确认时会发起回查，回查方法需要根据事务 ID 查出本地状态并返回提交、回滚或未知。这里有个被大量忽略的前提：本地事务必须留下可按事务 ID 查询的痕迹。如果本地事务只是更新了一张业务表而没有记录事务 ID，回查时就无法判断，只能返回未知，于是半消息会被反复回查直到超过次数限制后丢弃，业务出现下游没收到消息的静默不一致。所以实现时要在本地事务内插入一条带事务 ID 的记录，回查读这条记录。另外回查可能发生多次，实现必须幂等且只读。"}}, {"@type": "Question", "name": "TCC 的空回滚和悬挂为什么要靠一张事务记录表解决？", "acceptedAnswer": {"@type": "Answer", "text": "空回滚是指 Try 因为超时或网络问题没执行，协调者却发起了 Cancel，这时 Cancel 什么都不该做但必须返回成功。悬挂是指 Try 的请求在网络里延迟，Cancel 先到并完成，Try 才姗姗来迟地执行，于是预留的资源再也没人释放。两个问题的共同解法是让分支事务在数据库里留下状态：Cancel 执行时如果找不到 Try 的记录，就插入一条已回滚记录并直接返回成功，这就解决了空回滚；Try 执行时先检查是否已存在已回滚记录，存在则直接拒绝，这就解决了悬挂。再加上对同一分支 ID 的唯一约束，幂等也一并解决。一张表三个问题，比在业务代码里散落判断可靠得多。"}}, {"@type": "Question", "name": "Saga 的补偿操作失败了怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "补偿失败是柔性事务真正的硬骨头，必须设计明确的兜底链条，绝不能静默丢弃。可行的处置顺序是：先按指数退避重试若干次，覆盖网络抖动与下游短时不可用；重试达到上限后把流程实例标记为补偿失败并投入人工介入队列，同时触发告警，通知里必须带全局事务 ID 与卡住的步骤；运营或值班同学在后台通过幂等的补偿接口手动重放，或者做数据修正。设计上还有两条硬要求：补偿接口必须幂等，因为它会被重试很多次；补偿操作应该尽可能设计成不会失败的形式，比如把扣减库存的补偿做成插入一条返还流水而不是直接改库存，插入操作的失败面比更新小得多。"}}, {"@type": "Question", "name": "为什么柔性事务一定要做对账？", "acceptedAnswer": {"@type": "Answer", "text": "因为所有基于重试和补偿的机制都有漏网概率：消息超过重试上限进了死信、巡检任务自己挂了一段时间、代码 bug 导致状态机卡在中间态、人工处理时改错了数据。这些情况在系统内部看起来都是正常的，只有拿两侧数据做比对才能发现。对账的设计要点是明确四件事：对什么（通常是两侧的金额汇总与逐笔明细）、多久对一次（核心资金按小时，一般业务按天）、发现差异后自动修复还是告警（能明确判定方向且修复幂等的可自动，涉及资金的一律先告警）、以及修复本身必须幂等且留痕。对账是最后一道防线，没有它就等于把不一致的发现时间交给用户投诉。"}}, {"@type": "Question", "name": "柔性事务的中间态可以直接展示给用户吗？", "acceptedAnswer": {"@type": "Answer", "text": "不能直接把内部状态暴露出去。用户看到处理中、待补偿、补偿失败这类术语只会产生困惑并反复提单。正确做法是在业务状态和内部事务状态之间做一层映射：对用户只呈现处理中、成功、失败三种确定语义，内部的中间态一律归入处理中，并给出明确的预期时间和查询入口。另一个关键点是失败态必须在真正终态确定后才展示，中间态下展示失败会引导用户重复下单。同时接口要返回稳定的业务单号，让用户在客服沟通时能定位，后台再用全局事务 ID 关联到具体卡住的步骤。"}}]}</script>
 </head>
 <body>
     <div class="reading-progress"></div>
@@ -71,7 +71,157 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>2PC 的不确定态、TCC 与 Saga 与本地消息表与事务消息的四方案对照、以及选型判断，<a href="../">分布式系统主干篇</a>已经给出，本篇不再重复对比。这里只讲一件事：<strong>选定方案之后，表结构怎么设计、代码怎么写、失败路径怎么收尾</strong>。柔性事务上线后出的事故，几乎没有一个是因为选错了方案，全部来自这些细节——消息表没加唯一键、投递任务没做抢占、补偿接口不幂等、没有巡检、没有对账。</p>
+<p>2PC 的不确定态、TCC 与 Saga 与本地消息表与事务消息的四方案对照、以及选型判断，<a href="../">分布式系统主干篇</a>已经给出，本篇不再重复对比。这里只讲一件事：<strong>选定方案之后，表结构怎么设计、代码怎么写、失败路径怎么收尾</strong>。柔性事务上线后出的事故，几乎没有一个是因为选错了方案，全部来自这些细节——消息表没加唯一键、投递任务没做抢占、补偿接口不幂等、没有巡检、没有对账。所以先给能直接开工的骨架与落地清单，再逐个展开它们背后的机制。</p>
+
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：一张八项落地清单（少做哪一项会在什么时候爆）、TCC 三个接口的最小可用 SQL（占位、条件预留、状态机 CAS、空回滚插入），以及 Saga 编排器的最小可用骨架代码与补偿失败的四级处置。</li>
+        <li><strong>② 原理</strong>：本地消息表每个字段省掉的后果与四种归档方案、投递任务的抢占与退避与超时回收、事务消息回查为什么必须依赖本地留痕、TCC 一张记录表怎么同时收口幂等与空回滚与悬挂、Saga 状态机的完整流转与两种驱动方式、三类中间态的巡检 SQL、对账的两层做法、全局事务 ID 的贯穿方式。</li>
+        <li><strong>③ 场景</strong>：按业务形态选落地方案的决策矩阵与代价、八个反模式、以及本篇不覆盖的边界指向哪里。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 落地清单：这八项少一项，上线后必出事</h2>
+
+<p>下面八项是所有柔性事务方案的公共部分，不分 TCC、Saga 还是消息表。<strong>「什么时候爆」一列是重点</strong>——这些项漏掉之后都不会立刻出问题，而是在扩容、下游故障、数据量上涨这三个时刻集中爆发。</p>
+
+<table>
+<thead><tr><th>要做什么</th><th>怎么做</th><th>漏了什么时候爆</th></tr></thead>
+<tbody>
+<tr><td>业务变更与留痕写进同一个本地事务</td><td>同库同事务插入消息表或事务记录表，<strong>事务里不做任何远程调用</strong></td><td>一上线就可能出现「业务成功但下游没收到」，且无法追溯</td></tr>
+<tr><td>留痕表有业务唯一键</td><td><code>UNIQUE KEY (biz_id)</code> 或 <code>UNIQUE KEY (branch_id)</code>，重复插入走冲突分支当成功</td><td>业务侧一重试就出两条，下游按两笔处理</td></tr>
+<tr><td>后台任务做抢占</td><td>条件 <code>UPDATE ... WHERE id = ? AND status = 0</code>，受影响行数为 1 才处理</td><td>扩容到第二个实例的那一刻开始重复投递</td></tr>
+<tr><td>重试用指数退避且有上限</td><td>退避序列写死在代码里，超上限转死信</td><td>下游故障时被持续打压，故障时间被放大</td></tr>
+<tr><td>死信有出口</td><td>转死信同时告警，告警带 <code>biz_id</code> 与失败摘要</td><td>死信表静默堆积，等对账时才发现下游少了一段数据</td></tr>
+<tr><td>中间态有超时巡检</td><td>按 <code>(status, time)</code> 索引捞长时间未推进的记录，回收或推进</td><td>驱动进程崩溃一次，所有在途流程永久停住</td></tr>
+<tr><td>有对账任务</td><td>逐笔加汇总两层，差异用原 <code>biz_id</code> 补发</td><td>代码 bug 造成的漏网不一致累积数月，靠用户投诉暴露</td></tr>
+<tr><td>全局事务 ID 贯穿到异步链路</td><td>放进请求头、MDC、MQ 消息头，所有日志与指标都带上</td><td>第一次排查卡单时才发现消费端日志完全断链</td></tr>
+</tbody></table>
+
+<p>TCC 的三个接口去掉框架之后，本质就是下面这四条语句。<strong>把它们背下来比背「Try-Confirm-Cancel」有用</strong>：</p>
+
+<pre><code class="language-sql">-- ① Try 第一步：先占位。唯一键让并发只有一条能插入成功
+INSERT INTO tcc_branch (xid, branch_id, resource, state, tried_at)
+VALUES ('X1', 'X1:inventory', 'inventory', 1, NOW(3));
+-- 报唯一键冲突时不要直接失败，先查这条记录的 state：
+--   state = 1（已预留）-> 重复 Try，返回上次结果即可（幂等）
+--   state = 3（已取消）-> Cancel 已经先到过，本次 Try 必须拒绝（防悬挂）
+
+-- ② Try 第二步：业务预留。条件写进 WHERE，由行锁保证不会预留出负数
+UPDATE stock SET available = available - 10, frozen = frozen + 10
+ WHERE sku_id = 1001 AND available &gt;= 10;
+-- 受影响行数为 0 就抛异常，让 ① 的占位记录随事务一起回滚
+
+-- ③ Confirm / Cancel：状态机 CAS，前置状态写进 WHERE
+UPDATE tcc_branch SET state = 2, confirmed_at = NOW(3)
+ WHERE branch_id = 'X1:inventory' AND state = 1;
+-- 受影响行数为 0 = 已经被处理过（或已取消），直接返回成功，不要重复动业务数据
+
+-- ④ Cancel 但 Try 从未执行（空回滚）：插一条已取消记录
+INSERT INTO tcc_branch (xid, branch_id, resource, state, cancelled_at)
+VALUES ('X1', 'X1:inventory', 'inventory', 3, NOW(3));
+-- 这条插入有两个作用：让本次 Cancel 返回成功，并为迟到的 Try 留下拒绝依据
+</code></pre>
+
+<p>四条语句对应的完整表结构、以及为什么「空回滚」和「悬挂」能被同一张表一起收口，见原理层的 TCC 一节。</p>
+
+<h2>① 用法 · Saga 最小可用骨架与补偿失败的四级处置</h2>
+
+<p>Saga 的最小可用形态只需要三件东西：一张状态机表、一个能被反复调用的推进函数、一条补偿失败的出口。<strong>推进函数必须写成「可以从任意时刻重新调用」</strong>，因为巡检任务、事件回调、人工重试都会调它：</p>
+
+<pre><code class="language-go">package saga
+
+import (
+    "context"
+    "errors"
+    "time"
+)
+
+// 一个步骤 = 正向动作 + 补偿动作。两者都必须幂等：
+// 正向会被巡检重复驱动，补偿会被重试链路重复调用。
+type Step struct {
+    Name string
+    Do   func(ctx context.Context, fc *FlowCtx) error
+    Undo func(ctx context.Context, fc *FlowCtx) error
+}
+
+var ErrManual = errors.New("saga: 补偿重试耗尽，转人工")
+
+const maxCompRetry = 8
+
+// Advance 推进一个流程实例一步。调用方是定时巡检或事件回调，
+// 每次只推进一步并立刻落库，这样进程在任何位置崩溃都能从库里续上。
+func (e *Engine) Advance(ctx context.Context, flowID string) error {
+    inst, err := e.store.LoadForUpdate(ctx, flowID) // SELECT ... FOR UPDATE，防两个驱动者同时推进
+    if err != nil {
+        return err
+    }
+    steps := e.flows[inst.FlowType]
+
+    if inst.Direction == Forward {
+        if inst.CurrentStep &gt;= len(steps) {
+            return e.store.Finish(ctx, inst, StateSuccess)
+        }
+        s := steps[inst.CurrentStep]
+        if err := s.Do(ctx, inst.FlowCtx); err != nil {
+            // 正向失败：不重试正向，直接转补偿。
+            // 正向重试要靠下游幂等来保证安全，这里的语义是「这一步做不成，整单回退」。
+            inst.Direction = Backward
+            inst.State = StateCompensating
+            return e.store.Save(ctx, inst) // 落库后由下一轮驱动执行补偿
+        }
+        inst.CurrentStep++
+        inst.StepsDone = append(inst.StepsDone, s.Name)
+        return e.store.Save(ctx, inst) // 每步一落库：崩溃后不会重做已完成的步骤
+    }
+
+    // 逆向：补偿已完成的步骤，顺序与正向相反
+    if len(inst.StepsDone) == 0 {
+        return e.store.Finish(ctx, inst, StateCompensated)
+    }
+    i := len(inst.StepsDone) - 1
+    s := steps[i]
+    if err := s.Undo(ctx, inst.FlowCtx); err != nil {
+        inst.RetryCount++
+        if inst.RetryCount &gt;= maxCompRetry {
+            // 补偿耗尽：只能转人工，绝不能标成功后跳过——那会让不一致永久化
+            inst.State = StateCompFail
+            _ = e.store.Save(ctx, inst)
+            e.alarm.Fire("saga_comp_fail", flowID, s.Name, err.Error())
+            return ErrManual
+        }
+        // 退避后重试同一步补偿，不推进进度
+        inst.NextRetryAt = time.Now().Add(backoff(inst.RetryCount))
+        return e.store.Save(ctx, inst)
+    }
+    inst.StepsDone = inst.StepsDone[:i]
+    inst.RetryCount = 0 // 每步补偿成功后重置，避免上一步的失败次数吃掉下一步的预算
+    return e.store.Save(ctx, inst)
+}
+</code></pre>
+
+<p>补偿失败不是异常分支，是<strong>一定会发生的常规分支</strong>。处置链条按下面四级走，上线前就要把第四级的入口做出来：</p>
+
+<table>
+<thead><tr><th>级别</th><th>动作</th><th>怎么做</th><th>不这么做的后果</th></tr></thead>
+<tbody>
+<tr><td>一</td><td>退避重试同一步补偿</td><td>不推进进度，只把 <code>next_retry_at</code> 往后推；覆盖下游短时不可用</td><td>固定间隔重试会在下游故障期间打出几百次无效调用</td></tr>
+<tr><td>二</td><td>超上限标记 <code>COMP_FAIL</code></td><td>状态落库后停止自动重试，等人工</td><td>无上限重试会让一条坏数据永久占用驱动任务的配额</td></tr>
+<tr><td>三</td><td>带上下文告警</td><td>告警必须包含全局事务 ID、卡住的步骤名、失败原因、业务摘要</td><td>只写日志等于没有告警，没人会主动去看</td></tr>
+<tr><td>四</td><td>人工介入入口</td><td>后台接口按 <code>flow_id</code> 重新驱动该步补偿（调的仍是幂等补偿接口）</td><td>值班只能直连数据库改数据，改错无法追溯</td></tr>
+</tbody></table>
+
+<div class="callout callout-danger">
+    <div class="callout-icon">❌</div>
+    <div class="callout-title">没有「跳过这一步」这个选项</div>
+    <p>补偿失败时把实例标成成功然后跳过，是最容易做又最不能做的处理。它把一次可修复的失败变成永久不一致：业务状态显示完成，下游数据却停在中间态，后续对账发现时已经没有自动修复的依据。跳过只能在人工确认数据已修正之后执行，并且要留操作记录。</p>
+</div>
+
+<h2>② 原理 · 三条后台任务与失败出口的全景</h2>
+
+<p>搞清这一节，能回答「为什么这些方案都需要三个后台任务」——它们分别兜住三类不同的失败：投递失败、驱动中断、逻辑漏网。任何柔性事务的落地形态都可以套进下面这张图：一个本地事务、三条后台任务、三个不能静默关闭的出口。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -99,9 +249,9 @@ flowchart TB
     B3 --> C3
 </div>
 
-<h2>本地消息表：DDL 决定了这个方案能不能用</h2>
+<h2>② 原理 · 本地消息表：DDL 决定了这个方案能不能用</h2>
 
-<p>本地消息表的可靠性完全建立在表结构上。缺了 <code>biz_id</code> 唯一键就防不住重复插入，缺了 <code>next_retry_at</code> 就只能固定间隔重试，缺了扫描索引就会在数据量涨起来后把业务库扫崩。</p>
+<p>搞清这一节，能解释为什么同样叫「本地消息表」，有的团队跑了三年没事，有的上线两周就重复投递——差别全在 DDL 上。本地消息表的可靠性完全建立在表结构上。缺了 <code>biz_id</code> 唯一键就防不住重复插入，缺了 <code>next_retry_at</code> 就只能固定间隔重试，缺了扫描索引就会在数据量涨起来后把业务库扫崩。</p>
 
 <pre><code class="language-sql">CREATE TABLE `tx_message` (
   `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -137,9 +287,9 @@ flowchart TB
 <tr><td><code>idx_scan</code> 联合索引</td><td>扫描退化成全表扫，消息表涨到千万级后压垮业务库</td><td>status 最左，配合分批 limit</td></tr>
 </tbody></table>
 
-<h2>投递任务：抢占、退避、死信，三件都不能少</h2>
+<h2>② 原理 · 投递任务：抢占、退避、死信，三件都不能少</h2>
 
-<p>业务与消息必须在同一个本地事务里写入，这是方案的前提；而投递任务的正确性关键在<strong>抢占</strong>。下面这段是可以直接抄的骨架：</p>
+<p>搞清这一节，能解释「为什么单实例跑得很好，扩容后立刻出现重复投递」。业务与消息必须在同一个本地事务里写入，这是方案的前提；而投递任务的正确性关键在<strong>抢占</strong>。下面这段是可以直接抄的骨架：</p>
 
 <pre><code class="language-java">@Service
 public class OrderService {
@@ -253,9 +403,9 @@ UPDATE tx_message
     <p>转死信只解决了「不再无谓重试」，没解决业务不一致。死信必须触发告警并进入人工处理流程，告警内容要带 <code>biz_id</code> 与失败原因摘要。见过太多系统死信表堆了几万条没人看，等到对账才发现下游少了一个月的数据。</p>
 </div>
 
-<h2>事务消息：回查接口的前提是本地事务留痕</h2>
+<h2>② 原理 · 事务消息：回查接口的前提是本地事务留痕</h2>
 
-<p>事务消息（RocketMQ 的半消息机制）看起来省掉了消息表，但它把可靠性押在<strong>回查接口</strong>上。而回查能不能答得出来，取决于本地事务是否留下了可按事务 ID 查询的痕迹——这是最常被漏掉的前提。</p>
+<p>搞清这一节，能解释一个典型现象：下游偶尔收不到消息，而且集中在高峰期。事务消息（RocketMQ 的半消息机制）看起来省掉了消息表，但它把可靠性押在<strong>回查接口</strong>上。而回查能不能答得出来，取决于本地事务是否留下了可按事务 ID 查询的痕迹——这是最常被漏掉的前提。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -333,9 +483,9 @@ sequenceDiagram
 <tr><td>留痕表与业务表同库</td><td>跨库就不再是一个本地事务</td><td>退化成又一个分布式事务问题</td></tr>
 </tbody></table>
 
-<h2>TCC：一张事务记录表解决三个问题</h2>
+<h2>② 原理 · TCC：一张事务记录表解决三个问题</h2>
 
-<p>空回滚与悬挂的成因主干篇已经讲过，这里给实现。核心是所有分支操作都先读写同一张记录表，用唯一约束加状态字段把三类问题一次性收口。</p>
+<p>搞清这一节，能解释用法层那四条 SQL 为什么要按那个顺序写。空回滚与悬挂的成因主干篇已经讲过，这里给实现。核心是所有分支操作都先读写同一张记录表，用唯一约束加状态字段把三类问题一次性收口。</p>
 
 <pre><code class="language-sql">CREATE TABLE `tcc_branch` (
   `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -400,9 +550,9 @@ public void cancelDeduct(String xid, String branchId, long skuId, int qty) {
 <tr><td>卡在中间态</td><td>协调者崩溃，二阶段没人发</td><td>按 <code>idx_state_time</code> 巡检长时间已预留的分支并推进</td></tr>
 </tbody></table>
 
-<h2>Saga 编排：状态机表与补偿失败兜底</h2>
+<h2>② 原理 · Saga 编排：状态机表与补偿失败兜底</h2>
 
-<p>Saga 的核心挑战不在正向流程，而在<strong>补偿失败</strong>。任何补偿操作都可能失败——下游宕机、网络分区、接口限流——不给它一个兜底链条，系统就会在中间态永久挂起。</p>
+<p>搞清这一节，能解释用法层那段推进函数为什么每一步都要落库、以及 <code>COMP_FAIL</code> 这个状态为什么必须存在。Saga 的核心挑战不在正向流程，而在<strong>补偿失败</strong>。任何补偿操作都可能失败——下游宕机、网络分区、接口限流——不给它一个兜底链条，系统就会在中间态永久挂起。</p>
 
 <pre><code class="language-sql">CREATE TABLE `saga_instance` (
   `id`              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -464,9 +614,9 @@ stateDiagram-v2
     <p>让补偿尽可能不失败。比如「扣减库存」的补偿不是「把可用库存加回去」（UPDATE 有并发与负数风险），而是「插入一条返还流水」（INSERT 基本只有主键冲突，天然幂等且失败面极窄）。把高风险操作转成低风险操作，是降低补偿失败率的核心手段。</p>
 </div>
 
-<h2>超时与中间态巡检：所有柔性事务的共同需求</h2>
+<h2>② 原理 · 超时与中间态巡检：所有柔性事务的共同需求</h2>
 
-<p>无论用哪种方案，「长时间处于中间状态」的实例都必须有巡检任务兜底。巡检不是可选的锦上添花，是方案能不能在生产跑的前提。</p>
+<p>搞清这一节，能解释为什么「驱动进程重启过一次」这件小事会造成一批订单永久卡单。无论用哪种方案，「长时间处于中间状态」的实例都必须有巡检任务兜底。巡检不是可选的锦上添花，是方案能不能在生产跑的前提。</p>
 
 <pre><code class="language-sql">-- 巡检本地消息表：投递中超过 3 分钟的记录，要么超时回收，要么告警人工
 SELECT id, biz_id, locked_at, owner, retry_count
@@ -500,9 +650,9 @@ SELECT flow_id, flow_type, state, current_step, updated_at
 <tr><td>Saga state=COMP_FAIL</td><td>补偿重试耗尽</td><td>告警加人工介入，不自动处理</td></tr>
 </tbody></table>
 
-<h2>对账是最后一道防线</h2>
+<h2>② 原理 · 对账是最后一道防线</h2>
 
-<p>重试、补偿、巡检能覆盖大部分故障场景，但覆盖不了全部：代码 bug 导致状态机走错分支、巡检任务自己挂了一段时间、人工处理时改错了数据。这些漏网之鱼<strong>只有对账能发现</strong>。</p>
+<p>搞清这一节，能解释为什么「我们重试和补偿都做了」仍然需要对账——前两者只能覆盖它们自己知道的失败。重试、补偿、巡检能覆盖大部分故障场景，但覆盖不了全部：代码 bug 导致状态机走错分支、巡检任务自己挂了一段时间、人工处理时改错了数据。这些漏网之鱼<strong>只有对账能发现</strong>。</p>
 
 <pre><code class="language-sql">-- 对账核心逻辑：两侧按时间范围汇总，找出差异
 -- 左侧是订单库（源头），右侧是积分库（下游），按小时对齐
@@ -537,9 +687,9 @@ SELECT 'points' AS side, COUNT(*) AS cnt, SUM(biz_amount) AS total
 <tr><td>对账本身的留痕</td><td>对了什么、什么结果、修了什么</td><td>每次对账写一条汇总记录加差异明细，便于审计和追溯</td></tr>
 </tbody></table>
 
-<h2>可观测性：全局事务 ID 必须贯穿全链路</h2>
+<h2>② 原理 · 可观测性：全局事务 ID 必须贯穿全链路</h2>
 
-<p>柔性事务必须能回答：「这笔业务现在卡在哪一步？」答不出来，故障时就只能翻日志猜。全局事务 ID 是贯穿所有组件的主线。</p>
+<p>搞清这一节，能把「这笔业务卡在哪一步」从半小时的翻日志变成一次查询。柔性事务必须能回答这个问题；答不出来，故障时就只能翻日志猜。全局事务 ID 是贯穿所有组件的主线。</p>
 
 <div class="mermaid">
 flowchart LR
@@ -560,7 +710,23 @@ flowchart LR
 <tr><td>指标看板</td><td>中间态数量、平均停留时长、死信数、补偿失败数</td><td>无法主动发现堆积，只能被动等投诉</td></tr>
 </tbody></table>
 
-<h2>反模式清单</h2>
+<h2>③ 场景 · 按业务形态选落地方案与代价</h2>
+
+<p>方案对照在主干篇，这里给的是<strong>落到具体业务形态上的选择与它转移出去的成本</strong>。「代价」一列决定了你要额外准备什么工程量，漏估这一列是柔性事务项目延期的主要原因。</p>
+
+<table>
+<thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
+<tbody>
+<tr><td>只是通知下游：加积分、建索引、触发履约</td><td>本地消息表 + 投递任务</td><td>不需要隔离性，也不需要回退主操作</td><td>消息表膨胀要归档；消费端必须幂等；多一个后台任务要监控</td></tr>
+<tr><td>已经深度使用 RocketMQ 的体系</td><td>事务消息</td><td>省掉消息表与投递任务的自研与运维</td><td>必须实现回查且本地事务要留痕，留痕表保留期要覆盖最大回查窗口</td></tr>
+<tr><td>资金冻结、库存预占、券锁定</td><td>TCC</td><td>Try 阶段就要把资源挡住，别人不能抢走</td><td>每个参与方三个接口，外加空回滚、悬挂、幂等三类处理；遗留系统常常改不动</td></tr>
+<tr><td>跨多服务的长流程：下单、支付、履约、结算</td><td>Saga 编排，状态机落库，每步一落</td><td>步骤多，各步天然有补偿语义，TCC 改造成本不可接受</td><td>没有隔离性，中间态会被看到；必须做补偿失败的人工入口</td></tr>
+<tr><td>步骤只有两三步且都在自己团队内</td><td>退化成「主操作 + 一两条消息」，不引入状态机</td><td>状态机的收益来自步骤多，两步时收益抵不上维护成本</td><td>失败处置分散在各处，排查时要靠日志串起来</td></tr>
+<tr><td>参与方是外部系统（银行、第三方支付）</td><td>不指望补偿，改成「查询对齐 + 对账」：定时查对方状态并向自己收敛</td><td>外部系统通常只提供查询接口，不提供可靠的取消</td><td>收敛时间取决于对方查询接口的频率限制，可能是分钟到小时级</td></tr>
+<tr><td>已经产生了历史脏数据</td><td>先对账定位，再用原始 <code>biz_id</code> 走正常链路补发</td><td>幂等键让补发天然安全，不会再造一份重复数据</td><td>方向判断需要人工确认；资金类必须人工审批后才执行</td></tr>
+</tbody></table>
+
+<h2>③ 场景 · 反模式与不适用边界</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>为什么出现</th><th>实际后果</th><th>正确做法</th></tr></thead>
@@ -575,12 +741,23 @@ flowchart LR
 <tr><td>事务消息不留痕</td><td>以为回查只是形式</td><td>回查全部返回未知，半消息超限丢弃，下游静默少数据</td><td>本地事务内写以事务 ID 为唯一键的留痕记录</td></tr>
 </tbody></table>
 
+<p><strong>不适用边界</strong>：这篇只讲「方案已选定之后怎么把它写对」。该不该上分布式事务、七级替代顺序在 <a href="../">分布式一致性深度原理</a>；一致性档位怎么验证在 <a href="../consistency/">一致性模型的工程含义</a>；消费端与补偿接口的幂等键设计、可直接用的唯一键与状态机 CAS 语句在下一篇 <a href="../idempotency/">幂等的完整工程实现</a>；重试打爆下游的防护在 <a href="../rate-limit/">限流的分布式实现与多维配额</a>，以及 <a href="../../governance/circuit-breaker/">熔断与降级</a>（配合限流一起用）。消息本身会不会丢、顺序怎么保、重复怎么来在 <a href="../../messaging/reliable/">消息可靠性</a> 与 <a href="../../kafka/reliability/">Kafka 可靠性</a>；消息表的索引与大表归档涉及的存储机制在 <a href="../../../database/mysql/">MySQL 深度原理</a>；中间态数量与死信数要做成看板，指标链路在 <a href="../../../observability/metrics/">指标与监控</a>，按 xid 串起全链路在 <a href="../../../observability/tracing/">链路追踪</a>；服务拆分粒度决定你要不要反复写这些骨架，见 <a href="../../microservices/split/">服务拆分</a>。</p>
+
+<p>这条路径上，上一篇把一致性保证变成可验证的断言，本篇给出跨服务写的落地骨架。所有骨架都建立在同一个前提上：每个接口都能被重复调用而不出错。下一篇专门解决这件事。</p>
+
+<p class="cluster-nav">同主题路径：<a href="../consistency/">← 上一步：一致性模型的工程含义：从线性一致到会话保证</a> · <a href="../idempotency/">下一步：幂等的完整工程实现 →</a></p>
+
+<h2>最容易踩的坑</h2>
+
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
-    <div class="callout-title">最容易踩的坑</div>
+    <div class="callout-title">避坑清单</div>
     <ul>
         <li><strong>消息表没加唯一键</strong>：业务重试时插入两条，下游收到两条且无法区分，少一个唯一键就少了整个方案的地基。</li>
         <li><strong>投递任务不做抢占</strong>：多实例同时扫到同一条消息各发一次，下游以为是两笔不同业务。</li>
+        <li><strong>Saga 推进函数不落库就往下走</strong>：一个函数里跑完三步再统一保存，进程崩在第二步后已完成的步骤全部丢失，补偿也无从下手。</li>
+        <li><strong>补偿成功后不重置重试计数</strong>：上一步补偿失败攒下的次数会吃掉下一步的重试预算，表现为「有些补偿只重试了一次就转人工」。</li>
+        <li><strong>正向失败后原地重试正向</strong>：下游若不幂等，重试正向会造成重复扣减；语义上「这一步做不成」应当直接转补偿。</li>
         <li><strong>回查接口改了数据</strong>：Broker 默认回查 15 次，每次都调一遍回查方法，如果回查里有写入，业务数据会被改 15 遍。</li>
         <li><strong>本地事务没有为回查留痕</strong>：回查只能返回未知，半消息超过回查上限后被丢弃，表现为下游偶尔收不到消息，且集中在高峰期（本地事务慢的时候）。</li>
         <li><strong>补偿接口不幂等</strong>：补偿被重试多次，每次都执行一遍，退款退了两倍、库存加回了两倍。</li>
@@ -588,6 +765,7 @@ flowchart LR
         <li><strong>没有超时巡检</strong>：驱动进程崩溃后所有进行中的流程永久停滞，到下一次对账（可能是明天）才会发现。</li>
         <li><strong>退避序列起步太短</strong>：下游挂了 5 分钟，起步间隔 1 秒的重试会在 5 分钟里打出几百次无效调用，增大下游恢复难度。</li>
         <li><strong>消息表不做归档</strong>：日均百万单跑三个月就是一亿行，扫描索引变高变慢，投递延迟从毫秒涨到秒级。</li>
+        <li><strong>补偿写成 UPDATE 加回数量</strong>：并发与负数风险都在这条语句上，改成插入一条返还流水，失败面能收窄到只剩主键冲突。</li>
         <li><strong>全局事务 ID 没有传进异步链路</strong>：消息消费端的日志与上游完全断链，排查卡单只能按业务主键一条一条搜。</li>
         <li><strong>把内部事务状态直接展示给用户</strong>：用户看到「已预留」「补偿失败」等术语，不知道自己的业务到底成了没有。</li>
     </ul>

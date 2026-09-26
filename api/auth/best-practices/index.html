@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="认证系统上线后才会暴露的工程问题：并发请求同时刷新令牌导致互相失效的三种解法、多端登录策略与登出其他设备的实现前提、单点登出为什么不可靠、账号表与多身份源绑定的结构设计、RBAC 的角色爆炸与权限点分离、风险分级的二次验证、认证系统必须监控的指标与降级预案，以及自建与托管 IdP 的隐性成本对比。">
+    <meta name="description" content="认证系统工程实践按用法、原理、场景三段组织：先给上线前的自检清单——凭证存储、会话双超时与轮换、令牌存放位置、限流的账号与 IP 双维度、越权检查该落在哪一层，每条都配可直接跑的验证命令与 SQL；再讲透并发刷新导致整族令牌作废的成因与三种解法、多端会话管理的实现前提、单点登出为什么不可靠、账号表与多身份源的结构设计、权限点与角色分离、风险分级的二次验证、必须监控的指标与降级预案；最后给不同阶段的系统该做到哪一步以及自建与托管的隐性成本对比。">
     <meta name="keywords" content="认证授权,认证授权最佳实践,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/auth/best-practices/">
     <meta property="og:title" content="认证系统的工程实践 - 认证授权 - 资深码农">
-    <meta property="og:description" content="认证系统上线后才会暴露的工程问题：并发请求同时刷新令牌导致互相失效的三种解法、多端登录策略与登出其他设备的实现前提、单点登出为什么不可靠、账号表与多身份源绑定的结构设计、RBAC 的角色爆炸与权限点分离、风险分级的二次验证、认证系统必须监控的指标与降级预案，以及自建与托管 IdP 的隐性成本对比。">
+    <meta property="og:description" content="认证系统工程实践按用法、原理、场景三段组织：先给上线前的自检清单——凭证存储、会话双超时与轮换、令牌存放位置、限流的账号与 IP 双维度、越权检查该落在哪一层，每条都配可直接跑的验证命令与 SQL；再讲透并发刷新导致整族令牌作废的成因与三种解法、多端会话管理的实现前提、单点登出为什么不可靠、账号表与多身份源的结构设计、权限点与角色分离、风险分级的二次验证、必须监控的指标与降级预案；最后给不同阶段的系统该做到哪一步以及自建与托管的隐性成本对比。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/auth/best-practices/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="认证系统的工程实践 - 认证授权">
-    <meta name="twitter:description" content="认证系统上线后才会暴露的工程问题：并发请求同时刷新令牌导致互相失效的三种解法、多端登录策略与登出其他设备的实现前提、单点登出为什么不可靠、账号表与多身份源绑定的结构设计、RBAC 的角色爆炸与权限点分离、风险分级的二次验证、认证系统必须监控的指标与降级预案，以及自建与托管 IdP 的隐性成本对比。">
+    <meta name="twitter:description" content="认证系统工程实践按用法、原理、场景三段组织：先给上线前的自检清单——凭证存储、会话双超时与轮换、令牌存放位置、限流的账号与 IP 双维度、越权检查该落在哪一层，每条都配可直接跑的验证命令与 SQL；再讲透并发刷新导致整族令牌作废的成因与三种解法、多端会话管理的实现前提、单点登出为什么不可靠、账号表与多身份源的结构设计、权限点与角色分离、风险分级的二次验证、必须监控的指标与降级预案；最后给不同阶段的系统该做到哪一步以及自建与托管的隐性成本对比。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -69,7 +69,212 @@
                     <div class="article-content">
 <p>认证系统的功能列表很短，但上线之后暴露的问题一个比一个难缠：用户莫名被登出、会话列表里显示不出真实设备、单点登出只登出了一半、权限改了但用户手里的令牌还是旧的、认证服务抖一下全站都进不去。这些都不是协议知识能解决的，而是工程设计问题。这篇讲的就是这一层：令牌续期的并发、多端与会话管理、账号体系的表结构、权限模型的取舍、可观测性与降级。协议细节见站内 <a href="../oauth2/">OAuth 2.0 与 OIDC 的协议细节</a> 与 <a href="../jwt/">JWT 的结构与验签机制</a>，密码哈希参数、登录限流阈值、多因素的安全机理见站内 <a href="../../security/auth-security/">越权与鉴权安全</a>。</p>
 
-<h2>令牌续期的并发问题：最容易带上线的坑</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：上线前的自检清单，十二条各配一个能直接跑的验证方法——改密后其他设备是否真的掉线、限流两个维度是否都在、换个资源 ID 会不会被放行。</li>
+        <li><strong>② 原理</strong>：并发刷新为什么会把用户踢下线、会话管理的状态下限在哪、单点登出为什么天生不可靠、账号表该怎么分、权限点与角色怎么分离、认证故障该怎么降级。</li>
+        <li><strong>③ 场景</strong>：从 MVP 到强合规的五个阶段各该做到哪一步，以及自建、私有化、托管、云 IAM 的隐性成本对比。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · 上线前的认证自检清单：每条都给验证方法</h2>
+<p>认证系统的问题有个共同特征：<strong>功能测试全过，问题只在真实流量里出现</strong>。所以这份清单的每一条都不是「要注意」，而是「用什么命令确认它在线上是对的」。按五组来查：凭证存储、会话与令牌生命周期、令牌存放位置、限流维度、越权检查落在哪一层。为什么这些地方会出问题，见下一节起的原理部分。</p>
+<pre><code class="language-bash"># ===== 1) 改密码与封禁必须失效「其他设备」：安全评审必查项 =====
+curl -s -c /tmp/devA -o /dev/null -X POST https://app.example.com/login \
+  -d 'username=alice' -d 'password=REDACTED'
+curl -s -c /tmp/devB -o /dev/null -X POST https://app.example.com/login \
+  -d 'username=alice' -d 'password=REDACTED'
+curl -s -b /tmp/devA -o /dev/null -X POST https://app.example.com/account/password \
+  -d 'old=REDACTED' -d 'new=REDACTED2'
+curl -s -b /tmp/devB -o /dev/null -w '改密后另一台设备 %{http_code}\n' https://app.example.com/api/me
+# 期望 401。返回 200 说明改密码只改了密码表，没有按用户维度失效会话与刷新令牌
+
+# ===== 2) 限流必须是双维度：只按 IP 挡不住分布式撞库，只按账号会被用来锁死别人 =====
+for i in $(seq 1 30); do
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST https://app.example.com/login \
+    -d 'username=alice' -d 'password=wrong'
+done | sort | uniq -c
+# 期望超过阈值后出现 429 或验证码挑战；全部 401 说明没有账号维度限流。
+# 再用 30 个不同用户名跑一遍，应触发 IP 或设备维度限流；缺任一维度都不算做完。
+# 注意锁定策略要分级（先验证码、再延迟、最后才锁），否则它本身就是一种拒绝服务手段
+
+# ===== 3) 越权自检：换一个不属于自己的资源 ID =====
+curl -s -o /dev/null -w '别人的订单 %{http_code}\n' -b /tmp/devA \
+  https://app.example.com/api/orders/999999
+# 期望 403 或 404，绝不能是 200。多租户系统还要用另一个租户的资源各试一次
+
+# ===== 4) 刷新并发自检：同时发起多个刷新，用户不应因此被登出 =====
+for i in 1 2 3 4 5; do
+  curl -s -o /dev/null -X POST -b /tmp/devA https://app.example.com/auth/refresh &amp;
+done; wait
+curl -s -o /dev/null -w '并发刷新后 %{http_code}\n' -b /tmp/devA https://app.example.com/api/me
+# 最后一行必须是 200。出现 401 说明并发刷新被判成令牌复用、整个家族被作废，成因见下一节</code></pre>
+<pre><code class="language-sql">-- 凭证存储自检：算法标识分布里不该出现裸哈希或可逆加密
+SELECT substring(credential from 1 for 10) AS algo_prefix, count(*)
+FROM user_identities
+WHERE credential IS NOT NULL
+GROUP BY 1 ORDER BY 2 DESC;
+-- 期望只有一种现代口令哈希的标识前缀。出现多种说明有历史遗留，
+-- 要在用户下次登录成功时静默重算升级；具体算法与代价参数取值见站内安全篇
+
+-- 会话表自检：有没有永不过期的会话、有没有只增不删
+SELECT
+  count(*) FILTER (WHERE revoked_at IS NULL AND expires_at &gt; now())          AS alive,
+  count(*) FILTER (WHERE expires_at &lt; now() - interval '30 days')            AS should_be_archived,
+  max(expires_at - last_seen_at)                                             AS max_window
+FROM user_sessions;
+-- should_be_archived 不为 0 说明缺归档任务，表迟早膨胀到查询变慢；
+-- max_window 异常大说明只有滑动过期、没有绝对上限，被盗会话可以靠定时请求无限续命
+
+-- 刷新令牌是否明文入库：只应存哈希，长度与字符集一看就知道
+SELECT length(refresh_hash) AS len, count(*) FROM user_sessions GROUP BY 1;
+-- 长度参差不齐或明显长于哈希长度，基本可以断定存了原文</code></pre>
+<table>
+    <thead>
+        <tr>
+            <th>自检项</th>
+            <th>要做到什么</th>
+            <th>怎么验证</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>口令存储形态</td>
+            <td>只存现代口令哈希，不存可逆加密、不存裸摘要，历史数据在下次登录时静默升级</td>
+            <td>上面的算法前缀分组 SQL；再测一次单账号登录耗时，口令校验快到毫秒级通常意味着代价参数被调得过低（参数取值见 <a href="../../security/auth-security/">越权与鉴权安全</a>）</td>
+        </tr>
+        <tr>
+            <td>登录响应不泄露账号是否存在</td>
+            <td>用户不存在与密码错误返回同一个结果，耗时也不应有系统性差异</td>
+            <td>用一个不存在的账号与一个存在的账号各请求若干次，比较响应体、状态码与耗时分布</td>
+        </tr>
+        <tr>
+            <td>会话双超时</td>
+            <td>空闲超时与绝对超时同时生效，绝对超时不随活跃度延长</td>
+            <td>会话表 <code>max_window</code> 查询；再放一个会话空转到超时，确认之后请求是 401</td>
+        </tr>
+        <tr>
+            <td>登录后换标识</td>
+            <td>Cookie 会话在登录成功后换新 ID 并删旧记录；令牌方案每次刷新轮换刷新令牌</td>
+            <td>登录前后对比 <code>Set-Cookie</code> 的值；刷新两次确认旧刷新令牌不可再用</td>
+        </tr>
+        <tr>
+            <td>改密与封禁的影响面</td>
+            <td>按用户维度一次性失效全部会话与刷新令牌，用户表上有「此刻前签发的令牌全部失效」的时间点字段</td>
+            <td>脚本第 1 段：另一台设备必须变成 401</td>
+        </tr>
+        <tr>
+            <td>登出的完整性</td>
+            <td>清服务端会话记录、撤销刷新令牌，必要时再调 IdP 的登出端点</td>
+            <td>登出后用旧访问令牌调接口应 401，用旧刷新令牌换新应失败</td>
+        </tr>
+        <tr>
+            <td>令牌存放位置（Web）</td>
+            <td>有后端就把令牌留在服务端，浏览器只拿 <code>HttpOnly</code> 会话 Cookie</td>
+            <td>DevTools 里 <code>localStorage</code> 与 <code>sessionStorage</code> 不应出现令牌；<code>document.cookie</code> 读不到会话 Cookie</td>
+        </tr>
+        <tr>
+            <td>令牌存放位置（App）</td>
+            <td>放系统提供的加密存储，不落明文文件，不进日志与崩溃上报</td>
+            <td>抓一份完整日志与一次崩溃上报，全文搜索令牌片段与 <code>Authorization</code> 字样，必须为空</td>
+        </tr>
+        <tr>
+            <td>限流维度</td>
+            <td>账号维度与 IP 或设备维度同时存在，措施分级：先验证码、再延迟、最后才锁定</td>
+            <td>脚本第 2 段的两种跑法；同时确认锁定不会变成锁死他人账号的手段</td>
+        </tr>
+        <tr>
+            <td>认证与业务资源隔离</td>
+            <td>认证服务有独立的限流与连接资源，不与业务共命运</td>
+            <td>压测业务接口的同时观察登录成功率与认证延迟分位数，不应受影响</td>
+        </tr>
+        <tr>
+            <td>越权检查的落点</td>
+            <td>归属与租户条件强制注入在数据访问层，不是只在网关或前端判断</td>
+            <td>脚本第 3 段；再把请求里的租户参数改成别的值，结果必须不变（租户只能来自服务端身份）</td>
+        </tr>
+        <tr>
+            <td>权限判断方式</td>
+            <td>代码只判断权限点，角色是配置数据；数据范围落在查询条件里</td>
+            <td>全仓搜索角色名字符串，命中即是硬编码；新增一个角色应当不需要改代码</td>
+        </tr>
+        <tr>
+            <td>敏感操作的认证新鲜度</td>
+            <td>改密、改绑、提现要求二次验证，并检查最近一次认证的时间与强度</td>
+            <td>用一个放了很久的会话直接发起敏感操作，必须被二次验证拦住</td>
+        </tr>
+        <tr>
+            <td>告警与降级</td>
+            <td>登录成功率与刷新失败率有独立告警；降级路径不包含「放行未授权请求」</td>
+            <td>演练：断开外部 IdP，在线用户应仍可访问、新登录明确失败；关掉验证码通道，告警必须响</td>
+        </tr>
+    </tbody>
+</table>
+<table>
+    <thead>
+        <tr>
+            <th>参数或策略</th>
+            <th>作用</th>
+            <th>默认值</th>
+            <th>什么时候必须改</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>口令哈希的代价参数</td>
+            <td>决定离线爆破的成本</td>
+            <td>各库默认值随版本变化，且常低于当下推荐值，以所用库文档与实测单次校验耗时为准</td>
+            <td>换机型或升级库时重新实测；参数变更后靠登录时静默重算逐步迁移</td>
+        </tr>
+        <tr>
+            <td>会话空闲与绝对超时</td>
+            <td>限制无操作与单会话的最长寿命</td>
+            <td>框架默认常只有空闲超时，绝对超时多数需要自己实现</td>
+            <td>两者必须同时存在；管理端与资金类后台把空闲超时压到分钟级</td>
+        </tr>
+        <tr>
+            <td>访问令牌有效期</td>
+            <td>它等于「无法吊销」的窗口</td>
+            <td>由签发方决定，以令牌响应的 <code>expires_in</code> 为准</td>
+            <td>压到 5 到 15 分钟；不要用调长它来减少刷新请求</td>
+        </tr>
+        <tr>
+            <td>刷新令牌轮换宽限期</td>
+            <td>容忍并发刷新，避免误判成复用</td>
+            <td>多数授权服务器不提供宽限期，需要自己实现</td>
+            <td>取 10 到 30 秒，并且客户端必须同时做单飞刷新</td>
+        </tr>
+        <tr>
+            <td>登录失败阈值与维度</td>
+            <td>抵挡撞库同时避免锁死他人账号</td>
+            <td>无通用默认，阈值取值见站内安全篇</td>
+            <td>账号与 IP 两个维度都要配，措施要分级而不是直接锁定</td>
+        </tr>
+        <tr>
+            <td>二次验证的认证新鲜度上限</td>
+            <td>敏感操作要求「最近认证过」</td>
+            <td>无默认，取决于实现；OIDC 场景可用 <code>auth_time</code> 与 <code>max_age</code></td>
+            <td>资金与账号变更类操作一律设置，通常取分钟级</td>
+        </tr>
+        <tr>
+            <td>会话记录归档周期</td>
+            <td>控制会话表体量与查询延迟</td>
+            <td>无默认，不做就是只增不删</td>
+            <td>一律配定时任务；软删记录保留期按审计要求定</td>
+        </tr>
+        <tr>
+            <td>公钥缓存与刷新限流</td>
+            <td>认证服务抖动时的降级基础</td>
+            <td>各库不同，以所用库文档为准</td>
+            <td>公钥缓存 TTL 与旧公钥保留期要覆盖最长令牌有效期；刷新接口一律限流并要求客户端退避</td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>② 原理 · 令牌续期的并发问题：最容易带上线的坑</h2>
+<p>搞清这条链路，能解决一类几乎无法复现的客服问题：用户说自己「莫名被登出」，而日志里只有一次 <code>invalid_grant</code>。</p>
 <p>这个问题在本地几乎复现不出来，因为它需要多个请求<strong>同时</strong>撞上令牌过期。真实环境里这种情况非常常见：页面首屏并行发六七个接口、App 冷启动同时拉配置与用户信息、弱网下请求堆积后一起重发。每个请求各自发现 401，各自去调刷新接口，而刷新令牌通常是一次性的——第一个请求换走新令牌并作废旧的，后面的请求带着已作废的旧令牌去换，服务端把这判定为<strong>令牌复用</strong>，按安全策略作废整个令牌家族，用户直接被登出。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -157,7 +362,8 @@ async function request(input: string, init: RequestInit = {}, retried = false) {
 // Web 端补充：多标签页可用 BroadcastChannel 或 Web Locks API 让锁跨标签生效，
 // 仅靠模块级变量时，五个标签页同时唤醒仍会产生五次刷新。</code></pre>
 
-<h2>多端登录与会话管理</h2>
+<h2>② 原理 · 多端登录与会话管理</h2>
+<p>搞清会话管理的状态下限，能解决「我们用的是无状态 JWT，为什么做不了登出其他设备」。</p>
 <p>「同一个账号能不能在多个设备上登录」是产品决策，但它决定了技术实现的下限：只要产品要展示会话列表或提供「登出其他设备」，就必须有<strong>服务端会话记录</strong>，纯无状态令牌做不到。折中方案是只给刷新令牌建记录——一条记录代表一个设备会话，访问令牌仍是短有效期自包含令牌，踢设备就是删记录，最长一个访问令牌有效期后彻底生效。</p>
 <table>
     <thead>
@@ -201,7 +407,8 @@ async function request(input: string, init: RequestInit = {}, retried = false) {
     <p>会话列表要显示「小米手机、上海、两小时前活跃」这种信息，靠的是 User-Agent、客户端上报的设备型号和 IP 归属库，三者都不可靠：UA 可伪造、重装应用会产生新的设备标识、IP 归属在移动网络下经常偏差几百公里。设计时要接受同一台设备出现多条记录，并给用户「登出全部其他设备」这个一键选项作为兜底，而不是指望他逐条辨认。</p>
 </div>
 
-<h2>单点登录容易，单点登出很难</h2>
+<h2>② 原理 · 单点登录容易，单点登出很难</h2>
+<p>搞清两者的方向差异，能解决「用户点了登出，回到另一个子系统却还在登录状态」。</p>
 <p>单点登录是单向的一次性流程：各子系统信任同一个身份提供方即可。单点登出要反过来通知所有已建立会话的子系统清理自己的会话，而身份提供方既不可靠地知道哪些子系统还活跃，通知也可能失败。结果就是用户点了登出，回到某个子系统发现自己还在登录状态。</p>
 <div class="mermaid">
 flowchart TB
@@ -258,7 +465,8 @@ flowchart TB
     </tbody>
 </table>
 
-<h2>账号体系设计：把可变的东西挪出主键</h2>
+<h2>② 原理 · 账号体系设计：把可变的东西挪出主键</h2>
+<p>搞清这层结构，能解决两个迟早会来的需求：换绑邮箱手机号，以及同一个人绑多个身份源。</p>
 <p>最常见的设计错误是用邮箱或手机号当用户主键。它们都会变：换手机号、换公司邮箱、号码被运营商回收后重新分配给别人。一旦作为主键，所有引用它的表都要跟着迁移，历史数据的归属也会错乱。正确结构是<strong>内部不可变 ID 做主键，登录标识放在独立的身份表里</strong>，一个用户可以绑定多个身份源。</p>
 <pre><code class="language-sql">-- 用户主表：只放稳定不变的东西，主键无业务含义
 CREATE TABLE users (
@@ -332,7 +540,8 @@ CREATE UNIQUE INDEX ON user_sessions (refresh_hash);</code></pre>
     </tbody>
 </table>
 
-<h2>权限模型：先想清楚要不要角色</h2>
+<h2>② 原理 · 权限模型：先想清楚要不要角色</h2>
+<p>搞清模型差异，能解决「每加一个角色都要改代码发版」以及「数据范围该不该塞进 RBAC」。</p>
 <table>
     <thead>
         <tr>
@@ -376,7 +585,8 @@ CREATE UNIQUE INDEX ON user_sessions (refresh_hash);</code></pre>
     <p>任何权限判断和任何数据查询都要带上租户标识，并且租户标识只能来自服务端确认过的身份，绝不能取自请求参数。缺失租户维度的权限判断在单租户测试环境永远是对的，上线后表现为跨租户数据泄露。稳妥做法是在数据访问层强制注入租户条件，让漏写变成编译期或运行期的显式错误，而不是靠每个开发记得加 where。</p>
 </div>
 
-<h2>登录体验与安全的平衡</h2>
+<h2>② 原理 · 登录体验与安全的平衡：按风险分级</h2>
+<p>搞清风险信号与措施的对应，能解决「加强安全就一定掉转化」这个假两难。</p>
 <p>把所有用户都按最高风险对待会直接降低转化，正确做法是<strong>按风险分级触发额外验证</strong>。风险信号来自设备是否可信、IP 与常用地的偏离、行为频率、以及本次操作的敏感度。</p>
 <table>
     <thead>
@@ -421,7 +631,8 @@ CREATE UNIQUE INDEX ON user_sessions (refresh_hash);</code></pre>
     </tbody>
 </table>
 
-<h2>可观测性与降级：认证挂了就是全站挂了</h2>
+<h2>② 原理 · 可观测性与降级：认证挂了就是全站挂了</h2>
+<p>搞清该看哪些指标，能解决「接口全是 200，但没有一个用户能登录进来」这种监控盲区。</p>
 <p>认证是所有请求的前置依赖，它的故障不会表现为「登录功能不可用」，而是表现为全站不可用。因此它的监控要按最高级别做，并且必须提前想好降级路径。</p>
 <pre><code class="language-promql"># 1) 登录成功率：跌破 95% 立即告警，按身份源拆分才能定位是哪家出问题
 sum(rate(auth_login_total{result="success"}[5m])) by (provider)
@@ -477,7 +688,65 @@ sum(rate(jwks_fetch_total{result="error"}[5m])) &gt; 0</code></pre>
     </tbody>
 </table>
 
-<h2>自建还是用托管</h2>
+<h2>③ 场景 · 不同阶段的系统该做到哪一步</h2>
+<p>上面的清单是完整形态，但一次做完既不现实也不必要。<strong>判断依据是「你现在有几种客户端、封禁的生效延迟容忍度、以及有没有外部身份源」</strong>，这三条决定了该停在哪一档。</p>
+<table>
+    <thead>
+        <tr>
+            <th>场景</th>
+            <th>该做到哪一步</th>
+            <th>为什么停在这里</th>
+            <th>代价</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>MVP 阶段：一个 Web 应用，团队两三人</td>
+            <td>Cookie 会话加双超时、登录后换 ID、改密码失效全部会话、登录成功率告警</td>
+            <td>吊销能力天然具备，框架半天就能落地，此时引入令牌体系只是提前付成本</td>
+            <td>接入 App 时要补一整条令牌链路，界面上的会话列表也要另做</td>
+        </tr>
+        <tr>
+            <td>有了 App 或小程序，跨域成为常态</td>
+            <td>访问令牌 5 到 15 分钟 + 刷新令牌轮换 + 客户端单飞刷新 + 会话表一行一设备</td>
+            <td>多端拿不到 Cookie 的自动携带，但「踢设备」的能力必须保住，所以令牌只做传输载体</td>
+            <td>要长期维护刷新并发与设备识别不准确带来的产品体验问题</td>
+        </tr>
+        <tr>
+            <td>接入了第三方登录</td>
+            <td>身份表按「提供方 + 提供方内 UID」唯一、邮箱相同不自动合并、解绑保护、提供方故障时入口降级</td>
+            <td>外部身份源不可控，账号接管风险几乎全部集中在合并逻辑上</td>
+            <td>首登信息补全与解绑规则要产品配合，登录页要能按提供方灰度</td>
+        </tr>
+        <tr>
+            <td>开始卖给企业客户，需要 SSO</td>
+            <td>内部统一 OIDC，SAML 走适配层，支持按客户配置身份源，登出走后端通道并配重试队列</td>
+            <td>采购清单常把协议支持写成硬性要求，而协议适配是最耗人力的部分</td>
+            <td>每个客户一套配置，要做配置化、灰度与专门的对接文档</td>
+        </tr>
+        <tr>
+            <td>强合规或资金类业务</td>
+            <td>用户级失效时间点做到秒级封禁、敏感操作校验认证新鲜度与第二因素、认证与授权全链路审计</td>
+            <td>生效延迟容忍度是零，这一条直接否决纯自包含方案</td>
+            <td>每请求一次失效查询，审计数据的存储与保留期都要按合规算</td>
+        </tr>
+        <tr>
+            <td>规模上来，认证成为全站前置依赖</td>
+            <td>认证独立部署与独立限流、公钥本地缓存、刷新接口限流加客户端退避、会话表归档</td>
+            <td>认证的故障不表现为「登录不可用」而是「全站不可用」，必须先与业务解耦</td>
+            <td>多一套部署与容量规划，降级演练要定期做</td>
+        </tr>
+        <tr>
+            <td>预计将来会更换实现（自建换托管或反之）</td>
+            <td>第一天就把认证收敛到一个服务，业务只依赖内部统一的身份接口</td>
+            <td>更换实现时改动集中在一处，而不是散落在每个业务服务的登录逻辑里</td>
+            <td>抽象层本身要维护，早期会显得「多写了一层」</td>
+        </tr>
+    </tbody>
+</table>
+<p><strong>不适用边界：</strong>本篇只覆盖认证系统自己的工程问题。三类相邻问题不在这里解决——<strong>攻防参数与漏洞机理</strong>（口令哈希取值、多因素、越权分类、令牌存放位置的攻击面）见 <a href="../../security/auth-security/">越权与鉴权安全</a> 与 <a href="../../security/csrf-clickjacking/">CSRF 与点击劫持</a>；<strong>协议报文层面</strong>的参数与校验点见 <a href="../oauth2/">OAuth 2.0 与 OIDC 的协议细节</a> 与 <a href="../jwt/">JWT 的结构与验签机制</a>；<strong>指标采集与告警落地</strong>见 <a href="../../../observability/metrics/">指标与监控</a>，网关侧限流与超时参数见 <a href="../../../devops/nginx/">Nginx 实践</a>。整条路径的选型与分层回到 <a href="../">认证与授权的协议全景</a>，本篇是这条路径的最后一环。</p>
+
+<h2>③ 场景 · 自建还是用托管</h2>
 <div class="mermaid">
 flowchart TB
     Q1{"是否需要对接企业客户的<br/>SAML 或 OIDC 身份源"} -->|"是 且客户数量多"| M["优先托管或成熟开源<br/>协议适配是最耗人力的部分"]
@@ -533,7 +802,7 @@ flowchart TB
 </table>
 <p>无论哪条路，都要在第一天就<strong>把认证收敛到一个服务</strong>，业务代码只依赖内部统一的身份接口。这样将来更换实现时改动集中在一处，而不是散落在每个业务服务的登录逻辑里。</p>
 
-<h2>反模式与最容易踩的坑</h2>
+<h2>③ 场景 · 反模式对照：每条都对应一次真实事故</h2>
 <table>
     <thead>
         <tr>
@@ -586,6 +855,9 @@ flowchart TB
     </tbody>
 </table>
 
+<p class="cluster-nav">同主题路径：<a href="../oauth2/">← 上一步：OAuth 2.0 与 OIDC 的协议细节</a></p>
+
+<h2>最容易踩的坑</h2>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">避坑清单</div>
