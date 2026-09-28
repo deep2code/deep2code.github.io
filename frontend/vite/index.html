@@ -73,7 +73,83 @@
                     <div class="article-content">
 <p>「Vite 比 Webpack 快」这句话本身没错，但把原因归结为「用 Rust 或 Go 写的所以快」就完全跑偏了。Vite 的开发服务器主体是 JavaScript 写的，它快的根因是<strong>换了一套开发期模型：不打包</strong>。理解这个模型，才能理解它的全部优势，以及它带来的那个绕不开的代价——开发和生产走的是两条不同的构建路径。</p>
 
-<h2>核心洞察：浏览器自己就会加载模块</h2>
+<div class="callout callout-info">
+    <div class="callout-icon">💡</div>
+    <div class="callout-title">这篇怎么读</div>
+    <ul>
+        <li><strong>① 用法</strong>：「dev 正常但 build 或 preview 不对」的动手定位顺序——一组可直接敲的命令、一张「症状 → 第一步查什么 → 怎么判读」对照表、一张命令与配置项速查表。</li>
+        <li><strong>② 原理</strong>：不打包模型凭什么成立、HMR 边界怎么沿模块图传播、双引擎架构为什么必然产生 dev 与 build 的行为差异（八种典型差异的根因）、依赖预构建为什么是前提而不是优化、「冷启动与项目规模无关」这句话错在哪。</li>
+        <li><strong>③ 场景</strong>：按项目形态在 Vite、Webpack、Rspack、Turbopack 之间怎么选，八条反模式对照，以及什么情况下「Vite 快」不再成立。</li>
+    </ul>
+</div>
+
+<h2>① 用法 · dev 正常但 build 不对时的定位顺序</h2>
+
+<p>用 Vite 遇到的问题有很大一部分落在同一类上：开发期一切正常，构建失败或者构建出来的产物行为不对。因为开发和生产是两条不同的路径（原因见原理层），所以排查也要按固定顺序把范围收窄，而不是凭猜测改配置。下面这组命令可以直接敲，顺序本身就是排查逻辑。</p>
+
+<pre><code class="language-bash"># 第 1 步：先分清是「构建失败」还是「构建成功但行为不对」，两者后续路径完全不同
+npx vite build
+
+# 第 2 步：构建成功就用产物起服务复现，dev server 在这一步完全不参与
+#          线上白屏而 preview 正常，问题几乎一定在 base 与部署路径，不在代码
+npx vite preview
+
+# 第 3 步：类型错误不要指望 Vite 报，它只擦除类型语法、从不做类型检查
+npx tsc --noEmit
+
+# 第 4 步：怀疑预构建缓存脏了（刚切过分支、动过 lockfile、手改过 node_modules）
+#          先只丢预构建缓存，不要删整个 node_modules
+npx vite --force
+
+# 第 5 步：需要读产物确认「这段代码是怎么被打进来的」时，关掉压缩
+#          只用于排查，不要把这套参数留在发布流程里
+npx vite build --sourcemap --minify false
+
+# 第 6 步：dev 能跑、build 出来是 undefined，优先怀疑循环依赖（整图打包改变了执行顺序）
+npx madge --circular --extensions ts,tsx src/
+
+# 第 7 步：确认环境变量真的进了产物。没有 VITE_ 前缀的变量不会被注入，且不报错
+grep -ro "VITE_[A-Z0-9_]*" dist/assets/ | sort -u</code></pre>
+
+<p>拿到症状之后，按下表决定第一步查什么。第三列是判读方式——同一个症状的候选原因往往只有两三个，判读比乱改配置快得多。</p>
+
+<table>
+<thead><tr><th>症状</th><th>第一步查什么</th><th>怎么判读</th></tr></thead>
+<tbody>
+<tr><td><code>vite build</code> 直接失败</td><td>看<strong>第一条</strong>报错的模块路径，不要看最后一条</td><td>路径在 <code>src</code> 下多为循环依赖或仅类型的导入被当成值；路径在 <code>node_modules</code> 下多为 CJS 与 ESM 互操作</td></tr>
+<tr><td>build 成功但 <code>preview</code> 白屏</td><td>浏览器控制台<strong>第一条</strong>错误</td><td>读取 undefined 的属性指向循环依赖；资源 404 指向 <code>base</code> 配错；语法错误指向 <code>build.target</code> 过低</td></tr>
+<tr><td>只有线上白屏，<code>preview</code> 正常</td><td><code>base</code> 与实际部署路径是否一致</td><td>产物里资源路径以 <code>/</code> 开头而站点部署在子目录，就会全量 404</td></tr>
+<tr><td>点进某个路由页面自动刷新一次</td><td>启动或访问日志里有没有 <code>optimizing dependencies</code></td><td>有就是运行时在补做预构建，把该依赖写进 <code>optimizeDeps.include</code></td></tr>
+<tr><td>改一行代码就整页刷新</td><td>改的那个文件有没有 HMR 边界</td><td>组件文件里混着导出常量或普通函数，边界会上移；纯逻辑模块本来就没有边界</td></tr>
+<tr><td>环境变量读出来是 <code>undefined</code></td><td>变量名有没有 <code>VITE_</code> 前缀</td><td>没前缀不注入且不报错；用 <code>process.env</code> 读也一样拿不到，浏览器里没有 <code>process</code></td></tr>
+<tr><td>开发期首屏很慢</td><td>网络面板里首屏 JS 请求数</td><td>上千个请求说明瀑布已成瓶颈，这时要拆路由懒加载，不是去调 Vite 参数</td></tr>
+<tr><td>「删了 <code>node_modules</code> 就好了」</td><td>先只跑 <code>--force</code> 验证一次</td><td>能修好就说明只是预构建缓存脏，不必每次浪费几分钟重装依赖</td></tr>
+</tbody>
+</table>
+
+<p>排查和日常配置要用到的命令与配置项，集中在这张表里。默认值会随版本变化，需要确认时以 <code>npx vite --help</code> 与当前版本文档为准，不要照抄博客里的数字。</p>
+
+<table>
+<thead><tr><th>命令或配置项</th><th>作用</th><th>什么时候需要它</th></tr></thead>
+<tbody>
+<tr><td><code>vite build</code></td><td>走 Rollup 全量打包产出 <code>dist</code></td><td>每个提交都该跑一次，而不是发版前才第一次跑</td></tr>
+<tr><td><code>vite preview</code></td><td>用构建产物起一个静态服务</td><td>验证「构建成功但行为不对」；它不经过 dev server 的任何转换</td></tr>
+<tr><td><code>vite --force</code></td><td>丢弃 <code>node_modules/.vite</code> 重新预构建</td><td>切分支、改 lockfile、依赖行为诡异时的第一反应</td></tr>
+<tr><td><code>--minify false --sourcemap</code></td><td>产出可读产物与映射</td><td>只在排查产物内容时用；<code>sourcemap</code> 常态开启要考虑是否对外暴露</td></tr>
+<tr><td><code>optimizeDeps.include</code></td><td>启动时就把指定依赖预构建掉</td><td>依赖只出现在动态 <code>import</code> 分支里、导致运行时补课刷新</td></tr>
+<tr><td><code>optimizeDeps.exclude</code></td><td>把某依赖排除在预构建之外</td><td>依赖本身是 ESM 源码且需要参与 HMR（如 monorepo 内部包）</td></tr>
+<tr><td><code>build.target</code></td><td>决定产物语法降级到哪一代</td><td>顶层 <code>await</code>、较新语法报错时；默认值随版本变化，以当前版本文档为准</td></tr>
+<tr><td><code>base</code></td><td>产物里资源引用的公共前缀</td><td>部署在子路径或 CDN 时；配错的唯一症状就是线上全量 404</td></tr>
+<tr><td><code>server.warmup</code></td><td>启动后提前转译指定文件</td><td>开发期首屏模块数很大、首次点开某页明显卡顿</td></tr>
+<tr><td><code>define</code></td><td>编译期做字面量替换</td><td>某个依赖坚持读 <code>process.env.X</code>，需要显式喂给它</td></tr>
+</tbody>
+</table>
+
+<p>上面这些做法为什么是这样——为什么 Vite 不看类型、为什么预构建缺一次就会刷新页面、为什么循环依赖只在生产暴露——下面逐节展开。</p>
+
+<h2>② 原理 · 浏览器自己就会加载模块</h2>
+
+<p>搞清这一节能解决一个认知问题：Vite 的快是模型差异还是实现差异，这直接决定你该不该期待「换个更快的打包器」能达到同样效果。</p>
 
 <p>打包这件事最初是被迫的：浏览器不认识 <code>require</code>，也不支持模块化，所以必须有工具把几百个文件拼成一个能在 <code>&lt;script&gt;</code> 里跑的大文件。但现代浏览器已经原生支持 ESM——你给它一个 <code>&lt;script type="module" src="/src/main.tsx"&gt;</code>，它会自己解析里面的 <code>import</code> 语句，再去请求被引用的模块，递归下去。</p>
 
@@ -130,7 +206,9 @@ sequenceDiagram
     Note over B,D: 源码按需转译 依赖走强缓存<br/>首屏请求数等于用到的模块数
 </div>
 
-<h2>HMR 为什么能做到精确更新</h2>
+<h2>② 原理 · HMR 为什么能做到精确更新</h2>
+
+<p>搞清这一节能解决两个日常现象：为什么改某些文件会整页刷新，以及为什么改组件后组件状态有时保留有时丢失。</p>
 
 <p>Vite 的 HMR 不是「刷新页面」，而是沿着模块图找到<strong>最近的 HMR 边界</strong>，只替换那一段。所谓边界就是调用了 <code>import.meta.hot.accept</code> 的模块：React 项目里这件事由 <code>react-refresh</code> 自动完成（组件文件天然是边界），Vue 由 SFC 插件完成。如果向上一直找不到边界，就退化成整页刷新。</p>
 
@@ -169,7 +247,9 @@ if (import.meta.hot) {
   })
 }</code></pre>
 
-<h2>生产必须打包：双引擎架构与它的代价</h2>
+<h2>② 原理 · 生产必须打包：双引擎架构与它的代价</h2>
+
+<p>搞清这一节能解决用法层那张表里几乎所有「dev 没暴露」的问题：它们都来自同一个结构性原因。</p>
 
 <p>如果原生 ESM 这么好，为什么生产不也这样？因为<strong>开发期能接受的请求数，生产期完全不能接受</strong>：一个中型项目有几千个模块，让用户的浏览器逐个请求，加上深层 <code>import</code> 链会串行化、同域并发连接有上限，首屏时间会退化到不可用。而且 tree shaking、作用域提升、压缩、内容哈希这些优化都需要看到完整依赖图。</p>
 
@@ -209,7 +289,9 @@ flowchart TB
 <tr><td><code>process.env.XXX</code> 是 undefined</td><td>浏览器没有 process，Vite 只替换显式声明的变量</td><td>某些依赖在 dev 下恰好没走到该分支</td><td>改用 <code>import.meta.env</code>，或用 <code>define</code> 显式注入</td></tr>
 </tbody></table>
 
-<h2>依赖预构建：不做不行的一步</h2>
+<h2>② 原理 · 依赖预构建：不做不行的一步</h2>
+
+<p>搞清这一节能解决「页面莫名自动刷新一次」和「改了依赖之后行为诡异」这两类问题。</p>
 
 <p>预构建（pre-bundling）常被误认为是「为了快的优化」，其实它是<strong>让不打包模型能成立的前提</strong>，有两个硬需求：</p>
 
@@ -237,13 +319,31 @@ rm -rf node_modules/.vite
     <p>最常见的现象是：某个依赖只在动态 <code>import</code> 的分支里被用到，启动扫描没发现它，等你点进那个路由时 Vite 才现场预构建，完成后强制刷新页面。表现就是「点某个菜单页面会白一下然后刷新」。修法是把这类依赖写进 <code>optimizeDeps.include</code>，让它在启动时就被预构建。</p>
 </div>
 
-<h2>纠正一个流传很广的说法：冷启动与规模无关</h2>
+<h2>② 原理 · 纠正一个流传很广的说法：冷启动与规模无关</h2>
+
+<p>搞清这一节能解决「项目做大之后 Vite 反而变慢，是不是配错了」的疑问——大概率没配错，是模型的代价开始显现。</p>
 
 <p>「Vite 的启动速度与项目大小无关」这句话只对了一半。<strong>服务器启动确实与规模无关，但首屏加载与规模强相关</strong>：浏览器要为首屏用到的每个源码模块发一次请求，模块数上千时请求瀑布本身就是瓶颈，深层 <code>import</code> 链会串行化，浏览器对同一域名还有并发连接上限。在几千个模块的巨型单页应用里，Vite 开发期的首屏有可能比 Webpack 的 bundle 更慢。</p>
 
 <p>这也正是社区在推进全量 bundle 模式和依赖预热的原因。判断方法很直接：开发期打开网络面板，看首屏 JS 请求数，超过一两千就该拆路由懒加载，或者用 <code>server.warmup</code> 提前转译热点文件。</p>
 
-<h2>与 Webpack、Rspack、Turbopack 的对照</h2>
+<h2>③ 场景 · 按项目形态选构建工具</h2>
+
+<p>前面讲的是同一套模型，这里按项目形态收成判断：不打包模型的收益与代价在不同规模、不同历史包袱下差别很大。</p>
+
+<div class="mermaid">
+flowchart TB
+    START{"项目现在<br/>是什么状态"}
+    START -->|全新项目| NEW{"是否用 Next.js<br/>这类全栈框架"}
+    NEW -->|是| TP["框架自带工具链<br/>Turbopack 或其内置构建"]
+    NEW -->|否| VT["Vite 作为默认选择"]
+    START -->|"已有 Webpack 项目"| OLD{"配置与 loader<br/>能否重写"}
+    OLD -->|"能，且量不大"| VT
+    OLD -->|"不能，绑定 Webpack 专有能力"| RS["Rspack 原地替换<br/>保留配置与 loader"]
+    START -->|"已在 Vite 上"| SCALE{"开发期首屏<br/>请求数是否上千"}
+    SCALE -->|否| KEEP["不要为跑分迁移"]
+    SCALE -->|是| SPLIT["拆路由懒加载<br/>加 server.warmup"]
+</div>
 
 <table>
 <thead><tr><th>维度</th><th>Vite</th><th>Webpack 5</th><th>Rspack</th><th>Turbopack</th></tr></thead>
@@ -258,10 +358,6 @@ rm -rf node_modules/.vite
 <tr><td>选型结论</td><td>新项目默认选它</td><td>只在无法迁移时保留</td><td>老项目提速的最小代价方案</td><td>用 Next.js 就自然用上</td></tr>
 </tbody></table>
 
-<p>构建工具的代际变化、包管理器差异与发布期新旧资源共存等工程化议题，详见站内 <a href="../frameworks/engineering/">前端工程化</a>；具体的配置项与插件钩子见 <a href="config/">配置与插件机制</a>，生产产物的分包与体积治理见 <a href="optimization/">生产构建优化</a>。</p>
-
-<h2>反模式对照</h2>
-
 <table>
 <thead><tr><th>反模式</th><th>后果</th><th>正确做法</th></tr></thead>
 <tbody>
@@ -275,6 +371,14 @@ rm -rf node_modules/.vite
 <tr><td>巨型单页不拆懒加载</td><td>开发期首屏几千个请求，反而比打包慢</td><td>按路由拆分，配 <code>server.warmup</code></td></tr>
 </tbody></table>
 
+<p><strong>不适用边界</strong>：如果项目的核心资产是一堆 Webpack 专有 loader 与自研插件，迁 Vite 的成本会远超收益，用 Rspack 原地替换更现实；如果项目已经在 Vite 上跑得顺，不要为了跑分迁移。Vite 也解决不了运行时性能问题——构建再快，首屏与交互指标该测还得测，见 <a href="../performance/web-vitals/">Web Vitals 与前端性能指标</a>；构建工具的代际变化、包管理器差异与发布期新旧资源共存等工程化议题见 <a href="../frameworks/engineering/">前端工程化</a>。</p>
+
+<p>本篇是这条路径的起点，只讲模型与排查顺序。接下来一篇落到具体项目：目录结构怎么放、依赖预构建怎么配、环境变量哪些会被打进产物；再往后是配置与插件钩子，最后是生产产物的分包与体积治理。</p>
+
+<p class="cluster-nav">同主题路径：<a href="intro/">下一步：Vite 上手：项目结构、依赖预构建与环境变量 →</a></p>
+
+<h2>最容易踩的坑</h2>
+
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">最容易踩的坑</div>
@@ -282,6 +386,7 @@ rm -rf node_modules/.vite
 <li><strong>只测 dev 不测 build</strong>：双引擎架构下这两条路径必然有行为差异，不跑 build 等于把风险全押在发版日。</li>
 <li><strong>以为 Vite 帮你做类型检查</strong>：esbuild 只擦除类型语法，类型错误在开发期完全静默。</li>
 <li><strong>期待生产构建也很快</strong>：生产是 Rollup 全量打包加压缩，大项目几分钟是正常的，别按 dev 的体感估 CI 时间。</li>
+<li><strong>看构建报错只看最后一条</strong>：Rollup 的报错常是级联的，第一条里的模块路径才是线索。</li>
 <li><strong>页面莫名自动刷新</strong>：通常是动态导入的依赖没被启动扫描发现，触发了运行时补做预构建，用 <code>optimizeDeps.include</code> 提前声明。</li>
 <li><strong>组件文件里混着导出普通函数或常量</strong>：react-refresh 的状态保留失效，HMR 边界上移，改一行就整页刷新。</li>
 <li><strong>手写 <code>import.meta.hot.accept</code> 忘了 <code>dispose</code></strong>：定时器与监听器不断累积，症状是越改越卡、请求越来越多。</li>
@@ -290,6 +395,7 @@ rm -rf node_modules/.vite
 <li><strong>循环依赖在 dev 侥幸能跑</strong>：Rollup 整图打包后执行顺序变化，生产才暴露成 undefined，排查成本极高。</li>
 <li><strong>完全动态拼接的 <code>import</code> 路径</strong>：dev 能返回文件，生产无法静态分析导致模块缺失，要用 <code>import.meta.glob</code>。</li>
 <li><strong>切分支后不清预构建缓存</strong>：lockfile 变了但 <code>.vite</code> 里还是旧依赖，症状千奇百怪，先试 <code>--force</code>。</li>
+<li><strong>部署在子路径却没配 <code>base</code></strong>：<code>preview</code> 一切正常，线上资源全量 404，最容易被误判成部署故障。</li>
 <li><strong>巨型项目不拆路由懒加载</strong>：开发期首屏上千个模块请求，瀑布本身成为瓶颈，这时候「Vite 快」不再成立。</li>
     </ul>
 </div>
