@@ -90,7 +90,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>集群网络出问题时最贵的动作是「随机试」：改一个注解、重启一个 Pod、换一次 CNI，然后祈祷。真正能收敛问题的办法是认清层次——把一个服务暴露出去只需要两个对象，而包从 Pod A 走到 Pod B 却要穿过五层。</p>
+<p>集群网络出问题时最贵的动作是「随机试」：改注解、重启 Pod、换 CNI，然后祈祷。真正能收敛问题的办法是认清层次——暴露一个服务只需两个对象，而包从 Pod A 走到 Pod B 要穿过五层。</p>
 <p>这篇先给能直接 apply 的最小暴露清单与一条从里往外的排查序列，再往下拆 CNI、DNS、Ingress 与 NetworkPolicy 的机制，最后回答「该用哪种暴露方式」。</p>
 <p>Service 的虚拟 IP 机制、kube-proxy 的 iptables 与 IPVS 实现对照、Service 四种类型的实现细节，主干篇 <a href="../">Kubernetes 架构与核心机制</a> 已经写透，这里不重复。</p>
 
@@ -205,7 +205,7 @@ kubectl -n prod get netpol
 <li>任意两个 Pod 之间可以用这个 IP <strong>直接互通，中间不做 NAT</strong>——即 A 看到的源地址就是 B 的真实 Pod IP；</li>
 <li>节点上的进程（含 kubelet、DaemonSet）能直接访问本节点与其他节点的 Pod。</li>
 </ol>
-<p>注意：<strong>Kubernetes 自己一行代码都不实现这三条</strong>。它只定义 CNI 接口，分 IP、建虚拟设备、跨节点转发全部由插件完成。这解释了上面那两个现象：kubelet 在等 CNI 就绪才报 Ready，而 Pod 网段、封装方式、策略能力全是插件的私有决策。</p>
+<p>注意：<strong>Kubernetes 自己一行代码都不实现这三条</strong>。它只定义 CNI 接口，分 IP、建虚拟设备、跨节点转发全由插件完成。这解释了上面两个现象：kubelet 等 CNI 就绪才报 Ready，而 Pod 网段、封装方式、策略能力全是插件的私有决策。</p>
 <p>下面这张图是「包是怎么从一个 Pod 真正走到另一个节点的 Pod 的」：</p>
 
 <div class="mermaid">
@@ -235,7 +235,7 @@ flowchart TB
 </div>
 
 <h2>② 原理 · CNI 的两大流派：封装还是路由</h2>
-<p>搞清这一节能解决「跨节点不通」与「小包通大包挂」这两类最难定位的故障。抛开插件名字，实现只有两条路：<strong>把 Pod 的包再套一层外层头发给对端节点</strong>（Overlay），或者<strong>让底层网络知道每个 Pod 网段在哪台机器上</strong>（路由）。</p>
+<p>搞清这节能解决「跨节点不通」与「小包通大包挂」两类最难定位的故障。抛开插件名字，实现只有两条路：<strong>把 Pod 的包套一层外层头发给对端节点</strong>（Overlay），或<strong>让底层网络知道每个 Pod 网段在哪台机器上</strong>（路由）。</p>
 <table>
 <thead><tr><th>维度</th><th>Overlay 封装（VXLAN / IPIP / Geneve）</th><th>路由模式（BGP / 云 VPC 路由）</th><th>云 VPC 原生（弹性网卡辅助 IP）</th></tr></thead>
 <tbody>
@@ -254,14 +254,14 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">MTU 配错：小包全通、大包全挂</div>
-    <p>Overlay 封装要吃掉有效载荷：VXLAN 占 50 字节、IPIP 占 20 字节、再叠 WireGuard 还要更多。若物理链路 MTU 是 1500 而 Pod 网卡仍是 1500，封装后超限，需要分片或依赖「需要分片」的 ICMP 做路径 MTU 发现，<strong>而云环境和防火墙经常把这类 ICMP 丢掉</strong>。</p>
+    <p>Overlay 封装要吃掉有效载荷：VXLAN 占 50 字节、IPIP 占 20 字节、再叠 WireGuard 更多。若物理链路 MTU 是 1500 而 Pod 网卡仍是 1500，封装后超限，要分片或依赖「需要分片」的 ICMP 做路径 MTU 发现，<strong>而云环境和防火墙经常把这类 ICMP 丢掉</strong>。</p>
 <p>结果是：ping 通、TCP 握手通、小接口正常，一旦返回大 JSON、上传文件、或 TLS 证书链偏大，连接就永久挂住不返回。</p>
-    <p>对照关系：物理 1500 时，VXLAN 下 Pod MTU 取 1450、IPIP 下取 1480、VXLAN 叠 WireGuard 取 1370 左右；若底层支持巨帧 9000，则相应放大。定位命令是禁止分片的定长 ping 做二分：<code>ping -M do -s 1422 对端PodIP</code>（1422 加 28 字节头等于 1450），能通说明 1450 以内没问题，换成 1472 不通就确认是 MTU 问题。</p>
+    <p>对照关系：物理 1500 时，VXLAN 下 Pod MTU 取 1450、IPIP 下取 1480、VXLAN 叠 WireGuard 取 1370 左右；底层支持巨帧 9000 则相应放大。定位用禁止分片的定长 ping 二分：<code>ping -M do -s 1422 对端PodIP</code>（1422 加 28 字节头等于 1450），能通说明 1450 以内没问题，换成 1472 不通就确认是 MTU 问题。</p>
 </div>
 
 <h2>② 原理 · Cilium 与 eBPF 为什么成了趋势</h2>
 <p>搞清这一节能解释一个规模化之后才出现的现象：Service 数量涨到几千之后，kube-proxy 同步延迟能到几十秒，新 Pod 起来了流量却半分钟才切过去。</p>
-<p>传统数据平面把规则写进 iptables，Service 与策略数量一多，规则链呈线性增长，变更时要整表替换。eBPF 的做法是把转发与策略逻辑作为程序挂在内核钩子上，用哈希表查目标，<strong>查找复杂度与 Service 数量基本无关</strong>。</p>
+<p>传统数据平面把规则写进 iptables，Service 与策略数量一多，规则链线性增长，变更时要整表替换。eBPF 把转发与策略逻辑作为程序挂在内核钩子上，用哈希表查目标，<strong>查找复杂度与 Service 数量基本无关</strong>。</p>
 <table>
 <thead><tr><th>能力</th><th>iptables 系数据平面</th><th>eBPF（Cilium）</th></tr></thead>
 <tbody>
@@ -273,10 +273,10 @@ flowchart TB
 <tr><td>代价</td><td>成熟、人人会看</td><td>要求较新内核，排障需要新工具链，团队学习成本真实存在</td></tr>
 </tbody>
 </table>
-<p>务实的结论：<strong>新集群且团队愿意学，直接上 Cilium 收益最大</strong>（尤其是需要七层策略与流量可观测性的场景）；已有集群跑着 Calico 且没有具体痛点，不必为了架构时髦做一次高风险替换。iptables 与 IPVS 两种 kube-proxy 模式的具体差异见主干篇。</p>
+<p>务实结论：<strong>新集群且团队愿意学，直接上 Cilium 收益最大</strong>（尤其需要七层策略与流量可观测性时）；已有集群跑着 Calico 且无具体痛点，不必为架构时髦做高风险替换。iptables 与 IPVS 两种 kube-proxy 模式的差异见主干篇。</p>
 
 <h2>② 原理 · DNS 是集群里最高频的故障源</h2>
-<p>搞清这一节能解决那类最难归因的现象：全站偶发 5 秒超时，业务代码与数据库都查不出问题。集群内所有服务发现都走 CoreDNS，它的负载与集群 QPS 直接成正比，而默认配置里藏着一个放大器。</p>
+<p>搞清这节能解决那类最难归因的现象：全站偶发 5 秒超时，业务代码与数据库都查不出问题。集群内所有服务发现都走 CoreDNS，它的负载与集群 QPS 成正比，而默认配置里藏着一个放大器。</p>
 
 <div class="mermaid">
 sequenceDiagram

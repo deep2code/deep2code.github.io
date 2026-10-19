@@ -91,7 +91,7 @@
 <p>多环境管理的难点从来不是「怎么部署到四个集群」，而是<strong>怎么让环境之间的差异保持少、可见、可审计</strong>。</p>
 <p>绝大多数「测试环境好的、生产环境挂了」都能归结到同一个根因：生产上跑的东西和你验证过的东西，在某个没人注意的地方不一样。</p>
 
-<p>本文只讲仓库模型、配置差异与 promote。GitOps 的基本纪律见站内《GitOps 核心原则》，Argo CD 自身的部署见《ArgoCD 安装配置》，同步开关、漂移自愈与 sync-wave 见站内《Argo CD 同步机制与漂移自愈》，金丝雀与数据库兼容演进见站内 CI/CD 部署策略一篇。</p>
+<p>本文只讲仓库模型、配置差异与 promote。GitOps 基本纪律见站内《GitOps 核心原则》，Argo CD 部署见《ArgoCD 安装配置》，同步开关、漂移自愈与 sync-wave 见《Argo CD 同步机制与漂移自愈》，金丝雀与数据库兼容演进见 CI/CD 部署策略一篇。</p>
 
 <h2>一、三种仓库模型，以及为什么别用分支表示环境</h2>
 
@@ -109,8 +109,8 @@
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">「用分支表示环境」是最常见的错误做法</div>
-    <p>这个方案看起来很自然：dev 分支对应开发集群、main 分支对应生产。问题出在 merge 的语义上——分支合并会把源分支的<strong>全部</strong>差异带过去，而环境差异（副本数、域名、日志级别、调试开关）恰恰是<strong>不该跟着走</strong>的那部分。</p>
-<p>于是每次 promote 都变成人工挑拣：漏挑一个，dev 的 debug 日志级别或者压测用的资源配额就进了生产。反方向也一样难受，生产热修复往回合会造成长期分叉，同一个文件反复冲突。</p>
+    <p>这个方案看起来很自然：dev 分支对应开发集群、main 分支对应生产。问题出在 merge 的语义——合并会把源分支的<strong>全部</strong>差异带过去，而环境差异（副本数、域名、日志级别、调试开关）恰恰是<strong>不该跟着走</strong>的那部分。</p>
+<p>于是每次 promote 都变成人工挑拣：漏挑一个，dev 的 debug 日志级别或压测资源配额就进了生产。反向也一样难受，生产热修复往回合造成长期分叉，同一个文件反复冲突。</p>
 <p>正确做法是让环境差异以<strong>静态文件</strong>的形式并列存在，promote 只推进镜像版本这一个变量。</p>
 </div>
 
@@ -219,7 +219,7 @@ flowchart TB
 
 <h2>三、Kustomize 的 base 加 overlay：patch 顺序与 hash 后缀</h2>
 
-<p><code>kustomize build</code> 是一次<strong>纯函数式的渲染</strong>：读入 base 的对象，按顺序应用 components、patches、generators、名字与镜像的变换，输出最终 YAML。理解它的关键是顺序：<strong>patch 的 target 匹配用的是变换前的原始名字，而 namePrefix、nameSuffix 与 labels 是在最后统一施加的</strong>。</p>
+<p><code>kustomize build</code> 是一次<strong>纯函数式的渲染</strong>：读入 base 对象，按顺序应用 components、patches、generators、名字与镜像变换，输出最终 YAML。关键是顺序：<strong>patch 的 target 匹配用的是变换前的原始名字，而 namePrefix、nameSuffix 与 labels 在最后统一施加</strong>。</p>
 <p>很多人把 patch 的 target 写成带前缀的名字，结果 patch 静默不生效（kustomize 默认不会因为 target 没命中而报错，这一点非常容易踩）。</p>
 
 <table>
@@ -233,7 +233,7 @@ flowchart TB
 <tr><td><code>components</code></td><td>v4.1+</td><td>可选特性组合，自身可以包含 resources 与 patches</td><td>被引用多次时变换会叠加，要确认是幂等的</td></tr>
 </tbody></table>
 
-<p><strong>接下来是 configMapGenerator 的 hash 后缀，这是多环境里最实用的一个机制。</strong>「ConfigMap 改了，Pod 没重启，配置没生效」是 K8s 里最经典的困惑。原因很直接：Deployment 的 pod 模板一个字节都没变，控制器没有任何理由重建 Pod。</p>
+<p><strong>configMapGenerator 的 hash 后缀是多环境里最实用的机制。</strong>「ConfigMap 改了，Pod 没重启，配置没生效」是 K8s 里最经典的困惑。原因很直接：Deployment 的 pod 模板一个字节没变，控制器没有理由重建 Pod。</p>
 
 <table>
 <thead><tr><th>注入方式</th><th>改 ConfigMap 后的行为</th><th>生效时机</th></tr></thead>
@@ -271,7 +271,7 @@ secretGenerator:
 
 <h2>四、Helm 在多环境下的做法，以及和 Kustomize 混用</h2>
 
-<p>Helm 的多环境靠 <code>values-{env}.yaml</code>，值的优先级从低到高是：chart 自带的 <code>values.yaml</code>、按顺序传入的多个 <code>-f</code> 文件（后者覆盖前者）、<code>--set</code>、<code>--set-string</code> 与 <code>--set-file</code>。数组是<strong>整体替换</strong>而不是合并，这是最常见的误判——你在 env values 里只想加一个 tolerations，结果把 chart 默认的那几条全覆盖掉了。</p>
+<p>Helm 的多环境靠 <code>values-{env}.yaml</code>，值优先级从低到高：chart 自带的 <code>values.yaml</code>、按顺序传入的多个 <code>-f</code> 文件（后者覆盖前者）、<code>--set</code>、<code>--set-string</code> 与 <code>--set-file</code>。数组是<strong>整体替换</strong>而非合并，这是最常见的误判——在 env values 里只想加一个 tolerations，结果把 chart 默认的那几条全覆盖掉了。</p>
 
 <table>
 <thead><tr><th>维度</th><th>Kustomize</th><th>Helm</th><th>混用（推荐形态）</th></tr></thead>
@@ -366,7 +366,7 @@ flowchart TB
     B4 --> F2["必须在 CI 里主动比对渲染结构<br/>没有自动收敛机制"]
 </div>
 
-<p>第一个方向有现成的机制兜底（selfHeal），第二个方向<strong>完全没有</strong>——它不会触发任何告警，只会在某次生产发布时以一个莫名其妙的失败暴露出来。所以要在 CI 里主动生成「结构指纹」做比对：</p>
+<p>第一个方向有现成机制兜底（selfHeal），第二个方向<strong>完全没有</strong>——它不触发任何告警，只会在某次生产发布时以莫名其妙的失败暴露出来。所以要在 CI 里主动生成「结构指纹」做比对：</p>
 
 <pre><code class="language-bash">#!/usr/bin/env bash
 set -euo pipefail
@@ -400,7 +400,7 @@ fi</code></pre>
 
 <h2>八、分环境的密钥与 ApplicationSet 批量生成</h2>
 
-<p>密钥的第一原则是<strong>overlay 里只能出现引用，不能出现密文</strong>。如果用 SOPS 之类的方案加密入库，关键在于<strong>每个环境必须用独立的密钥</strong>：共用一把密钥时，任何能解开 dev 的人就能解开 prod，环境隔离在密钥层面直接失效。</p>
+<p>密钥的第一原则是<strong>overlay 里只能出现引用，不能出现密文</strong>。用 SOPS 之类方案加密入库时，关键在于<strong>每个环境必须用独立密钥</strong>：共用一把密钥，能解开 dev 的人就能解开 prod，环境隔离在密钥层面直接失效。</p>
 <p>更省事的形态是 External Secrets，仓库里放一个指向远端路径的对象，按环境配不同的 SecretStore：</p>
 
 <pre><code class="language-yaml"># overlays/prod/external-secret.yaml —— 仓库里没有任何密文
@@ -463,7 +463,7 @@ spec:
   syncPolicy:
     preserveResourcesOnDeletion: true   # 删掉 ApplicationSet 时不要级联删掉生产资源</code></pre>
 
-<p>另一种常见写法是 git directory generator：扫描 <code>overlays/*</code> 自动生成 Application，新增一个环境目录就自动多一套应用。它的便利和危险是同一件事——<strong>删掉或改名一个目录会导致对应 Application 消失</strong>，配合 prune 就是一次批量删除，所以 <code>preserveResourcesOnDeletion</code> 在生产环境必须打开。</p>
+<p>另一种写法是 git directory generator：扫描 <code>overlays/*</code> 自动生成 Application，新增一个环境目录就多一套应用。它的便利和危险是同一件事——<strong>删掉或改名一个目录会导致对应 Application 消失</strong>，配合 prune 就是批量删除，所以 <code>preserveResourcesOnDeletion</code> 在生产必须打开。</p>
 
 <h2>九、反模式</h2>
 

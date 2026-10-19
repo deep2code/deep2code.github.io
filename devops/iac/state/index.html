@@ -90,10 +90,10 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Terraform 的所有魔力都建立在一个前提上：它知道「上一次我造出来的东西长什么样」。这份记忆就是 state。没有 state，<code>plan</code> 无法区分「这个资源需要新建」和「这个资源已经存在只是属性变了」，整个声明式模型直接崩塌。</p>
+<p>Terraform 的一切都建立在一个前提上：它知道「上次造出来的东西长什么样」。这份记忆就是 state。没有 state，<code>plan</code> 无法区分「需要新建」和「已存在只是属性变了」，声明式模型直接崩塌。</p>
 <p>所以 state 不是缓存、不是临时文件，它是<strong>与云上真实资源同等重要的生产资产</strong>。</p>
 
-<p>本文只讲 state。Terraform 的基本语法与第一个项目见站内《Terraform 入门与 HCL 语法》，IaC 的核心模型与漂移概念见《IaC 基础设施即代码总览》，Terraform 与 Pulumi、CloudFormation、Ansible 的取舍见《IaC 工具对比》，模块的接口与版本设计见《Terraform Module 与最佳实践》。</p>
+<p>本文只讲 state。基本语法与第一个项目见《Terraform 入门与 HCL 语法》，核心模型与漂移见《IaC 基础设施即代码总览》，与 Pulumi、CloudFormation、Ansible 的取舍见《IaC 工具对比》，模块的接口与版本设计见《Terraform Module 与最佳实践》。</p>
 
 <h2>一、state 里到底存了什么</h2>
 
@@ -125,7 +125,7 @@ flowchart TB
     F --> D4["漂移：state 与云上现状不一致"]
 </div>
 
-<p>三条容易被忽略的事实。第一，<strong>dependencies 是存在 state 里的</strong>，不只在代码里——这就是为什么你删掉代码里的依赖关系后，销毁顺序依然按老的来。第二，<code>lineage</code> 保证你不会把 A 项目的 state 推到 B 项目的后端上（推错时 Terraform 会明确拒绝）。</p>
+<p>三条容易被忽略的事实。第一，<strong>dependencies 存在 state 里</strong>，不只在代码里——删掉代码里的依赖后，销毁顺序仍按老的来。第二，<code>lineage</code> 保证不会把 A 项目的 state 推到 B 项目后端上（推错时 Terraform 会拒绝）。</p>
 <p>第三，<code>serial</code> 是并发保护的最后一道防线，两个人拿到同一个 serial 各自写回时，后写的会覆盖前者，这也是为什么锁不可省。</p>
 
 <table>
@@ -194,7 +194,7 @@ terraform {
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">别把后端配置做成「运行时才知道指向哪」</div>
-    <p>后端块里不允许引用变量，这是 Terraform 的有意设计——如果 state 的位置可以被变量决定，那么「我这次操作的是哪个环境」就成了运行时才确定的事，一个环境变量写错就把生产的 state 覆盖了。</p>
+    <p>后端块里不允许引用变量，这是 Terraform 的有意设计：如果 state 位置由变量决定，「这次操作的是哪个环境」就变成运行时才确定的事，一个变量写错就覆盖了生产的 state。</p>
 <p>需要多环境时只能用 partial configuration，而且 <code>-backend-config</code> 文件必须入库并被评审。更稳的做法是每个环境一个目录，backend 块里把 bucket 和 key 写死。</p>
 </div>
 
@@ -299,7 +299,7 @@ terraform state rm 'aws_route53_zone.legacy'
 
 <h2>六、代码重构与 state 的对应关系</h2>
 
-<p>Terraform 认的是 state 里的<strong>资源地址</strong>，不是资源的名字或用途。任何让地址发生变化的重构（重命名、移进 module、把 <code>count</code> 换成 <code>for_each</code>），在 Terraform 眼里都是「旧地址的资源消失了、新地址的资源需要创建」，plan 会显示销毁加新建。</p>
+<p>Terraform 认的是 state 里的<strong>资源地址</strong>，不是名字或用途。任何让地址变化的重构（重命名、移进 module、<code>count</code> 换 <code>for_each</code>），在它眼里都是「旧地址消失、新地址需要创建」，plan 显示销毁加新建。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -392,7 +392,7 @@ flowchart TB
     A2 -.->|"terraform_remote_state<br/>会形成输出结构耦合"| C1
 </div>
 
-<p>跨 state 取值有两条路。<code>terraform_remote_state</code> 直接读上游 state 的 output，代价是<strong>下游被上游的 output 结构绑死</strong>，上游改一个 output 名字下游就崩，而且下游需要上游 state 的读权限（等于能读到上游的所有敏感值）。</p>
+<p>跨 state 取值有两条路。<code>terraform_remote_state</code> 直接读上游 state 的 output，代价是<strong>下游被上游的 output 结构绑死</strong>：上游改个 output 名字下游就崩，且下游需要上游 state 读权限（等于能读到所有敏感值）。</p>
 <p>更好的做法是用 <code>data</code> 源按标签或名字查询云上的真实资源——它只依赖「资源存在且带着约定的标签」这个弱契约，也不需要跨 state 的权限。</p>
 
 <pre><code class="language-nginx"># ---------- 推荐：data 源按约定标签查询，不依赖上游 state ----------
@@ -441,7 +441,7 @@ resource "aws_instance" "app" {
 <tr><td>靠 tfvars 区分</td><td>否</td><td>共用</td><td>极高：忘传 <code>-var-file</code> 就用默认值打到别的环境</td><td>只能作为目录隔离之上的补充</td></tr>
 </tbody></table>
 
-<p>灾备不是「开了版本控制就等于有备份」。真正需要的是三件事：后端开对象版本控制并设保留策略；CI 在每次 apply 前把 <code>state pull</code> 的结果归档到另一个账号或另一个桶（防止有人有权限把桶和版本一起删了）；</p>
+<p>灾备不是「开了版本控制就等于有备份」，真正需要三件事：后端开对象版本控制并设保留策略；CI 在每次 apply 前把 <code>state pull</code> 结果归档到另一个账号或桶（防止有人把桶和版本一起删了）；</p>
 <p><strong>每季度做一次恢复演练</strong>——在隔离环境里用备份 state 加当前代码跑一次 plan，确认输出是零变更。</p>
 <p>没演练过的备份不能算备份，常见的翻车是备份里的 <code>lineage</code> 与后端现有的不一致，恢复时被 Terraform 拒绝，而这件事只有演练过才会提前知道。</p>
 

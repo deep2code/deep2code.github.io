@@ -231,7 +231,7 @@ helm -n prod uninstall api --keep-history
 </tbody>
 </table>
 
-<p>values 的覆盖顺序从低到高是：<strong>子 chart 的 values → 父 chart 的 values → 各个 <code>-f</code> 文件（按命令行先后，后面覆盖前面）→ <code>--set</code> 系列</strong>。加上下面几个参数的行为，构成了「为什么我设了却没生效」的全部答案：</p>
+<p>values 的覆盖顺序从低到高是：<strong>子 chart 的 values → 父 chart 的 values → 各个 <code>-f</code> 文件（按命令行先后，后者覆盖前者）→ <code>--set</code> 系列</strong>。加上下面几个参数的行为，就是「为什么我设了却没生效」的全部答案：</p>
 
 <table>
 <thead><tr><th>参数</th><th>作用</th><th>不加或用错会出什么现象</th></tr></thead>
@@ -247,12 +247,12 @@ helm -n prod uninstall api --keep-history
 </tbody>
 </table>
 
-<p>上面这些参数的默认值随 Helm 版本变化（尤其是 <code>--timeout</code> 与 <code>--wait</code> 的等待判定范围），落地前用 <code>helm upgrade --help</code> 核对你手上这个版本的实际行为。<strong>为什么缩进要自己管、为什么 rollback 不撤销数据、为什么手工改动会被改回去，都在下面几节。</strong></p>
+<p>这些参数的默认值随 Helm 版本变化（尤其 <code>--timeout</code> 与 <code>--wait</code> 的等待判定范围），落地前用 <code>helm upgrade --help</code> 核对实际行为。<strong>为什么缩进要自己管、rollback 不撤销数据、手工改动会被改回去，都在下面几节。</strong></p>
 
 <h2>② 原理 · Helm 的两个核心</h2>
 
-<p>搞清这一节能解释一整类报错：为什么 Helm 会说「mapping values are not allowed in this context」而你的模板看起来毫无问题。Helm 解决的问题是：把一组 K8s 对象打包成可参数化、可版本化、可一键安装卸载的单元。</p>
-<p>实现方式非常朴素——先把 values 逐层合并，再用 Go template 把 <code>templates/</code> 下的文件渲染成字符串，最后把字符串交给 YAML 解析器，得到对象提交给 apiserver，同时把这份渲染结果原样存下来当作 Release 记录。</p>
+<p>搞清这节能解释一整类报错：为什么 Helm 会说「mapping values are not allowed in this context」，而你的模板看起来没问题。Helm 要解决的是把一组 K8s 对象打包成可参数化、可版本化、可一键安装卸载的单元。</p>
+<p>实现非常朴素——先把 values 逐层合并，再用 Go template 把 <code>templates/</code> 下的文件渲染成字符串，交给 YAML 解析器得到对象提交 apiserver，同时把渲染结果原样存下来当 Release 记录。</p>
 <p>声明式交付与 Argo CD 的部分见 <a href="../../gitops/">GitOps 系列</a>，流水线里怎么串这些命令见 <a href="../../cicd/">CI 与流水线</a>。</p>
 
 <div class="mermaid">
@@ -374,7 +374,7 @@ spec:
 
 <h2>② 原理 · Release 与状态：rollback 到底回滚了什么</h2>
 
-<p>搞清这一节能解决两个现象：Release 卡在 <code>pending-upgrade</code> 后所有操作都被拒，以及回滚之后应用行为并没有完全回到旧版本。Helm 3 把每次操作的渲染结果存成一个 Secret，名字形如 <code>sh.helm.release.v1.api.v7</code>，带 <code>owner=helm</code> 标签，默认放在 Release 所在的命名空间。</p>
+<p>搞清这节能解决两个现象：Release 卡在 <code>pending-upgrade</code> 后所有操作被拒，以及回滚后应用行为没有完全回到旧版本。Helm 3 把每次操作的渲染结果存成一个 Secret，名字形如 <code>sh.helm.release.v1.api.v7</code>，带 <code>owner=helm</code> 标签，默认放在 Release 所在命名空间。</p>
 <p><strong><code>helm rollback</code> 的实现就是取出旧 revision 的那份渲染快照重新应用一遍</strong>——它不做任何逆向推导，也不知道你的应用语义。</p>
 
 <div class="mermaid">
@@ -415,7 +415,7 @@ stateDiagram-v2
 </tbody>
 </table>
 
-<p>由「Release 是一份快照」还能推出另一个结论：<strong>如果有人用 <code>kubectl edit</code> 改了线上，Helm 的记录里完全没有这件事</strong>。<code>helm get manifest</code> 给你的是上次渲染结果，不是集群现状。想知道差异只能自己比。</p>
+<p>由「Release 是一份快照」还能推出：<strong>有人用 <code>kubectl edit</code> 改了线上，Helm 的记录里完全没有这件事</strong>。<code>helm get manifest</code> 给的是上次渲染结果，不是集群现状，想知道差异只能自己比。</p>
 
 <h2>② 原理 · 三向合并补丁</h2>
 
@@ -440,7 +440,7 @@ sequenceDiagram
 </div>
 
 <p>Helm 2 用的是两向合并，只比 old 与 new，所以手工改过的字段能一直存活。</p>
-<p><strong>Helm 3 引入三向合并后，线上手工改动会在下一次 upgrade 时被拉回 chart 声明的值</strong>——这通常是好事，但在两个场景下会咬人：一是 chart 写了 <code>replicas</code> 而副本数由 HPA 管，每次发布都会先把副本打回初始值，容量塌一下再由 HPA 扩回来；</p>
+<p><strong>Helm 3 引入三向合并后，线上手工改动会在下次 upgrade 时被拉回 chart 声明的值</strong>——通常是好事，但两个场景会咬人：一是 chart 写了 <code>replicas</code> 而副本数由 HPA 管，每次发布先把副本打回初始值，容量塌一下再由 HPA 扩回来；</p>
 <p>二是某些控制器会往对象上写字段（例如注入 sidecar 或补默认注解），如果 chart 恰好也声明了同名字段，就会出现两边来回改写的抖动。</p>
 
 <h2>② 原理 · hooks：能跑迁移，但不受回滚保护</h2>
@@ -458,7 +458,8 @@ sequenceDiagram
 </tbody>
 </table>
 
-<p>最需要记住的一条：<strong>hook 产生的资源不属于 Release 的托管范围，也不参与三向合并</strong>。这意味着 <code>helm rollback</code> 会把 Deployment 换回旧镜像，但 <code>pre-upgrade</code> 里已经执行完的数据库迁移不会被撤销。于是回滚之后旧版本代码面对的是新版本的表结构——如果迁移不是向后兼容的，这一步就直接出故障。另外 <code>helm.sh/hook-delete-policy</code> 默认是 <code>before-hook-creation</code>，意思是下次创建时才删上次的，所以集群里会长期留着最后一次的 hook Job；要立刻清理就加 <code>hook-succeeded</code>。</p>
+<p>最需要记住的一条：<strong>hook 产生的资源不属于 Release 托管范围，也不参与三向合并</strong>。<code>helm rollback</code> 会把 Deployment 换回旧镜像，但 <code>pre-upgrade</code> 里已执行完的数据库迁移不会被撤销。</p>
+<p>回滚后旧版本代码面对的是新版本的表结构——迁移不向后兼容就直接出故障。另外 <code>helm.sh/hook-delete-policy</code> 默认 <code>before-hook-creation</code>，即下次创建时才删上次的，集群会长期留着最后一次的 hook Job；要立刻清理就加 <code>hook-succeeded</code>。</p>
 
 <h2>② 原理 · 依赖管理与该参数化什么</h2>
 
@@ -500,10 +501,10 @@ autoscaling:
 extraEnv: []                        # 提供追加口，因为列表覆盖是整体替换而不是合并
 </code></pre>
 
-<p><code>helm dependency update</code> 会按上面的声明拉取依赖到 <code>charts/</code> 并生成 <code>Chart.lock</code>。<strong>锁文件必须入库</strong>——它记录了依赖的精确版本和摘要，不入库就等于放弃了构建可复现性，几个月后同一个 commit 渲染出来的东西可能已经变了。</p>
+<p><code>helm dependency update</code> 会按声明拉取依赖到 <code>charts/</code> 并生成 <code>Chart.lock</code>。<strong>锁文件必须入库</strong>——它记录依赖的精确版本和摘要，不入库就放弃了构建可复现性，几个月后同一个 commit 渲染出的东西可能已经变了。</p>
 
 <p>关于「该参数化什么」，唯一有用的判断标准是：<strong>这个字段会不会在不同安装之间取不同的值</strong>。会，才做成 values；不会，直接写死在模板里。</p>
-<p>把每个字段都做成 values 的结果是模板比原始 YAML 更难读，而且 values 的组合空间大到无法测试。一个实用的分界：镜像、副本与伸缩、资源规格、对外暴露方式、依赖开关、存储大小与 StorageClass 这几类必须参数化；</p>
+<p>每个字段都做成 values 的结果是模板比原始 YAML 更难读，values 的组合空间也大到无法测试。实用的分界：镜像、副本与伸缩、资源规格、对外暴露方式、依赖开关、存储大小与 StorageClass 这几类必须参数化；</p>
 <p>探针路径、标签规范、安全上下文这些全公司统一的东西写死更好。</p>
 
 <pre><code class="language-bash"># Release 记录就是一批带 owner=helm 标签的 Secret
@@ -584,8 +585,8 @@ flowchart TB
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：Helm 不负责「集群里该有哪些对象」这件事的正确性——工作负载怎么选与字段怎么填在 <a href="../core-resources/">工作负载对象的选择与编写</a>，配置与密钥不要写进 values 的理由在 <a href="../config-secret/">配置与密钥在集群里的落地</a>；</p>
-<p>镜像的构建与标签策略在 <a href="../../docker/">Docker</a>，流水线怎么串这些命令在 <a href="../../cicd/">CI 与流水线</a>；多环境的单一事实来源与自动纠偏在 <a href="../../gitops/">GitOps 系列</a>；发布之后「这次上线有没有把指标搞坏」的判断在 <a href="../../../observability/">可观测性系列</a>。</p>
+<p><strong>不适用边界</strong>：Helm 不负责「集群里该有哪些对象」的正确性——工作负载怎么选与字段怎么填在 <a href="../core-resources/">工作负载对象的选择与编写</a>，配置与密钥不写进 values 的理由在 <a href="../config-secret/">配置与密钥在集群里的落地</a>；</p>
+<p>镜像构建与标签策略在 <a href="../../docker/">Docker</a>，流水线怎么串这些命令在 <a href="../../cicd/">CI 与流水线</a>；多环境的单一事实来源与自动纠偏在 <a href="../../gitops/">GitOps 系列</a>；发布后「有没有把指标搞坏」的判断在 <a href="../../../observability/">可观测性系列</a>。</p>
 
 <h2>③ 场景 · 反模式</h2>
 

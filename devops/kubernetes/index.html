@@ -73,7 +73,7 @@
             <span class="meta-item">🏷️ K8s</span>
         </div>
     </header>
-    <p>K8s 的概念多到让人放弃，但它只有<strong>一个</strong>核心思想：你描述期望状态，一堆控制器不停地把现实拉向它。把这条主线抓住，Pod、Service、探针、QoS、滚动更新全都是它的推论。</p>
+    <p>K8s 的概念多到让人放弃，但只有<strong>一个</strong>核心思想：你描述期望状态，一堆控制器不停把现实拉向它。抓住这条主线，Pod、Service、探针、QoS、滚动更新全是它的推论。</p>
 <p>这篇按「控制循环 → 一次 apply 的完整链路 → 调度 → 生命周期与探针 → 资源与 QoS → Service 的真实实现 → 滚动更新与排障」展开。</p>
 
     <div class="callout callout-info">
@@ -87,7 +87,7 @@
     </div>
 
     <h2>① 用法 · 一个服务上 K8s 最少要写哪几个对象</h2>
-    <p>一个无状态 HTTP 服务上集群，最少只需要两个对象：一个 <code>Deployment</code> 描述「跑几份、跑什么镜像」，一个 <code>Service</code> 给它一个稳定的集群内地址。要从集群外访问再加 <code>Ingress</code>，要把配置从镜像里拿出来再加 <code>ConfigMap</code>。</p>
+    <p>一个无状态 HTTP 服务上集群，最少只要两个对象：<code>Deployment</code> 描述「跑几份、跑什么镜像」，<code>Service</code> 给它一个稳定的集群内地址。集群外访问再加 <code>Ingress</code>，配置从镜像里拿出来再加 <code>ConfigMap</code>。</p>
 <p>下面这份是能直接 <code>kubectl apply -f</code> 的最小完整清单，注释只说明「为什么要这行」。</p>
 
     <pre><code class="language-yaml"># 最小可用清单：一个 Deployment + 一个 Service，apply 后即可被集群内其他服务按 http://web 访问
@@ -365,7 +365,7 @@ flowchart TB
     </table>
 
     <h2>② 原理 · 控制循环：为什么删掉的 Pod 会自己回来</h2>
-    <p>每个控制器都在跑同一个死循环：<strong>读期望状态 → 读实际状态 → 算差异 → 采取行动</strong>。这就是为什么 <code>kubectl delete pod</code> 之后 Pod 又出现了：你删的是实际状态，期望状态（Deployment 的 replicas=3）没变，ReplicaSet 控制器发现少了一个，立刻补一个。</p>
+    <p>每个控制器都在跑同一个死循环：<strong>读期望状态 → 读实际状态 → 算差异 → 采取行动</strong>。这就是 <code>kubectl delete pod</code> 后 Pod 又出现的原因：你删的是实际状态，期望状态（Deployment 的 replicas=3）没变，ReplicaSet 控制器发现少了一个就立刻补一个。</p>
 
     <div class="mermaid">
 flowchart LR
@@ -590,8 +590,8 @@ flowchart TB
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">调度看的是 requests，不是实际用量</div>
         <p>节点「资源够不够」判断的是<strong>已分配 requests 之和</strong>与 Allocatable 的关系，和节点当前真实使用率<strong>毫无关系</strong>。所以会出现两种反直觉现象：</p>
-        <p>① 节点 CPU 实际只用了 10%，却调度不进新 Pod——因为已有 Pod 的 requests 总和已经占满。<br/>
-        ② 节点 CPU 实际跑到 95%，新 Pod 照样被调度进来——因为大家 requests 都填得很小。第二种情况会直接导致所有 Pod 一起变慢。</p>
+        <p>① 节点 CPU 实际只用 10%，却调度不进新 Pod——已有 Pod 的 requests 总和已占满。<br/>
+        ② 节点 CPU 实际跑到 95%，新 Pod 照样被调度进来——大家 requests 都填得很小，这会让所有 Pod 一起变慢。</p>
         <p>所以 <code>requests</code> 必须填真实的日常水位，它是调度和容量规划的唯一依据；<code>Allocatable = Capacity − kube-reserved − system-reserved − eviction-threshold</code>，永远小于机器标称配置。</p>
     </div>
 
@@ -675,7 +675,7 @@ stateDiagram-v2
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
         <div class="callout-title">滚动更新期间出现 502 的真正原因</div>
-        <p>Pod 被删除时，「从 EndpointSlice 摘除」和「给容器发 SIGTERM」是<strong>并行且无先后保证</strong>的两条路径。摘除还要经过 EndpointSlice 控制器 → kube-proxy → 每个节点的 iptables/IPVS 规则更新，这中间有几百毫秒到数秒的传播延迟。</p>
+        <p>Pod 被删除时，「从 EndpointSlice 摘除」和「给容器发 SIGTERM」是<strong>并行且无先后保证</strong>的两条路径。摘除还要经过 EndpointSlice 控制器 → kube-proxy → 各节点 iptables/IPVS 规则更新，中间有几百毫秒到数秒的传播延迟。</p>
 <p>如果容器已经退出但规则还没更新完，流量仍会被转发到死掉的 Pod —— 于是客户端收到 502。</p>
         <p>解法就是上面那个 <code>preStop: sleep 5</code>：它让容器在收到 SIGTERM 前先「装死」几秒，把时间差让给规则传播。这是<strong>零改造成本</strong>的一招，几乎所有对外服务都该加。</p>
 <p>另外要确保 <code>terminationGracePeriodSeconds</code> 大于 preStop 时间加上应用处理完存量请求的时间，否则会被 SIGKILL 直接砍断。</p>
@@ -758,11 +758,11 @@ kubectl exec -it POD -- cat /sys/fs/cgroup/cpu.stat
 # Prometheus 里对应的指标
 # rate(container_cpu_cfs_throttled_periods_total[5m])
 #   / rate(container_cpu_cfs_periods_total[5m]) &gt; 0.1 说明问题严重</code></pre>
-        <p>对延迟敏感的服务，常见做法是<strong>只设 requests 不设 cpu limits</strong>（靠 requests 保证下限，允许突发占用空闲 CPU），或者把 limit 设到远高于日常水位。内存则相反：<strong>limits 必须设</strong>，否则一个内存泄漏的 Pod 能把整个节点拖垮。</p>
+        <p>对延迟敏感的服务，常见做法是<strong>只设 requests 不设 cpu limits</strong>（靠 requests 保下限，允许突发占用空闲 CPU），或把 limit 设到远高于日常水位。内存相反：<strong>limits 必须设</strong>，否则一个内存泄漏的 Pod 能把整个节点拖垮。</p>
     </div>
 
     <h2>② 原理 · Service 的 ClusterIP 其实不存在</h2>
-    <p>这是最反直觉的一点：<code>ClusterIP</code> 是一个<strong>纯虚拟的地址，没有任何进程监听它，也不属于任何网卡</strong>。它能通，是因为每个节点上都有 kube-proxy 写好的 DNAT 规则，在数据包离开时把目标地址改写成某个真实 Pod IP。</p>
+    <p>这是最反直觉的一点：<code>ClusterIP</code> 是<strong>纯虚拟的地址，没有任何进程监听它，也不属于任何网卡</strong>。它能通，是因为每个节点上都有 kube-proxy 写好的 DNAT 规则，数据包离开时把目标改写成某个真实 Pod IP。</p>
 
     <div class="mermaid">
 flowchart TB
@@ -918,7 +918,7 @@ flowchart TB
     </table>
 
     <h2>③ 场景 · 什么规模该上、上到什么程度</h2>
-    <p>K8s 不是「用不用」的二元选择，而是「用到哪一层」。控制平面本身就是一套要有人维护的分布式系统，它的成本是固定支出，收益却和你的服务数量、发布频率、弹性需求成正比。下面这张表按规模给出落点。</p>
+    <p>K8s 不是「用不用」的二元选择，而是「用到哪一层」。控制平面本身就是一套要有人维护的分布式系统，成本是固定支出，收益却和服务数量、发布频率、弹性需求成正比。下表按规模给出落点。</p>
 
     <table>
         <thead>
@@ -969,9 +969,11 @@ flowchart TB
         </tbody>
     </table>
 
-    <p><strong>不该塞进集群的东西</strong>：需要独占整台机器的单体应用（上了集群只是多一层抽象）、对延迟极敏感且必须绑核绑网卡的服务（要额外配 CPU Manager、SR-IOV，收益有限）、只有一个实例且不允许重启的遗留系统（K8s 的核心能力是「随时可以重建一个副本」，不满足这个前提时它帮不上忙）。容器与镜像本身的机制在 <a href="../docker/">Docker</a>；把清单模板化的手段在 <a href="helm/">Helm</a>；入口层的七层细节在 <a href="../nginx/">Nginx</a>。</p>
+    <p><strong>不该塞进集群的东西</strong>：需要独占整台机器的单体应用（多一层抽象）、对延迟极敏感且必须绑核绑网卡的服务（要配 CPU Manager、SR-IOV，收益有限）。</p>
+<p>只有单实例且不允许重启的遗留系统也不行——K8s 的核心能力是「随时可以重建一个副本」，不满足前提就帮不上忙。</p>
+<p>容器与镜像机制在 <a href="../docker/">Docker</a>；清单模板化的手段在 <a href="helm/">Helm</a>；入口层七层细节在 <a href="../nginx/">Nginx</a>。</p>
 
-    <p>本篇是这条路径的总览：它给出全局主线与最小清单。要判断该不该上、上到哪一层，接着读下一篇；要把集群真正建起来、把工作负载与配置写对，按路径依次往后读即可。</p>
+    <p>本篇是这条路径的总览：给出全局主线与最小清单。要判断该不该上、上到哪一层，接着读下一篇；要把集群建起来、把工作负载与配置写对，按路径往后读即可。</p>
 
     <p class="cluster-nav">同主题路径：<a href="intro/">下一步：K8s 的抽象层次与该不该上 →</a></p>
 
