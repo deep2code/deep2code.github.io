@@ -100,7 +100,8 @@
     </div>
 
     <h2>① 用法 · 一份可抄的启动参数模板与「现象 → 先调哪个」</h2>
-    <p>先说结论：在线服务需要显式配的参数不到十个，其余交给默认值和自适应。下面这份模板可以直接抄，注释写的是「为什么要这行」；所有默认值都随版本变化，要确认实际生效值一律看 <code>java -XX:+PrintFlagsFinal -version</code> 的输出，或者对着运行中的进程执行 <code>jcmd &lt;pid&gt; VM.flags -all</code>。</p>
+    <p>先说结论：在线服务需要显式配的参数不到十个，其余交给默认值和自适应。下面这份模板可以直接抄，注释写的是「为什么要这行」；</p>
+<p>所有默认值都随版本变化，要确认实际生效值一律看 <code>java -XX:+PrintFlagsFinal -version</code> 的输出，或者对着运行中的进程执行 <code>jcmd &lt;pid&gt; VM.flags -all</code>。</p>
     <pre><code class="language-bash">#!/usr/bin/env bash
 # 容器内在线服务的 JVM 启动参数模板。用数组组织便于逐条加注释。
 OPTS=()
@@ -168,7 +169,8 @@ exec java "${OPTS[@]}" -jar /app/app.jar</code></pre>
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">JDK 8u191 之前的容器坑</div>
-        <p>老版本 JVM <strong>不读 cgroup 限制</strong>，默认堆按<strong>宿主机</strong>物理内存的 1/4 推算。一台 256 GB 的机器上跑一个 limit 为 2 GB 的容器，JVM 会认为自己能用 64 GB 堆，于是完全不着急 GC，一路涨到 2 GB 被内核杀掉，日志里什么都没有，只在编排平台上看到 <code>OOMKilled</code> 和反复重启。8u191 起 <code>UseContainerSupport</code> 默认开启才解决；如果被迫停留在更老的版本，必须显式写死 <code>-Xmx</code>。</p>
+        <p>老版本 JVM <strong>不读 cgroup 限制</strong>，默认堆按<strong>宿主机</strong>物理内存的 1/4 推算。一台 256 GB 的机器上跑一个 limit 为 2 GB 的容器，JVM 会认为自己能用 64 GB 堆，于是完全不着急 GC，一路涨到 2 GB 被内核杀掉，日志里什么都没有，只在编排平台上看到 <code>OOMKilled</code> 和反复重启。</p>
+<p>8u191 起 <code>UseContainerSupport</code> 默认开启才解决；如果被迫停留在更老的版本，必须显式写死 <code>-Xmx</code>。</p>
     </div>
     <p>参数配好之后，调优就变成查表：左列是你在监控或日志里看到的样子，右列是「怎么证明改对了」——<strong>没有验证手段的调参等于赌博</strong>。</p>
     <table>
@@ -232,12 +234,14 @@ flowchart TB
     <div class="callout callout-tip">
         <div class="callout-icon">✅</div>
         <div class="callout-title">这一步不需要停机，也不需要改参数</div>
-        <p><code>jstat -gcutil &lt;pid&gt; 1000</code> 连续采样十分钟就能得出结论：看 <code>O</code> 列在 <code>FGC</code> 计数增加前后是否回落、<code>YGC</code> 每分钟多少次、<code>GCT</code> 占进程运行时间的比例。GC 总耗时占比长期超过 1% 值得关注，超过 5% 基本可以确定是主要瓶颈。不要跳过这一步直接改参数，否则你没有对照基线，改完也不知道是变好还是变差。</p>
+        <p><code>jstat -gcutil &lt;pid&gt; 1000</code> 连续采样十分钟就能得出结论：看 <code>O</code> 列在 <code>FGC</code> 计数增加前后是否回落、<code>YGC</code> 每分钟多少次、<code>GCT</code> 占进程运行时间的比例。GC 总耗时占比长期超过 1% 值得关注，超过 5% 基本可以确定是主要瓶颈。</p>
+<p>不要跳过这一步直接改参数，否则你没有对照基线，改完也不知道是变好还是变差。</p>
     </div>
 
     <h2>② 原理 · G1 的一个完整周期，以及 MaxGCPauseMillis 的误用</h2>
     <p>搞清这一节能解释两件事：为什么把停顿目标调小之后停顿总量反而变大，以及日志里哪两行才是真正该告警的信号。</p>
-    <p>G1 把堆切成 1 MB 到 32 MB 的等大 Region，每个 Region 动态扮演 Eden、Survivor、Old 或 Humongous 角色，「分代」从固定的连续空间变成了逻辑标签。这带来两个特性：一是可以只挑<strong>回收收益最高</strong>的那批 Region 来回收，从而把停顿控制在目标附近，这也是它名字里 Garbage First 的含义；二是超过半个 Region 的对象被当作 Humongous 对象特殊处理，直接占用连续 Region 并计入老年代。</p>
+    <p>G1 把堆切成 1 MB 到 32 MB 的等大 Region，每个 Region 动态扮演 Eden、Survivor、Old 或 Humongous 角色，「分代」从固定的连续空间变成了逻辑标签。</p>
+<p>这带来两个特性：一是可以只挑<strong>回收收益最高</strong>的那批 Region 来回收，从而把停顿控制在目标附近，这也是它名字里 Garbage First 的含义；二是超过半个 Region 的对象被当作 Humongous 对象特殊处理，直接占用连续 Region 并计入老年代。</p>
     <div class="mermaid">
 stateDiagram-v2
     state "Young GC 全程 STW" as YGC
@@ -269,7 +273,8 @@ stateDiagram-v2
             <tr><td><code>-XX:ParallelGCThreads</code></td><td>按可用 CPU 推算</td><td>STW 阶段的工作线程数</td><td>容器里 CPU 感知不准会算出过多线程，造成严重上下文切换；见用法层的 <code>ActiveProcessorCount</code></td></tr>
         </tbody>
     </table>
-    <p>上表的默认值是 HotSpot 的常见取值，随版本与堆大小自适应而变，落地前用 <code>java -XX:+PrintFlagsFinal -version</code> 或 <code>jcmd &lt;pid&gt; VM.flags -all</code> 核对一遍。日志里出现 <code>to-space exhausted</code> 或 <code>Pause Full</code>，意味着 G1 已经失败退化。这两条比停顿时长更值得告警——它们说明回收速度跟不上分配速度，而 Full GC 在 G1 里是单线程整理，停顿可能是平时的几十倍。</p>
+    <p>上表的默认值是 HotSpot 的常见取值，随版本与堆大小自适应而变，落地前用 <code>java -XX:+PrintFlagsFinal -version</code> 或 <code>jcmd &lt;pid&gt; VM.flags -all</code> 核对一遍。日志里出现 <code>to-space exhausted</code> 或 <code>Pause Full</code>，意味着 G1 已经失败退化。</p>
+<p>这两条比停顿时长更值得告警——它们说明回收速度跟不上分配速度，而 Full GC 在 G1 里是单线程整理，停顿可能是平时的几十倍。</p>
 
     <h2>② 原理 · GC 日志逐行判读</h2>
     <p>搞清这一节能把「日志看不懂只能看监控图」变成「一段日志就能定位到旋钮」。</p>
@@ -397,7 +402,8 @@ flowchart TB
         end
     end
 </div>
-    <p>判断堆外是否异常的唯一可靠方法是<strong>基线对比</strong>：启动时加 <code>-XX:NativeMemoryTracking=summary</code>，服务稳定后打一个基线，隔一段时间做差值，看哪一类在单调上升。只有单调上升才是泄漏，来回波动是正常的。注意本地内存跟踪本身有固定的性能与内存开销，长期开启要在压测里量一遍再决定。</p>
+    <p>判断堆外是否异常的唯一可靠方法是<strong>基线对比</strong>：启动时加 <code>-XX:NativeMemoryTracking=summary</code>，服务稳定后打一个基线，隔一段时间做差值，看哪一类在单调上升。只有单调上升才是泄漏，来回波动是正常的。</p>
+<p>注意本地内存跟踪本身有固定的性能与内存开销，长期开启要在压测里量一遍再决定。</p>
     <table>
         <thead>
             <tr><th>命令</th><th>看什么字段</th><th>怎么判读</th></tr>
@@ -417,7 +423,8 @@ flowchart TB
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">容器化之后必须补的两件事</div>
-        <p>第一，<strong>CPU limit 会影响 JVM 的并行度决策</strong>。<code>availableProcessors</code> 的返回值决定了 GC 线程数、JIT 编译线程数，以及几乎所有默认线程池的大小。cpu limit 是小数时取整结果常常不符合预期，用 <code>-XX:ActiveProcessorCount</code> 显式指定最省心。第二，<strong>内存 limit 不等于堆上限</strong>，必须给上面那一整串非堆开销留出余量，通常堆占 limit 的 50% 到 70%。至于 CPU 配额本身怎么被内核限流、为什么配额卡着会出现周期性毛刺，属于容器编排范畴，详见站内 <a href="../../../devops/kubernetes/">Kubernetes 原理篇</a>。</p>
+        <p>第一，<strong>CPU limit 会影响 JVM 的并行度决策</strong>。<code>availableProcessors</code> 的返回值决定了 GC 线程数、JIT 编译线程数，以及几乎所有默认线程池的大小。cpu limit 是小数时取整结果常常不符合预期，用 <code>-XX:ActiveProcessorCount</code> 显式指定最省心。</p>
+<p>第二，<strong>内存 limit 不等于堆上限</strong>，必须给上面那一整串非堆开销留出余量，通常堆占 limit 的 50% 到 70%。至于 CPU 配额本身怎么被内核限流、为什么配额卡着会出现周期性毛刺，属于容器编排范畴，详见站内 <a href="../../../devops/kubernetes/">Kubernetes 原理篇</a>。</p>
     </div>
 
     <h2>③ 场景 · 收集器怎么选，以及每种场景该动哪个旋钮</h2>
@@ -438,7 +445,8 @@ flowchart TB
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
         <div class="callout-title">先别换收集器</div>
-        <p>「换了 ZGC 停顿就短了」在压测报告里成立，在故障现场基本不成立。泄漏场景下 ZGC 只是把长停顿换成了持续的高 CPU 占用和更晚到来的 OOM；堆偏小场景下它会因为回收跟不上分配而退化。换收集器是把堆配对、泄漏修完、GC 日志读明白之后的<strong>最后一步</strong>，而不是第一步。</p>
+        <p>「换了 ZGC 停顿就短了」在压测报告里成立，在故障现场基本不成立。泄漏场景下 ZGC 只是把长停顿换成了持续的高 CPU 占用和更晚到来的 OOM；堆偏小场景下它会因为回收跟不上分配而退化。</p>
+<p>换收集器是把堆配对、泄漏修完、GC 日志读明白之后的<strong>最后一步</strong>，而不是第一步。</p>
     </div>
     <table>
         <thead>
@@ -472,7 +480,9 @@ flowchart TB
             <tr><td>抄一份「线上通用 JVM 参数」几十个开关</td><td>大量参数在新版本里已失效、语义变了或彼此冲突，出问题时无法归因</td><td>只配本文表格里那几类，其余交给默认值与自适应</td></tr>
         </tbody>
     </table>
-    <p><strong>不适用边界</strong>：这篇只解决 JVM 自己能解释的问题。内存区域划分、晋升规则、安全点与类加载机制在 <a href="../">JVM 运行时原理</a>；对象为什么被框架长期持有（单例 bean 缓存请求级数据、代理链、事务未提交）在 <a href="../spring-core/">Spring 核心机制</a>；一次查询把百万行捞进内存、持久化上下文撑大这类「业务侧制造的堆压力」在 <a href="../orm/">JPA 持久化上下文与 MyBatis 选型</a>；容器 limit、<code>OOMKilled</code>、驱逐与 CPU 限流的现场判定在 <a href="../../../devops/kubernetes/ops-troubleshooting/">Kubernetes 运维排障</a>；GC 指标怎么采集、阈值怎么定在 <a href="../../../observability/metrics/">指标与监控</a>；升级 JDK 带来的 GC 行为变化与压测对比方法在 <a href="../java17-springboot3/">Java 8 升 17 的实战路径</a>。</p>
+    <p><strong>不适用边界</strong>：这篇只解决 JVM 自己能解释的问题。内存区域划分、晋升规则、安全点与类加载机制在 <a href="../">JVM 运行时原理</a>；对象为什么被框架长期持有（单例 bean 缓存请求级数据、代理链、事务未提交）在 <a href="../spring-core/">Spring 核心机制</a>；</p>
+<p>一次查询把百万行捞进内存、持久化上下文撑大这类「业务侧制造的堆压力」在 <a href="../orm/">JPA 持久化上下文与 MyBatis 选型</a>；容器 limit、<code>OOMKilled</code>、驱逐与 CPU 限流的现场判定在 <a href="../../../devops/kubernetes/ops-troubleshooting/">Kubernetes 运维排障</a>；GC 指标怎么采集、阈值怎么定在 <a href="../../../observability/metrics/">指标与监控</a>；</p>
+<p>升级 JDK 带来的 GC 行为变化与压测对比方法在 <a href="../java17-springboot3/">Java 8 升 17 的实战路径</a>。</p>
     <p>这条路径上，上一篇给的是概念地基（区域、晋升、安全点），本篇把它变成参数与命令，下一篇往上走一层，讲框架层面为什么会持有那些不该持有的对象。</p>
 
     <p class="cluster-nav">同主题路径：<a href="../">← 上一步：JVM 运行时原理：内存区域、GC 与类加载</a> · <a href="../spring-core/">下一步：Spring 核心机制：IoC 容器、AOP 代理与事务陷阱 →</a></p>

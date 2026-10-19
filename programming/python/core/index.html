@@ -90,7 +90,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>写业务代码不需要知道 CPython 怎么实现的，但排查内存只涨不降、解释「为什么这个类占了 200MB」、判断某段热路径还能不能优化，就必须知道。这篇只讲运行时层面的机制：对象怎么布局、内存怎么回收、属性怎么查找、哪些写法的开销来自实现而不是算法。GIL 对并发模型的影响见<a href="../">Python 做后端的适用边界与运行时约束</a>，这里只讲它在对象层留下的痕迹。</p>
+<p>写业务代码不需要知道 CPython 怎么实现的，但排查内存只涨不降、解释「为什么这个类占了 200MB」、判断某段热路径还能不能优化，就必须知道。</p>
+<p>这篇只讲运行时层面的机制：对象怎么布局、内存怎么回收、属性怎么查找、哪些写法的开销来自实现而不是算法。</p>
+<p>GIL 对并发模型的影响见<a href="../">Python 做后端的适用边界与运行时约束</a>，这里只讲它在对象层留下的痕迹。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -171,7 +173,8 @@ print("谁引用了它:", [type(r).__qualname__ for r in gc.get_referrers(suspec
 <p>这一层不解释为什么，比如「为什么 <code>getsizeof</code> 不递归就会差一个数量级」「为什么 fork 前要 freeze」，都在下面的原理层。</p>
 
 <h2>② 原理 · 一切皆对象，代价写在对象头里</h2>
-<p>搞清这一节能解决的现象是：容量规划按元素个数乘字段长度算，结果实际占用是估算的好几倍。Python 没有「基本类型」。整数、布尔、函数、类、模块全部是堆上的对象，每个对象至少带 <strong>16 字节对象头</strong>：8 字节引用计数（<code>ob_refcnt</code>）加 8 字节类型指针（<code>ob_type</code>）。变长对象（int、str、list、tuple）再加一个 8 字节的长度字段。</p>
+<p>搞清这一节能解决的现象是：容量规划按元素个数乘字段长度算，结果实际占用是估算的好几倍。Python 没有「基本类型」。</p>
+<p>整数、布尔、函数、类、模块全部是堆上的对象，每个对象至少带 <strong>16 字节对象头</strong>：8 字节引用计数（<code>ob_refcnt</code>）加 8 字节类型指针（<code>ob_type</code>）。变长对象（int、str、list、tuple）再加一个 8 字节的长度字段。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -205,7 +208,8 @@ flowchart TB
 </tbody>
 </table>
 
-<p>所以「100 万条记录缓存在 dict 里」的真实成本要自己加：dict 本体约 40MB，100 万个 str 类型的 key 按平均 20 字符算约 69MB，value 如果是带三个属性的普通对象，每个约 250 字节又是 250MB。总量轻松到 350MB 以上，而 <code>sys.getsizeof(cache)</code> 只会告诉你 40MB——<strong>它不递归</strong>，这是内存评估最常见的误读。</p>
+<p>所以「100 万条记录缓存在 dict 里」的真实成本要自己加：dict 本体约 40MB，100 万个 str 类型的 key 按平均 20 字符算约 69MB，value 如果是带三个属性的普通对象，每个约 250 字节又是 250MB。</p>
+<p>总量轻松到 350MB 以上，而 <code>sys.getsizeof(cache)</code> 只会告诉你 40MB——<strong>它不递归</strong>，这是内存评估最常见的误读。</p>
 
 <pre><code class="language-python">import sys
 from itertools import chain
@@ -238,7 +242,8 @@ print("递归统计真实占用:", deep_size(cache) / 1024 / 1024, "MB")
 </code></pre>
 
 <h2>② 原理 · 引用计数与分代 GC 的分工</h2>
-<p>搞清这一节能解决的现象是：把所有内存问题都归给「Python 的 GC 慢」，或者在请求路径上调 <code>gc.collect()</code> 换来几百毫秒停顿。两套机制职责完全不同。引用计数是主力：计数归零立即释放，没有停顿，<code>del</code> 之后内存就回到分配器。它唯一处理不了的是<strong>循环引用</strong>——互相引用的两个对象计数永远大于零。分代 GC 就只为这一件事存在。</p>
+<p>搞清这一节能解决的现象是：把所有内存问题都归给「Python 的 GC 慢」，或者在请求路径上调 <code>gc.collect()</code> 换来几百毫秒停顿。两套机制职责完全不同。引用计数是主力：计数归零立即释放，没有停顿，<code>del</code> 之后内存就回到分配器。</p>
+<p>它唯一处理不了的是<strong>循环引用</strong>——互相引用的两个对象计数永远大于零。分代 GC 就只为这一件事存在。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -298,7 +303,8 @@ print(gc.get_threshold(), gc.get_count())   # 观察各代当前计数
 </div>
 
 <h2>② 原理 · <code>__slots__</code>：把属性字典换成固定槽位</h2>
-<p>搞清这一节能解决的现象是：百万级实例的服务多出几百 MB 常驻内存。普通实例的属性存在实例自带的 <code>__dict__</code> 里，灵活但每个实例都要多付一个字典。声明 <code>__slots__</code> 后，解释器在类型对象上为每个属性分配固定偏移的槽位（底层是数据描述符），实例不再创建字典。</p>
+<p>搞清这一节能解决的现象是：百万级实例的服务多出几百 MB 常驻内存。普通实例的属性存在实例自带的 <code>__dict__</code> 里，灵活但每个实例都要多付一个字典。</p>
+<p>声明 <code>__slots__</code> 后，解释器在类型对象上为每个属性分配固定偏移的槽位（底层是数据描述符），实例不再创建字典。</p>
 
 <table>
 <thead><tr><th>形态</th><th>单实例内存量级（3 个属性）</th><th>可动态加属性</th><th>限制</th></tr></thead>
@@ -343,7 +349,8 @@ flowchart TB
 </table>
 
 <h2>② 原理 · 装饰器与闭包：执行时机比语法更容易出错</h2>
-<p>搞清这一节能解决的现象是：测试无法隔离、traceback 里全是 wrapper、循环里注册的回调全部拿到最后一个值。装饰器的本质就是 <code>f = deco(f)</code>，关键在于<strong>它在模块导入时就执行</strong>。所以在装饰器里连数据库、读远程配置、注册全局状态，会让导入顺序变成隐式依赖，测试时也无法绕开。</p>
+<p>搞清这一节能解决的现象是：测试无法隔离、traceback 里全是 wrapper、循环里注册的回调全部拿到最后一个值。装饰器的本质就是 <code>f = deco(f)</code>，关键在于<strong>它在模块导入时就执行</strong>。</p>
+<p>所以在装饰器里连数据库、读远程配置、注册全局状态，会让导入顺序变成隐式依赖，测试时也无法绕开。</p>
 
 <pre><code class="language-python">import functools
 import logging
@@ -402,7 +409,8 @@ print([f() for f in fns])            # [0, 1, 2]，用默认参数在定义时�
 </table>
 
 <h2>② 原理 · CPython 的性能特征：开销来自实现</h2>
-<p>搞清这一节能解决的现象是：算法复杂度看着没问题，实测却慢几倍。同样的复杂度，Python 的常数因子来自三件事：每个操作都要经过对象头与类型检查、属性查找是多次字典查找、函数调用要建栈帧。所以优化方向不是「少写几行」，而是<strong>把解释器的重复工作搬出热路径</strong>。</p>
+<p>搞清这一节能解决的现象是：算法复杂度看着没问题，实测却慢几倍。同样的复杂度，Python 的常数因子来自三件事：每个操作都要经过对象头与类型检查、属性查找是多次字典查找、函数调用要建栈帧。</p>
+<p>所以优化方向不是「少写几行」，而是<strong>把解释器的重复工作搬出热路径</strong>。</p>
 
 <div class="echart-container" id="python-ds-compare"></div>
 
@@ -449,7 +457,8 @@ print([f() for f in fns])            # [0, 1, 2]，用默认参数在定义时�
 <tr><td>用 <code>is</code> 比较数值或字符串</td><td>小数据侥幸正确，大数据随机出错</td><td>值比较用 <code>==</code>，<code>is</code> 只对 None 等单例</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：字节码、指令分发、专用化解释器这一层在<a href="../internals/">CPython 实现细节</a>；语义层面的坑（作用域、可变默认参数、相等与哈希）系统整理在<a href="../pitfalls/">Python 的语义陷阱清单</a>；GIL 与三条并发路线在<a href="../concurrency/">Python 并发的三条路线与选择</a>；worker 数、preload、多进程内存评估属于部署层，在<a href="../web/">Python Web 服务的部署形态</a>；进程被 OOM kill 之后的取证与容器内存约束见站内<a href="../../../observability/performance/">后端性能优化专题</a>。</p>
+<p><strong>不适用边界</strong>：字节码、指令分发、专用化解释器这一层在<a href="../internals/">CPython 实现细节</a>；语义层面的坑（作用域、可变默认参数、相等与哈希）系统整理在<a href="../pitfalls/">Python 的语义陷阱清单</a>；GIL 与三条并发路线在<a href="../concurrency/">Python 并发的三条路线与选择</a>；</p>
+<p>worker 数、preload、多进程内存评估属于部署层，在<a href="../web/">Python Web 服务的部署形态</a>；进程被 OOM kill 之后的取证与容器内存约束见站内<a href="../../../observability/performance/">后端性能优化专题</a>。</p>
 <p>这条路径上，上一篇讲进程内怎么组织并发，本篇解释「单个操作的开销与内存从哪来」，下一篇再往下一层，进到字节码与解释器实现。</p>
 
 <div class="callout-title">避坑清单</div>

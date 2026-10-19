@@ -94,7 +94,9 @@
 
 <h2>一、拉模型与推模型的真实取舍</h2>
 <p>Prometheus 主动去目标的 <code>/metrics</code> 端点上抓，而不是等目标推过来。这个选择带来四个很难替代的工程收益。</p>
-<p><strong>一是抓取失败本身就是存活信号。</strong>每次抓取 Prometheus 都会自动写入一条 <code>up</code> 指标，成功为 1、失败为 0。推模型下目标停止推送时，你无法区分「进程挂了」和「它觉得没必要推」，还得额外造一套心跳机制。<strong>二是可调试性。</strong>任何时候 <code>curl http://target:9100/metrics</code> 看到的就是 Prometheus 看到的，排查链路只有一跳。<strong>三是控制权在服务端。</strong>抓取间隔、超时、抓哪些目标、丢哪些指标全在 Prometheus 配置里，改这些不需要动应用、不需要重启业务进程。<strong>四是与服务发现天然契合。</strong>目标列表由 Kubernetes API 或注册中心动态产出，扩缩容时不需要任何额外动作。</p>
+<p><strong>一是抓取失败本身就是存活信号。</strong>每次抓取 Prometheus 都会自动写入一条 <code>up</code> 指标，成功为 1、失败为 0。推模型下目标停止推送时，你无法区分「进程挂了」和「它觉得没必要推」，还得额外造一套心跳机制。<strong>二是可调试性。</strong></p>
+<p>任何时候 <code>curl http://target:9100/metrics</code> 看到的就是 Prometheus 看到的，排查链路只有一跳。<strong>三是控制权在服务端。</strong>抓取间隔、超时、抓哪些目标、丢哪些指标全在 Prometheus 配置里，改这些不需要动应用、不需要重启业务进程。<strong>四是与服务发现天然契合。</strong></p>
+<p>目标列表由 Kubernetes API 或注册中心动态产出，扩缩容时不需要任何额外动作。</p>
 <p>代价也很实在：抓取要求网络从 Prometheus 单向可达目标，跨 NAT、跨专线、客户端侧指标这些场景需要额外打通；而<strong>生命周期短于抓取间隔的任务根本活不到被抓的时刻</strong>——这是 Pushgateway 存在的唯一理由。</p>
 <table>
 <thead><tr><th>维度</th><th>拉模型（Prometheus 抓取）</th><th>推模型（客户端上报）</th></tr></thead>
@@ -112,7 +114,9 @@
 <div class="callout callout-danger">
 <div class="callout-icon">❌</div>
 <div class="callout-title">Pushgateway 最常见的误用</div>
-<p>把它当成通用推送网关，让常驻服务全部推到 Pushgateway 再被抓。后果有三个：一是<strong>指标不会自动消失</strong>，实例下线后 Pushgateway 仍然持续暴露它最后推上来的值，这些僵尸序列会被当成现状参与告警计算，必须显式调用 <code>DELETE /metrics/job/xxx</code> 才会清掉；二是 <code>up</code> 只反映 Pushgateway 自己的健康，真实实例的存活彻底失去观测；三是它变成单点，挂掉即全盲。它只该用于「跑完就退出的批处理任务」。</p>
+<p>把它当成通用推送网关，让常驻服务全部推到 Pushgateway 再被抓。</p>
+<p>后果有三个：一是<strong>指标不会自动消失</strong>，实例下线后 Pushgateway 仍然持续暴露它最后推上来的值，这些僵尸序列会被当成现状参与告警计算，必须显式调用 <code>DELETE /metrics/job/xxx</code> 才会清掉；</p>
+<p>二是 <code>up</code> 只反映 Pushgateway 自己的健康，真实实例的存活彻底失去观测；三是它变成单点，挂掉即全盲。它只该用于「跑完就退出的批处理任务」。</p>
 </div>
 
 <h2>二、架构组成与数据流</h2>
@@ -155,14 +159,19 @@ flowchart TB
     RULE --> AM
     AM --> RCV
 </div>
-<p>两条容易被忽略的回边值得注意：规则引擎指向 head 的那条边表示 recording rule 的计算结果会<strong>作为新的时间序列写回自己</strong>，所以预聚合会增加序列数，只是增加得可控；规则引擎指向 Alertmanager 的那条边表示告警是由 Prometheus 判定的，Alertmanager 收到的已经是「确定要发的告警」，它只做通知策略。很多人把告警不发的问题一路查到 Alertmanager，实际上八成是表达式在 Prometheus 侧就没变成 firing。</p>
+<p>两条容易被忽略的回边值得注意：规则引擎指向 head 的那条边表示 recording rule 的计算结果会<strong>作为新的时间序列写回自己</strong>，所以预聚合会增加序列数，只是增加得可控；</p>
+<p>规则引擎指向 Alertmanager 的那条边表示告警是由 Prometheus 判定的，Alertmanager 收到的已经是「确定要发的告警」，它只做通知策略。很多人把告警不发的问题一路查到 Alertmanager，实际上八成是表达式在 Prometheus 侧就没变成 firing。</p>
 
 <h2>三、四种指标类型的精确语义</h2>
 <p>类型不是装饰，它决定了你能对这个指标做什么运算。</p>
-<p><strong>Counter 只增不减</strong>，进程重启时归零。它的绝对值几乎没有意义——<code>http_requests_total</code> 显示 87263918，这个数字告诉你什么？什么都没有。Counter 必须配 <code>rate()</code> 或 <code>increase()</code> 使用，看的是变化速率。这是新手最高频的错误：在面板上直接画 Counter，得到一条单调上升的斜线，故障期间这条线依然在涨。</p>
+<p><strong>Counter 只增不减</strong>，进程重启时归零。它的绝对值几乎没有意义——<code>http_requests_total</code> 显示 87263918，这个数字告诉你什么？什么都没有。Counter 必须配 <code>rate()</code> 或 <code>increase()</code> 使用，看的是变化速率。</p>
+<p>这是新手最高频的错误：在面板上直接画 Counter，得到一条单调上升的斜线，故障期间这条线依然在涨。</p>
 <p><strong>Gauge 可增可减</strong>，表示某一刻的瞬时值，比如内存占用、队列长度、连接数。它可以直接看、可以取 <code>avg</code> / <code>max</code>，但不能用 <code>rate()</code>（<code>rate</code> 会把下降当成 Counter 重置来处理，结果毫无意义），想看 Gauge 的变化趋势用 <code>deriv()</code> 或 <code>delta()</code>。</p>
-<p><strong>Histogram 是预定义桶的累积计数。</strong>客户端只做一件事：把每次观测值累加到对应的桶计数器上。一个 Histogram 暴露三组序列：带 <code>le</code> 标签的一系列累积桶（<code>le</code> 是 less-or-equal，桶是<strong>累积</strong>的，<code>le=0.5</code> 的计数包含了 <code>le=0.1</code> 的所有请求）、<code>xxx_sum</code> 观测值总和、<code>xxx_count</code> 观测总次数。分位数是查询时在服务端估算的，所以<strong>桶边界定错，分位数就不准</strong>：如果 SLO 是 300 毫秒而桶边界是 0.1 / 0.5 / 1 / 5，那 300 毫秒落在 0.1 到 0.5 桶中间只能靠线性插值猜。另外注意 Histogram 的序列开销是<strong>桶数加 2</strong> 倍，10 个桶就是 12 条序列，再乘上其他标签的基数，它是最容易撑爆序列数的指标类型。</p>
-<p><strong>Summary 在客户端算分位数。</strong>它直接暴露带 <code>quantile</code> 标签的序列。好处是不需要预先猜桶边界、分位数在单实例内是精确的；代价是致命的：<strong>分位数不可相加，因此 Summary 无法跨实例聚合</strong>。十个 Pod 各自上报一个 P99，你没有任何数学方法把它们合成整体 P99——求平均是错的，求最大值是过于保守的。只要服务有多副本，就必须用 Histogram。</p>
+<p><strong>Histogram 是预定义桶的累积计数。</strong>客户端只做一件事：把每次观测值累加到对应的桶计数器上。一个 Histogram 暴露三组序列：带 <code>le</code> 标签的一系列累积桶（<code>le</code> 是 less-or-equal，桶是<strong>累积</strong>的，<code>le=0.5</code> 的计数包含了 <code>le=0.1</code> 的所有请求）、<code>xxx_sum</code> 观测值总和、<code>xxx_count</code> 观测总次数。</p>
+<p>分位数是查询时在服务端估算的，所以<strong>桶边界定错，分位数就不准</strong>：如果 SLO 是 300 毫秒而桶边界是 0.1 / 0.5 / 1 / 5，那 300 毫秒落在 0.1 到 0.5 桶中间只能靠线性插值猜。</p>
+<p>另外注意 Histogram 的序列开销是<strong>桶数加 2</strong> 倍，10 个桶就是 12 条序列，再乘上其他标签的基数，它是最容易撑爆序列数的指标类型。</p>
+<p><strong>Summary 在客户端算分位数。</strong>它直接暴露带 <code>quantile</code> 标签的序列。好处是不需要预先猜桶边界、分位数在单实例内是精确的；代价是致命的：<strong>分位数不可相加，因此 Summary 无法跨实例聚合</strong>。</p>
+<p>十个 Pod 各自上报一个 P99，你没有任何数学方法把它们合成整体 P99——求平均是错的，求最大值是过于保守的。只要服务有多副本，就必须用 Histogram。</p>
 <table>
 <thead><tr><th>维度</th><th>Counter</th><th>Gauge</th><th>Histogram</th><th>Summary</th></tr></thead>
 <tbody>
@@ -179,7 +188,8 @@ flowchart TB
 </table>
 
 <h2>四、TSDB：样本从内存到磁盘的完整路径</h2>
-<p>Prometheus 的本地存储不是通用数据库，它是为「写多读少、时间有序、按序列分片」这个场景专门写的。一条样本的生命周期是这样的：抓取后先追加到 <strong>WAL</strong>（预写日志，顺序写，用于崩溃恢复），同时写入内存中的 <strong>head block</strong>；head 累积到约 2 小时的数据后被切出来，压缩成磁盘上一个独立的 <strong>block 目录</strong>（包含 chunks 数据、倒排索引 index、元信息 meta.json），对应的 WAL 段随之被截断；后台 <strong>compaction</strong> 会把相邻的小 block 合并成更大的 block，并在合并时丢弃超出 <code>--storage.tsdb.retention.time</code> 的数据。</p>
+<p>Prometheus 的本地存储不是通用数据库，它是为「写多读少、时间有序、按序列分片」这个场景专门写的。一条样本的生命周期是这样的：抓取后先追加到 <strong>WAL</strong>（预写日志，顺序写，用于崩溃恢复），同时写入内存中的 <strong>head block</strong>；</p>
+<p>head 累积到约 2 小时的数据后被切出来，压缩成磁盘上一个独立的 <strong>block 目录</strong>（包含 chunks 数据、倒排索引 index、元信息 meta.json），对应的 WAL 段随之被截断；后台 <strong>compaction</strong> 会把相邻的小 block 合并成更大的 block，并在合并时丢弃超出 <code>--storage.tsdb.retention.time</code> 的数据。</p>
 <div class="mermaid">
 flowchart TB
     subgraph 写入路径
@@ -211,7 +221,8 @@ flowchart TB
     H --> MG
     B1 --> MG
 </div>
-<p>几个由这套结构直接导出的行为，运维时一定会碰到：<strong>重启慢是因为要回放 WAL</strong>，序列多的时候几分钟很正常，日志里能看到 replay 进度；<strong>删除数据不是行级删除</strong>，retention 是按整个 block 目录删的，所以磁盘占用是阶梯式下降而不是平滑下降；<strong>降低 retention 不会立刻释放空间</strong>，要等下一轮 compaction；<strong>不要手工删 block 目录</strong>，index 与 meta 不一致会导致启动失败。</p>
+<p>几个由这套结构直接导出的行为，运维时一定会碰到：<strong>重启慢是因为要回放 WAL</strong>，序列多的时候几分钟很正常，日志里能看到 replay 进度；</p>
+<p><strong>删除数据不是行级删除</strong>，retention 是按整个 block 目录删的，所以磁盘占用是阶梯式下降而不是平滑下降；<strong>降低 retention 不会立刻释放空间</strong>，要等下一轮 compaction；<strong>不要手工删 block 目录</strong>，index 与 meta 不一致会导致启动失败。</p>
 <table>
 <thead><tr><th>参数 / 机制</th><th>默认值</th><th>作用</th><th>调错的后果</th></tr></thead>
 <tbody>
@@ -227,7 +238,8 @@ flowchart TB
 </table>
 
 <h2>五、抓取配置、relabel 与服务发现</h2>
-<p>relabel 是 Prometheus 最强也最容易写错的机制，关键是记住<strong>两个阶段的时机不同</strong>：<code>relabel_configs</code> 在抓取<strong>之前</strong>作用于目标（改地址、改标签、决定抓不抓），服务发现产出的元标签只在这个阶段可见；<code>metric_relabel_configs</code> 在抓取<strong>之后、入库之前</strong>作用于每条样本（丢指标、删标签、改名），这是对抗基数爆炸最直接的工具。</p>
+<p>relabel 是 Prometheus 最强也最容易写错的机制，关键是记住<strong>两个阶段的时机不同</strong>：<code>relabel_configs</code> 在抓取<strong>之前</strong>作用于目标（改地址、改标签、决定抓不抓），服务发现产出的元标签只在这个阶段可见；</p>
+<p><code>metric_relabel_configs</code> 在抓取<strong>之后、入库之前</strong>作用于每条样本（丢指标、删标签、改名），这是对抗基数爆炸最直接的工具。</p>
 <table>
 <thead><tr><th>action</th><th>作用</th><th>典型用途</th><th>坑</th></tr></thead>
 <tbody>
@@ -338,8 +350,10 @@ scrape_configs:
       - targets: ['pushgateway:9091']</code></pre>
 
 <h2>六、单机容量边界与远程存储选型</h2>
-<p>先给数字。单机 Prometheus 的经验安全边界是<strong>活跃时间序列 100 万条以内、样本摄入 20 万到 50 万每秒</strong>，配置 16 到 32 GB 内存与 SSD。内存主要花在 head：每条活跃序列的常驻开销大约 3 KB 量级（含 index、标签字符串、末尾 chunk），100 万序列就是 3 GB 左右，再加上查询临时对象和 GC 余量，所以内存要留一倍以上。</p>
-<p>超过边界时，<strong>第一反应应该是减基数而不是加机器</strong>。实际情况几乎总是：前 5 个高基数指标占了一半以上的序列数，删掉或降维就回到安全区。只有当你确实需要「跨集群统一查询」「保留一年以上」「多租户隔离」时，才该引入远程存储。</p>
+<p>先给数字。单机 Prometheus 的经验安全边界是<strong>活跃时间序列 100 万条以内、样本摄入 20 万到 50 万每秒</strong>，配置 16 到 32 GB 内存与 SSD。</p>
+<p>内存主要花在 head：每条活跃序列的常驻开销大约 3 KB 量级（含 index、标签字符串、末尾 chunk），100 万序列就是 3 GB 左右，再加上查询临时对象和 GC 余量，所以内存要留一倍以上。</p>
+<p>超过边界时，<strong>第一反应应该是减基数而不是加机器</strong>。实际情况几乎总是：前 5 个高基数指标占了一半以上的序列数，删掉或降维就回到安全区。</p>
+<p>只有当你确实需要「跨集群统一查询」「保留一年以上」「多租户隔离」时，才该引入远程存储。</p>
 <div class="mermaid">
 flowchart TB
     Q{"你的真实诉求是什么"}
@@ -369,7 +383,8 @@ flowchart TB
 </div>
 
 <h2>七、告警链路：从表达式到手机响铃</h2>
-<p>告警是两个系统的接力。Prometheus 侧按 <code>evaluation_interval</code> 周期性求值规则，表达式有结果就进入 <code>pending</code>，连续满足 <code>for</code> 指定的时长才升级为 <code>firing</code> 并推送给 Alertmanager。<strong><code>for</code> 期间只要有一次求值不满足就直接回到 inactive，计时从零重来</strong>——这一点很关键，它意味着抖动型故障永远不会触发长 <code>for</code> 的告警，这既是特性也是陷阱。</p>
+<p>告警是两个系统的接力。Prometheus 侧按 <code>evaluation_interval</code> 周期性求值规则，表达式有结果就进入 <code>pending</code>，连续满足 <code>for</code> 指定的时长才升级为 <code>firing</code> 并推送给 Alertmanager。</p>
+<p><strong><code>for</code> 期间只要有一次求值不满足就直接回到 inactive，计时从零重来</strong>——这一点很关键，它意味着抖动型故障永远不会触发长 <code>for</code> 的告警，这既是特性也是陷阱。</p>
 <div class="mermaid">
 stateDiagram-v2
     [*] --> Inactive
@@ -384,7 +399,8 @@ stateDiagram-v2
     Resolved --> Inactive: 经过 resolve_timeout 后清理
     Firing --> Firing: 每次求值持续重发 默认 1 分钟一次
 </div>
-<p>Alertmanager 侧则由三个时间参数控制通知节奏，它们经常被混淆：<code>group_wait</code> 是<strong>新分组</strong>第一次通知前的等待（默认 30 秒，用来把同时爆发的同组告警攒成一条）；<code>group_interval</code> 是同一分组内<strong>出现新成员</strong>后再次通知的最小间隔（默认 5 分钟）；<code>repeat_interval</code> 是告警<strong>一直没恢复</strong>时重复提醒的间隔（默认 4 小时）。</p>
+<p>Alertmanager 侧则由三个时间参数控制通知节奏，它们经常被混淆：<code>group_wait</code> 是<strong>新分组</strong>第一次通知前的等待（默认 30 秒，用来把同时爆发的同组告警攒成一条）；<code>group_interval</code> 是同一分组内<strong>出现新成员</strong>后再次通知的最小间隔（默认 5 分钟）；</p>
+<p><code>repeat_interval</code> 是告警<strong>一直没恢复</strong>时重复提醒的间隔（默认 4 小时）。</p>
 <div class="mermaid">
 sequenceDiagram
     participant P as Prometheus 规则引擎

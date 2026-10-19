@@ -102,7 +102,8 @@
 </div>
 
 <h2>① 用法 · 最小可用的装配写法与事务不生效自查清单</h2>
-<p>会写 Java 的人缺的不是注解语法，是「这类东西在工程上该怎么放」。下面这段是生产代码里的标准形态：组件用构造器注入、配置类只负责装配第三方类、配置读成类型安全对象、事务边界画在应用服务层。注释只说明为什么这么写。</p>
+<p>会写 Java 的人缺的不是注解语法，是「这类东西在工程上该怎么放」。</p>
+<p>下面这段是生产代码里的标准形态：组件用构造器注入、配置类只负责装配第三方类、配置读成类型安全对象、事务边界画在应用服务层。注释只说明为什么这么写。</p>
 <pre><code class="language-java">// 1) 业务组件：构造器注入，字段全部 final。
 //    单构造器时不需要写 @Autowired —— 少一个注解少一处误解。
 //    构造器注入的好处不是「优雅」，而是依赖数量藏不住、字段能 final、单测能直接 new。
@@ -283,7 +284,8 @@ sequenceDiagram
 
 <h2>② 原理 · 循环依赖与三级缓存：为什么构造器注入解决不了</h2>
 <p>搞清这一节能回答两个问题：为什么同样的循环依赖改成字段注入就「好了」，以及为什么这种「好了」不值得高兴。</p>
-<p>A 依赖 B，B 又依赖 A。属性注入场景下 Spring 能解决：创建 A 时先把「刚 new 出来但还没填充属性」的半成品暴露出去，B 注入这个半成品就能完成创建，然后 A 再继续填充。<strong>而构造器注入无法解决</strong>——构造 A 就必须先有完整的 B，构造 B 又必须先有完整的 A，连半成品都产生不出来，只能报错。</p>
+<p>A 依赖 B，B 又依赖 A。属性注入场景下 Spring 能解决：创建 A 时先把「刚 new 出来但还没填充属性」的半成品暴露出去，B 注入这个半成品就能完成创建，然后 A 再继续填充。</p>
+<p><strong>而构造器注入无法解决</strong>——构造 A 就必须先有完整的 B，构造 B 又必须先有完整的 A，连半成品都产生不出来，只能报错。</p>
 <div class="mermaid">
 stateDiagram-v2
     state "一级缓存 singletonObjects 成品" as L1
@@ -297,11 +299,14 @@ stateDiagram-v2
     L1 --> [*]: 后续注入直接命中一级缓存
     ING --> [*]: 构造器注入的循环依赖在这里失败 因为半成品都造不出来
 </div>
-<p>三级缓存里的工厂不是多余设计：如果 A 需要被 AOP 代理，早期暴露出去的必须是<strong>代理对象</strong>而不是原始对象，否则 B 拿到的是没有事务、没有缓存增强的裸对象。工厂的作用就是在「有人真的来取」的时候才决定要不要提前生成代理，没人取就不提前生成。</p>
+<p>三级缓存里的工厂不是多余设计：如果 A 需要被 AOP 代理，早期暴露出去的必须是<strong>代理对象</strong>而不是原始对象，否则 B 拿到的是没有事务、没有缓存增强的裸对象。</p>
+<p>工厂的作用就是在「有人真的来取」的时候才决定要不要提前生成代理，没人取就不提前生成。</p>
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">Spring Boot 2.6 起默认禁止循环依赖</div>
-    <p>这是官方有意的收紧：以前循环依赖被默默解决了，问题藏着；现在启动直接失败。确实存在开关可以放开，也可以给字段加延迟注入绕过去，但这两条路都只是<strong>让错误的依赖结构继续存在</strong>，并且延迟注入会把失败时机推到第一次调用，变成线上问题。正确解法只有重构：把两边共用的逻辑抽成第三个组件、把一方的反向调用改成事件发布、或者调整分层让依赖单向。循环依赖几乎总是「某个服务类什么都做」的征兆。</p>
+    <p>这是官方有意的收紧：以前循环依赖被默默解决了，问题藏着；现在启动直接失败。</p>
+<p>确实存在开关可以放开，也可以给字段加延迟注入绕过去，但这两条路都只是<strong>让错误的依赖结构继续存在</strong>，并且延迟注入会把失败时机推到第一次调用，变成线上问题。</p>
+<p>正确解法只有重构：把两边共用的逻辑抽成第三个组件、把一方的反向调用改成事件发布、或者调整分层让依赖单向。循环依赖几乎总是「某个服务类什么都做」的征兆。</p>
 </div>
 
 <h2>② 原理 · AOP 的两种代理，以及它们各自的限制</h2>
@@ -325,7 +330,8 @@ stateDiagram-v2
 
 <h2>② 原理 · 自调用绕过代理：让事务、缓存、异步集体失效的那个坑</h2>
 <p>搞清这一节能解释一个特别误导人的现象：单测直接调那个方法一切正常，线上却完全不生效。</p>
-<p>这是 Spring 里最高频的「注解不生效」原因，而且它不报错、日志里什么都没有。原因非常直接：<strong>代理只能拦住从外面进来的调用</strong>。一旦进入目标对象内部，用 <code>this</code> 调另一个方法，走的是目标对象自己的方法表，代理完全不在调用链上。</p>
+<p>这是 Spring 里最高频的「注解不生效」原因，而且它不报错、日志里什么都没有。原因非常直接：<strong>代理只能拦住从外面进来的调用</strong>。</p>
+<p>一旦进入目标对象内部，用 <code>this</code> 调另一个方法，走的是目标对象自己的方法表，代理完全不在调用链上。</p>
 <div class="mermaid">
 sequenceDiagram
     participant C as 调用方 Controller
@@ -463,7 +469,8 @@ public class PayService {
 
 <h2>② 原理 · Bean 作用域与线程安全</h2>
 <p>搞清这一节能解释一类最难复现的线上事故：数据串到了别的用户身上，而测试环境怎么压都正常。</p>
-<p>默认作用域是单例，这意味着<strong>一个实例被所有请求线程共享</strong>。由此推出一条硬性约束：Bean 里不能有可变的实例状态。可以有的是构造完就不再改的依赖和配置值。这条规则被违反时的症状是「数据串到别的用户身上」，在低并发的测试环境几乎不可能复现。</p>
+<p>默认作用域是单例，这意味着<strong>一个实例被所有请求线程共享</strong>。由此推出一条硬性约束：Bean 里不能有可变的实例状态。可以有的是构造完就不再改的依赖和配置值。</p>
+<p>这条规则被违反时的症状是「数据串到别的用户身上」，在低并发的测试环境几乎不可能复现。</p>
 <table>
     <thead>
         <tr><th>作用域</th><th>实例数量</th><th>销毁回调</th><th>典型陷阱</th></tr>
@@ -475,11 +482,13 @@ public class PayService {
         <tr><td><code>session</code></td><td>每个会话一个</td><td>会话失效时调用</td><td>多实例部署下依赖会话状态会导致行为不一致；放大对象会撑爆会话存储</td></tr>
     </tbody>
 </table>
-<p>注入到单例里的 <code>request</code> 作用域 Bean 实际上是一个代理，每次方法调用时才去找当前请求对应的真实对象。所以它在没有请求上下文的线程里失败，而不是在注入时失败——错误出现的位置离原因很远，这是它难查的原因。</p>
+<p>注入到单例里的 <code>request</code> 作用域 Bean 实际上是一个代理，每次方法调用时才去找当前请求对应的真实对象。</p>
+<p>所以它在没有请求上下文的线程里失败，而不是在注入时失败——错误出现的位置离原因很远，这是它难查的原因。</p>
 
 <h2>② 原理 · 自动配置、条件装配与配置绑定的实际规则</h2>
 <p>搞清这一节能解决两类问题：老 starter 升级后自动配置集体失效，以及「本地能跑线上值不对」。</p>
-<p>自动配置的核心是一条顺序保证：<strong>用户自己定义的配置类先被处理，自动配置类最后处理</strong>。正因为如此，<code>@ConditionalOnMissingBean</code> 才能表达「用户没提供我就给个默认的」。反过来，把 <code>@ConditionalOnMissingBean</code> 写在自己的普通配置类里是<strong>不可靠</strong>的——普通配置类之间没有顺序保证，条件判断时机取决于加载次序。</p>
+<p>自动配置的核心是一条顺序保证：<strong>用户自己定义的配置类先被处理，自动配置类最后处理</strong>。正因为如此，<code>@ConditionalOnMissingBean</code> 才能表达「用户没提供我就给个默认的」。</p>
+<p>反过来，把 <code>@ConditionalOnMissingBean</code> 写在自己的普通配置类里是<strong>不可靠</strong>的——普通配置类之间没有顺序保证，条件判断时机取决于加载次序。</p>
 <pre><code class="language-java">// 一个规范的自动配置类。注意四个条件的分工。
 @AutoConfiguration(after = DataSourceAutoConfiguration.class)   // 声明相对顺序
 @ConditionalOnClass(RedisTemplate.class)                        // 类不在 classpath 就整个跳过
@@ -509,11 +518,13 @@ public class CacheProps {
     private Duration ttl = Duration.ofMinutes(5);
     // getter/setter 省略
 }</code></pre>
-<p>配置来源的优先级从高到低依次是：命令行参数、<code>SPRING_APPLICATION_JSON</code>、Java 系统属性、操作系统环境变量、jar 包外部的 <code>application-{profile}</code>、jar 包内部的 <code>application-{profile}</code>、外部 <code>application</code>、内部 <code>application</code>、<code>@PropertySource</code>、代码里的默认值。<strong>同名配置高优先级直接覆盖低优先级</strong>，这是「本地能跑线上值不对」的常见原因——先用启动日志或环境端点确认实际生效值，再去翻配置文件。</p>
+<p>配置来源的优先级从高到低依次是：命令行参数、<code>SPRING_APPLICATION_JSON</code>、Java 系统属性、操作系统环境变量、jar 包外部的 <code>application-{profile}</code>、jar 包内部的 <code>application-{profile}</code>、外部 <code>application</code>、内部 <code>application</code>、<code>@PropertySource</code>、代码里的默认值。</p>
+<p><strong>同名配置高优先级直接覆盖低优先级</strong>，这是「本地能跑线上值不对」的常见原因——先用启动日志或环境端点确认实际生效值，再去翻配置文件。</p>
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">松散绑定只对 @ConfigurationProperties 生效</div>
-    <p><code>@Value</code> 要求名字<strong>完全精确匹配</strong>，既不支持短横线与驼峰互转，也不支持时长、数据大小这类类型转换，而且写错了只会在启动时抛「无法解析占位符」，或者更糟——设了默认值于是静默用了默认值。用 <code>@ConfigurationProperties</code> 做成类型安全的配置对象，能顺带获得校验和 IDE 提示。另外环境变量只能用<strong>大写加下划线</strong>的形式，容器里配置注入失败十有八九是这里写成了小数点分隔。</p>
+    <p><code>@Value</code> 要求名字<strong>完全精确匹配</strong>，既不支持短横线与驼峰互转，也不支持时长、数据大小这类类型转换，而且写错了只会在启动时抛「无法解析占位符」，或者更糟——设了默认值于是静默用了默认值。</p>
+<p>用 <code>@ConfigurationProperties</code> 做成类型安全的配置对象，能顺带获得校验和 IDE 提示。另外环境变量只能用<strong>大写加下划线</strong>的形式，容器里配置注入失败十有八九是这里写成了小数点分隔。</p>
 </div>
 <p>启动慢的时候常有人开 <code>spring.main.lazy-initialization</code>。它确实能显著缩短启动时间，代价是<strong>把问题推迟到运行时</strong>：Bean 创建失败、依赖缺失、配置写错这些原本在启动时就暴露的错误，变成第一次请求时才抛出，而那时实例已经通过健康检查进入负载均衡了。开发期用它提速可以，生产环境要慎重；生产上更该做的是裁掉用不上的自动配置和 starter。</p>
 
@@ -566,7 +577,9 @@ public class CacheProps {
         <tr><td>用 <code>ApplicationContext.getBean</code> 到处取 Bean</td><td>把依赖注入退化成服务定位，依赖关系不可见，测试无法替换</td><td>声明式注入；确实需要动态选择实现时用工厂或策略映射</td></tr>
     </tbody>
 </table>
-<p><strong>不适用边界</strong>：本篇只讲容器与事务代理这一层。Bean 长期持有对象导致的堆增长、代理链让栈变深属于运行时问题，在 <a href="../">JVM 运行时原理</a> 与 <a href="../jvm-tuning/">JVM 调优实战</a>；持久化上下文的一级缓存、脏检查、<code>open-in-view</code> 与 N+1 查询在 <a href="../orm/">JPA 持久化上下文与 MyBatis 选型</a>；跨服务的事务一致性（TCC、Saga、本地消息表）在 <a href="../../../architecture/distributed/">分布式系统核心</a>，本篇的事务只覆盖单库；服务注册、配置中心、熔断限流这些微服务组件在 <a href="../spring-cloud/">Spring Cloud 组件演进</a>；数据库侧的锁与隔离级别、为什么大事务会造成等待与死锁在 <a href="../../../database/mysql/">MySQL 存储与索引</a>；<code>javax</code> 到 <code>jakarta</code> 的包名变更与自动配置注册方式的迁移在 <a href="../java17-springboot3/">Java 8 升 17 的实战路径</a>。</p>
+<p><strong>不适用边界</strong>：本篇只讲容器与事务代理这一层。Bean 长期持有对象导致的堆增长、代理链让栈变深属于运行时问题，在 <a href="../">JVM 运行时原理</a> 与 <a href="../jvm-tuning/">JVM 调优实战</a>；</p>
+<p>持久化上下文的一级缓存、脏检查、<code>open-in-view</code> 与 N+1 查询在 <a href="../orm/">JPA 持久化上下文与 MyBatis 选型</a>；跨服务的事务一致性（TCC、Saga、本地消息表）在 <a href="../../../architecture/distributed/">分布式系统核心</a>，本篇的事务只覆盖单库；</p>
+<p>服务注册、配置中心、熔断限流这些微服务组件在 <a href="../spring-cloud/">Spring Cloud 组件演进</a>；数据库侧的锁与隔离级别、为什么大事务会造成等待与死锁在 <a href="../../../database/mysql/">MySQL 存储与索引</a>；<code>javax</code> 到 <code>jakarta</code> 的包名变更与自动配置注册方式的迁移在 <a href="../java17-springboot3/">Java 8 升 17 的实战路径</a>。</p>
 <p>这条路径上，前两篇讲的是 JVM 替你管的内存，本篇讲框架替你做的装配与拦截，下一篇进入持久化层——事务边界之内到底发出了多少条 SQL，才是性能问题的常见来源。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../jvm-tuning/">← 上一步：JVM 调优实战：GC 选型、参数配置与 OOM 排查</a> · <a href="../orm/">下一步：JPA 持久化上下文与 MyBatis 选型 →</a></p>

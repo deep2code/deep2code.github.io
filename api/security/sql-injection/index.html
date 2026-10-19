@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>SQL 注入被讲了二十多年，防御手段也早就有了标准答案，但它至今还在 OWASP 榜单上，原因不是大家不知道要用参数化查询，而是<strong>参数化查询有一圈明确的能力边界</strong>：表名、列名、<code>ORDER BY</code> 字段、<code>LIMIT</code> 值、<code>IN</code> 列表全都无法参数化。真实线上漏洞绝大多数就落在这圈边界上，以及 ORM 里那几个「看起来很安全其实在拼字符串」的入口。</p>
+<p>SQL 注入被讲了二十多年，防御手段早有标准答案，但它至今还在 OWASP 榜单上，原因不是大家不知道要用参数化查询，而是<strong>参数化查询有一圈明确的能力边界</strong>：表名、列名、<code>ORDER BY</code> 字段、<code>LIMIT</code> 值、<code>IN</code> 列表全都无法参数化。</p>
+<p>真实线上漏洞绝大多数就落在这圈边界上，以及 ORM 里那几个「看起来很安全其实在拼字符串」的入口。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -103,7 +104,8 @@
 </div>
 
 <h2>① 用法 · 按 SQL 位置选写法，并把配置一次配对</h2>
-<p>防注入的动作其实只有三件：<strong>值全部走占位符、结构位置走白名单映射、连接与账号配置一次配对</strong>。这一层给可以直接照着改的写法与自查命令；参数化为什么能根治、为什么表名不能绑参数，见下一节起的原理部分。</p>
+<p>防注入的动作其实只有三件：<strong>值全部走占位符、结构位置走白名单映射、连接与账号配置一次配对</strong>。这一层给可以直接照着改的写法与自查命令；</p>
+<p>参数化为什么能根治、为什么表名不能绑参数，见下一节起的原理部分。</p>
 
 <pre><code class="language-bash"># ===== 1) 连接与驱动：先把「参数化是否真的在服务端生效」定下来 =====
 # Go MySQL：不要加 interpolateParams=true，它会退化成驱动内部拼接
@@ -258,7 +260,7 @@ mysql -h db -u admin -p -e "SHOW GRANTS FOR 'app_rw'@'10.0.%'"</code></pre>
 <h2>② 原理 · 根因：数据被当成代码解析</h2>
 <p>搞清根因，能解决「我已经过滤了引号和关键字，为什么还是被注入」——判据在通道，不在内容。</p>
 
-<p>注入的本质和 XSS 完全同源：<strong>一段本该是数据的内容，被送进了解析器的语法分析阶段，于是改变了语句结构</strong>。数据库拿到的只是一个字符串，它无法知道其中哪一段是程序写的、哪一段是用户填的。</p>
+<p>注入的本质和 XSS 同源：<strong>一段本该是数据的内容，被送进解析器的语法分析阶段，于是改变了语句结构</strong>。数据库拿到的只是一个字符串，无法知道哪一段是程序写的、哪一段是用户填的。</p>
 
 <p>看一条最经典的登录查询。程序员脑子里的结构是「用户名等于某个值」，而字符串拼接交给数据库之后，语法树可能长成完全不同的样子：</p>
 
@@ -275,13 +277,16 @@ SELECT id FROM users WHERE name = 'admin' -- ' AND pwd = 'whatever'
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">判断一处代码有没有注入风险，只看一件事</div>
-    <p>用户数据是<strong>在 SQL 文本里</strong>，还是<strong>在 SQL 文本之外</strong>。凡是参与了 SQL 字符串构造的，都有风险，无论中间做了多少层过滤；凡是通过绑定参数送过去的，天然没有风险，哪怕内容是一整段 <code>DROP TABLE</code>。这条判据比「有没有过滤引号」可靠得多——判断依据是<strong>数据传输的通道</strong>，而不是数据的内容。</p>
+    <p>判据是用户数据<strong>在 SQL 文本里</strong>，还是<strong>在 SQL 文本之外</strong>。参与 SQL 字符串构造的都有风险，无论中间多少层过滤；通过绑定参数送过去的天然没有风险，哪怕内容是一整段 <code>DROP TABLE</code>。</p>
+<p>这条判据比「有没有过滤引号」可靠得多——判断依据是<strong>数据传输的通道</strong>，而不是数据的内容。</p>
 </div>
 
 <h2>② 原理 · 参数化查询为什么能根治</h2>
 <p>搞清预编译的两次通信，能解决「参数化是不是只是帮我自动加转义」的误解，也解释了为什么某些驱动配置会让它退化。</p>
 
-<p>参数化查询不是「帮你自动加转义」，这是最常见的理解偏差。它的机制是把一次查询拆成<strong>两次独立的通信</strong>：先把带占位符的 SQL 模板发给数据库，数据库完成词法分析、语法分析、生成执行计划——此时语法树已经定型，占位符的位置被标记为「值槽」；然后再把参数值按二进制协议单独发过去，填进值槽。<strong>参数值从来没有经过 SQL 解析器</strong>，所以它里面写什么都只是值。</p>
+<p>参数化查询不是「帮你自动加转义」，这是最常见的理解偏差。</p>
+<p>它的机制是把一次查询拆成<strong>两次独立的通信</strong>：先把带占位符的 SQL 模板发给数据库，数据库完成词法分析、语法分析、生成执行计划——此时语法树已定型，占位符位置被标记为「值槽」；</p>
+<p>然后再把参数值按二进制协议单独发过去，填进值槽。<strong>参数值从来没有经过 SQL 解析器</strong>，所以它里面写什么都只是值。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -317,12 +322,13 @@ sequenceDiagram
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">「用了参数化就一定是服务端预编译」不成立</div>
-    <p>很多驱动为了减少一次网络往返，默认或可选走<strong>客户端拼接</strong>：Go 的 MySQL 驱动加上 <code>interpolateParams=true</code> 后，参数是在驱动里转义后拼进 SQL 文本再发出去的；PHP PDO 历史上默认开启模拟预编译。这些实现本身写得不错，但它们把安全性重新压回到「转义是否正确」上，于是对连接字符集敏感——这正是宽字节注入的土壤。<strong>结论：追求确定性就关掉模拟预编译，并把连接字符集统一为 utf8mb4。</strong></p>
+    <p>很多驱动为减少一次网络往返，默认或可选走<strong>客户端拼接</strong>：Go 的 MySQL 驱动加上 <code>interpolateParams=true</code> 后，参数在驱动里转义后拼进 SQL 文本再发出；PHP PDO 历史上默认开启模拟预编译。</p>
+<p>这些实现本身写得不错，但把安全性重新压回「转义是否正确」，于是对连接字符集敏感——这正是宽字节注入的土壤。<strong>结论：追求确定性就关掉模拟预编译，并把连接字符集统一为 utf8mb4。</strong></p>
 </div>
 <h2>② 原理 · 参数化的能力边界：哪些位置根本不能绑参数</h2>
 <p>这一节解释用法层为什么要给排序字段单独做白名单：真实线上漏洞绝大多数就落在这圈边界上。</p>
 
-<p>这是全篇最实用的一节。<strong>占位符只能出现在「值」的位置</strong>，因为执行计划在预编译阶段就要确定读哪张表、用哪个索引、按哪列排序。凡是影响语法结构的位置都不能绑参数，只能用白名单映射。</p>
+<p>这是全篇最实用的一节。<strong>占位符只能出现在「值」的位置</strong>，因为执行计划在预编译阶段就要确定读哪张表、用哪个索引、按哪列排序。影响语法结构的位置都不能绑参数，只能用白名单映射。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -369,7 +375,8 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">「先过滤再拼表名」不是白名单</div>
-    <p>常见的错误补救是给表名做一次正则过滤，比如只允许字母数字下划线。这确实能挡住引号和空格，但它挡不住<strong>越权访问</strong>：攻击者把表名换成另一个租户的分表、或者换成 <code>users</code>，正则完全放行。<strong>白名单的含义是「值必须来自程序内定义的常量集合」</strong>，输入只能是这个集合的 key，SQL 里出现的永远是程序里写死的标识符。这一条同时解决了注入和越权两个问题，而过滤只解决了半个注入。</p>
+    <p>常见的错误补救是给表名做一次正则过滤，比如只允许字母数字下划线。这能挡住引号和空格，但挡不住<strong>越权访问</strong>：攻击者把表名换成另一个租户的分表、或换成 <code>users</code>，正则完全放行。</p>
+<p><strong>白名单的含义是「值必须来自程序内定义的常量集合」</strong>，输入只能是这个集合的 key，SQL 里出现的永远是程序写死的标识符。这一条同时解决注入和越权，而过滤只解决了半个注入。</p>
 </div>
 
 <pre><code class="language-go">package main
@@ -554,7 +561,8 @@ conn.prepareStatement(bad).executeQuery();
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">ORM 不等于安全，它只是把危险入口收窄到几个方法上</div>
-    <p>用了 ORM 之后注入面确实小了，但风险集中在这些入口：GORM 的 <code>Raw</code>、<code>Exec</code>、以及 <code>Order</code>、<code>Select</code>、<code>Group</code>、<code>Having</code>、<code>Joins</code> 这几个<strong>参数会被原样拼进 SQL</strong> 的方法；<code>Where</code> 传单个字符串而不用占位符时同样危险。Code Review 的检查点非常明确：<strong>搜索代码里所有 SQL 关键字附近的字符串格式化</strong>，在 Go 里搜 <code>fmt.Sprintf</code>，在 Python 里搜 f-string 和 <code>%</code>，在 Java 里搜 <code>${}</code> 和字符串加号。这条规则比读一遍业务逻辑有效得多，也容易做成 CI 里的静态检查。</p>
+    <p>用了 ORM 之后注入面确实小了，但风险集中在这些入口：GORM 的 <code>Raw</code>、<code>Exec</code>、以及 <code>Order</code>、<code>Select</code>、<code>Group</code>、<code>Having</code>、<code>Joins</code> 这几个<strong>参数会被原样拼进 SQL</strong> 的方法；<code>Where</code> 传单个字符串而不用占位符时同样危险。</p>
+<p>Code Review 的检查点非常明确：<strong>搜索代码里所有 SQL 关键字附近的字符串格式化</strong>，在 Go 里搜 <code>fmt.Sprintf</code>，Python 里搜 f-string 和 <code>%</code>，Java 里搜 <code>${}</code> 和字符串加号。这条规则比读一遍业务逻辑有效，也容易做成 CI 里的静态检查。</p>
 </div>
 <h2>② 原理 · 注入类型分类：利用条件与外部特征</h2>
 <p>搞清类型差异有两个实际用途：估算漏洞的严重程度，以及在日志和监控里认出正在被打。</p>
@@ -572,7 +580,8 @@ conn.prepareStatement(bad).executeQuery();
 <tr><td>二次注入</td><td>入库时被转义，取出后再次拼进 SQL</td><td>延迟生效，与提交点不在同一接口</td><td>取决于二次拼接点</td><td>最难发现，请求本身完全正常</td></tr>
 </tbody></table>
 
-<p><strong>二次注入是最容易被漏掉的一类</strong>，因为它完全绕开了「入口做一次转义」的思路。数据在入口被正确转义、正确入库；真正的问题出在读出来之后——程序默认「数据库里的数据是可信的」，于是把它拼进另一条 SQL。下面这张图画的是同一条数据的状态变化：</p>
+<p><strong>二次注入是最容易被漏掉的一类</strong>，因为它完全绕开了「入口做一次转义」的思路。数据在入口被正确转义、正确入库；</p>
+<p>真正的问题出在读出来之后——程序默认「数据库里的数据是可信的」，于是把它拼进另一条 SQL。下面这张图画的是同一条数据的状态变化：</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -599,13 +608,14 @@ stateDiagram-v2
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">从二次注入得到的通用结论</div>
-    <p>「可信数据源」这个概念在 SQL 层面不存在。<strong>不管数据来自用户、数据库、缓存、消息队列还是内部服务，只要它进入 SQL 文本，就一样危险。</strong>所以防御规则不应该写成「对用户输入做处理」，而应该写成「所有进入 SQL 的动态内容都走绑定参数或白名单」。后者是可以机械检查的，前者永远依赖判断力。</p>
+    <p>「可信数据源」这个概念在 SQL 层面不存在。<strong>不管数据来自用户、数据库、缓存、消息队列还是内部服务，只要它进入 SQL 文本，就一样危险。</strong></p>
+<p>所以防御规则不应写成「对用户输入做处理」，而应写成「所有进入 SQL 的动态内容都走绑定参数或白名单」。后者可以机械检查，前者永远依赖判断力。</p>
 </div>
 
 <h2>② 原理 · 为什么转义和黑名单靠不住</h2>
 <p>搞清这些绕过手法的共性，能解决「老项目来不及改，先加一层过滤顶一下」这种看似务实、实际无效的决策。</p>
 
-<p>转义与关键字黑名单是 2010 年前的主流方案，现在还大量留在老项目里。它们不可靠不是因为写得不够仔细，而是因为<strong>防御方需要穷举所有变形，攻击方只需要找到一种</strong>。</p>
+<p>转义与关键字黑名单是 2010 年前的主流方案，现在还大量留在老项目里。它们不可靠不是因为写得不够仔细，而是<strong>防御方需要穷举所有变形，攻击方只需找到一种</strong>。</p>
 
 <table>
 <thead><tr><th>绕过手法</th><th>示例</th><th>为什么有效</th><th>参数化是否受影响</th></tr></thead>
@@ -622,12 +632,14 @@ stateDiagram-v2
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">数字型参数没有引号，转义函数完全失效</div>
-    <p><code>WHERE id = $id</code> 这种写法里，攻击者不需要任何引号：直接传 <code>1 OR 1=1</code> 或 <code>1 UNION SELECT ...</code> 即可，转义函数处理的那些字符一个都用不上。所以老项目里做安全评估时，<strong>数字型参数的优先级要排在字符串型前面</strong>，尤其是 <code>id</code>、<code>page</code>、<code>size</code>、<code>status</code> 这类看起来没风险的字段。补救的最小成本做法是先强制类型转换：Go 里用 <code>strconv.ParseInt</code>，Python 里用 <code>int()</code>，转换失败直接返回 400，这一步就能把绝大多数历史遗留的数字型注入挡掉。</p>
+    <p><code>WHERE id = $id</code> 这种写法里，攻击者不需要任何引号：直接传 <code>1 OR 1=1</code> 或 <code>1 UNION SELECT ...</code> 即可，转义函数处理的那些字符一个都用不上。</p>
+<p>所以老项目里做安全评估时，<strong>数字型参数的优先级要排在字符串型前面</strong>，尤其是 <code>id</code>、<code>page</code>、<code>size</code>、<code>status</code> 这类看起来没风险的字段。</p>
+<p>补救的最小成本做法是先强制类型转换：Go 里用 <code>strconv.ParseInt</code>，Python 里用 <code>int()</code>，转换失败直接返回 400，这一步就能把绝大多数历史遗留的数字型注入挡掉。</p>
 </div>
 <h2>③ 场景 · 纵深防御：假设某处一定会漏</h2>
 <p>参数化是修复，这一层决定的是万一漏了一处，损失是「读到部分数据」还是「整台实例失陷」。</p>
 
-<p>参数化是修复，剩下的都是<strong>限制爆炸半径</strong>。目标很明确：即使某个接口真的被注入了，攻击者也只能读到有限的数据、无法写入、无法落地 WebShell、并且你能在几分钟内发现。</p>
+<p>参数化是修复，剩下的都是<strong>限制爆炸半径</strong>。目标明确：即使某接口真被注入，攻击者也只能读到有限数据、无法写入、无法落地 WebShell、且你能在几分钟内发现。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -712,11 +724,11 @@ ORDER BY time DESC;
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">报错信息的处理方式，比大多数团队想的更重要</div>
-    <p>把数据库原始错误返回到前端，等价于送给攻击者一个交互式调试器：报错注入可以直接把查询结果塞进错误消息，列数、类型、表名全都能试出来。正确做法是<strong>错误分层</strong>：对外只返回统一错误码与请求 ID，详细的 SQL 与堆栈只进服务端日志，通过请求 ID 关联。顺带一个容易忽略的点——<strong>响应时间和返回行数也是信息通道</strong>，所谓盲注就是靠这两个通道工作的，所以哪怕错误信息已经统一，监控上仍然需要覆盖「同一接口高频请求且响应耗时规律变化」这种模式。</p>
+    <p>原始错误返前端等于送攻击者一个调试器。正确做法是<strong>错误分层</strong>：对外只回统一错误码与请求 ID，细节只进服务端日志。<strong>响应时间和返回行数也是信息通道</strong>，盲注就靠它们工作，监控需覆盖此模式。</p>
 </div>
 
 <h2>③ 场景 · 不同场景该做到什么程度</h2>
-<p>参数化是没有折扣的底线，但底线之外的几层（只读账号、列级授权、字段加密、异常 SQL 告警）成本差别很大，要按「被注入后最坏能损失什么」来决定做到哪一层。</p>
+<p>参数化是没有折扣的底线，但底线之外的几层（只读账号、列级授权、字段加密、异常 SQL 告警）成本差别很大，要按「被注入后最坏损失什么」决定做到哪一层。</p>
 
 <table>
 <thead>
@@ -776,10 +788,10 @@ ORDER BY time DESC;
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">这篇不覆盖的相邻问题</div>
-    <p>同一个「数据被当成代码」的错误换个解释器就是另一类漏洞，本篇不展开：<strong>NoSQL 注入</strong>（把用户对象直接当查询条件，运算符键名被注入）、<strong>ORM 层的表达式注入</strong>、<strong>命令注入</strong>（拼 shell 命令，要用参数数组而不是字符串）、<strong>LDAP 与 XPath 注入</strong>、<strong>模板注入</strong>。防御思路完全一致：让动态内容走值通道，或者只允许来自程序内的常量集合。另外索引、执行计划与慢查询优化属于数据库性能范畴，不在本篇。</p>
+    <p>同一错误换个解释器就是另一类漏洞，不展开：<strong>NoSQL 注入</strong>（用户对象当查询条件）、<strong>ORM 层表达式注入</strong>、<strong>命令注入</strong>（拼命令用参数数组）、<strong>LDAP 与 XPath 注入</strong>、<strong>模板注入</strong>。防御思路一致：动态内容走值通道，或只允许程序内常量。</p>
 </div>
 
-<p>相邻主题只给结论并指向：越权与认证会话的设计见 <a href="../auth-security/">认证授权安全</a>，认证鉴权的<strong>设计视角</strong>见 <a href="../../auth/">接口认证与鉴权</a>；接口参数契约与版本治理（把类型约束前移到契约上，能顺手挡掉一批数字型注入）见 <a href="../../design/versioning/">API 设计</a>；网关层的限流与请求体限制见 <a href="../../../devops/nginx/">Nginx 实践</a>；把「SQL 附近禁止字符串格式化」做成<strong>流水线卡点</strong>见 <a href="../../../devops/cicd/">CI/CD</a>；数据库驱动与 ORM 的版本锁定见 <a href="../../../tools/vcs/">版本控制与协作</a>。</p>
+<p>相邻主题：越权与会话见 <a href="../auth-security/">认证授权安全</a>，鉴权<strong>设计视角</strong>见 <a href="../../auth/">接口认证与鉴权</a>；契约与版本治理见 <a href="../../design/versioning/">API 设计</a>；网关限流见 <a href="../../../devops/nginx/">Nginx 实践</a>；SQL 格式化做成<strong>流水线卡点</strong>见 <a href="../../../devops/cicd/">CI/CD</a>；驱动版本锁定见 <a href="../../../tools/vcs/">版本控制与协作</a>。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../xss/">← 上一步：XSS 防御：上下文输出编码、DOM Sink 清单与 CSP 实战</a> · <a href="../csrf-clickjacking/">下一步：CSRF 与点击劫持：成立前提、SameSite 精确语义与防护失效边界 →</a></p>
 

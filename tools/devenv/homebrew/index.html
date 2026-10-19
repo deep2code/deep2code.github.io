@@ -91,15 +91,19 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Homebrew 在 macOS 上几乎等于默认安装，但多数人对它的认知停留在 <code>brew install</code> 这一行。真正出问题的时候是这样的场景：同一份 Brewfile，同事的机器编译通过、你的机器链接报错；一次 <code>brew upgrade</code> 之后 PostgreSQL 主版本跳了、<code>python3</code> 指向变了、CI 昨天还绿的构建今天红了。这些现象指向同一个根因——<strong>Homebrew 是一个滚动更新的系统级包管理器，它在设计上就不提供版本锁定</strong>。这篇不讲怎么装、怎么用，只讲机制、边界条件，以及它在「可复现开发环境」这件事上的真实位置与退出成本。</p>
+<p>Homebrew 在 macOS 上几乎等于默认安装，但多数人对它的认知停留在 <code>brew install</code> 这一行。真正出问题的时候是这样的场景：同一份 Brewfile，同事的机器编译通过、你的机器链接报错；</p>
+<p>一次 <code>brew upgrade</code> 之后 PostgreSQL 主版本跳了、<code>python3</code> 指向变了、CI 昨天还绿的构建今天红了。这些现象指向同一个根因——<strong>Homebrew 是一个滚动更新的系统级包管理器，它在设计上就不提供版本锁定</strong>。</p>
+<p>这篇不讲怎么装、怎么用，只讲机制、边界条件，以及它在「可复现开发环境」这件事上的真实位置与退出成本。</p>
 
 <h2>目录模型：Cellar、opt 与逐文件符号链接</h2>
 
 <p>Homebrew 的一切行为都由 prefix 决定。<code>brew --prefix</code> 在 Apple Silicon 上默认是 <code>/opt/homebrew</code>，Intel macOS 上是 <code>/usr/local</code>，Linuxbrew 则是 <code>/home/linuxbrew/.linuxbrew</code>。formula 安装后并不直接躺在 <code>prefix/bin</code> 里，而是先解包进 <code>Cellar/名称/版本/</code>，这个目录称为 keg；随后 <code>brew link</code> 把 keg 里的可执行文件、头文件、pkg-config 描述文件逐个做成符号链接，挂到 prefix 下对应的 <code>bin</code>、<code>include</code>、<code>lib</code> 目录。</p>
 
-<p>中间还有一层常被忽略的 <code>opt/名称</code>，它是指向「当前激活版本」的稳定软链。其他 formula 编译时写进二进制 rpath 的是 opt 路径，而不是带版本号的 Cellar 路径——这正是同一个库换版本后依赖方不必重新编译的原因，也是为什么手工 <code>mv</code> 或 <code>rm -rf</code> Cellar 下的目录会让一堆命令突然报 dyld 找不到库。</p>
+<p>中间还有一层常被忽略的 <code>opt/名称</code>，它是指向「当前激活版本」的稳定软链。</p>
+<p>其他 formula 编译时写进二进制 rpath 的是 opt 路径，而不是带版本号的 Cellar 路径——这正是同一个库换版本后依赖方不必重新编译的原因，也是为什么手工 <code>mv</code> 或 <code>rm -rf</code> Cellar 下的目录会让一堆命令突然报 dyld 找不到库。</p>
 
-<p>keg-only 是第二个困惑源。<code>openssl@3</code>、<code>mysql-client</code>、<code>node@18</code> 这类 formula 装完只落在 Cellar 与 opt，不会 link 进 <code>prefix/bin</code>，因为它们会与 macOS 自带版本或其他 formula 争抢同名文件。这不是安装失败，而是刻意的隔离策略，代价是你得自己往 <code>PATH</code>、<code>LDFLAGS</code>、<code>CPPFLAGS</code>、<code>PKG_CONFIG_PATH</code> 里补 opt 路径。安装结束时那段「If you need to have X first in your PATH」的提示就是在说这件事，跳过它后面必然踩坑。</p>
+<p>keg-only 是第二个困惑源。<code>openssl@3</code>、<code>mysql-client</code>、<code>node@18</code> 这类 formula 装完只落在 Cellar 与 opt，不会 link 进 <code>prefix/bin</code>，因为它们会与 macOS 自带版本或其他 formula 争抢同名文件。这不是安装失败，而是刻意的隔离策略，代价是你得自己往 <code>PATH</code>、<code>LDFLAGS</code>、<code>CPPFLAGS</code>、<code>PKG_CONFIG_PATH</code> 里补 opt 路径。</p>
+<p>安装结束时那段「If you need to have X first in your PATH」的提示就是在说这件事，跳过它后面必然踩坑。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -130,11 +134,14 @@ flowchart TB
 
 <h2>formula 与 cask：两套不同的安装语义</h2>
 
-<p>把 cask 理解成「formula 的图形界面版」是最常见的误解。两者只共享 CLI 入口，从元数据格式到升级与卸载语义几乎没有交集。formula 描述的是一次可重复的构建与安装过程；cask 描述的是「把一个已签名的分发包放到系统合适位置」的过程——下载 dmg、zip 或 pkg，把 <code>.app</code> 放进 Caskroom 再软链到 <code>/Applications</code>，或者干脆调用 macOS 的 installer 执行 pkg 内的安装脚本。</p>
+<p>把 cask 理解成「formula 的图形界面版」是最常见的误解。两者只共享 CLI 入口，从元数据格式到升级与卸载语义几乎没有交集。formula 描述的是一次可重复的构建与安装过程；</p>
+<p>cask 描述的是「把一个已签名的分发包放到系统合适位置」的过程——下载 dmg、zip 或 pkg，把 <code>.app</code> 放进 Caskroom 再软链到 <code>/Applications</code>，或者干脆调用 macOS 的 installer 执行 pkg 内的安装脚本。</p>
 
-<p>后一种情况尤其值得警惕：pkg 类型的 cask 会把文件写到你完全不掌握的位置，而 <code>brew uninstall --cask</code> 只能执行 cask 定义里声明的 <code>uninstall</code> 段。如果定义没写全，卸载后 LaunchDaemon、特权助手、系统扩展、<code>~/Library</code> 下的配置都会留在系统里。<code>--zap</code> 能清得更彻底，但它同样是按定义走的，不是真正的文件追踪。</p>
+<p>后一种情况尤其值得警惕：pkg 类型的 cask 会把文件写到你完全不掌握的位置，而 <code>brew uninstall --cask</code> 只能执行 cask 定义里声明的 <code>uninstall</code> 段。如果定义没写全，卸载后 LaunchDaemon、特权助手、系统扩展、<code>~/Library</code> 下的配置都会留在系统里。</p>
+<p><code>--zap</code> 能清得更彻底，但它同样是按定义走的，不是真正的文件追踪。</p>
 
-<p>另一个坑是自动更新打架。很多 GUI 应用自带升级器，对应 cask 会标注 <code>auto_updates true</code> 或把版本写成 <code>:latest</code>。这类 cask 在 <code>brew outdated</code> 里默认不出现，必须加 <code>--greedy</code> 才看得到；而当应用自己更新过之后，Caskroom 里记录的版本与磁盘上真实的 <code>.app</code> 已经不一致，下一次 <code>brew upgrade --cask</code> 可能把它「升级」回 cask 定义里的版本。</p>
+<p>另一个坑是自动更新打架。很多 GUI 应用自带升级器，对应 cask 会标注 <code>auto_updates true</code> 或把版本写成 <code>:latest</code>。这类 cask 在 <code>brew outdated</code> 里默认不出现，必须加 <code>--greedy</code> 才看得到；</p>
+<p>而当应用自己更新过之后，Caskroom 里记录的版本与磁盘上真实的 <code>.app</code> 已经不一致，下一次 <code>brew upgrade --cask</code> 可能把它「升级」回 cask 定义里的版本。</p>
 
 <table>
 <thead><tr><th>维度</th><th>formula</th><th>cask</th></tr></thead>
@@ -151,9 +158,11 @@ flowchart TB
 
 <h2>bottle 命中与源码编译的触发条件</h2>
 
-<p>bottle 是 Homebrew 预编译好的二进制包，按「系统代号 + 架构」打标签，例如 <code>arm64_sequoia</code>、<code>arm64_sonoma</code>、Intel 的 <code>sonoma</code>、Linux 的 <code>x86_64_linux</code>。安装时 brew 用当前系统去匹配 formula 里声明的 bottle 标签：命中则下载解包，秒级完成；匹配不上就退回源码编译，几十分钟甚至更久，并且要求本地有完整的 Command Line Tools。判断走了哪条路不用猜，输出里出现 <code>Pouring</code> 就是 bottle，出现 <code>Building</code> 就是在编译。</p>
+<p>bottle 是 Homebrew 预编译好的二进制包，按「系统代号 + 架构」打标签，例如 <code>arm64_sequoia</code>、<code>arm64_sonoma</code>、Intel 的 <code>sonoma</code>、Linux 的 <code>x86_64_linux</code>。安装时 brew 用当前系统去匹配 formula 里声明的 bottle 标签：命中则下载解包，秒级完成；</p>
+<p>匹配不上就退回源码编译，几十分钟甚至更久，并且要求本地有完整的 Command Line Tools。判断走了哪条路不用猜，输出里出现 <code>Pouring</code> 就是 bottle，出现 <code>Building</code> 就是在编译。</p>
 
-<p>bottle 里的二进制含有编译期写死的绝对路径，Homebrew 用 <code>cellar</code> 属性标记可重定位程度：<code>:any</code> 表示可以重定位到任意 prefix，<code>:any_skip_relocation</code> 表示根本不含绝对路径，而写死具体 Cellar 路径的 bottle 只能装进默认 prefix。这是「自定义 prefix 必然大量源码编译」的机制原因，不是哪个配置没调对。把 Homebrew 装到 <code>~/homebrew</code> 或 <code>/opt/brew</code> 这类非标准位置，等于主动放弃了大部分预编译包。</p>
+<p>bottle 里的二进制含有编译期写死的绝对路径，Homebrew 用 <code>cellar</code> 属性标记可重定位程度：<code>:any</code> 表示可以重定位到任意 prefix，<code>:any_skip_relocation</code> 表示根本不含绝对路径，而写死具体 Cellar 路径的 bottle 只能装进默认 prefix。</p>
+<p>这是「自定义 prefix 必然大量源码编译」的机制原因，不是哪个配置没调对。把 Homebrew 装到 <code>~/homebrew</code> 或 <code>/opt/brew</code> 这类非标准位置，等于主动放弃了大部分预编译包。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -183,11 +192,14 @@ flowchart TB
 
 <h2>依赖解析：为什么升级一个会带走一串</h2>
 
-<p>Homebrew 的依赖是构建期与运行期混在一张图里的。<code>brew upgrade</code> 不带参数时升级<strong>所有</strong> outdated 的 formula；带参数时也会先把目标的依赖拉到 formula 当前声明的版本。更隐蔽的是 revision 机制：当 <code>openssl@3</code> 这类底层库的动态库名变化时，homebrew-core 会给所有链接它的 formula 加一个 revision 并重新打 bottle，于是你只想升 curl，结果十几个包一起被替换。</p>
+<p>Homebrew 的依赖是构建期与运行期混在一张图里的。<code>brew upgrade</code> 不带参数时升级<strong>所有</strong> outdated 的 formula；带参数时也会先把目标的依赖拉到 formula 当前声明的版本。</p>
+<p>更隐蔽的是 revision 机制：当 <code>openssl@3</code> 这类底层库的动态库名变化时，homebrew-core 会给所有链接它的 formula 加一个 revision 并重新打 bottle，于是你只想升 curl，结果十几个包一起被替换。</p>
 
-<p>这不算设计缺陷。系统级包管理器让所有软件共享同一份动态库，要么整体保持一致，要么承受符号缺失导致的 dyld 报错。真正的问题在于 Homebrew 的「整体」跟随的是 homebrew-core 的 HEAD，而它每天都在变——没有任何机制让你回到「上周那个组合」。</p>
+<p>这不算设计缺陷。系统级包管理器让所有软件共享同一份动态库，要么整体保持一致，要么承受符号缺失导致的 dyld 报错。</p>
+<p>真正的问题在于 Homebrew 的「整体」跟随的是 homebrew-core 的 HEAD，而它每天都在变——没有任何机制让你回到「上周那个组合」。</p>
 
-<p>排查靠两个方向相反的命令：<code>brew uses --installed --recursive</code> 回答「谁依赖我」，<code>brew deps --tree</code> 回答「我依赖谁」。前者在决定「这个包能不能删」时必看。顺带纠正一个误解：<code>brew autoremove</code> 依据的是「是否被显式安装过」这个标记，而不是文件级引用分析，所以你手工 <code>brew install</code> 过一次的依赖包永远不会被它清掉，看起来「清不干净」是预期行为。</p>
+<p>排查靠两个方向相反的命令：<code>brew uses --installed --recursive</code> 回答「谁依赖我」，<code>brew deps --tree</code> 回答「我依赖谁」。前者在决定「这个包能不能删」时必看。</p>
+<p>顺带纠正一个误解：<code>brew autoremove</code> 依据的是「是否被显式安装过」这个标记，而不是文件级引用分析，所以你手工 <code>brew install</code> 过一次的依赖包永远不会被它清掉，看起来「清不干净」是预期行为。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -234,9 +246,11 @@ brew --prefix openssl@3             # 输出的是 opt 路径，不是 Cellar �
 
 <p>这是全篇最要紧的一节。<strong>Homebrew 没有 lockfile，homebrew-core 对每个 formula 原则上只维护一个「当前版本」。</strong>围绕这一点有三个流传很广的错误认知。</p>
 
-<p><strong>第一，<code>brew pin</code> 不是版本锁定。</strong>它的语义只有一条：<code>brew upgrade</code> 批量升级时跳过这个 formula。它不冻结依赖树，不改变别的包安装时的依赖解析——如果新装的包需要更高版本，你得到的是冲突或忽略，而不是自动适配。它也不会在另一台机器上生效，因为 pin 是本地状态而不是仓库里的声明。它是一张「别顺手升级我」的备忘录，不是约束。</p>
+<p><strong>第一，<code>brew pin</code> 不是版本锁定。</strong>它的语义只有一条：<code>brew upgrade</code> 批量升级时跳过这个 formula。它不冻结依赖树，不改变别的包安装时的依赖解析——如果新装的包需要更高版本，你得到的是冲突或忽略，而不是自动适配。</p>
+<p>它也不会在另一台机器上生效，因为 pin 是本地状态而不是仓库里的声明。它是一张「别顺手升级我」的备忘录，不是约束。</p>
 
-<p><strong>第二，<code>@</code> 版本 formula 是被策展的、有限的、会消失的。</strong><code>python@3.12</code>、<code>node@20</code>、<code>postgresql@16</code>、<code>openjdk@17</code> 之所以存在，是因为维护者判断这些主版本需要长期并存；粒度到主版本或次版本，从来不到补丁级，你写不出 <code>python@3.12.4</code>。更关键的是，当上游 EOL 时这些 formula 会被从 core 移除，你那份跑了两年的 Brewfile 会在某天突然装不上。</p>
+<p><strong>第二，<code>@</code> 版本 formula 是被策展的、有限的、会消失的。</strong><code>python@3.12</code>、<code>node@20</code>、<code>postgresql@16</code>、<code>openjdk@17</code> 之所以存在，是因为维护者判断这些主版本需要长期并存；粒度到主版本或次版本，从来不到补丁级，你写不出 <code>python@3.12.4</code>。</p>
+<p>更关键的是，当上游 EOL 时这些 formula 会被从 core 移除，你那份跑了两年的 Brewfile 会在某天突然装不上。</p>
 
 <p><strong>第三，降级没有一等支持。</strong>旧 bottle 不保证仍可下载，官方路径是 <code>brew extract --version=x.y.z</code> 把历史 formula 抽到自己的 tap 再安装，而抽出来的版本几乎一定没有 bottle，意味着源码编译。把这条当成常规手段的团队，最后都会转向 mise 或 nix。</p>
 
@@ -268,17 +282,21 @@ brew bundle install --no-upgrade                      # 关键参数：缺什么
 
 <h2>团队一致性：Brewfile 的边界与务实分层</h2>
 
-<p>Brewfile 是清单（manifest），不是锁（lock）。<code>brew bundle dump</code> 产出的是名字列表，回放时装的是<strong>执行那一刻</strong> core 里的版本。两个人相隔一周跑同一份 Brewfile，拿到的 Node、Python、protobuf 版本可以完全不同，而且没有任何报错提示这件事发生了——这是「我这能跑你那不行」最常见的来源。</p>
+<p>Brewfile 是清单（manifest），不是锁（lock）。<code>brew bundle dump</code> 产出的是名字列表，回放时装的是<strong>执行那一刻</strong> core 里的版本。</p>
+<p>两个人相隔一周跑同一份 Brewfile，拿到的 Node、Python、protobuf 版本可以完全不同，而且没有任何报错提示这件事发生了——这是「我这能跑你那不行」最常见的来源。</p>
 
-<p>如果组织上只能用 brew，把不一致范围压到最小的分层是：语言运行时全部交给 mise 或 asdf，把 <code>.tool-versions</code> 提交进仓库；构建必需的系统库（protobuf、openssl、pkg-config、cmake）宁可进容器或 nix，也不要指望 brew 给你稳定；Brewfile 里只留编辑器、终端、数据库客户端、GUI 工具这类「版本不影响构建产物」的软件。这样即使 brew 漂移，漂的也只是开发者体验，不是产物。</p>
+<p>如果组织上只能用 brew，把不一致范围压到最小的分层是：语言运行时全部交给 mise 或 asdf，把 <code>.tool-versions</code> 提交进仓库；构建必需的系统库（protobuf、openssl、pkg-config、cmake）宁可进容器或 nix，也不要指望 brew 给你稳定；</p>
+<p>Brewfile 里只留编辑器、终端、数据库客户端、GUI 工具这类「版本不影响构建产物」的软件。这样即使 brew 漂移，漂的也只是开发者体验，不是产物。</p>
 
 <p>再补一个常被忽略的参数：<code>brew bundle install</code> 默认会顺手升级已安装的包，加 <code>--no-upgrade</code> 才是「缺什么补什么」。配合 <code>HOMEBREW_NO_AUTO_UPDATE=1</code>，至少能保证一次安装动作不触发元数据刷新，让同一天内的几台机器结果一致。</p>
 
 <h2>与 asdf / mise / nix / devbox 的分工</h2>
 
-<p>这几类工具解决的是不同层次的问题，应该叠着用而不是二选一：brew 管「这台机器上的系统级软件」，mise 与 asdf 管「这个项目用哪个语言版本」，nix 与 devbox 管「这个项目的完整依赖闭包」，容器镜像管「运行时与生产环境对齐」。把语言版本交给 brew 管，是绝大多数团队环境漂移的起点。</p>
+<p>这几类工具解决的是不同层次的问题，应该叠着用而不是二选一：brew 管「这台机器上的系统级软件」，mise 与 asdf 管「这个项目用哪个语言版本」，nix 与 devbox 管「这个项目的完整依赖闭包」，容器镜像管「运行时与生产环境对齐」。</p>
+<p>把语言版本交给 brew 管，是绝大多数团队环境漂移的起点。</p>
 
-<p>选型时真正该权衡的不是功能表，而是<strong>退出成本</strong>。brew 的退出成本接近零，删掉 prefix 目录就干净了；mise 只多一个 shim 目录和一个版本文件；nix 一旦进入，flake、overlay、自建 derivation 会变成团队里只有一两个人能维护的资产，迁走时需要重写全部依赖描述。devbox 是 nix 的封装，降低了入门门槛，但底下仍是 nix，出问题依然要懂 nix 的求值模型。</p>
+<p>选型时真正该权衡的不是功能表，而是<strong>退出成本</strong>。brew 的退出成本接近零，删掉 prefix 目录就干净了；mise 只多一个 shim 目录和一个版本文件；</p>
+<p>nix 一旦进入，flake、overlay、自建 derivation 会变成团队里只有一两个人能维护的资产，迁走时需要重写全部依赖描述。devbox 是 nix 的封装，降低了入门门槛，但底下仍是 nix，出问题依然要懂 nix 的求值模型。</p>
 
 <table>
 <thead><tr><th>维度</th><th>Homebrew</th><th>asdf / mise</th><th>nix / devbox</th><th>容器镜像</th></tr></thead>
@@ -321,7 +339,8 @@ flowchart TB
 
 <p>Homebrew 吃磁盘有三个来源：Cellar 里的多版本 keg、Caskroom 里的历史版本目录、以及下载缓存（<code>brew --cache</code>，macOS 上默认在 <code>~/Library/Caches/Homebrew</code>）。第三项最容易长到几十 GB，因为默认清理策略只删超过 <code>HOMEBREW_CLEANUP_MAX_AGE_DAYS</code>（默认 120 天）的下载，而周期性完整清理的间隔由 <code>HOMEBREW_CLEANUP_PERIODIC_FULL_DAYS</code>（默认 30 天）控制。</p>
 
-<p>治理顺序是固定的：先 <code>brew cleanup -n</code> 做 dry run 看清会删什么，再决定是否加 <code>-s</code>（连已安装包的缓存一起删）和 <code>--prune=all</code>（忽略保留天数）。<code>brew autoremove</code> 清的是没有任何显式安装包依赖的 formula，如前所述它按显式安装标记判断，所以结果往往比你预期的少。</p>
+<p>治理顺序是固定的：先 <code>brew cleanup -n</code> 做 dry run 看清会删什么，再决定是否加 <code>-s</code>（连已安装包的缓存一起删）和 <code>--prune=all</code>（忽略保留天数）。</p>
+<p><code>brew autoremove</code> 清的是没有任何显式安装包依赖的 formula，如前所述它按显式安装标记判断，所以结果往往比你预期的少。</p>
 
 <table>
 <thead><tr><th>目标</th><th>命令或路径</th><th>影响面与风险</th></tr></thead>

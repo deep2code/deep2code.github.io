@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>PG 的索引能力远超「B-tree 加几个技巧」：五种索引类型对应五种完全不同的数据形态，加上部分索引、表达式索引和 <code>INCLUDE</code> 覆盖列，很多在 MySQL 上只能靠改表结构解决的问题在 PG 上是一行 DDL。但索引选对了不等于计划走对了，所以后半篇全部用来讲 <code>EXPLAIN (ANALYZE, BUFFERS)</code> 怎么读、优化器为什么不走你建的索引。</p>
+<p>PG 的索引能力远超「B-tree 加几个技巧」：五种索引类型对应五种完全不同的数据形态，加上部分索引、表达式索引和 <code>INCLUDE</code> 覆盖列，很多在 MySQL 上只能靠改表结构解决的问题在 PG 上是一行 DDL。</p>
+<p>但索引选对了不等于计划走对了，所以后半篇全部用来讲 <code>EXPLAIN (ANALYZE, BUFFERS)</code> 怎么读、优化器为什么不走你建的索引。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -225,7 +226,8 @@ flowchart TB
 <p>用法层到此结束。为什么 Bitmap Heap Scan 不是问题、为什么 <code>actual rows</code> 必须乘 <code>loops</code>、为什么 GIN 的写入代价高、为什么 <code>INCLUDE</code> 依赖 VACUUM，下面的原理层逐个展开。</p>
 
 <h2>② 原理 · 五种索引类型：按数据形态选，不是按「快慢」选</h2>
-<p>先把结论说清楚：<strong>B-tree 覆盖 95% 的场景</strong>，剩下的 5% 才需要挑类型。选错的典型后果不是慢一点，而是<strong>索引根本不会被用到</strong>——因为每种索引只实现了特定的操作符类，查询里的操作符不在这个集合里，优化器就只能全表扫。</p>
+<p>先把结论说清楚：<strong>B-tree 覆盖 95% 的场景</strong>，剩下的 5% 才需要挑类型。</p>
+<p>选错的典型后果不是慢一点，而是<strong>索引根本不会被用到</strong>——因为每种索引只实现了特定的操作符类，查询里的操作符不在这个集合里，优化器就只能全表扫。</p>
 <table>
 <thead>
 <tr><th>类型</th><th>擅长的数据与操作</th><th>体积量级</th><th>写入代价</th><th>什么时候它是错的选择</th></tr>
@@ -301,7 +303,9 @@ ALTER TABLE bookings ADD CONSTRAINT no_overlap
 <div class="callout callout-tip">
 <div class="callout-icon">✅</div>
 <div class="callout-title">部分索引是 PG 上最被低估的优化</div>
-<p>一张 5 亿行的订单表里只有几万行是 <code>status = 'pending'</code>，给全表建索引要几十 GB，而 <code>CREATE INDEX ... WHERE status = 'pending'</code> 只有几 MB，能常驻内存。更关键的是它<strong>减少写放大</strong>：不满足 WHERE 条件的行插入和更新时完全不碰这个索引，等于把主干篇讲的「索引个数等于写放大倍数」这个代价也一起降下来了。唯一要注意的是查询条件必须让优化器能静态判定蕴含关系，把 <code>status</code> 做成绑定参数就废了。</p>
+<p>一张 5 亿行的订单表里只有几万行是 <code>status = 'pending'</code>，给全表建索引要几十 GB，而 <code>CREATE INDEX ... WHERE status = 'pending'</code> 只有几 MB，能常驻内存。</p>
+<p>更关键的是它<strong>减少写放大</strong>：不满足 WHERE 条件的行插入和更新时完全不碰这个索引，等于把主干篇讲的「索引个数等于写放大倍数」这个代价也一起降下来了。</p>
+<p>唯一要注意的是查询条件必须让优化器能静态判定蕴含关系，把 <code>status</code> 做成绑定参数就废了。</p>
 </div>
 
 <h2>② 原理 · EXPLAIN 逐字段判读：只看 cost 是白看</h2>
@@ -383,7 +387,8 @@ CREATE STATISTICS st_orders_city_zip (dependencies, ndistinct) ON city, zipcode 
 ANALYZE orders;</code></pre>
 
 <h2>② 原理 · 四种扫描方式与 Bitmap 的真正含义</h2>
-<p>很多人以为「Bitmap Heap Scan 出现就是没用好索引」，恰恰相反：<strong>Bitmap 是索引命中行数中等时的最优解</strong>。它分两步——先扫索引把所有命中的<strong>块号</strong>攒成位图，再按块号从小到大<strong>顺序</strong>读堆。这样把随机 IO 变成了接近顺序的 IO，还顺带去掉了同一页被多次访问的重复读。</p>
+<p>很多人以为「Bitmap Heap Scan 出现就是没用好索引」，恰恰相反：<strong>Bitmap 是索引命中行数中等时的最优解</strong>。它分两步——先扫索引把所有命中的<strong>块号</strong>攒成位图，再按块号从小到大<strong>顺序</strong>读堆。</p>
+<p>这样把随机 IO 变成了接近顺序的 IO，还顺带去掉了同一页被多次访问的重复读。</p>
 <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -427,7 +432,8 @@ sequenceDiagram
 <tr><td><strong>Merge Join</strong></td><td>两侧都很大且已有序</td><td>排序阶段吃 <code>work_mem</code></td><td>两侧按连接键有序，通常靠索引或显式排序提供</td><td>需要额外排序时经常打不过 Hash Join；一侧数据倾斜严重时退化明显</td></tr>
 </tbody>
 </table>
-<p><code>work_mem</code> 是<strong>每个排序或哈希节点</strong>各分配一份，不是每个查询一份。一条带三个排序节点的查询在 50 个并发下，理论峰值是 <code>work_mem × 3 × 50</code>。所以正确做法是全局设一个保守值（比如 16MB 到 64MB），再对已知的重查询按会话或按角色单独放大。PG 13 起还有 <code>hash_mem_multiplier</code>（默认 2.0），可以只给哈希类节点更多内存而不放大排序。</p>
+<p><code>work_mem</code> 是<strong>每个排序或哈希节点</strong>各分配一份，不是每个查询一份。一条带三个排序节点的查询在 50 个并发下，理论峰值是 <code>work_mem × 3 × 50</code>。</p>
+<p>所以正确做法是全局设一个保守值（比如 16MB 到 64MB），再对已知的重查询按会话或按角色单独放大。PG 13 起还有 <code>hash_mem_multiplier</code>（默认 2.0），可以只给哈希类节点更多内存而不放大排序。</p>
 
 <h2>② 原理 · 为什么优化器不走我建的索引</h2>
 <p>先接受一个事实：<strong>大多数情况下不走索引是对的</strong>。PG 的优化器是基于代价的，当它估计要返回表里 10% 以上的行时，顺序扫描加上预读几乎一定比几十万次随机读堆更快。真正需要修的是下面这几类。</p>
@@ -511,11 +517,14 @@ SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;</code></pre>
 <div class="callout callout-info">
 <div class="callout-icon">💡</div>
 <div class="callout-title">删索引之前的正确验证顺序</div>
-<p>直接 <code>DROP INDEX</code> 的风险是判断错了要重建，而大表重建索引很贵。稳妥的顺序是：先确认 <code>idx_scan</code> 的统计区间覆盖了完整业务周期（含月末结算这类低频路径）；再用 <code>pg_stat_statements</code> 里的历史语句交叉比对有没有语句依赖它；要评估「新增某个索引是否有用」可以装 <strong>HypoPG</strong> 扩展创建虚拟索引，它只影响 <code>EXPLAIN</code> 的估算、不占磁盘也不写 WAL；最后真正删除时用 <code>DROP INDEX CONCURRENTLY</code>，普通 <code>DROP INDEX</code> 会取 ACCESS EXCLUSIVE 锁。网上流传的「直接 UPDATE pg_index 把 indisvalid 改成 false 让索引假死」不要用，手改系统目录绕过了所有一致性检查，出问题无从排查。</p>
+<p>直接 <code>DROP INDEX</code> 的风险是判断错了要重建，而大表重建索引很贵。稳妥的顺序是：先确认 <code>idx_scan</code> 的统计区间覆盖了完整业务周期（含月末结算这类低频路径）；再用 <code>pg_stat_statements</code> 里的历史语句交叉比对有没有语句依赖它；</p>
+<p>要评估「新增某个索引是否有用」可以装 <strong>HypoPG</strong> 扩展创建虚拟索引，它只影响 <code>EXPLAIN</code> 的估算、不占磁盘也不写 WAL；最后真正删除时用 <code>DROP INDEX CONCURRENTLY</code>，普通 <code>DROP INDEX</code> 会取 ACCESS EXCLUSIVE 锁。</p>
+<p>网上流传的「直接 UPDATE pg_index 把 indisvalid 改成 false 让索引假死」不要用，手改系统目录绕过了所有一致性检查，出问题无从排查。</p>
 </div>
 
 <h2>③ 场景 · 按业务形态选索引组合，以及索引解决不了的问题</h2>
-<p>前面给的是单条语句的判读与单个索引的选型。落到一张表上时，决定索引方案的是这张表在业务里的角色：它承担哪几种查询形态、写入有多密集、能不能把一部分查询分流出去。下表按常见业务形态给出组合方案与它的代价。</p>
+<p>前面给的是单条语句的判读与单个索引的选型。落到一张表上时，决定索引方案的是这张表在业务里的角色：它承担哪几种查询形态、写入有多密集、能不能把一部分查询分流出去。</p>
+<p>下表按常见业务形态给出组合方案与它的代价。</p>
 <table>
 <thead>
 <tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr>
@@ -532,7 +541,11 @@ SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;</code></pre>
 <tr><td>写入密集的流水表、埋点表</td><td>索引降到最少，只留主键与一个时间维度索引</td><td>每个索引都是写放大，非 HOT 更新要维护全部索引</td><td>查询能力弱，复杂查询只能走离线或列存链路</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：索引解决不了的问题不要在索引上找答案。元组结构、<code>xmin</code> 与 <code>xmax</code>、HOT 更新、VACUUM 与 WAL 的机制在 <a href="../">PostgreSQL 主干篇</a>；字段类型本身选得对不对（<code>jsonb</code> 还是拆列、<code>numeric</code> 还是 <code>bigint</code>）在 <a href="../datatypes/">PostgreSQL 数据类型选择与代价</a>，<strong>类型选错时任何索引都救不回来</strong>；<code>shared_buffers</code> 与全局内存参数的设定在 <a href="../install/">PostgreSQL 生产部署与必调参数</a>；建索引会取什么锁、<code>CREATE INDEX CONCURRENTLY</code> 为什么会被长事务拖住在 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；索引数量怎么管住、怎么从查询模式反推一组索引的通用方法在 <a href="../../optimization/index/">索引设计与治理</a>，慢查询从发现到根治的闭环在 <a href="../../optimization/slow-query/">慢查询治理</a>，而「问题到底是不是在数据库」这一层在 <a href="../../optimization/">数据库性能优化：瓶颈定位顺序</a>；MySQL 侧的 B+ 树树高、回表与 <code>EXPLAIN</code> 判读在 <a href="../../mysql/">MySQL 深度原理</a>。</p>
+<p><strong>不适用边界</strong>：索引解决不了的问题不要在索引上找答案。元组结构、<code>xmin</code> 与 <code>xmax</code>、HOT 更新、VACUUM 与 WAL 的机制在 <a href="../">PostgreSQL 主干篇</a>；</p>
+<p>字段类型本身选得对不对（<code>jsonb</code> 还是拆列、<code>numeric</code> 还是 <code>bigint</code>）在 <a href="../datatypes/">PostgreSQL 数据类型选择与代价</a>，<strong>类型选错时任何索引都救不回来</strong>；</p>
+<p><code>shared_buffers</code> 与全局内存参数的设定在 <a href="../install/">PostgreSQL 生产部署与必调参数</a>；建索引会取什么锁、<code>CREATE INDEX CONCURRENTLY</code> 为什么会被长事务拖住在 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；</p>
+<p>索引数量怎么管住、怎么从查询模式反推一组索引的通用方法在 <a href="../../optimization/index/">索引设计与治理</a>，慢查询从发现到根治的闭环在 <a href="../../optimization/slow-query/">慢查询治理</a>；</p>
+<p>而「问题到底是不是在数据库」这一层在 <a href="../../optimization/">数据库性能优化：瓶颈定位顺序</a>；MySQL 侧的 B+ 树树高、回表与 <code>EXPLAIN</code> 判读在 <a href="../../mysql/">MySQL 深度原理</a>。</p>
 <p>在 PostgreSQL 这条路径上，上一篇把类型选对，本篇把访问路径选对并学会读计划，下一篇处理同一份数据被并发读写时的行为——隔离级别、行锁与 DDL 的锁队列。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../datatypes/">← 上一步：PostgreSQL 数据类型选择与代价</a> · <a href="../mvcc-transaction/">下一步：PostgreSQL 隔离级别与并发控制：SSI、行锁四档与 DDL 锁队列 →</a></p>

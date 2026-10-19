@@ -71,7 +71,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>迁移是 ORM 里唯一会不可逆地毁掉生产数据的环节。查询写错了最多报错，迁移写错了列就没了。这篇讲清 drizzle-kit 的工作机制、危险变更的识别、以及生产环境应该怎么组织迁移流程。</p>
+<p>迁移是 ORM 里唯一会不可逆毁掉生产数据的环节。查询写错最多报错，迁移写错列就没了。这篇讲清 drizzle-kit 的工作机制、危险变更的识别、以及生产环境怎么组织迁移流程。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -85,7 +85,7 @@
 
 <h2>① 用法 · 从改 schema 到生产生效：六步</h2>
 
-<p>这六步是固定流程，<strong>第三步（人工审查）是唯一不能自动化也不能跳过的一步</strong>。每一步的「出错怎么办」都写在最后一列——注意只有最后一步没有便宜的退路，所以前五步的检查都是为它服务的。</p>
+<p>这六步是固定流程，<strong>第三步（人工审查）是唯一不能自动化也不能跳过的一步</strong>。每步的「出错怎么办」写在最后一列——只有最后一步没有便宜的退路，前五步的检查都是为它服务的。</p>
 
 <table>
 <thead><tr><th>步骤</th><th>动作</th><th>怎么验证</th><th>出错怎么办</th></tr></thead>
@@ -169,7 +169,8 @@ psql "$PROD_URL" -c \
 </tbody>
 </table>
 
-<p><strong>为什么生产绝不能用 push</strong>：push 的执行过程没有任何产物。你不知道它执行了什么 SQL，code review 里看不到 DDL 变更，出问题时无法追溯，不同环境可能执行出不同结果（因为 push 依赖当前数据库的实际状态）。更危险的是 push 遇到歧义变更（比如列重命名）时会交互式询问，在 CI 里就会卡住或选错。</p>
+<p><strong>为什么生产绝不能用 push</strong>：push 执行过程没有任何产物。你不知道它执行了什么 SQL，code review 里看不到 DDL 变更，出问题无法追溯，不同环境可能执行出不同结果（push 依赖当前数据库的实际状态）。</p>
+<p>更危险的是 push 遇到歧义变更（比如列重命名）时会交互式询问，在 CI 里就会卡住或选错。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -191,7 +192,7 @@ flowchart TB
 
 <p>搞清这一节能解决「为什么同一个变更被生成了两遍」。</p>
 
-<p>generate 不是对比 schema 和数据库，而是<strong>对比当前 schema 与上一次的 JSON 快照</strong>。快照存在 <code>drizzle/meta/</code> 目录下，每次 generate 会生成一个新快照和一个 SQL 文件。这个设计意味着：快照文件必须和 SQL 文件一起提交，否则下次 generate 会重新生成已有的变更。</p>
+<p>generate 不是对比 schema 和数据库，而是<strong>对比当前 schema 与上一次的 JSON 快照</strong>。快照存在 <code>drizzle/meta/</code> 下，每次 generate 生成一个新快照和一个 SQL 文件。这意味着：快照必须和 SQL 文件一起提交，否则下次 generate 会重新生成已有变更。</p>
 
 <pre><code class="language-bash"># 1. 生成迁移（对比 schema 与上次快照）
 npx drizzle-kit generate --name add_user_role
@@ -260,7 +261,7 @@ npx drizzle-kit pull --out ./tmp-introspect
 
 <p>搞清这一节能解决「每一步到底还能不能退回去」。</p>
 
-<p>安全的结构演进遵循三阶段模式：<strong>先扩展（expand）让新旧代码都能工作，再迁移数据和流量（migrate），最后收缩（contract）删掉旧结构</strong>。每个阶段都是独立的部署，中间有观察期。</p>
+<p>安全的结构演进遵循三阶段模式：<strong>先扩展（expand）让新旧代码都能工作，再迁移数据和流量（migrate），最后收缩（contract）删掉旧结构</strong>。每个阶段都是独立部署，中间有观察期。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -297,7 +298,7 @@ stateDiagram-v2
 </tbody>
 </table>
 
-<p>回填的关键是<strong>分批提交</strong>。一条 <code>UPDATE posts SET new_col = old_col</code> 在百万行表上会产生巨大的事务、大量 WAL、以及长时间的行锁。正确做法是按主键范围分批，每批几千行，批间 sleep。schema 演进的完整模式与兼容性策略详见站内模式演进篇。</p>
+<p>回填的关键是<strong>分批提交</strong>。一条 <code>UPDATE posts SET new_col = old_col</code> 在百万行表上会产生巨大事务、大量 WAL 和长时间行锁。正确做法是按主键范围分批，每批几千行，批间 sleep。完整模式与兼容性策略见站内模式演进篇。</p>
 
 <pre><code class="language-sql">-- Expand 阶段：只加 nullable 列，零风险
 ALTER TABLE posts ADD COLUMN author_uuid uuid;
@@ -337,7 +338,7 @@ ALTER TABLE posts DROP COLUMN author_legacy_id;</code></pre>
 
 <p>搞清这一节能解决「滚动发布时迁移被执行了好几遍」。</p>
 
-<p>最常见的错误是把迁移写在应用启动代码里。滚动更新时 5 个 Pod 同时启动，5 个进程同时尝试执行同一个迁移，结果可能是重复执行、部分失败、或者数据库被并发 DDL 搞出死锁。</p>
+<p>最常见的错误是把迁移写在应用启动代码里。滚动更新时 5 个 Pod 同时启动，5 个进程同时执行同一个迁移，可能重复执行、部分失败，或被并发 DDL 搞出死锁。</p>
 
 <p><strong>正确做法是把迁移剥离成独立的部署前置步骤</strong>，保证全局只有一个进程执行。</p>
 
@@ -457,7 +458,7 @@ jobs:
 
 <p><strong>核心原则</strong>：让每次结构变更都向后兼容（旧代码能在新结构上跑），这样应用版本可以独立回滚，数据库结构只需向前演进。这正是 expand-migrate-contract 的意义所在。</p>
 
-<p>真正需要恢复数据时的手段是备份和 PITR（point-in-time recovery），不是 down 迁移。生产环境必须确认：备份策略是什么、PITR 窗口多长、恢复演练做过没有。删列类操作前主动打一个快照。</p>
+<p>真正需要恢复数据时的手段是备份和 PITR（point-in-time recovery），不是 down 迁移。生产环境必须确认：备份策略是什么、PITR 窗口多长、恢复演练做过没有。删列前主动打一个快照。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -491,9 +492,12 @@ flowchart TB
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：本篇只讲 Drizzle 侧的迁移工程。加列删列改类型在数据库层面各自会不会重写全表、锁多久、元数据锁怎么排队，以及 <code>NOT VALID</code>、<code>CONCURRENTLY</code> 这些低锁路径的完整推演在 <a href="../../design/index-design/">模式演进与约束设计：表结构上线之后怎么改</a>；schema 与类型怎么定义在 <a href="../intro/">Drizzle 上手：schema 定义与类型推导</a>；查询与事务怎么写在上一篇 <a href="../queries/">查询构建：关系查询、join 与事务</a>；该不该用 Drizzle 在 <a href="../">Drizzle 的设计：SQL-first 的类型安全 ORM</a>；表结构本身该怎么设计在 <a href="../../design/">范式与反范式：数据库设计的取舍</a>；索引该不该建、建了有没有用在 <a href="../../optimization/index/">索引设计与优化</a>；回填期间主从延迟怎么观察与压制、PITR 与备份策略在 <a href="../../postgresql/replication-ha/">PostgreSQL 复制与高可用</a>；MySQL 侧 DDL 不可回滚与在线改表工具的差异在 <a href="../../mysql/">MySQL 深度原理</a>。</p>
+<p><strong>不适用边界</strong>：本篇只讲 Drizzle 侧的迁移工程。加列删列改类型会不会重写全表、锁多久、元数据锁怎么排队，以及 <code>NOT VALID</code>、<code>CONCURRENTLY</code> 这些低锁路径的完整推演见 <a href="../../design/index-design/">模式演进与约束设计：表结构上线之后怎么改</a>；</p>
+<p>schema 与类型怎么定义见 <a href="../intro/">Drizzle 上手：schema 定义与类型推导</a>；查询与事务怎么写见上一篇 <a href="../queries/">查询构建：关系查询、join 与事务</a>；该不该用 Drizzle 见 <a href="../">Drizzle 的设计：SQL-first 的类型安全 ORM</a>；</p>
+<p>表结构本身怎么设计见 <a href="../../design/">范式与反范式：数据库设计的取舍</a>；索引该不该建、建了有没有用见 <a href="../../optimization/index/">索引设计与优化</a>；</p>
+<p>回填期间主从延迟怎么观察与压制、PITR 与备份策略见 <a href="../../postgresql/replication-ha/">PostgreSQL 复制与高可用</a>；MySQL 侧 DDL 不可回滚与在线改表工具的差异见 <a href="../../mysql/">MySQL 深度原理</a>。</p>
 
-<p>这条路径到这里结束：第一篇决定用不用 Drizzle，第二篇定 schema 与类型，第三篇把查询写对，本篇负责让生产库安全地跟上 schema 的变化——四步里只有本篇的错误会直接毁掉数据。</p>
+<p>这条路径到这里结束：第一篇决定用不用 Drizzle，第二篇定 schema 与类型，第三篇把查询写对，本篇让生产库安全跟上 schema 变化——四步里只有本篇的错误会直接毁掉数据。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../queries/">← 上一步：查询构建：关系查询、join 与事务</a></p>
 

@@ -90,7 +90,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>「用 Go 操作 Git 仓库」有两条路：<code>github.com/go-git/go-git</code> 这个纯 Go 实现，或者用 <code>os/exec</code> 调本机的 <code>git</code>。网上的讨论常常把它当成二选一的信仰之争，实际工程里正确答案是<strong>按操作类型分工</strong>——go-git 在「读对象、解析引用、收发 packfile、把 Git 当数据库用」这一侧很强，在「需要和官方行为逐字节一致」的那一侧则有明确边界。Git 自身的对象模型（blob/tree/commit/tag 四类对象、内容寻址、引用与 packfile）站内已有专篇，见 <a href="../../../tools/vcs/">Git</a>，这里只用结论，不重复推演。</p>
+<p>「用 Go 操作 Git 仓库」有两条路：<code>github.com/go-git/go-git</code> 这个纯 Go 实现，或者用 <code>os/exec</code> 调本机的 <code>git</code>。</p>
+<p>网上的讨论常常把它当成二选一的信仰之争，实际工程里正确答案是<strong>按操作类型分工</strong>——go-git 在「读对象、解析引用、收发 packfile、把 Git 当数据库用」这一侧很强，在「需要和官方行为逐字节一致」的那一侧则有明确边界。</p>
+<p>Git 自身的对象模型（blob/tree/commit/tag 四类对象、内容寻址、引用与 packfile）站内已有专篇，见 <a href="../../../tools/vcs/">Git</a>，这里只用结论，不重复推演。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -337,7 +339,9 @@ sequenceDiagram
 
 <h2>② 原理 · 遍历历史与算 diff 的真实代价</h2>
 <p>这一节解释为什么「只是看看提交记录」也能把服务打挂。</p>
-<p>历史遍历本身是惰性的：迭代器每次 <code>Next</code> 才去加载对象。真正的代价在两个地方。第一是<strong>遍历顺序</strong>：默认是深度优先，跨多分支时输出顺序会很反直觉，要按时间看必须显式指定提交者时间序。第二是<strong>内容差异</strong>：只要知道「哪些文件变了」，比较两棵 tree 就够；一旦去取逐行补丁或提交统计，新旧两份文件内容都要完整读进内存做行级比对，遇到自动生成的巨型文件或二进制文件就是内存尖峰。改名检测更贵，本质是新增与删除文件之间的两两相似度比较。</p>
+<p>历史遍历本身是惰性的：迭代器每次 <code>Next</code> 才去加载对象。真正的代价在两个地方。第一是<strong>遍历顺序</strong>：默认是深度优先，跨多分支时输出顺序会很反直觉，要按时间看必须显式指定提交者时间序。</p>
+<p>第二是<strong>内容差异</strong>：只要知道「哪些文件变了」，比较两棵 tree 就够；一旦去取逐行补丁或提交统计，新旧两份文件内容都要完整读进内存做行级比对，遇到自动生成的巨型文件或二进制文件就是内存尖峰。</p>
+<p>改名检测更贵，本质是新增与删除文件之间的两两相似度比较。</p>
 <pre><code class="language-go">// 只要「哪些文件变了」：比较两棵 tree，不碰文件内容。
 func changedPaths(ctx context.Context, from, to *object.Commit) ([]string, error) {
     ft, err := from.Tree()
@@ -388,7 +392,9 @@ stateDiagram-v2
         混用同一个 .git 目录时两边可能打架
     end note
 </div>
-<p>具体来说：<strong>提交需要显式给出 Author</strong>，因为 go-git 默认只读仓库级配置，不会自动向上合并用户级与系统级配置，你在家目录里配的身份不会被拾取——这是把 go-git 塞进 CI 时最常见的第一个报错。<strong>文件模式位、符号链接、大小写不敏感文件系统</strong>这几处的判定和原生 git 有偏差，会表现为 status 里凭空出现一批「被修改」的文件。<strong>索引扩展字段</strong>两边写法不同，所以不要让 go-git 和原生 git 交替写同一个 <code>.git</code> 目录。最后，磁盘存储不是并发安全的，多 goroutine 写必须自己串行化；引用更新要避免丢写，用带比较的设置引用接口做 CAS，而不是无脑覆盖——并发写法的取舍见 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>。</p>
+<p>具体来说：<strong>提交需要显式给出 Author</strong>，因为 go-git 默认只读仓库级配置，不会自动向上合并用户级与系统级配置，你在家目录里配的身份不会被拾取——这是把 go-git 塞进 CI 时最常见的第一个报错。</p>
+<p><strong>文件模式位、符号链接、大小写不敏感文件系统</strong>这几处的判定和原生 git 有偏差，会表现为 status 里凭空出现一批「被修改」的文件。<strong>索引扩展字段</strong>两边写法不同，所以不要让 go-git 和原生 git 交替写同一个 <code>.git</code> 目录。</p>
+<p>最后，磁盘存储不是并发安全的，多 goroutine 写必须自己串行化；引用更新要避免丢写，用带比较的设置引用接口做 CAS，而不是无脑覆盖——并发写法的取舍见 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>。</p>
 
 <h2>② 原理 · packfile 与 delta：性能特征从哪来</h2>
 <p>go-git 的性能画像几乎完全由 packfile 决定，理解这几条就能预判它在你的仓库上表现如何：</p>
@@ -471,7 +477,8 @@ func (c cliGit) Merge(ctx context.Context, from string) error {
     }
     return nil
 }</code></pre>
-<p><strong>不适用边界</strong>：go-git 不是「Git 的替代」，它是「把 Git 当数据库读写的库」。需要和官方行为逐字节一致、需要钩子生效、需要完整合并语义的流程一律走命令行，规范见 <a href="../exec/">Go 中执行外部命令的正确姿势</a>；Git 本身的对象模型、rebase 与引用管理见 <a href="../../../tools/vcs/">Git</a>；把「检测到变更就触发部署」这套流程做成流水线属于 CI 范畴，见 <a href="../../../devops/cicd/">CI 与 CD</a>。凭据怎么存、日志怎么脱敏不是这个库的职责，但它是你的职责。</p>
+<p><strong>不适用边界</strong>：go-git 不是「Git 的替代」，它是「把 Git 当数据库读写的库」。需要和官方行为逐字节一致、需要钩子生效、需要完整合并语义的流程一律走命令行，规范见 <a href="../exec/">Go 中执行外部命令的正确姿势</a>；</p>
+<p>Git 本身的对象模型、rebase 与引用管理见 <a href="../../../tools/vcs/">Git</a>；把「检测到变更就触发部署」这套流程做成流水线属于 CI 范畴，见 <a href="../../../devops/cicd/">CI 与 CD</a>。凭据怎么存、日志怎么脱敏不是这个库的职责，但它是你的职责。</p>
 <p>这条路径上，前三篇讲的是 Web 层的框架取舍，本篇转向一类具体的工程库：能力边界清楚、越界就回落；下一篇是同类性质的另一个题目——图像与文字渲染，同样是「库只负责一部分，剩下的是你的事」。</p>
 
 <div class="callout-title">避坑清单</div>

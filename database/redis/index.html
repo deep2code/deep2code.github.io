@@ -91,7 +91,10 @@
         </div>
     </header>
 
-    <p>「Redis 快是因为在内存里」——这句话只答对了三分之一，而且解释不了任何线上问题。真正要搞清楚的是：单线程为什么不是瓶颈、什么操作会把它卡死、内存满了先淘汰谁、fork 一次要停多久、主从切换会不会丢数据。这篇先给一套「出问题时按什么顺序敲命令」的动手流程和一份必调配置速查，再按线程模型、数据结构、内存管理、持久化、复制与集群、缓存正确性的顺序把机制拆开，最后收拢部署形态与配置组合的选型。</p>
+    <p>「Redis 快是因为在内存里」——这句话只答对了三分之一，而且解释不了任何线上问题。</p>
+<p>真正要搞清楚的是：单线程为什么不是瓶颈、什么操作会把它卡死、内存满了先淘汰谁、fork 一次要停多久、主从切换会不会丢数据。</p>
+<p>这篇先给一套「出问题时按什么顺序敲命令」的动手流程和一份必调配置速查，再按线程模型、数据结构、内存管理、持久化、复制与集群、缓存正确性的顺序把机制拆开。</p>
+<p>最后收拢部署形态与配置组合的选型。</p>
 
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
@@ -526,7 +529,8 @@ flowchart TB
         <p>纯缓存实例请直接用 <code>allkeys-lru</code>，不要依赖「每个 key 都记得设 TTL」这种人工纪律。</p>
     </div>
 
-    <p>Redis 的 LRU 是<strong>近似</strong>的：真正的 LRU 需要一条全局链表，每次访问都要移动节点，内存和 CPU 都不划算。Redis 的做法是每个对象头里存 24 bit 的时钟，淘汰时随机采样 <code>maxmemory-samples</code>（默认 5）个 key，挑最旧的；再用一个 16 大小的淘汰池跨轮次保留候选，让结果逼近真实 LRU。</p>
+    <p>Redis 的 LRU 是<strong>近似</strong>的：真正的 LRU 需要一条全局链表，每次访问都要移动节点，内存和 CPU 都不划算。Redis 的做法是每个对象头里存 24 bit 的时钟，淘汰时随机采样 <code>maxmemory-samples</code>（默认 5）个 key，挑最旧的；</p>
+<p>再用一个 16 大小的淘汰池跨轮次保留候选，让结果逼近真实 LRU。</p>
 
     <table>
         <thead>
@@ -766,7 +770,8 @@ sequenceDiagram
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
         <div class="callout-title">脑裂：两个主库同时接受写入</div>
-        <p>主库 M 因为网络分区与 Sentinel 失联，但<strong>客户端仍能连到它</strong>。Sentinel 把从库 S 提为新主，此时集群里有两个主库在收写入。网络恢复后，老主 M 被降级为从库，它会清空自己的数据去全量同步新主——<strong>分区期间写入 M 的数据全部消失</strong>。</p>
+        <p>主库 M 因为网络分区与 Sentinel 失联，但<strong>客户端仍能连到它</strong>。Sentinel 把从库 S 提为新主，此时集群里有两个主库在收写入。</p>
+<p>网络恢复后，老主 M 被降级为从库，它会清空自己的数据去全量同步新主——<strong>分区期间写入 M 的数据全部消失</strong>。</p>
         <pre><code class="language-bash"># 至少 1 个从库、且延迟不超过 10 秒，主库才接受写入
 # 否则主动拒绝写，用可用性换一致性
 min-replicas-to-write 1
@@ -827,7 +832,8 @@ flowchart TB
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">hash tag 用过头会造成数据倾斜</div>
-        <p>hash tag 很好用，但如果给一大批 key 用了同一个 tag（比如所有商品都用 <code>{product}</code>），它们会全挤进同一个 slot、同一个节点——分片直接失效，那个节点成为热点和内存瓶颈。tag 的粒度应该是「业务上必须一起操作的最小单元」，通常是单个用户、单个订单。</p>
+        <p>hash tag 很好用，但如果给一大批 key 用了同一个 tag（比如所有商品都用 <code>{product}</code>），它们会全挤进同一个 slot、同一个节点——分片直接失效，那个节点成为热点和内存瓶颈。</p>
+<p>tag 的粒度应该是「业务上必须一起操作的最小单元」，通常是单个用户、单个订单。</p>
     </div>
 
     <h2>② 原理 · 缓存一致性与三大问题</h2>
@@ -950,7 +956,8 @@ flowchart TB
     <div class="callout callout-tip">
         <div class="callout-icon">✅</div>
         <div class="callout-title">为什么是「删缓存」而不是「更新缓存」</div>
-        <p>三个理由：① 删是幂等的，并发下无顺序问题，更新则会因为执行顺序交错而留下旧值；② 缓存值往往是多表聚合的结果，更新意味着在写路径上重算一遍，成本高；③ 写完未必有人读，删掉是惰性加载，能省掉大量无人访问的计算。</p>
+        <p>三个理由：① 删是幂等的，并发下无顺序问题，更新则会因为执行顺序交错而留下旧值；② 缓存值往往是多表聚合的结果，更新意味着在写路径上重算一遍，成本高；</p>
+<p>③ 写完未必有人读，删掉是惰性加载，能省掉大量无人访问的计算。</p>
         <p>再加一道保险：所有缓存都设一个兜底 TTL。即使删除彻底失败，脏数据的生命周期也被限制住了——这是成本最低、覆盖面最广的一条防线。</p>
     </div>
 
@@ -1079,7 +1086,8 @@ sequenceDiagram
         </tbody>
     </table>
 
-    <p>两类问题的治法方向是不同的：<strong>大 key 靠拆</strong>（按业务维度拆成多个 key，或拆成分片 Hash 让每片落在 listpack 编码内），删除一律用 <code>UNLINK</code>；<strong>热 key 靠挡与散</strong>（本地缓存吃掉大部分请求，或给 key 加随机后缀复制成 N 份副本轮询读），因为热 key 在 Cluster 下加节点完全没用——它只占一个 slot。业务侧该用什么结构承载、怎么拆分建模，见 <a href="../cache/redis-practice/">数据结构选型与业务建模</a>。</p>
+    <p>两类问题的治法方向是不同的：<strong>大 key 靠拆</strong>（按业务维度拆成多个 key，或拆成分片 Hash 让每片落在 listpack 编码内），删除一律用 <code>UNLINK</code>；</p>
+<p><strong>热 key 靠挡与散</strong>（本地缓存吃掉大部分请求，或给 key 加随机后缀复制成 N 份副本轮询读），因为热 key 在 Cluster 下加节点完全没用——它只占一个 slot。业务侧该用什么结构承载、怎么拆分建模，见 <a href="../cache/redis-practice/">数据结构选型与业务建模</a>。</p>
 
     <h2>③ 场景 · 部署形态与配置组合怎么选</h2>
 
@@ -1119,7 +1127,8 @@ sequenceDiagram
         </tbody>
     </table>
 
-    <p><strong>不适用边界</strong>：这篇讲的是 Redis 自身的机制与排障。缓存该不该加、命中率算式与四项成本在 <a href="../cache/">缓存的收益与代价</a>；缓存与数据库的一致性推演在 <a href="../cache/problems/">缓存一致性与失效</a>；用什么结构承载业务、大 key 怎么拆在 <a href="../cache/redis-practice/">数据结构选型与业务建模</a>；多级缓存的拓扑与失效难度在 <a href="../cache/architecture/">多级缓存与拓扑</a>；回源查询本身慢怎么治在 <a href="../optimization/slow-query/">慢查询治理</a>；指标怎么采、阈值怎么定在 <a href="../../observability/metrics/">指标与监控</a>。</p>
+    <p><strong>不适用边界</strong>：这篇讲的是 Redis 自身的机制与排障。缓存该不该加、命中率算式与四项成本在 <a href="../cache/">缓存的收益与代价</a>；缓存与数据库的一致性推演在 <a href="../cache/problems/">缓存一致性与失效</a>；</p>
+<p>用什么结构承载业务、大 key 怎么拆在 <a href="../cache/redis-practice/">数据结构选型与业务建模</a>；多级缓存的拓扑与失效难度在 <a href="../cache/architecture/">多级缓存与拓扑</a>；回源查询本身慢怎么治在 <a href="../optimization/slow-query/">慢查询治理</a>；指标怎么采、阈值怎么定在 <a href="../../observability/metrics/">指标与监控</a>。</p>
 
     <h2>最容易踩的坑</h2>
     <div class="callout callout-danger">

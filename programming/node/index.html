@@ -102,7 +102,8 @@
     </div>
 
     <h2>① 用法 · 选型自查清单与生产启动的定式</h2>
-    <p>会写 Node 的人缺的不是语法，是两样东西：立项时判断「这个需求要不要用 Node」的固定问法，和上线时那份不该由每个人重新摸索的启动配置。这一层只给结论和可直接敲的命令，为什么是这些数字见原理层。</p>
+    <p>会写 Node 的人缺的不是语法，是两样东西：立项时判断「这个需求要不要用 Node」的固定问法，和上线时那份不该由每个人重新摸索的启动配置。</p>
+<p>这一层只给结论和可直接敲的命令，为什么是这些数字见原理层。</p>
     <p>先过自查表。七项里前六项任意一项不过，都要先改设计而不是先写代码；最后一项不过，其余全过也不要选。</p>
     <table>
         <thead>
@@ -173,8 +174,10 @@ kill -SIGTERM $(pgrep -f 'node server.js')</code></pre>
 
     <h2>② 原理 · 单线程加非阻塞 IO 换到了什么，代价是什么</h2>
     <p>搞清这一节能解决一个日常判断：面对某个 API 调用，你能直接说出它会不会阻塞事件循环。</p>
-    <p>传统 thread-per-connection 模型里一个连接对应一个线程，Linux 上线程栈默认 8MB（<code>ulimit -s</code> 通常显示 8192），一万个连接光虚拟内存就要 80GB，再叠加上下文切换与调度器压力，几千并发就是天花板。Node 的做法是一个连接只占一个 fd 加一个几 KB 的 JS 对象，所有连接共享同一个事件循环线程，十万级空闲长连接的内存开销在几百 MB 量级。API 网关、BFF 聚合层、WebSocket 推送这些场景的全部优势就来自这一点。</p>
-    <p>代价非常直接：<strong>这个唯一的线程同时也是执行业务代码的线程。</strong>一次不让出控制权的同步操作，其耗时会原样加到当时所有在途请求的延迟上。这不是「性能差一点」，而是「一个请求能打死整个进程」。下面这张图把「代码到底跑在哪个线程上」分清楚——这是判断某个操作会不会阻塞的唯一依据。</p>
+    <p>传统 thread-per-connection 模型里一个连接对应一个线程，Linux 上线程栈默认 8MB（<code>ulimit -s</code> 通常显示 8192），一万个连接光虚拟内存就要 80GB，再叠加上下文切换与调度器压力，几千并发就是天花板。</p>
+<p>Node 的做法是一个连接只占一个 fd 加一个几 KB 的 JS 对象，所有连接共享同一个事件循环线程，十万级空闲长连接的内存开销在几百 MB 量级。API 网关、BFF 聚合层、WebSocket 推送这些场景的全部优势就来自这一点。</p>
+    <p>代价非常直接：<strong>这个唯一的线程同时也是执行业务代码的线程。</strong>一次不让出控制权的同步操作，其耗时会原样加到当时所有在途请求的延迟上。这不是「性能差一点」，而是「一个请求能打死整个进程」。</p>
+<p>下面这张图把「代码到底跑在哪个线程上」分清楚——这是判断某个操作会不会阻塞的唯一依据。</p>
     <div class="mermaid">
 flowchart TB
     subgraph JS["主线程：唯一执行你 JavaScript 的地方"]
@@ -198,7 +201,8 @@ flowchart TB
     A2 --> D["阻塞点：耗时直接叠加到所有在途请求"]
     A3 --> D
     </div>
-    <p>很多人以为「用了 async/await 就不会阻塞」，这是最常见的误解。<code>await</code> 只对真正交给 libuv 或内核的异步操作有效，一个 <code>await</code> 包着的纯计算函数照样把线程占死。判断标准只有一条：<strong>这段代码有没有真的把控制权交回事件循环。</strong>注意上图里线程池只服务四类操作，所以调大 <code>UV_THREADPOOL_SIZE</code> 对纯计算和网络 IO 都没有任何帮助。</p>
+    <p>很多人以为「用了 async/await 就不会阻塞」，这是最常见的误解。<code>await</code> 只对真正交给 libuv 或内核的异步操作有效，一个 <code>await</code> 包着的纯计算函数照样把线程占死。判断标准只有一条：<strong>这段代码有没有真的把控制权交回事件循环。</strong></p>
+<p>注意上图里线程池只服务四类操作，所以调大 <code>UV_THREADPOOL_SIZE</code> 对纯计算和网络 IO 都没有任何帮助。</p>
     <table>
         <thead>
             <tr><th>会阻塞的操作</th><th>为什么阻塞</th><th>量级参考（典型 x86 单核）</th><th>替代做法</th></tr>
@@ -267,12 +271,14 @@ sequenceDiagram
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">在 K8s 上不要再叠 cluster</div>
-        <p>「一个 Pod 限 2 核，里面 cluster fork 了 <code>os.cpus().length</code> 也就是宿主机的 64 个 worker」是真实会发生的配置。结果是 64 个进程抢 2 核配额，每个进程各自持有 V8 堆、连接池和定时器，内存翻几十倍、上下文切换暴涨、下游连接数被打爆。如果历史代码里已经有 cluster，至少要把 worker 数改成读环境变量并在容器里显式设成 1。</p>
+        <p>「一个 Pod 限 2 核，里面 cluster fork 了 <code>os.cpus().length</code> 也就是宿主机的 64 个 worker」是真实会发生的配置。结果是 64 个进程抢 2 核配额，每个进程各自持有 V8 堆、连接池和定时器，内存翻几十倍、上下文切换暴涨、下游连接数被打爆。</p>
+<p>如果历史代码里已经有 cluster，至少要把 worker 数改成读环境变量并在容器里显式设成 1。</p>
     </div>
 
     <h2>② 原理 · 内存约束：堆上限必须按容器 limit 配</h2>
     <p>搞清这一节能解决那个最讨厌的现象：容器被杀了，退出码 137，但应用日志里一行异常都没有。</p>
-    <p>V8 的老生代堆有硬上限。Node 12 之前 64 位下默认约 1.5GB；Node 12 之后改成按可用内存推算，但<strong>在容器里它读到的是宿主机内存，不是 cgroup limit</strong>，所以生产环境必须显式指定 <code>--max-old-space-size</code>（单位 MB）。这和 JVM 早年不感知容器内存是一模一样的坑，后果也一样：被 OOMKilled，退出码 137，日志里连一条 <code>JavaScript heap out of memory</code> 都没有。</p>
+    <p>V8 的老生代堆有硬上限。Node 12 之前 64 位下默认约 1.5GB；Node 12 之后改成按可用内存推算，但<strong>在容器里它读到的是宿主机内存，不是 cgroup limit</strong>，所以生产环境必须显式指定 <code>--max-old-space-size</code>（单位 MB）。</p>
+<p>这和 JVM 早年不感知容器内存是一模一样的坑，后果也一样：被 OOMKilled，退出码 137，日志里连一条 <code>JavaScript heap out of memory</code> 都没有。</p>
     <p>关键是别把堆上限设成等于 limit。<strong>RSS 等于老生代堆 加 新生代两个 semi-space 加 代码与元数据 加 堆外内存（Buffer、原生模块、TLS 会话、zlib 缓冲）。</strong>Buffer 完全不在老生代里，一个大量转发文件的服务堆外可能比堆还大。经验配比是堆上限取 limit 的 65%-75%：limit 512Mi 配 320、1Gi 配 700、2Gi 配 1400、4Gi 配 2800。</p>
     <pre><code class="language-bash"># 容器 limit 为 2Gi 时的典型启动参数
 node --max-old-space-size=1400 \
@@ -425,7 +431,9 @@ stateDiagram-v2
     <h2>③ 场景 · 什么场景 Node 是最优解，什么场景根本不该选</h2>
     <p>前面几节是逐条约束，这里收拢成按业务形态的判断：给方案、给理由、也给代价。</p>
     <p><strong>Node 最优的场景</strong>都有同一个特征：请求耗时的绝大部分花在等下游，业务自身几乎不算东西。典型是 API 网关与聚合层（一个请求扇出 10 个下游再拼装，全程并发等待，线程模型在这里反而笨重）、BFF（同时还吃「前后端同栈、类型定义共享」的红利）、实时推送（几万长连接每连接内存开销极小）、SSR 与中小项目全栈开发（招人与迭代速度都占优）、以及 Serverless（启动在 50-200ms 量级，比 JVM 冷启动有量级优势）。</p>
-    <p><strong>不该选的场景</strong>同样清楚：CPU 密集型处理（图像视频、批量加解密、复杂报表、模型推理）；需要强类型与成熟并发原语的核心领域逻辑（TypeScript 只在编译期存在，运行时拿到的仍是任意 JSON，跨进程边界必须自己做运行时校验，见 <a href="typescript/">TypeScript 工程化</a>）；重度依赖 JVM 或 Go 生态中间件的系统（客户端 SDK 成熟度差距是真实存在的）；以及团队没有 JS 工程能力——最后这条比前三条都致命，技术栈很少是瓶颈，人才是。</p>
+    <p><strong>不该选的场景</strong>同样清楚：CPU 密集型处理（图像视频、批量加解密、复杂报表、模型推理）；</p>
+<p>需要强类型与成熟并发原语的核心领域逻辑（TypeScript 只在编译期存在，运行时拿到的仍是任意 JSON，跨进程边界必须自己做运行时校验，见 <a href="typescript/">TypeScript 工程化</a>）；</p>
+<p>重度依赖 JVM 或 Go 生态中间件的系统（客户端 SDK 成熟度差距是真实存在的）；以及团队没有 JS 工程能力——最后这条比前三条都致命，技术栈很少是瓶颈，人才是。</p>
     <div class="mermaid">
 flowchart TB
     S["新服务选型"] --> Q1{"请求耗时主要花在<br/>等 IO 还是算 CPU"}
@@ -470,7 +478,9 @@ flowchart TB
             <tr><td>全局 <code>Map</code> 做缓存不设上限</td><td>内存单调上涨最终 OOM，且只有重启才清零</td><td>LRU 配 max 与 ttl，或直接用 Redis</td></tr>
         </tbody>
     </table>
-    <p><strong>不适用边界</strong>：这篇只负责「要不要用 Node、用的话有哪些硬约束」。阻塞到底发生在事件循环的哪个阶段、<code>setTimeout</code> 与 <code>setImmediate</code> 与微任务的实际执行顺序，在 <a href="event-loop/">Node.js 事件循环的六个阶段与实际影响</a>；确定卡住之后怎么定位到具体代码行，在 <a href="performance/">Node.js 性能诊断</a>；类型在运行时边界上失效怎么补，在 <a href="typescript/">TypeScript 工程化</a>；框架层的中间件模型与吞吐差异，在 <a href="framework-compare/">Node.js Web 框架选型</a>；把运行时整体换掉的收益与风险，在 <a href="bun/">Bun 是什么、快在哪、能不能上生产</a>。</p>
+    <p><strong>不适用边界</strong>：这篇只负责「要不要用 Node、用的话有哪些硬约束」。阻塞到底发生在事件循环的哪个阶段、<code>setTimeout</code> 与 <code>setImmediate</code> 与微任务的实际执行顺序，在 <a href="event-loop/">Node.js 事件循环的六个阶段与实际影响</a>；</p>
+<p>确定卡住之后怎么定位到具体代码行，在 <a href="performance/">Node.js 性能诊断</a>；类型在运行时边界上失效怎么补，在 <a href="typescript/">TypeScript 工程化</a>；框架层的中间件模型与吞吐差异，在 <a href="framework-compare/">Node.js Web 框架选型</a>；</p>
+<p>把运行时整体换掉的收益与风险，在 <a href="bun/">Bun 是什么、快在哪、能不能上生产</a>。</p>
     <p>这条路径上，本篇是入口：先划定 Node 能做什么不能做什么，下一篇把「为什么会卡」拆到事件循环的每个阶段。</p>
 
 <div class="callout-title">最容易踩的坑</div>

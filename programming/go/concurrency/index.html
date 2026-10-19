@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Go 的并发难点从来不在 <code>go</code> 这个关键字，而在三件事：goroutine 起来之后谁负责让它停、共享状态该用哪个原语保护、以及怎么让偶发的竞争在 CI 里稳定复现。这篇按这三件事组织——先给工程上已经收敛的几个标准定式，再展开 channel 与锁的语义细节，最后收拢选型判断。调度器与内存分配的运行时机制在 <a href="../">Go 运行时模型</a>，取消信号怎么一路传下去在 <a href="../context/">Context 篇</a>。</p>
+<p>Go 的并发难点从来不在 <code>go</code> 这个关键字，而在三件事：goroutine 起来之后谁负责让它停、共享状态该用哪个原语保护、以及怎么让偶发的竞争在 CI 里稳定复现。</p>
+<p>这篇按这三件事组织——先给工程上已经收敛的几个标准定式，再展开 channel 与锁的语义细节，最后收拢选型判断。调度器与内存分配的运行时机制在 <a href="../">Go 运行时模型</a>，取消信号怎么一路传下去在 <a href="../context/">Context 篇</a>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -278,7 +279,8 @@ stateDiagram-v2
         多个发送方时用额外的 done channel 协调而不是各自 close
     end note
 </div>
-<p>最高频的事故是<strong>往已关闭的 channel 发送</strong>：这不是死锁，是直接 panic，而且无法 recover（runtime 直接报 send on closed channel）。典型场景：一个生产者还在跑，消费者那边觉得够了关了 channel，生产者下一次 send 就炸。正确做法是<strong>只让发送方关闭 channel</strong>，接收方通过 <code>range</code> 或检查 <code>ok</code> 来感知关闭。</p>
+<p>最高频的事故是<strong>往已关闭的 channel 发送</strong>：这不是死锁，是直接 panic，而且无法 recover（runtime 直接报 send on closed channel）。典型场景：一个生产者还在跑，消费者那边觉得够了关了 channel，生产者下一次 send 就炸。</p>
+<p>正确做法是<strong>只让发送方关闭 channel</strong>，接收方通过 <code>range</code> 或检查 <code>ok</code> 来感知关闭。</p>
 <p>第二高频的是<strong>对 nil channel 操作</strong>：<code>var ch chan int</code> 声明但没 make，send 和 recv 都永久阻塞。在 select 里这其实是个有用的技巧——把某个 case 的 channel 设为 nil 就等于禁用了它，不会被选中。</p>
 
 <h2>② 原理 · select 的随机性与 time.After 的内存泄漏</h2>
@@ -534,7 +536,8 @@ go build -race -o myapp_race ./cmd/server
         <tr><td>block 与 mutex profile</td><td>谁在等锁、等了多久、哪把锁争用最严重</td><td>不发生争用的锁；默认关闭需先打开采样</td><td>压测与线上排障</td></tr>
     </tbody>
 </table>
-<p>Go 的<strong>内存模型</strong>有一条核心规则：<strong>没有同步操作就没有可见性保证</strong>。你不能靠「感觉」推断一个 goroutine 写入的值对另一个 goroutine 可见——必须通过 channel 的发送与接收、sync 包的锁操作、atomic 包的函数来建立 happens-before 关系。特别是 <code>atomic</code>：它保证操作本身是原子的，但<strong>不提供排序保证之外的互斥</strong>——两个 atomic 操作之间的非 atomic 访问仍然可能竞争。</p>
+<p>Go 的<strong>内存模型</strong>有一条核心规则：<strong>没有同步操作就没有可见性保证</strong>。你不能靠「感觉」推断一个 goroutine 写入的值对另一个 goroutine 可见——必须通过 channel 的发送与接收、sync 包的锁操作、atomic 包的函数来建立 happens-before 关系。</p>
+<p>特别是 <code>atomic</code>：它保证操作本身是原子的，但<strong>不提供排序保证之外的互斥</strong>——两个 atomic 操作之间的非 atomic 访问仍然可能竞争。</p>
 <div class="mermaid">
 sequenceDiagram
     participant G1 as goroutine A
@@ -564,7 +567,9 @@ sequenceDiagram
         <tr><td>只是想「等一下」看并发结果</td><td>永远不用 <code>time.Sleep</code>，改用 <code>WaitGroup</code> 或 channel</td><td><code>sleep</code> 不建立任何 happens-before 关系，时长也不确定</td><td>无；这是纯粹的收益</td></tr>
     </tbody>
 </table>
-<p><strong>不适用边界</strong>：并发原语解决不了「取消信号没传下去」——请求悬挂、超时不生效、连接池被慢请求耗尽都在 <a href="../context/">Go Context 的传播、取消与误用</a>。单个接口本身慢、GC 毛刺、线程数异常增长属于运行时层面，在 <a href="../">Go 运行时模型</a> 与 <a href="../../../observability/">可观测系列</a>。共享数据结构选错导致的复杂度问题（用切片线性查找当索引）在 <a href="../../algorithms/">算法与数据结构</a>。高并发下日志的分配与写入顺序见 <a href="../slog/">结构化日志与 log/slog</a>；Web 框架每请求一个 goroutine 的模型与中间件里的并发约束见 <a href="../iris/">Go Web 框架选型方法论</a>。</p>
+<p><strong>不适用边界</strong>：并发原语解决不了「取消信号没传下去」——请求悬挂、超时不生效、连接池被慢请求耗尽都在 <a href="../context/">Go Context 的传播、取消与误用</a>。</p>
+<p>单个接口本身慢、GC 毛刺、线程数异常增长属于运行时层面，在 <a href="../">Go 运行时模型</a> 与 <a href="../../../observability/">可观测系列</a>。共享数据结构选错导致的复杂度问题（用切片线性查找当索引）在 <a href="../../algorithms/">算法与数据结构</a>。</p>
+<p>高并发下日志的分配与写入顺序见 <a href="../slog/">结构化日志与 log/slog</a>；Web 框架每请求一个 goroutine 的模型与中间件里的并发约束见 <a href="../iris/">Go Web 框架选型方法论</a>。</p>
 <p>这条路径上，上一篇讲的是运行时替你管的那部分，本篇讲你自己要管的并发结构，下一篇把范围收窄到「取消与超时怎么一路传下去」——它是并发正确性的另一半。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../">← 上一步：Go 运行时模型：GMP 调度、内存分配与 GC</a> · <a href="../context/">下一步：Go Context 的传播、取消与误用 →</a></p>

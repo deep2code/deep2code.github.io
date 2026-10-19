@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="只讲用 LangChain 与 LangGraph 实现 Agent 的工程问题：工具的 name 与 description 就是给模型看的文档、工具过多导致选择准确率下降的分层解法、把模型输出当不可信参数的执行网关（schema 校验、带调用者身份鉴权、高风险转人工）、最大步数与 token 预算与耗时三重闸门、为什么用 LangGraph 而非 AgentExecutor、以及什么场景根本不该用 Agent。">
+    <meta name="description" content="只讲用 LangChain 与 LangGraph 实现 Agent 的工程问题：工具 name 与 description 就是给模型看的文档、工具过多时选择准确率下降的分层解法、把模型输出当不可信参数的执行网关、步数与 token 预算三重闸门，以及什么场景不该用 Agent。">
     <meta name="keywords" content="LangChain,Agent 与工具调用,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/ai/langchain/agent/">
     <meta property="og:title" content="LangChain Agent 的工程约束：工具定义、安全边界与终止条件 - LangChain - 资深码农">
-    <meta property="og:description" content="只讲用 LangChain 与 LangGraph 实现 Agent 的工程问题：工具的 name 与 description 就是给模型看的文档、工具过多导致选择准确率下降的分层解法、把模型输出当不可信参数的执行网关（schema 校验、带调用者身份鉴权、高风险转人工）、最大步数与 token 预算与耗时三重闸门、为什么用 LangGraph 而非 AgentExecutor、以及什么场景根本不该用 Agent。">
+    <meta property="og:description" content="只讲用 LangChain 与 LangGraph 实现 Agent 的工程问题：工具 name 与 description 就是给模型看的文档、工具过多时选择准确率下降的分层解法、把模型输出当不可信参数的执行网关、步数与 token 预算三重闸门，以及什么场景不该用 Agent。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/ai/langchain/agent/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="LangChain Agent 的工程约束：工具定义、安全边界与终止条件 - LangChain">
-    <meta name="twitter:description" content="只讲用 LangChain 与 LangGraph 实现 Agent 的工程问题：工具的 name 与 description 就是给模型看的文档、工具过多导致选择准确率下降的分层解法、把模型输出当不可信参数的执行网关（schema 校验、带调用者身份鉴权、高风险转人工）、最大步数与 token 预算与耗时三重闸门、为什么用 LangGraph 而非 AgentExecutor、以及什么场景根本不该用 Agent。">
+    <meta name="twitter:description" content="只讲用 LangChain 与 LangGraph 实现 Agent 的工程问题：工具 name 与 description 就是给模型看的文档、工具过多时选择准确率下降的分层解法、把模型输出当不可信参数的执行网关、步数与 token 预算三重闸门，以及什么场景不该用 Agent。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -67,11 +67,12 @@
                     </header>
                     <div class="article-content">
 
-<p>Agent 的规划范式、ReAct 循环、反思与多智能体协作见站内 AI Agent 一篇。<strong>本篇只讲用 LangChain 与 LangGraph 实现 Agent 时的工程问题</strong>：工具怎么定义才不会选错、工具执行的安全边界在哪、循环怎么收住、为什么该用 LangGraph、以及什么场景根本不该用 Agent。</p>
+<p>Agent 的规划范式、ReAct 循环、反思与多智能体协作见站内 AI Agent 一篇。<strong>本篇只讲用 LangChain 与 LangGraph 实现 Agent 时的工程问题</strong>：工具怎么定义才不会选错、安全边界在哪、循环怎么收住、为什么该用 LangGraph、什么场景不该用 Agent。</p>
 
 <h2>工具定义的质量就是 Agent 的上限</h2>
 
-<p>一个反复被忽略的事实：<strong>工具的 <code>name</code> 和 <code>description</code> 会被序列化进请求发给模型，它们就是模型唯一能看到的文档</strong>。描述写成「查询数据」，模型只能靠猜；参数收一个自由字符串，模型就会往里塞各种东西。调 Agent 效果时，先改工具定义，再改系统提示——前者的收益通常大一个量级。</p>
+<p>一个反复被忽略的事实：<strong>工具的 <code>name</code> 和 <code>description</code> 会被序列化进请求发给模型，它们就是模型唯一能看到的文档</strong>。描述写成「查询数据」，模型只能靠猜；参数收自由字符串，模型就会往里塞各种东西。</p>
+<p>调 Agent 效果时，先改工具定义，再改系统提示——前者的收益通常大一个量级。</p>
 
 <pre><code class="language-python">from typing import Literal, Optional
 from pydantic import BaseModel, Field
@@ -125,12 +126,14 @@ def get_leave_balance(employee_id: str, leave_type: str, year: int) -&gt; str:
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">工具数量的准确率悬崖</div>
-    <p>工具数量超过十几个之后，选择准确率会明显下降，而且下降不是线性的——近义工具越多退化越快。两种解法：<strong>分层选择</strong>，先让模型在五六个工具组里选一个组，再在组内选具体工具；<strong>动态裁剪</strong>，根据当前会话上下文或前置分类只暴露相关的几个工具。顺带的好处是工具 schema 不再全量占用输入 token。</p>
+    <p>工具超过十几个后，选择准确率明显下降，而且不是线性下降——近义工具越多退化越快。两种解法：<strong>分层选择</strong>，先让模型在五六个工具组里选一个组，再在组内选具体工具；</p>
+<p><strong>动态裁剪</strong>，根据当前会话上下文或前置分类只暴露相关的几个工具。顺带的好处是工具 schema 不再全量占用输入 token。</p>
 </div>
 
 <h2>工具执行的安全边界</h2>
 
-<p>这是本篇最该强调的部分。Agent 的运行机制是<strong>把模型输出当作参数去调用真实函数</strong>，而模型的输入包含用户消息、检索到的文档、上一轮工具输出——这三类全是不可信内容。于是必须把工具执行入口当成外部攻击面来设计，和处理 HTTP 请求参数一样严格。信任边界与注入的系统讨论见站内 Web 安全总览一篇。</p>
+<p>这是本篇最该强调的部分。Agent 的运行机制是<strong>把模型输出当作参数去调用真实函数</strong>，而模型输入包含用户消息、检索文档、上一轮工具输出——这三类全是不可信内容。</p>
+<p>于是必须把工具执行入口当成外部攻击面来设计，和处理 HTTP 请求参数一样严格。信任边界与注入的系统讨论见站内 Web 安全总览一篇。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -259,7 +262,8 @@ def execute_tool(name: str, args: dict, ctx: ToolContext, tools: dict):
 
 <h2>循环与终止：三重闸门</h2>
 
-<p>Agent 会陷入两类病态：<strong>反复调用同一个工具</strong>（参数几乎不变，因为模型没理解返回结果），以及<strong>在两个工具之间来回摆动</strong>（每次都觉得另一个更合适）。只设最大步数不够，因为每一步都会把完整历史重新发一遍，<strong>token 消耗随步数超线性增长</strong>，可能在步数没到上限时就烧掉大量费用。</p>
+<p>Agent 会陷入两类病态：<strong>反复调用同一个工具</strong>（参数几乎不变，因为模型没理解返回结果），以及<strong>在两个工具之间来回摆动</strong>（每次都觉得另一个更合适）。</p>
+<p>只设最大步数不够，因为每一步都会把完整历史重新发一遍，<strong>token 消耗随步数超线性增长</strong>，可能在步数没到上限时就烧掉大量费用。</p>
 
 <table>
 <thead><tr><th>闸门</th><th>建议值</th><th>不设的后果</th><th>触发后怎么做</th></tr></thead>
@@ -386,7 +390,8 @@ with SqliteSaver.from_conn_string("checkpoints.sqlite") as saver:
 
 <h2>可靠性与成本</h2>
 
-<p>Agent 的失败模式比单次调用多一层：模型调用会失败，工具也会失败，而工具失败之后的处理方式直接决定 Agent 能不能自愈。<strong>工具错误应该结构化后回传给模型，让它调整策略，但必须脱敏</strong>——数据库异常原文回传会被模型当成信息写进答案。</p>
+<p>Agent 的失败模式比单次调用多一层：模型调用会失败，工具也会失败，而工具失败之后的处理方式直接决定 Agent 能不能自愈。</p>
+<p><strong>工具错误应该结构化后回传给模型，让它调整策略，但必须脱敏</strong>——数据库异常原文回传会被模型当成信息写进答案。</p>
 
 <table>
 <thead><tr><th>失效点</th><th>表现</th><th>处置</th></tr></thead>
@@ -400,7 +405,8 @@ with SqliteSaver.from_conn_string("checkpoints.sqlite") as saver:
 </tbody>
 </table>
 
-<p>成本与延迟是<strong>按步数累加</strong>的，而且因为每步都重发完整历史，实际增长比线性更快。一个六步的 Agent，粗略估算是：每步输入 token 约等于「系统提示加工具 schema」加「历史累积」，输出 token 较小。所以第六步的输入可能是第一步的三四倍，总成本往往是单次调用的十几倍。</p>
+<p>成本与延迟<strong>按步数累加</strong>，而且每步都重发完整历史，实际增长比线性更快。一个六步的 Agent，粗略估算：每步输入 token 约等于「系统提示加工具 schema」加「历史累积」，输出 token 较小。</p>
+<p>所以第六步的输入可能是第一步的三四倍，总成本往往是单次调用的十几倍。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -413,7 +419,7 @@ flowchart TB
     Q3 -->|否| A4["只读工具 Agent<br/>设三重闸门与轨迹记录"]
 </div>
 
-<p>最重要的一条结论：<strong>能用确定性流程解决的就不要用 Agent</strong>。Agent 的价值在于处理无法提前枚举分支的任务，把它用在流程已知的场景上，等于用十几倍成本换来更差的稳定性。</p>
+<p>最重要的一条结论：<strong>能用确定性流程解决的就不要用 Agent</strong>。Agent 的价值在于处理无法提前枚举分支的任务，用在流程已知的场景，等于用十几倍成本换来更差的稳定性。</p>
 
 <h2>评测：轨迹比对是最低门槛</h2>
 

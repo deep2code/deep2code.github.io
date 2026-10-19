@@ -89,9 +89,11 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>用 JPA 写业务的人几乎都问过这三句话：为什么我只改了对象、没调 <code>save</code>，数据库居然更新了？为什么我调了 <code>save</code>，日志里当场却没有 SQL？为什么方法返回之后取一个关联字段就抛 <code>LazyInitializationException</code>？这三个问题的答案是同一个东西——<strong>持久化上下文（Persistence Context）</strong>。不理解它，Hibernate 的行为看起来全是玄学；理解了它，这些现象都是必然结果，而且可以提前预判。</p>
+<p>用 JPA 写业务的人几乎都问过这三句话：为什么我只改了对象、没调 <code>save</code>，数据库居然更新了？为什么我调了 <code>save</code>，日志里当场却没有 SQL？为什么方法返回之后取一个关联字段就抛 <code>LazyInitializationException</code>？</p>
+<p>这三个问题的答案是同一个东西——<strong>持久化上下文（Persistence Context）</strong>。不理解它，Hibernate 的行为看起来全是玄学；理解了它，这些现象都是必然结果，而且可以提前预判。</p>
 
-<p>这篇不写 CRUD 教程，先给两个框架的最小可用写法与选型定式，再讲机制和陷阱。SQL 本身怎么写快、索引怎么建、执行计划怎么读，见站内 <a href="../../../database/mysql/">MySQL 深度剖析</a> 与 <a href="../../../database/optimization/">数据库优化</a>；连接池参数矩阵、真正的批量写入、事务边界与事务内 RPC 的危害，见 <a href="../../../observability/performance/">性能优化</a>。这几处本文只给结论，不重复展开。</p>
+<p>这篇不写 CRUD 教程，先给两个框架的最小可用写法与选型定式，再讲机制和陷阱。SQL 本身怎么写快、索引怎么建、执行计划怎么读，见站内 <a href="../../../database/mysql/">MySQL 深度剖析</a> 与 <a href="../../../database/optimization/">数据库优化</a>；</p>
+<p>连接池参数矩阵、真正的批量写入、事务边界与事务内 RPC 的危害，见 <a href="../../../observability/performance/">性能优化</a>。这几处本文只给结论，不重复展开。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -260,7 +262,8 @@ class OrderQueryServiceSqlCountTest {
 
 <p>搞清这一节能解释开头那三个「玄学」现象，也能解释为什么批处理里事务越长越慢。</p>
 
-<p>持久化上下文是 <code>EntityManager</code>（Hibernate 里是 <code>Session</code>）背后的那块内存区域。在 Spring 的默认配置下，它的生命周期<strong>与事务绑定</strong>：事务开始时创建，提交或回滚时销毁。它同时承担三个职责，而这三个职责被人用三个不同名字讨论，导致很多人以为它们是三样东西。</p>
+<p>持久化上下文是 <code>EntityManager</code>（Hibernate 里是 <code>Session</code>）背后的那块内存区域。在 Spring 的默认配置下，它的生命周期<strong>与事务绑定</strong>：事务开始时创建，提交或回滚时销毁。</p>
+<p>它同时承担三个职责，而这三个职责被人用三个不同名字讨论，导致很多人以为它们是三样东西。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -280,7 +283,8 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">一级缓存的隐性成本</div>
-    <p>持久化上下文里有多少 managed 实体，脏检查就要比对多少份快照。在一个事务里 <code>findAll()</code> 出十万条实体再做循环处理，提交时的脏检查会明显卡顿，而且这些实体在事务结束前不会被 GC 回收。批处理场景要么用 DTO 投影绕开管理，要么每处理若干条主动 <code>flush()</code> 加 <code>clear()</code>。堆为什么会因此涨上去、以及怎么确认是它，见 <a href="../jvm-tuning/">JVM 调优实战</a>。</p>
+    <p>持久化上下文里有多少 managed 实体，脏检查就要比对多少份快照。在一个事务里 <code>findAll()</code> 出十万条实体再做循环处理，提交时的脏检查会明显卡顿，而且这些实体在事务结束前不会被 GC 回收。</p>
+<p>批处理场景要么用 DTO 投影绕开管理，要么每处理若干条主动 <code>flush()</code> 加 <code>clear()</code>。堆为什么会因此涨上去、以及怎么确认是它，见 <a href="../jvm-tuning/">JVM 调优实战</a>。</p>
 </div>
 
 <h2>② 原理 · 实体的四种状态，以及每个 API 实际在做什么</h2>
@@ -313,9 +317,11 @@ stateDiagram-v2
     end note
 </div>
 
-<p>两个必须纠正的流传很广的说法。第一，<strong><code>merge</code> 不是「把这个对象变成受管」</strong>，它是「把这个对象的字段值复制到一个受管副本上，然后返回那个副本」。写成 <code>em.merge(user);</code> 却继续操作原来的 <code>user</code>，改动会全部丢失，必须写 <code>user = em.merge(user);</code>。Spring Data 的 <code>save()</code> 同理，它内部判断主键是否为空来决定走 <code>persist</code> 还是 <code>merge</code>，所以<strong>对有主键的对象调 <code>save()</code> 会先发一条 SELECT</strong> 把数据库里的行加载进来做合并，这是很多人没意识到的额外查询。</p>
+<p>两个必须纠正的流传很广的说法。第一，<strong><code>merge</code> 不是「把这个对象变成受管」</strong>，它是「把这个对象的字段值复制到一个受管副本上，然后返回那个副本」。写成 <code>em.merge(user);</code> 却继续操作原来的 <code>user</code>，改动会全部丢失，必须写 <code>user = em.merge(user);</code>。</p>
+<p>Spring Data 的 <code>save()</code> 同理，它内部判断主键是否为空来决定走 <code>persist</code> 还是 <code>merge</code>，所以<strong>对有主键的对象调 <code>save()</code> 会先发一条 SELECT</strong> 把数据库里的行加载进来做合并，这是很多人没意识到的额外查询。</p>
 
-<p>第二，<strong><code>persist</code> 不保证立刻发 INSERT</strong>。只有主键策略是 <code>IDENTITY</code>（依赖数据库自增）时，Hibernate 被迫立刻执行 INSERT 才能拿到主键填进身份映射表；用 <code>SEQUENCE</code> 或 <code>TABLE</code> 策略时它能先取号、把 INSERT 攒到 flush。这也解释了为什么 <strong>MySQL 自增主键下 JPA 的批量插入很难真正 batch</strong> ——每条都要立刻回写主键，JDBC 批处理攒不起来。真要批量写，方案见 <a href="../../../observability/performance/">性能优化</a> 里的批量写入部分。</p>
+<p>第二，<strong><code>persist</code> 不保证立刻发 INSERT</strong>。只有主键策略是 <code>IDENTITY</code>（依赖数据库自增）时，Hibernate 被迫立刻执行 INSERT 才能拿到主键填进身份映射表；用 <code>SEQUENCE</code> 或 <code>TABLE</code> 策略时它能先取号、把 INSERT 攒到 flush。</p>
+<p>这也解释了为什么 <strong>MySQL 自增主键下 JPA 的批量插入很难真正 batch</strong> ——每条都要立刻回写主键，JDBC 批处理攒不起来。真要批量写，方案见 <a href="../../../observability/performance/">性能优化</a> 里的批量写入部分。</p>
 
 <h2>② 原理 · flush 的时机，以及为什么 SQL 出现得比你想的晚</h2>
 
@@ -362,9 +368,11 @@ sequenceDiagram
 
 <p>搞清这一节能解释为什么「把 open-in-view 打开异常就没了」是最糟的修法：异常消失了，代价转移到了连接池上。</p>
 
-<p>先说清代理是怎么来的。<code>getReference()</code>（旧名 <code>getOne()</code>）根本不查数据库，它返回一个只填了主键的字节码代理；<code>@OneToMany</code> 默认 <code>FetchType.LAZY</code>，加载父实体时子集合也是一个代理集合。代理内部持有创建它的那个 Session 引用，第一次访问非主键字段时才去发 SQL 初始化自己。</p>
+<p>先说清代理是怎么来的。<code>getReference()</code>（旧名 <code>getOne()</code>）根本不查数据库，它返回一个只填了主键的字节码代理；<code>@OneToMany</code> 默认 <code>FetchType.LAZY</code>，加载父实体时子集合也是一个代理集合。</p>
+<p>代理内部持有创建它的那个 Session 引用，第一次访问非主键字段时才去发 SQL 初始化自己。</p>
 
-<p>事务在 Service 方法返回时结束，Session 关闭。此时代理仍在对象图里，Controller 或模板引擎再去 <code>getItems().size()</code>，代理找不到活着的 Session，抛 <code>LazyInitializationException: could not initialize proxy - no Session</code>。所以这个异常的本质不是「懒加载不好」，而是<strong>数据获取边界和事务边界没对齐</strong>：你在事务里没声明需要这份数据，出了事务才想要。</p>
+<p>事务在 Service 方法返回时结束，Session 关闭。此时代理仍在对象图里，Controller 或模板引擎再去 <code>getItems().size()</code>，代理找不到活着的 Session，抛 <code>LazyInitializationException: could not initialize proxy - no Session</code>。</p>
+<p>所以这个异常的本质不是「懒加载不好」，而是<strong>数据获取边界和事务边界没对齐</strong>：你在事务里没声明需要这份数据，出了事务才想要。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -387,7 +395,8 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">spring.jpa.open-in-view 默认是 true</div>
-    <p>Spring Boot 启动时会打一条 warn 说明这一点，几乎所有人都忽略了它。它的作用是把 <code>EntityManager</code> 的生命周期从事务扩展到整个请求，代价是<strong>数据库连接被持有到视图渲染完成</strong>。对返回 JSON 的 REST 服务来说，序列化阶段的每次懒加载访问都是一条额外 SQL，而且发生在事务之外、没有一致性保证。建议显式设为 <code>false</code>，把暴露出来的异常逐个用查询层修掉，而不是让它兜底。</p>
+    <p>Spring Boot 启动时会打一条 warn 说明这一点，几乎所有人都忽略了它。它的作用是把 <code>EntityManager</code> 的生命周期从事务扩展到整个请求，代价是<strong>数据库连接被持有到视图渲染完成</strong>。</p>
+<p>对返回 JSON 的 REST 服务来说，序列化阶段的每次懒加载访问都是一条额外 SQL，而且发生在事务之外、没有一致性保证。建议显式设为 <code>false</code>，把暴露出来的异常逐个用查询层修掉，而不是让它兜底。</p>
 </div>
 
 <table>
@@ -408,7 +417,8 @@ flowchart TB
 
 <p><strong>形态一：LAZY 集合在循环里被访问。</strong>查出 100 个订单，然后 <code>for (Order o : orders) o.getItems().size()</code>，每次访问都初始化一个独立的集合代理，总共 1 加 100 条 SQL。危险在于这段循环经常不在你写的代码里，而在 Jackson 序列化、模板渲染、或者某个 <code>toString()</code> 里。</p>
 
-<p><strong>形态二：<code>@ManyToOne</code> 和 <code>@OneToOne</code> 默认是 EAGER。</strong>这是 JPA 规范里一个公认的坏默认值。你以为自己只查订单，实际每条订单都会带出买家、带出买家的部门、层层展开，要么变成一个巨大的 JOIN，要么变成一串额外 SELECT。<strong>正确做法是把所有关联显式声明为 <code>fetch = FetchType.LAZY</code></strong>，需要的地方再用 fetch 或投影声明，把「默认不取、按需声明」变成团队规范。</p>
+<p><strong>形态二：<code>@ManyToOne</code> 和 <code>@OneToOne</code> 默认是 EAGER。</strong>这是 JPA 规范里一个公认的坏默认值。你以为自己只查订单，实际每条订单都会带出买家、带出买家的部门、层层展开，要么变成一个巨大的 JOIN，要么变成一串额外 SELECT。</p>
+<p><strong>正确做法是把所有关联显式声明为 <code>fetch = FetchType.LAZY</code></strong>，需要的地方再用 fetch 或投影声明，把「默认不取、按需声明」变成团队规范。</p>
 
 <table>
 <thead><tr><th>修法</th><th>SQL 条数</th><th>适用边界</th><th>注意</th></tr></thead>
@@ -423,7 +433,8 @@ flowchart TB
 
 <p>搞清这一节能避免这一簇里事故率最高的一种写法，它在测试环境完全没有症状。</p>
 
-<p>当 fetch 的是<strong>集合</strong>关联时，一行父实体会被 JOIN 成多行结果，数据库的 <code>limit</code> 和 <code>offset</code> 作用在 JOIN 后的行上，切出来的页和父实体的页对不上。Hibernate 的选择是干脆不把分页下推，而是<strong>把满足条件的全部结果集取到内存，在内存里做分页</strong>，并在日志里留下一行警告：</p>
+<p>当 fetch 的是<strong>集合</strong>关联时，一行父实体会被 JOIN 成多行结果，数据库的 <code>limit</code> 和 <code>offset</code> 作用在 JOIN 后的行上，切出来的页和父实体的页对不上。</p>
+<p>Hibernate 的选择是干脆不把分页下推，而是<strong>把满足条件的全部结果集取到内存，在内存里做分页</strong>，并在日志里留下一行警告：</p>
 
 <pre><code class="language-bash">WARN  org.hibernate.hql.internal.ast.QueryTranslatorImpl
       HHH000104: firstResult/maxResults specified with collection fetch; applying in memory!</code></pre>
@@ -579,7 +590,9 @@ flowchart TB
 
 <p>关于混用，唯一需要死守的边界是：<strong>同一张表的写操作只能由一个框架承担</strong>。原因回到本文第一节——JPA 的一级缓存不知道 MyBatis 在同一个事务里改过数据，之后 <code>findById</code> 会从身份映射表返回过期实体，而脏检查还会拿过期快照生成 UPDATE，把 MyBatis 的改动覆盖掉。这类 bug 在日志里看不出任何异常，排查成本极高。</p>
 
-<p>MyBatis 侧另外两个必须知道的点。第一，<code>#{}</code> 编译成预编译语句的占位符，参数走绑定变量；<code>${}</code> 是字符串拼接，值直接进 SQL 文本。表名、列名、排序方向这类结构位置无法用绑定变量，不得不用 <code>${}</code> 时必须用白名单校验取值，绝不能信任前端传来的字段名——参数化的完整边界见站内 <a href="../../../api/security/">接口安全</a>。第二，二级缓存默认关闭是件好事，开启后它以 namespace 为粒度失效，任意一条写操作会清掉整个 mapper 的缓存，命中率低且极易在多表关联场景读到脏数据。</p>
+<p>MyBatis 侧另外两个必须知道的点。第一，<code>#{}</code> 编译成预编译语句的占位符，参数走绑定变量；<code>${}</code> 是字符串拼接，值直接进 SQL 文本。</p>
+<p>表名、列名、排序方向这类结构位置无法用绑定变量，不得不用 <code>${}</code> 时必须用白名单校验取值，绝不能信任前端传来的字段名——参数化的完整边界见站内 <a href="../../../api/security/">接口安全</a>。</p>
+<p>第二，二级缓存默认关闭是件好事，开启后它以 namespace 为粒度失效，任意一条写操作会清掉整个 mapper 的缓存，命中率低且极易在多表关联场景读到脏数据。</p>
 
 <p>与这些判断对应的反模式：</p>
 

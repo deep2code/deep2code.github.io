@@ -90,7 +90,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>把 GraphQL 放进微服务架构，真正要解决的问题是：<strong>一次查询要跨多个服务，但对客户端必须表现为一张完整的图</strong>。谁来组合、组合发生在哪一层、组合的代价谁付，这三个问题的不同答案就是三种方案。</p>
+<p>把 GraphQL 放进微服务架构，核心是：<strong>一次查询要跨多个服务，对客户端却要像一张完整的图</strong>。谁来组合、在哪一层组合、代价谁付，三种答案就是三种方案。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -104,7 +104,8 @@
 
 <h2>① 用法 · 实体与 @key 的最小可用写法</h2>
 
-<p>Federation 的全部用法可以归结为一句话：<strong>每个子图声明自己拥有哪些实体、实体的主键是什么，网关按主键把跨子图的字段拼成同一个对象</strong>。下面这份 SDL 是三个子图的最小可用形态——订单子图拥有 <code>Order</code>，用户子图拥有 <code>User</code>，营销子图只给 <code>Order</code> 扩展一个自己能算的字段。先照着写，为什么每次拼接都要多一跳往返、为什么 <code>@requires</code> 要省着用，见下面的原理层。</p>
+<p>Federation 的全部用法可以归结为一句话：<strong>每个子图声明自己拥有哪些实体、实体的主键是什么，网关按主键把跨子图的字段拼成同一个对象</strong>。</p>
+<p>下面这份 SDL 是三个子图的最小可用形态——订单子图拥有 <code>Order</code>，用户子图拥有 <code>User</code>，营销子图只给 <code>Order</code> 扩展一个自己能算的字段。为什么每次拼接要多一跳往返、<code>@requires</code> 要省着用，见下面的原理层。</p>
 
 <pre><code class="language-graphql"># ---------- 订单子图：Order 的拥有者 ----------
 extend schema @link(
@@ -245,7 +246,7 @@ export const createSubgraphLoaders = (clients) =&gt; ({
 <tr><td>@shareable</td><td>允许同一字段在多个子图定义</td><td>确实需要多处提供同一字段时</td><td>很容易掩盖所有权不清的问题，用之前先怀疑服务边界</td></tr>
 </tbody></table>
 
-<p>写法不难，难的是判断要不要上。<strong>Federation 解决的只有一个问题：多团队想各自独立发布，但对外要是一张图。</strong>如果你的痛点不是这个，它带来的 Registry、组合校验、两层批量、跨子图追踪都是纯成本。下面这张表按提问顺序给判断依据。</p>
+<p>写法不难，难的是判断要不要上。<strong>Federation 只解决一个问题：多团队想各自独立发布，但对外要是一张图。</strong>痛点不是这个，Registry、组合校验、两层批量、跨子图追踪就都是纯成本。下表按提问顺序给判断依据。</p>
 
 <table>
 <thead>
@@ -342,15 +343,18 @@ flowchart TB
 <tr><td>适合规模</td><td>服务少于五个，或只有一两个团队</td><td>不推荐</td><td>多团队、多服务、跨服务实体关联频繁</td></tr>
 </tbody></table>
 
-<p>方案一被低估了。它的最大问题是发布耦合——三个团队改字段都要提同一个仓库的 PR，冲突和排队会随团队数增长；但在服务少于五个、或者只有一两个后端团队时，它的运维成本远低于联邦，而且下游根本不需要改造。<strong>不要因为「微服务」这个词就默认上联邦。</strong>服务拆分粒度本身的讨论见<a href="../../../architecture/microservices/">微服务架构</a>。</p>
+<p>方案一被低估了。它的最大问题是发布耦合——三个团队改字段都要提同一个仓库的 PR，冲突和排队会随团队数增长；</p>
+<p>但在服务少于五个、或者只有一两个后端团队时，它的运维成本远低于联邦，而且下游根本不需要改造。<strong>不要因为「微服务」这个词就默认上联邦。</strong>服务拆分粒度本身的讨论见<a href="../../../architecture/microservices/">微服务架构</a>。</p>
 
 <h2>② 原理 · 网关怎么把跨子图字段拼成一个对象</h2>
 
 <p>搞清这一节能解释用法层那些指令背后到底发生了什么，也是后面所有性能与越权问题的基础。</p>
 
-<p>组合后的 schema 里，<code>Order</code> 看起来是一个完整类型，但它的字段分散在三个子图里。网关的做法是：<strong>先向拥有者子图取到实体主键，再把一批主键打包成一次 <code>_entities</code> 查询发给另一个子图</strong>。<code>_entities</code> 是框架自动生成的隐藏入口，参数是一个 representations 数组，每个元素带 <code>__typename</code> 和 key 字段；子图侧对每个元素调一次 <code>__resolveReference</code>，返回该实体在本子图的那部分字段。</p>
+<p>组合后的 schema 里，<code>Order</code> 看起来是一个完整类型，但它的字段分散在三个子图里。网关的做法是：<strong>先向拥有者子图取到实体主键，再把一批主键打包成一次 <code>_entities</code> 查询发给另一个子图</strong>。</p>
+<p><code>_entities</code> 是框架自动生成的隐藏入口，参数是一个 representations 数组，每个元素带 <code>__typename</code> 和 key 字段；子图侧对每个元素调一次 <code>__resolveReference</code>，返回该实体在本子图的那部分字段。</p>
 
-<p>这里有两个容易误判的点。第一，<strong>网关把 key 攒成一批，并不意味着子图内部也是批量的</strong>——框架仍然逐个调解析函数，所以子图必须自己上 DataLoader。第二，<code>_entities</code> 的返回与 representations 等长同序，但某个 id 在下游已被删除时对应位置是 null 而不是报错，调用侧要显式处理，否则会把 null 当成正常对象继续往下取字段。</p>
+<p>这里有两个容易误判的点。第一，<strong>网关把 key 攒成一批，并不意味着子图内部也是批量的</strong>——框架仍然逐个调解析函数，所以子图必须自己上 DataLoader。</p>
+<p>第二，<code>_entities</code> 的返回与 representations 等长同序，但某个 id 在下游已被删除时对应位置是 null 而不是报错，调用侧要显式处理，否则会把 null 当成正常对象继续往下取字段。</p>
 
 <h2>② 原理 · 二次查询就是 Federation 的性能代价</h2>
 
@@ -380,13 +384,15 @@ sequenceDiagram
     Note over G,M: 跨子图字段越多 串行跳数越多<br/>耗时是各跳之和 不是最大值
 </div>
 
-<p>所以 Federation 的性能账要这么算：<strong>耗时约等于串行跳数乘以单跳耗时</strong>，而跳数由查询里涉及几个子图、以及有多少 <code>@requires</code> 决定。三跳、单跳 30ms，就是 90ms 起步，加上网关自身的查询计划与结果合并开销。优化方向只有两个：减少跨子图字段（把常一起查的字段放进同一个子图），以及用 <code>@provides</code> 在能接受冗余的地方省掉一跳。</p>
+<p>所以 Federation 的性能账要这么算：<strong>耗时约等于串行跳数乘以单跳耗时</strong>，而跳数由查询里涉及几个子图、以及有多少 <code>@requires</code> 决定。三跳、单跳 30ms，就是 90ms 起步，加上网关自身的查询计划与结果合并开销。</p>
+<p>优化方向只有两个：减少跨子图字段（把常一起查的字段放进同一个子图），以及用 <code>@provides</code> 在能接受冗余的地方省掉一跳。</p>
 
 <h2>② 原理 · 实体所有权：Federation 成败的关键</h2>
 
 <p>搞清这一节能解决「schema 组合天天失败，到处在用 shareable 打补丁」。</p>
 
-<p>技术机制都不难，难的是划分。一条规则：<strong>一个实体必须有唯一的拥有者服务，负责它的核心字段与生命周期；其他子图只扩展自己关心的字段</strong>。用户的昵称头像归用户子图，订单的状态金额归订单子图，营销子图可以给 Order 加一个「预估积分」字段，但不能去定义 <code>status</code>。</p>
+<p>技术机制都不难，难的是划分。一条规则：<strong>一个实体必须有唯一的拥有者服务，负责它的核心字段与生命周期；其他子图只扩展自己关心的字段</strong>。</p>
+<p>用户的昵称头像归用户子图，订单的状态金额归订单子图，营销子图可以给 Order 加一个「预估积分」字段，但不能去定义 <code>status</code>。</p>
 
 <table>
 <thead><tr><th>判断</th><th>说明</th><th>违反后的症状</th></tr></thead>
@@ -398,7 +404,8 @@ sequenceDiagram
 <tr><td>实体主键要全局稳定</td><td>用不会变的业务主键</td><td>主键变更导致网关拼接到错误对象，数据串号</td></tr>
 </tbody></table>
 
-<p>第四行值得强调：<strong>如果两个团队为「User 到底归谁」争论不下，问题不在 Federation 的用法，而在服务拆分本身</strong>。这类冲突的正确解法是回到领域边界去讨论，边界划分与治理见<a href="../../../architecture/governance/">服务治理</a>。用 <code>@shareable</code> 把两边都满足，只是把冲突推迟到下一次 Schema 组合失败的时候。</p>
+<p>第四行值得强调：<strong>如果两个团队为「User 到底归谁」争论不下，问题不在 Federation 的用法，而在服务拆分本身</strong>。这类冲突的正确解法是回到领域边界去讨论，边界划分与治理见<a href="../../../architecture/governance/">服务治理</a>。</p>
+<p>用 <code>@shareable</code> 把两边都满足，只是把冲突推迟到下一次 Schema 组合失败的时候。</p>
 
 <h2>② 原理 · 跨服务的 N+1 更严重，而且要在两层都治</h2>
 
@@ -420,7 +427,7 @@ sequenceDiagram
 
 <p>搞清这一节能解决「一个子图发版，全站的 GraphQL 都挂了」。</p>
 
-<p>联邦最大的运维风险在这里：<strong>一个子图的破坏性变更不只影响自己，可能让整个 Schema 组合失败，网关起不来或退回旧版本</strong>。单体服务发错版只影响自己，联邦发错版影响全站。所以治理不是锦上添花。</p>
+<p>联邦最大的运维风险在这里：<strong>一个子图的破坏性变更不只影响自己，可能让整个 Schema 组合失败，网关起不来或退回旧版本</strong>。单体发错版只影响自己，联邦发错版却影响全站，治理不是点缀。</p>
 
 <table>
 <thead><tr><th>治理事项</th><th>具体做法</th><th>不做的后果</th></tr></thead>
@@ -434,7 +441,9 @@ sequenceDiagram
 <tr><td>子图上线顺序</td><td>先发提供方再发消费方，@requires 的依赖方向要在流程里体现</td><td>消费方先上线，引用的外部字段还不存在，组合失败</td></tr>
 </tbody></table>
 
-<p>可观测性上有一个联邦特有的需求：<strong>要能把客户端的一次查询关联到各子图的调用</strong>。网关必须把 traceId 透传给每个子图，子图再往下游传，这样一条链路才能串起来；再配合按字段统计耗时，才能回答「这次查询慢在哪个子图的哪个字段」。采样与落地见<a href="../../../observability/tracing/">分布式追踪</a>，组合校验做成流水线卡点见<a href="../../../devops/cicd/">CI/CD</a>。另外网关自身的查询计划耗时、每跳的耗时分布、以及子图错误率都要单独出指标，否则一旦某个子图变慢，只能看到「网关慢了」。</p>
+<p>可观测性上有一个联邦特有的需求：<strong>要能把客户端的一次查询关联到各子图的调用</strong>。网关必须把 traceId 透传给每个子图，子图再往下游传，这样一条链路才能串起来；</p>
+<p>再配合按字段统计耗时，才能回答「这次查询慢在哪个子图的哪个字段」。采样与落地见<a href="../../../observability/tracing/">分布式追踪</a>，组合校验做成流水线卡点见<a href="../../../devops/cicd/">CI/CD</a>。</p>
+<p>另外网关自身的查询计划耗时、每跳的耗时分布、以及子图错误率都要单独出指标，否则一旦某个子图变慢，只能看到「网关慢了」。</p>
 
 <h2>② 原理 · 认证授权：一个真实存在的越权风险</h2>
 
@@ -445,10 +454,13 @@ sequenceDiagram
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">子图暴露在外部网络加上只信请求头，等于任意用户伪造</div>
-    <p>子图信任 <code>x-user-id</code> 这类请求头，是因为它假设请求只可能来自网关。一旦子图的端口在集群外可达——测试环境图方便开了公网、Ingress 配错、或者同集群内其他工作负载可以直接访问——任何人都能自己构造一个带 <code>x-user-id</code> 的请求，变成任意用户。这不是理论风险，是 Federation 部署里反复发生的事故。防护必须两层：网络层用 NetworkPolicy 或安全组限制来源，应用层校验网关凭证或 mTLS 客户端证书。<strong>只做一层不够，两层里任何一层配错都还有另一层兜着。</strong></p>
+    <p>子图信任 <code>x-user-id</code> 这类请求头，是因为它假设请求只可能来自网关。</p>
+<p>一旦子图的端口在集群外可达——测试环境图方便开了公网、Ingress 配错、或者同集群内其他工作负载可以直接访问——任何人都能自己构造一个带 <code>x-user-id</code> 的请求，变成任意用户。</p>
+<p>这不是理论风险，是 Federation 部署里反复发生的事故。防护必须两层：网络层用 NetworkPolicy 或安全组限制来源，应用层校验网关凭证或 mTLS 客户端证书。<strong>只做一层不够，两层里任何一层配错都还有另一层兜着。</strong></p>
 </div>
 
-<p>另外还有两点容易忽略：网关<strong>绝不能直接转发客户端的原始认证头</strong>给子图，要转发的是网关自己验签后重新生成的身份信息，否则子图会各自重复验签，且各子图的验签逻辑一旦不一致就出现权限判定分歧。以及字段级鉴权必须放在子图——网关看到的是查询计划和实体主键，它没有能力判断某个用户能不能看某个字段。</p>
+<p>另外两点容易忽略：网关<strong>绝不能直接转发客户端的原始认证头</strong>给子图，要转发的是网关验签后重新生成的身份信息，否则子图会各自重复验签，验签逻辑一旦不一致就出现权限判定分歧。</p>
+<p>字段级鉴权必须放在子图——网关看到的只是查询计划和实体主键，没能力判断某个用户能不能看某个字段。</p>
 <pre><code class="language-javascript">// ---------- 网关：认证在这里做一次，把身份用可信请求头透传给子图 ----------
 const gateway = new ApolloGateway({
   buildService: ({ url }) =&gt; new RemoteGraphQLDataSource({

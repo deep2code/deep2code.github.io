@@ -93,7 +93,8 @@
 <p>Grafana 的教程大多停在「点哪个按钮」，而生产环境真正会咬人的是另一批东西：变量里 <code>$__interval</code> 和 <code>$__rate_interval</code> 选错导致缩放时间范围后曲线完全变形、Stat 面板的 Calculation 让数字和数据源对不上、告警规则的 No Data 状态默认不告警导致整段静默、手改看板导致换个环境全部失效。这篇讲这些。</p>
 
 <h2>Grafana 在体系里的位置：它不存数据</h2>
-<p>这是理解所有 Grafana 性能问题的前提：<strong>Grafana 是查询与展示层，自身只存看板 JSON、变量定义、告警规则和用户权限</strong>，指标数据一个字节都不存。所以「看板很慢」这个现象，九成以上的根因在数据源侧或者查询写法上，扩容 Grafana 通常一点用都没有。</p>
+<p>这是理解所有 Grafana 性能问题的前提：<strong>Grafana 是查询与展示层，自身只存看板 JSON、变量定义、告警规则和用户权限</strong>，指标数据一个字节都不存。</p>
+<p>所以「看板很慢」这个现象，九成以上的根因在数据源侧或者查询写法上，扩容 Grafana 通常一点用都没有。</p>
 <div class="mermaid">
 flowchart TB
     subgraph BR["浏览器端"]
@@ -123,7 +124,8 @@ flowchart TB
     AL --> PM
     MD --- AU
 </div>
-<p>两个容易被忽略的推论。第一，<strong>告警引擎不经过看板</strong>：它按自己的时间窗直接查数据源，所以「面板上看着很正常」不代表告警查询也正常，反之亦然。第二，<code>access</code> 模式决定请求从哪里发出——<code>proxy</code> 由服务端转发，浏览器不需要能直连数据源，凭据也不会下发到前端；早期的 <code>direct</code> 模式让浏览器直连，会带来跨域与凭据泄露问题，现在不应再使用。</p>
+<p>两个容易被忽略的推论。第一，<strong>告警引擎不经过看板</strong>：它按自己的时间窗直接查数据源，所以「面板上看着很正常」不代表告警查询也正常，反之亦然。</p>
+<p>第二，<code>access</code> 模式决定请求从哪里发出——<code>proxy</code> 由服务端转发，浏览器不需要能直连数据源，凭据也不会下发到前端；早期的 <code>direct</code> 模式让浏览器直连，会带来跨域与凭据泄露问题，现在不应再使用。</p>
 
 <h2>模板变量：四种类型与刷新时机</h2>
 <p>变量是看板复用的核心，也是最容易埋雷的地方。四种常用类型的差别不在语法，而在<strong>取值来源和什么时候重新求值</strong>：</p>
@@ -169,10 +171,12 @@ flowchart TB
     </tbody>
 </table>
 <p>变量之间可以串联（<code>instance</code> 的查询里引用 <code>$job</code>），Grafana 会按依赖顺序求值。多选变量在 PromQL 里必须用正则匹配符，也就是 <code>=~"$instance"</code> 而不是 <code>="$instance"</code>，因为多选值会被渲染成 <code>a|b|c</code>；同时把 <code>allValue</code> 设成 <code>.*</code>，否则勾选「All」时渲染出的巨大正则会显著拖慢查询。</p>
-<p><strong>重复面板（repeat）</strong>是变量最实用的衍生能力：给面板或行设置 <code>repeat</code>，Grafana 会按变量的每个选中值克隆一份。注意它只在看板加载或变量变化时展开，单纯改时间范围不会重新克隆；另外重复面板会把查询数量乘以变量取值个数，一个变量有 50 个实例就等于一次刷新发 50 个查询，这是数据源被打爆的常见来源。</p>
+<p><strong>重复面板（repeat）</strong>是变量最实用的衍生能力：给面板或行设置 <code>repeat</code>，Grafana 会按变量的每个选中值克隆一份。注意它只在看板加载或变量变化时展开，单纯改时间范围不会重新克隆；</p>
+<p>另外重复面板会把查询数量乘以变量取值个数，一个变量有 50 个实例就等于一次刷新发 50 个查询，这是数据源被打爆的常见来源。</p>
 
 <h2>$__interval 与 $__rate_interval：最容易翻车的一处</h2>
-<p>Grafana 会把「时间范围」和「面板宽度」换算成一个查询步长：<code>$__interval</code> 约等于时间范围除以 <code>maxDataPoints</code>，而 <code>maxDataPoints</code> 默认取面板的像素宽度，再向上取整到一个友好值，并受面板的 Min interval 限制。也就是说，<strong>同一个面板，窗口拉宽、换个屏幕、把时间范围从 1 小时改成 7 天，<code>$__interval</code> 的值都会变</strong>。</p>
+<p>Grafana 会把「时间范围」和「面板宽度」换算成一个查询步长：<code>$__interval</code> 约等于时间范围除以 <code>maxDataPoints</code>，而 <code>maxDataPoints</code> 默认取面板的像素宽度，再向上取整到一个友好值，并受面板的 Min interval 限制。</p>
+<p>也就是说，<strong>同一个面板，窗口拉宽、换个屏幕、把时间范围从 1 小时改成 7 天，<code>$__interval</code> 的值都会变</strong>。</p>
 <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -191,8 +195,10 @@ sequenceDiagram
     G-->>B: 经字段变换与单位格式化后绘图
     Note over B,P: 一个看板 20 个面板等于 20 个并发查询
 </div>
-<p>问题出在 <code>rate()</code> 这类区间向量函数上：它需要区间内<strong>至少两个样本点</strong>才能算出斜率。抓取间隔是 15 秒时，如果 <code>$__interval</code> 被算成 15 秒甚至 10 秒，区间里经常只有一个点，<code>rate()</code> 直接返回空，曲线就出现断齿；把时间范围拉大后 <code>$__interval</code> 变成 5 分钟，曲线又变得极度平滑。同一份数据，两种完全不同的形状，很容易被误读成「故障时段指标缺失」。</p>
-<p><code>$__rate_interval</code> 就是为解决这个问题设计的：它取 <code>$__interval</code> 加抓取间隔、与 4 倍抓取间隔两者中的较大值，保证窗口里至少有 4 个样本。结论很简单：<strong>所有区间向量函数的窗口都写 <code>$__rate_interval</code>，不要写 <code>$__interval</code>，也不要写死 <code>[5m]</code></strong>（写死会在缩小时间范围时把细节抹掉）。它依赖数据源配置里的 <code>timeInterval</code>（界面上叫 Scrape interval），这个值填错，等于白配。</p>
+<p>问题出在 <code>rate()</code> 这类区间向量函数上：它需要区间内<strong>至少两个样本点</strong>才能算出斜率。抓取间隔是 15 秒时，如果 <code>$__interval</code> 被算成 15 秒甚至 10 秒，区间里经常只有一个点，<code>rate()</code> 直接返回空，曲线就出现断齿；</p>
+<p>把时间范围拉大后 <code>$__interval</code> 变成 5 分钟，曲线又变得极度平滑。同一份数据，两种完全不同的形状，很容易被误读成「故障时段指标缺失」。</p>
+<p><code>$__rate_interval</code> 就是为解决这个问题设计的：它取 <code>$__interval</code> 加抓取间隔、与 4 倍抓取间隔两者中的较大值，保证窗口里至少有 4 个样本。</p>
+<p>结论很简单：<strong>所有区间向量函数的窗口都写 <code>$__rate_interval</code>，不要写 <code>$__interval</code>，也不要写死 <code>[5m]</code></strong>（写死会在缩小时间范围时把细节抹掉）。它依赖数据源配置里的 <code>timeInterval</code>（界面上叫 Scrape interval），这个值填错，等于白配。</p>
 <table>
     <thead>
         <tr>
@@ -368,7 +374,9 @@ flowchart TB
 </table>
 
 <h2>看板设计原则与看板即代码</h2>
-<p>设计上三条硬原则：<strong>顶层看板一屏能看完</strong>（不超过十二个面板、不需要滚动，只放判断健康与否所必需的指标）；<strong>从概览到明细要有下钻路径</strong>（用数据链接把当前变量与时间范围一起带到下级看板，避免跳过去还得重新选一遍）；<strong>按服务而不是按机器组织</strong>（容器环境里实例随时被替换，按机器建的看板会越来越空，要看单实例时用变量或重复面板展开）。</p>
+<p>设计上三条硬原则：<strong>顶层看板一屏能看完</strong>（不超过十二个面板、不需要滚动，只放判断健康与否所必需的指标）；</p>
+<p><strong>从概览到明细要有下钻路径</strong>（用数据链接把当前变量与时间范围一起带到下级看板，避免跳过去还得重新选一遍）；</p>
+<p><strong>按服务而不是按机器组织</strong>（容器环境里实例随时被替换，按机器建的看板会越来越空，要看单实例时用变量或重复面板展开）。</p>
 <p>工程上最重要的一条是<strong>看板即代码</strong>。手工改看板的真实代价不是麻烦，而是不可复现：没有评审、没有历史、换个环境重建不出来、改坏了不知道谁改的。</p>
 <table>
     <thead>
@@ -449,11 +457,13 @@ providers:
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">导入社区看板前先做两件事</div>
-    <p>社区看板的价值是给指标名和布局打样，直接用往往对不上：一是它假设的指标名与你的 exporter 版本或 relabel 规则不同，二是它大量使用写死的 <code>[5m]</code> 和固定数据源名。导入后至少把区间窗口批量改成 <code>$__rate_interval</code>、把数据源改成变量引用，再删掉一半你看不懂也用不上的面板。</p>
+    <p>社区看板的价值是给指标名和布局打样，直接用往往对不上：一是它假设的指标名与你的 exporter 版本或 relabel 规则不同，二是它大量使用写死的 <code>[5m]</code> 和固定数据源名。</p>
+<p>导入后至少把区间窗口批量改成 <code>$__rate_interval</code>、把数据源改成变量引用，再删掉一半你看不懂也用不上的面板。</p>
 </div>
 
 <h2>Grafana 告警：evaluation group 与 No Data 的默认行为</h2>
-<p>Grafana 8 之后是统一告警（unified alerting）：<strong>告警规则从面板里独立出来</strong>，不再依赖某个面板存在，可以跨数据源做表达式运算，并且内置了与 Alertmanager 同构的通知策略与静默。旧版的 dashboard alert 绑在面板上、只支持单查询、改面板就可能改坏告警，已经被移除。</p>
+<p>Grafana 8 之后是统一告警（unified alerting）：<strong>告警规则从面板里独立出来</strong>，不再依赖某个面板存在，可以跨数据源做表达式运算，并且内置了与 Alertmanager 同构的通知策略与静默。</p>
+<p>旧版的 dashboard alert 绑在面板上、只支持单查询、改面板就可能改坏告警，已经被移除。</p>
 <p>几个必须理解的概念：<strong>evaluation group</strong> 是评估的调度单位，间隔配在组上而不是规则上，同组内规则顺序评估，所以把上百条规则塞进一个组会导致整体评估延迟；<strong>pending period</strong>（<code>for</code>）是条件连续为真多久才真正触发；<strong>规则自带时间窗</strong>（relativeTimeRange），与任何看板的时间范围无关。</p>
 <div class="mermaid">
 stateDiagram-v2

@@ -67,7 +67,8 @@
                     </header>
 
                     <div class="post-body">
-<p>Protobuf 真正需要吃透的只有两件事：<strong>字节层面的编码规则</strong>和<strong>模式演进的兼容性边界</strong>。前者决定了为什么一个 <code>int32</code> 存 -1 要占 10 字节，后者决定了哪些改动可以随手提交、哪些改动会在几周后变成一起数据事故。传输层的多路复用、流控与错误模型不在这篇，见站内 <a href="../grpc/">gRPC 的传输机制与工程落地</a>；框架抽象与选型见站内 <a href="../">RPC 框架的抽象层次与选型</a>。</p>
+<p>Protobuf 真正需要吃透的只有两件事：<strong>字节层面的编码规则</strong>和<strong>模式演进的兼容性边界</strong>。前者决定为什么一个 <code>int32</code> 存 -1 要占 10 字节，后者决定哪些改动可以随手提交、哪些会在几周后变成数据事故。</p>
+<p>传输层的多路复用、流控与错误模型不在这篇，见站内 <a href="../grpc/">gRPC 的传输机制与工程落地</a>；框架抽象与选型见站内 <a href="../">RPC 框架的抽象层次与选型</a>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -80,7 +81,7 @@
 </div>
 
 <h2>① 用法 · 改 schema 前的兼容性自查与 CI 拦截</h2>
-<p>动 proto 之前先过一遍这张表：左边是你想做的改动，右边是它到底安全不安全、必须同时做什么。判定背后的机制（为什么改名不影响二进制、为什么复用字段号会静默污染数据）在下一节起的原理部分。</p>
+<p>动 proto 前先过一遍这张表：左边是想做的改动，右边是它安全不安全、必须同时做什么。判定机制（为什么改名不影响二进制、为什么复用字段号会静默污染数据）见下一节起的原理部分。</p>
 
 <table>
     <thead>
@@ -299,7 +300,8 @@ protoscope payload.bin</code></pre>
 
 <h2>② 原理 · wire format：一条消息在字节层是什么样</h2>
 <p>搞清这个模型，上面那张自查表的每一条判定你都能自己推出来，不必背。</p>
-<p>Protobuf 的编码模型简单到可以背下来：消息就是<strong>一串「tag + payload」的重复</strong>，没有消息头，没有字段总数，没有 schema 信息。tag 本身是一个 varint，<strong>低 3 位是 wire type，其余位是字段号</strong>（<code>tag = 字段号 &lt;&lt; 3 | wire type</code>）。解析器靠 wire type 知道后面该读几个字节，靠字段号知道这是哪个字段——所以字段名从头到尾没进过字节流。</p>
+<p>Protobuf 的编码模型简单到可以背下来：消息就是<strong>一串「tag + payload」的重复</strong>，没有消息头，没有字段总数，没有 schema 信息。tag 本身是一个 varint，<strong>低 3 位是 wire type，其余位是字段号</strong>（<code>tag = 字段号 &lt;&lt; 3 | wire type</code>）。</p>
+<p>解析器靠 wire type 知道后面该读几个字节，靠字段号知道这是哪个字段——所以字段名从头到尾没进过字节流。</p>
 <p>举个能手算的例子：<code>int32 age = 4;</code> 赋值 150，编码结果是 <code>20 96 01</code> 三个字节。<code>0x20</code> 是 tag（字段号 4 左移 3 位，wire type 0），<code>96 01</code> 是 150 的 varint。<code>string id = 1;</code> 赋值 "ab" 则是 <code>0A 02 61 62</code>：tag、长度 2、两个字符。</p>
 
 <div class="mermaid">
@@ -377,7 +379,8 @@ flowchart TB
 </table>
 
 <h3>varint 与 ZigZag：负数的代价</h3>
-<p>varint 每字节只用 7 位存数据，所以 0-127 占 1 字节，128-16383 占 2 字节。问题出在负数：<strong><code>int32</code> 的负值会先按二进制补码扩展成 64 位再编码，固定占 10 字节</strong>。这是「<code>int32</code> 比 <code>int64</code> 省空间」这一常见误解的翻车点——存负数时两者一样费，而且都比 <code>sint32</code> 差一个数量级。</p>
+<p>varint 每字节只用 7 位存数据，所以 0-127 占 1 字节，128-16383 占 2 字节。问题出在负数：<strong><code>int32</code> 的负值会先按二进制补码扩展成 64 位再编码，固定占 10 字节</strong>。</p>
+<p>这是「<code>int32</code> 比 <code>int64</code> 省空间」这一常见误解的翻车点——存负数时两者一样费，而且都比 <code>sint32</code> 差一个数量级。</p>
 <p><code>sint32</code> / <code>sint64</code> 用 ZigZag 把符号折进低位：<code>(n &lt;&lt; 1) ^ (n &gt;&gt; 31)</code>，把 -1 映射成 1、1 映射成 2、-2 映射成 3。于是 -1 只占 1 字节。凡是「差值、偏移量、经纬度增量、正负都可能出现」的字段，都该用 sint。</p>
 
 <table>
@@ -425,8 +428,9 @@ flowchart TB
 
 <h2>② 原理 · 字段号：唯一不可回收的资源</h2>
 <p>搞清这条，能解决「为什么删字段必须写 reserved」以及那类「几周后才从对账差异里暴露」的脏数据事故。</p>
-<p>字段号的合法范围是 1 到 536870911，其中 19000-19999 被实现自身保留。真正的工程约束是两条：<strong>1-15 的 tag 只占一个字节</strong>，所以高频字段要优先占这段；<strong>任何字段号一旦发布就永久作废</strong>，删除后必须 <code>reserved</code>。</p>
-<p>为什么复用如此致命？因为解析端只认号。旧版本写出的字节里还留着旧字段，新版本把这个号解释成新字段——<strong>如果两者 wire type 恰好相同（比如都是 varint），一个错误都不会报</strong>，只是静默写入脏数据。这类事故通常在几周后从对账差异或诡异的业务分支里才浮出水面。</p>
+<p>字段号合法范围是 1 到 536870911，其中 19000-19999 被实现保留。真正的工程约束是两条：<strong>1-15 的 tag 只占一个字节</strong>，高频字段优先占这段；<strong>字段号一旦发布就永久作废</strong>，删除后必须 <code>reserved</code>。</p>
+<p>复用如此致命，因为解析端只认号。旧版本写出的字节里还留着旧字段，新版本把这个号解释成新字段——<strong>如果两者 wire type 恰好相同（比如都是 varint），一个错误都不会报</strong>，只是静默写入脏数据。</p>
+<p>这类事故通常在几周后从对账差异或诡异的业务分支里才浮出水面。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -452,8 +456,10 @@ stateDiagram-v2
 
 <h2>② 原理 · 存在性语义：proto3 的零值歧义</h2>
 <p>搞清这一节，能解决「用户把开关关成 false 却关不掉」这类最高频的业务缺陷。</p>
-<p>这是 Protobuf 最容易埋雷的地方。proto3 的标量字段是<strong>隐式存在性</strong>：等于默认值时压根不写进字节流。于是「用户把开关关成 false」和「用户没传这个字段」在解析端是同一个结果。批量更新接口如果照着这个语义写，就会出现「想关闭却关不掉」的经典缺陷。</p>
-<p>三点需要澄清：message 类型字段<strong>永远</strong>有显式存在性（nil 与空消息可区分）；<code>repeated</code> 和 <code>map</code> 从来没有存在性概念，空就是空；proto3 的 <code>optional</code> 不是 proto2 的复活，它在实现上是一个合成 oneof，只是给字段加回了显式存在性。另外，2023 年起 protobuf 引入 Editions 取代 <code>syntax</code> 二分法，把 proto2/proto3 的行为差异拆成 <code>field_presence</code>、<code>enum_type</code>、<code>repeated_field_encoding</code> 这类可逐项设置的 feature，<strong>wire format 完全没变</strong>，所以它是编译期与语义层的演进，不是数据格式升级。</p>
+<p>这是 Protobuf 最容易埋雷的地方。proto3 标量字段是<strong>隐式存在性</strong>：等于默认值时不写进字节流。于是「把开关关成 false」和「没传这个字段」在解析端是同一个结果。</p>
+<p>批量更新接口如果照着这个语义写，就会出现「想关闭却关不掉」的经典缺陷。</p>
+<p>三点澄清：message 类型字段<strong>永远</strong>有显式存在性（nil 与空消息可区分）；<code>repeated</code> 和 <code>map</code> 没有存在性概念，空就是空；proto3 的 <code>optional</code> 不是 proto2 复活，它实现上是合成 oneof，给字段加回了显式存在性。</p>
+<p>另外，2023 年起 protobuf 引入 Editions 取代 <code>syntax</code> 二分法，把 proto2/proto3 的行为差异拆成 <code>field_presence</code>、<code>enum_type</code>、<code>repeated_field_encoding</code> 这类可逐项设置的 feature，<strong>wire format 完全没变</strong>，所以它是编译期与语义层的演进，不是数据格式升级。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -536,8 +542,10 @@ _, _, _ = raw, unknown, canonical</code></pre>
 
 <h2>② 原理 · oneof 与 map 的底层表示</h2>
 <p>搞清这两个语法糖的真实表示，就知道「把已有字段并进 oneof」和「给 map 加属性」为什么一个安全一个不安全。</p>
-<p><strong>oneof 在字节层不存在。</strong>它的成员就是普通字段，各自有自己的号。互斥是解析器的行为：解码时后出现的成员覆盖前面的，所以两个成员同时出现在字节流里不会报错，只是「最后一个赢」。这意味着把<strong>单个</strong>已有字段移进一个新建 oneof 是 wire 兼容的，而把<strong>多个</strong>已有字段合并进同一个 oneof 是不兼容的——老客户端会同时设置它们，新代码只能看到一个。</p>
-<p><strong>map 是 repeated message 的糖。</strong><code>map&lt;K, V&gt;</code> 等价于 <code>repeated MapFieldEntry</code>，entry 里键是字段 1、值是字段 2，不 packed。推论有三条：键重复时后者覆盖前者，不会报错；<strong>顺序不保证</strong>，因此序列化结果不能当指纹或缓存 key；map 与对应的 repeated entry message 之间可以互相改写，wire 层完全兼容，这是给 map 加第三个属性时的正规迁移路径。</p>
+<p><strong>oneof 在字节层不存在。</strong>成员就是普通字段，各有自己的号。互斥是解析器行为：解码时后出现的成员覆盖前面的，两个成员同时出现不会报错，只是「最后一个赢」。</p>
+<p>把<strong>单个</strong>已有字段移进新建 oneof 是 wire 兼容的，把<strong>多个</strong>已有字段合并进同一个 oneof 则不兼容——老客户端会同时设置它们，新代码只能看到一个。</p>
+<p><strong>map 是 repeated message 的糖。</strong><code>map&lt;K, V&gt;</code> 等价于 <code>repeated MapFieldEntry</code>，entry 里键是字段 1、值是字段 2，不 packed。推论有三条：键重复时后者覆盖前者，不会报错；<strong>顺序不保证</strong>，因此序列化结果不能当指纹或缓存 key；</p>
+<p>map 与对应的 repeated entry message 之间可以互相改写，wire 层完全兼容，这是给 map 加第三个属性时的正规迁移路径。</p>
 
 <h2>② 原理 · 模式演进的兼容性矩阵</h2>
 <p>把常见改动按「旧代码读新数据」和「新代码读旧数据」两个方向拆开看，用法层那张自查表的结论就都有了出处。</p>
@@ -635,7 +643,8 @@ _, _, _ = raw, unknown, canonical</code></pre>
 
 <h2>② 原理 · 未知字段：保留还是丢弃</h2>
 <p>搞清这一节，能解决「灰度期新字段莫名不生效，链路上没有任何报错」。</p>
-<p>未知字段就是解析器「不认识但原样收着」的字节。它是灰度发布能成立的基础：中间层用旧 proto 转发新版本消息时，字段不会丢。<strong>但这件事在 proto3 上有过一次反转</strong>——proto3 早期版本会直接丢弃未知字段，3.5 起恢复保留。至今仍有人按「proto3 不保留未知字段」的旧结论做设计。</p>
+<p>未知字段是解析器「不认识但原样收着」的字节，是灰度发布成立的基础：中间层用旧 proto 转发新版本消息时字段不会丢。<strong>但 proto3 上有过一次反转</strong>——proto3 早期会直接丢弃未知字段，3.5 起恢复保留。</p>
+<p>至今仍有人按「proto3 不保留未知字段」的旧结论做设计。</p>
 
 <div class="mermaid">
 sequenceDiagram

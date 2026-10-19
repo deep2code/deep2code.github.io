@@ -89,7 +89,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>ClickHouse 的 <code>CREATE TABLE</code> 看着和 MySQL 很像，这是个陷阱。<code>ENGINE</code>、<code>ORDER BY</code>、<code>PARTITION BY</code> 这三项定错了没有 ALTER 能救，只能新建表加回灌全量数据；写入姿势错了，则会在上线第三天收到 <code>Too many parts</code>。这篇只讲建表和写入这两件最容易做错的事：列存与向量化执行、稀疏主键索引的物理布局详见站内《ClickHouse 架构与核心特性》，副本拓扑与 Distributed 表详见站内《ClickHouse 集群与分布式表》，这里只给结论不展开。</p>
+<p>ClickHouse 的 <code>CREATE TABLE</code> 看着和 MySQL 很像，这是个陷阱。<code>ENGINE</code>、<code>ORDER BY</code>、<code>PARTITION BY</code> 这三项定错了没有 ALTER 能救，只能新建表加回灌全量数据；写入姿势错了，则会在上线第三天收到 <code>Too many parts</code>。</p>
+<p>这篇只讲建表和写入这两件最容易做错的事：列存与向量化执行、稀疏主键索引的物理布局见《ClickHouse 架构与核心特性》，副本拓扑与 Distributed 表见《ClickHouse 集群与分布式表》，只给结论不展开。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -103,7 +104,7 @@
 
 <h2>① 用法 · 一份可抄的建表 DDL、批量导入与验收</h2>
 
-<p>建表和写入这两件事，做对的成本很低，做错的修复成本极高——前者只能重建表回灌，后者会在上线第三天以 <code>Too many parts</code> 的形式找上来。先查下面这张表把动作对上，再照后面的 DDL 起步。</p>
+<p>建表和写入这两件事，做对成本很低，做错修复成本极高——前者只能重建表回灌，后者会在上线第三天以 <code>Too many parts</code> 的形式找上来。先查下表把动作对上，再照后面的 DDL 起步。</p>
 
 <table>
 <thead><tr><th>要做什么</th><th>怎么做</th><th>注意什么</th></tr></thead>
@@ -209,7 +210,7 @@ FROM system.mutations WHERE NOT is_done;
 
 <h2>② 原理 · 建表时必须一次定对的三件事</h2>
 
-<p>ClickHouse 的 DDL 自由度比关系库低得多。加列、删列、改列类型都很便宜（元数据操作或后台异步重写），但 <code>ORDER BY</code> 只能在末尾追加列、不能重排已有列，<code>PARTITION BY</code> 和 <code>ENGINE</code> 完全不能改。这意味着建表评审要花的时间比写导入脚本更多。</p>
+<p>ClickHouse 的 DDL 自由度比关系库低得多。加列、删列、改列类型都很便宜（元数据操作或后台异步重写），但 <code>ORDER BY</code> 只能在末尾追加、不能重排已有列，<code>PARTITION BY</code> 和 <code>ENGINE</code> 完全不能改。所以建表评审比写导入脚本更费时间。</p>
 
 <table>
 <thead><tr><th>决策项</th><th>决定了什么</th><th>能否事后修改</th><th>定错的后果</th><th>修复成本</th></tr></thead>
@@ -221,7 +222,9 @@ FROM system.mutations WHERE NOT is_done;
 <tr><td><code>index_granularity</code></td><td>一个 granule 覆盖多少行，默认 8192</td><td>可以改，但需重建 part</td><td>点查场景读放大明显</td><td>一般不用动，除非单行特别宽</td></tr>
 </tbody></table>
 
-<p><code>ORDER BY</code> 的排列有三条经验：<strong>过滤最频繁的列放最左</strong>，因为主键裁剪只能用前缀；<strong>基数低的列放前面</strong>，相同值连续排列会同时改善压缩率和 granule 裁剪效果；<strong>时间列一般放中间或靠后</strong>，前面先放租户或业务维度，因为几乎所有查询都带租户条件，把时间放最左会让单租户查询退化成扫所有租户的数据。分区键在实践中只有按天和按月两个合理选项，目标是总分区数控制在一千以内、单分区压缩后在几 GB 到几十 GB。</p>
+<p><code>ORDER BY</code> 的排列有三条经验：<strong>过滤最频繁的列放最左</strong>，因为主键裁剪只能用前缀；<strong>基数低的列放前面</strong>，相同值连续排列会同时改善压缩率和 granule 裁剪效果；</p>
+<p><strong>时间列一般放中间或靠后</strong>，前面放租户或业务维度，因为几乎所有查询都带租户条件，把时间放最左会让单租户查询退化成扫所有租户。</p>
+<p>分区键在实践中只有按天和按月两个合理选项，目标是总分区数控制在一千以内、单分区压缩后在几 GB 到几十 GB。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -245,7 +248,8 @@ flowchart TB
 
 <h2>② 原理 · MergeTree 家族：每个引擎在解决什么问题</h2>
 
-<p>MergeTree 家族的全部差异都发生在<strong>后台 merge 的那一刻</strong>：它们共用同样的列存布局和稀疏索引，只是在合并两个 part 时对排序键相同的行做了不同处理。理解这一点就能推导出所有引擎共同的认知坑——<strong>你永远不知道 merge 什么时候发生，所以引擎的语义在查询时不是立即成立的</strong>。</p>
+<p>MergeTree 家族的全部差异都发生在<strong>后台 merge 的那一刻</strong>：它们共用同样的列存布局和稀疏索引，只是在合并两个 part 时对排序键相同的行做了不同处理。</p>
+<p>理解这一点就能推导出所有引擎共同的认知坑——<strong>你永远不知道 merge 什么时候发生，所以引擎的语义在查询时不是立即成立的</strong>。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -290,12 +294,13 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">流传最广的错误说法：ReplacingMergeTree 等于唯一索引</div>
-    <p>它既不拒绝重复写入，也不保证任何时刻查到的是一行。折叠只在后台 merge 时按分区内的排序键做，触发条件是 part 的大小和数量，可能几秒也可能几天。更隐蔽的是<strong>跨分区的重复永远不会折叠</strong>：如果分区键是 <code>toYYYYMM(update_time)</code>，同一个订单先后两次更新落在不同月份，它就是两行。<code>OPTIMIZE TABLE ... FINAL</code> 能强制合并，但它会重写整张表，禁止写进定时任务当日常手段。</p>
+    <p>它既不拒绝重复写入，也不保证任何时刻查到的是一行。折叠只在后台 merge 时按分区内的排序键做，触发条件是 part 的大小和数量，可能几秒也可能几天。</p>
+<p>更隐蔽的是<strong>跨分区的重复永远不会折叠</strong>：分区键是 <code>toYYYYMM(update_time)</code> 时，同一订单先后两次更新落在不同月份就是两行。<code>OPTIMIZE TABLE ... FINAL</code> 能强制合并，但会重写整张表，禁止写进定时任务。</p>
 </div>
 
 <h2>② 原理 · 列类型选对，磁盘立刻省一半</h2>
 
-<p>列存的压缩率几乎完全由「同一列相邻值的相似度」决定，所以类型选择在 ClickHouse 里不是洁癖而是实打实的成本。下面这张表是实际项目里最高频的几个改法。</p>
+<p>列存的压缩率几乎完全由「同一列相邻值的相似度」决定，所以类型选择在 ClickHouse 里不是洁癖而是实打实的成本。下表是实际项目里最高频的几个改法。</p>
 
 <table>
 <thead><tr><th>常见写法</th><th>问题</th><th>应该改成</th><th>收益量级</th><th>代价与边界</th></tr></thead>
@@ -348,7 +353,8 @@ ALTER TABLE events ADD INDEX idx_user user_id TYPE bloom_filter(0.01) GRANULARIT
 
 <h2>② 原理 · 写入的铁律：批量，且只有批量</h2>
 
-<p>ClickHouse 的写入模型一句话就能概括：<strong>一次 INSERT 生成一个 part，不管里面是 1 行还是 100 万行</strong>。part 是一个包含每列数据文件、标记文件和索引文件的目录，创建成本固定。逐条写入意味着每秒创建上千个目录，后台 merge 线程被迫不停合并小文件，磁盘 IO 全耗在合并上，接着写入被限速，最后直接报错。</p>
+<p>ClickHouse 的写入模型一句话就能概括：<strong>一次 INSERT 生成一个 part，不管里面是 1 行还是 100 万行</strong>。part 是一个包含每列数据文件、标记文件和索引文件的目录，创建成本固定。</p>
+<p>逐条写入意味着每秒创建上千个目录，后台 merge 线程被迫不停合并小文件，磁盘 IO 全耗在合并上，接着写入被限速，最后直接报错。</p>
 
 <table>
 <thead><tr><th>参数 / 指标</th><th>默认值</th><th>含义</th><th>踩线后的表现</th></tr></thead>
@@ -361,7 +367,8 @@ ALTER TABLE events ADD INDEX idx_user user_id TYPE bloom_filter(0.01) GRANULARIT
 <tr><td>建议提交频率</td><td>每表每秒不超过 1 次</td><td>官方长期给出的经验上限</td><td>频率高于此，merge 追不上产生速度</td></tr>
 </tbody></table>
 
-<p>上表里的两个 part 阈值在大版本之间调整过多次，落地前用 <code>SELECT name, value FROM system.merge_tree_settings</code> 核对你这个版本的实际值，不要照抄任何文章里的数字。批次攒在哪里有客户端和服务端两种做法。<code>async_insert</code> 的真正价值是：当你有几百个无状态服务实例、每个实例只有零星流量时，客户端根本攒不出大批次，这时让服务端按表维度统一攒批才合理。</p>
+<p>上表里的两个 part 阈值在大版本间调整过多次，落地前用 <code>SELECT name, value FROM system.merge_tree_settings</code> 核对本版本的实际值，别照抄任何文章里的数字。批次攒在哪里有客户端和服务端两种做法。</p>
+<p><code>async_insert</code> 的真正价值是：当你有几百个无状态服务实例、每个实例只有零星流量时，客户端根本攒不出大批次，这时让服务端按表维度统一攒批才合理。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -497,7 +504,8 @@ WHERE event IN ('DelayedInserts', 'RejectedInserts', 'InsertedRows', 'MergedRows
 
 <h2>② 原理 · 更新与删除的真相</h2>
 
-<p>ClickHouse 里「改一行数据」这个动作在物理上不存在。part 里的列文件是压缩后顺序写入的，任何修改都意味着重写整个 part。<code>ALTER TABLE ... UPDATE</code> 之所以叫 mutation 而不叫 UPDATE，就是在提醒你它是一次后台的大规模数据重写：异步执行、不返回受影响行数、不保证何时可见，而且一个卡住的 mutation 会让排在后面的所有变更全部停住。</p>
+<p>ClickHouse 里「改一行数据」这个动作在物理上不存在。part 里的列文件是压缩后顺序写入的，任何修改都意味着重写整个 part。</p>
+<p><code>ALTER TABLE ... UPDATE</code> 叫 mutation 而不叫 UPDATE，就是提醒你它是一次后台的大规模数据重写：异步执行、不返回受影响行数、不保证何时可见，一个卡住的 mutation 会让后面所有变更全部停住。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -529,7 +537,7 @@ stateDiagram-v2
 
 <h2>② 原理 · 用 TTL 管住数据生命周期</h2>
 
-<p>TTL 有三种形态经常被忽略：行级删除、<strong>列级清空</strong>（明细字段过期但维度继续保留）、以及配合多盘存储策略把冷数据搬到廉价介质。三者可以写在同一张表上。</p>
+<p>TTL 有三种常被忽略的形态：行级删除、<strong>列级清空</strong>（明细字段过期但维度保留）、以及配合多盘存储策略把冷数据搬到廉价介质。三者可写在同一张表上。</p>
 
 <pre><code class="language-sql">-- 前提：config.xml 的 storage_configuration 里已定义 hot 与 cold 两个卷
 ALTER TABLE events MODIFY TTL
@@ -552,12 +560,13 @@ FROM system.parts WHERE table = 'events' AND active LIMIT 5;
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">ttl_only_drop_parts 的前提条件</div>
-    <p>开启后 ClickHouse 只在一个 part 里<strong>所有行</strong>都过期时整目录删除，代价极低；关闭时每次 merge 都要逐行判断 TTL 并重写 part，大表上会持续占用后台线程。前提是分区键与 TTL 表达式基于同一个日期列，否则 part 里永远混着未过期的行，数据就一直删不掉。</p>
+    <p>开启后 ClickHouse 只在一个 part 里<strong>所有行</strong>都过期时整目录删除，代价极低；关闭时每次 merge 都要逐行判断 TTL 并重写 part，大表上会持续占用后台线程。</p>
+<p>前提是分区键与 TTL 表达式基于同一个日期列，否则 part 里永远混着未过期的行，数据就一直删不掉。</p>
 </div>
 
 <h2>③ 场景 · 从需求到一张表的落地组合</h2>
 
-<p>前面几节把每个机制拆开讲了，落地时需要的是反过来的映射：手上这个需求，引擎、排序键、分区、写入方式该怎么组合。下表每一行都是一个完整组合，代价列是选了它就必须一起接受的东西。</p>
+<p>前面几节把每个机制拆开讲了，落地时需要反向映射：手上这个需求，引擎、排序键、分区、写入方式该怎么组合。下表每行是一个完整组合，代价列是选了它就必须一起接受的东西。</p>
 
 <table>
 <thead><tr><th>需求</th><th>组合怎么定</th><th>为什么是这个组合</th><th>代价</th></tr></thead>
@@ -572,7 +581,8 @@ FROM system.parts WHERE table = 'events' AND active LIMIT 5;
 <tr><td>按用户做合规删除</td><td>轻量级 <code>DELETE FROM</code> 打删除掩码</td><td>语句返回即可见，不需要重写整个 part</td><td>查询要多读一份掩码，真正清理仍要等 merge</td></tr>
 </tbody></table>
 
-<p><strong>不适用边界</strong>：这一篇只负责把数据正确、经济地存进去。SQL 为什么慢、granule 裁剪与 PREWHERE 怎么调是下一步的事；星型模型、大宽表与缓慢变化维属于建模层；分片副本与 <code>ON CLUSTER</code> 属于集群层；引擎为什么必须批量写、稀疏索引为什么是 8192 行，回到 <a href="../">ClickHouse 深度原理</a>。如果你还在纠结用不用 ClickHouse，那是 <a href="../compare/">OLAP 引擎选型</a> 的问题，不要靠调参数来回答。上游 Kafka 的分区设计与保留策略不在本篇范围。</p>
+<p><strong>不适用边界</strong>：本篇只负责把数据正确、经济地存进去。SQL 为什么慢、granule 裁剪与 PREWHERE 怎么调是下一步；星型模型、大宽表与缓慢变化维属建模层；分片副本与 <code>ON CLUSTER</code> 属集群层；</p>
+<p>引擎为什么必须批量写、稀疏索引为什么是 8192 行，回到 <a href="../">ClickHouse 深度原理</a>。纠结用不用 ClickHouse，那是 <a href="../compare/">OLAP 引擎选型</a> 的问题，不要靠调参数回答。上游 Kafka 的分区设计与保留策略不在本篇范围。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../compare/">← 上一步：OLAP 引擎选型：ClickHouse vs Doris vs Trino vs 云数仓</a> · <a href="../query-optimization/">下一步：ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合 →</a></p>
 

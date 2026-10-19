@@ -90,7 +90,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这一篇只解决一件事：<strong>客户端代码到底怎么写、参数到底怎么配才不出事</strong>。参数名统一用 Java 客户端的官方命名，Go 的 sarama 与 confluent-kafka-go 只是换了个壳，语义一一对应，文中会标出映射关系。</p>
+<p>这一篇只解决一件事：<strong>客户端代码怎么写、参数怎么配才不出事</strong>。参数名统一用 Java 客户端的官方命名，Go 的 sarama 与 confluent-kafka-go 只是换了个壳，语义一一对应，文中标出映射关系。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -249,7 +249,8 @@ public void stop() {
 
 <h2>② 原理 · send() 不是「发送」，只是「入队」</h2>
 
-<p>线上丢消息的故障，一大半的根子在对这一行的误解：<code>producer.send(record)</code> 返回的那一刻，消息极可能还在本进程的堆内存里，一个字节都没出网卡。真实链路是业务线程走完拦截器、序列化、分区器，把消息<strong>追加到 RecordAccumulator 中该分区的 batch 双端队列</strong>然后立刻返回；真正的 ProduceRequest 由一个独立的 Sender 线程发出。</p>
+<p>线上丢消息的故障，一大半的根子在对这一行的误解：<code>producer.send(record)</code> 返回的那一刻，消息极可能还在本进程的堆内存里，一个字节都没出网卡。</p>
+<p>真实链路是业务线程走完拦截器、序列化、分区器，把消息<strong>追加到 RecordAccumulator 中该分区的 batch 双端队列</strong>然后立刻返回；真正的 ProduceRequest 由一个独立的 Sender 线程发出。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -278,7 +279,9 @@ flowchart TB
     NET --> CB["收到响应后<br/>在 Sender 线程上执行 Callback<br/>回调里不要做耗时操作"]
 </div>
 
-<p>这张图能直接解释四个现象。第一，<strong>Callback 是在 Sender 线程上执行的</strong>，你在回调里查数据库、调接口，会把整个 Producer 的发送吞吐拖死。第二，多个分区的 batch 只要 leader 在同一个 Broker 上，就会被合并成一个请求发出，所以分区数变多不一定线性增加请求数。第三，<code>buffer.memory</code> 是所有分区共享的，某个分区的 leader 挂了导致 batch 堆积，会连带拖慢其他分区。第四，进程退出时这块内存里的东西没有任何持久化，谁都救不了。</p>
+<p>这张图能直接解释四个现象。第一，<strong>Callback 是在 Sender 线程上执行的</strong>，你在回调里查数据库、调接口，会把整个 Producer 的发送吞吐拖死。</p>
+<p>第二，多个分区的 batch 只要 leader 在同一个 Broker 上，就合并成一个请求发出，所以分区数变多，请求数不一定线性增加。第三，<code>buffer.memory</code> 是所有分区共享的，某个分区的 leader 挂了导致 batch 堆积，会连带拖慢其他分区。</p>
+<p>第四，进程退出时这块内存里的东西没有任何持久化，谁都救不了。</p>
 
 <table>
 <thead><tr><th>写法</th><th>代码形态</th><th>吞吐量级</th><th>失败时的表现</th><th>能用吗</th></tr></thead>
@@ -292,7 +295,8 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">同步发送慢的真正原因不是「等 ack」</div>
-    <p>很多人以为 <code>send().get()</code> 慢是因为多等了一个 acks 的往返。实际更致命的是它<strong>把批处理打散了</strong>：业务线程在 get 上阻塞，下一条消息根本进不了 accumulator，每个 batch 永远只有一条记录。同样的 acks 配置下，异步加回调能攒出几百条一批，吞吐差出一到两个数量级。</p>
+    <p>很多人以为 <code>send().get()</code> 慢是因为多等了一个 acks 的往返。更致命的是它<strong>把批处理打散了</strong>：业务线程在 get 上阻塞，下一条消息进不了 accumulator，每个 batch 永远只有一条记录。</p>
+<p>同样的 acks 配置下，异步加回调能攒出几百条一批，吞吐差出一到两个数量级。</p>
 </div>
 
 <h2>② 原理 · Producer 参数矩阵：默认值与调错后果</h2>
@@ -345,7 +349,7 @@ flowchart TB
 </tbody>
 </table>
 
-<p>「close 会丢消息，所以必须先 flush」这个说法只对了一半。Java 客户端的 <code>close()</code> 无参版本本身就会阻塞等待所有已发送记录完成，语义上等价于先 flush 再关。真正丢消息的是下面这几种关闭方式。</p>
+<p>「close 会丢消息，所以必须先 flush」只说对了一半。Java 客户端的 <code>close()</code> 无参版本本身会阻塞等所有已发送记录完成，语义等价于先 flush 再关。真正丢消息的是下面几种关闭方式。</p>
 
 <table>
 <thead><tr><th>关闭方式</th><th>实际行为</th><th>结果</th></tr></thead>
@@ -362,7 +366,7 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">Kubernetes 场景必须对齐三个超时</div>
-    <p>Pod 收到 SIGTERM 后有 <code>terminationGracePeriodSeconds</code>（默认 30 秒）的窗口。你的关闭钩子里 <code>close(timeout)</code> 的超时必须明显小于这个值，而 <code>delivery.timeout.ms</code> 又不能大到让 close 等不完。三者不匹配的典型现象是：滚动发布时每次都丢几百条消息，但压测时怎么都复现不出来。</p>
+    <p>Pod 收到 SIGTERM 后有 <code>terminationGracePeriodSeconds</code>（默认 30 秒）的窗口。关闭钩子里 <code>close(timeout)</code> 的超时必须明显小于这个值，<code>delivery.timeout.ms</code> 又不能大到让 close 等不完。三者不匹配的典型现象是：滚动发布每次都丢几百条消息，压测时却怎么都复现不出来。</p>
 </div>
 
 <pre><code class="language-go">package main
@@ -456,7 +460,8 @@ sequenceDiagram
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">「poll 负责发心跳」是 0.10.0 时代的旧说法</div>
-    <p>从 0.10.1 起，心跳由独立的后台线程发送，处理消息期间心跳不会断，所以 <code>session.timeout.ms</code> 不再受业务处理耗时影响。真正约束处理耗时的是 <code>max.poll.interval.ms</code>：超过它协调者会认为你卡死并踢出组。这两个参数的分工搞混，就会写出「把 session.timeout.ms 调到 10 分钟来解决处理慢」这种无效修法。</p>
+    <p>从 0.10.1 起，心跳由独立后台线程发送，处理消息期间心跳不会断，所以 <code>session.timeout.ms</code> 不再受业务处理耗时影响。真正约束处理耗时的是 <code>max.poll.interval.ms</code>：超过它协调者会认为你卡死并踢出组。</p>
+<p>这两个参数的分工搞混，就会写出「把 session.timeout.ms 调到 10 分钟来解决处理慢」这种无效修法。</p>
 </div>
 
 <table>
@@ -485,7 +490,9 @@ sequenceDiagram
 </tbody>
 </table>
 
-<p>这个参数<strong>只在两个时刻生效</strong>：消费组在该分区上没有已提交位点，或者已提交位点已经被 retention 清理掉了。正常运行期间它完全不参与决策，所以「我配了 earliest 会不会每次重启都从头消费」这个担心是多余的——只要位点还在，就从位点续。反过来，一旦你动过 group.id、清理过 <code>__consumer_offsets</code>、或者迁移了集群，它就会立刻生效。稳妥做法是上线前先用脚本把位点摆好：</p>
+<p>这个参数<strong>只在两个时刻生效</strong>：消费组在该分区上没有已提交位点，或已提交位点已被 retention 清理掉。</p>
+<p>正常运行期间它完全不参与决策，「我配了 earliest 会不会每次重启都从头消费」这个担心是多余的——只要位点还在就从位点续。</p>
+<p>反过来，一旦动过 group.id、清理过 <code>__consumer_offsets</code>、或迁移了集群，它就会立刻生效。稳妥做法是上线前先用脚本把位点摆好：</p>
 
 <pre><code class="language-bash"># 查看消费组当前位点与 Lag 分布，先确认哪些分区落后
 kafka-consumer-groups.sh --bootstrap-server kafka-1:9092 \
@@ -543,7 +550,8 @@ flowchart TB
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">先加分区再加线程</div>
-    <p>并发度上限等于分区数，一个分区在同一消费组内只会被一个成员消费，加到第 N+1 个实例时它会完全空转。所以扩容顺序是：先确认分区数够不够（方法见 <a href="../topic-partition/">分区设计</a>），再考虑加实例，最后才考虑线程池。只有在「分区数已经因为顺序性或成本原因不能再加，而单条处理耗时又下不来」时，线程池才是合理选项。</p>
+    <p>并发度上限等于分区数，一个分区在同一消费组内只会被一个成员消费，加到第 N+1 个实例时它完全空转。扩容顺序是：先确认分区数够不够（方法见 <a href="../topic-partition/">分区设计</a>），再考虑加实例，最后才考虑线程池。</p>
+<p>只有在「分区数已经因为顺序性或成本原因不能再加，而单条处理耗时又下不来」时，线程池才是合理选项。</p>
 </div>
 
 <pre><code class="language-go">type handler struct{ biz *Service }
@@ -599,7 +607,8 @@ func consume(ctx context.Context, brokers []string) error {
 
 <h2>② 原理 · 为什么背压必须用 pause、重放必须在回调里 seek</h2>
 
-<p><code>close()</code> 在另一个线程里调用是不安全的，KafkaConsumer 不是线程安全类。唯一允许跨线程调用的方法是 <code>wakeup()</code>，它会让阻塞在 poll 上的线程抛出 WakeupException，从而跳出循环走收尾逻辑。背压用 <code>pause()</code> 而不是 sleep：sleep 会让你逼近 <code>max.poll.interval.ms</code> 触发 Rebalance，而 pause 之后仍然可以正常 poll 维持组成员身份，只是不再返回被暂停分区的数据。</p>
+<p><code>close()</code> 在另一个线程里调用是不安全的，KafkaConsumer 不是线程安全类。唯一允许跨线程调用的方法是 <code>wakeup()</code>，它会让阻塞在 poll 上的线程抛出 WakeupException，从而跳出循环走收尾逻辑。</p>
+<p>背压用 <code>pause()</code> 而不是 sleep：sleep 会让你逼近 <code>max.poll.interval.ms</code> 触发 Rebalance，而 pause 之后仍然可以正常 poll 维持组成员身份，只是不再返回被暂停分区的数据。</p>
 
 <p>重放靠 <code>seek()</code>：按位点用 <code>seek(tp, offset)</code>，按时间用 <code>offsetsForTimes()</code> 先把时间戳换成位点再 seek。注意 seek 只对<strong>已经分配给当前成员的分区</strong>生效，刚 subscribe 之后立刻 seek 会抛 IllegalStateException，正确位置是在 <code>onPartitionsAssigned</code> 回调里，或者先 poll 一次拿到分配结果再 seek。</p>
 
@@ -620,7 +629,8 @@ func consume(ctx context.Context, brokers []string) error {
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：这一篇只负责客户端怎么写。丢消息的六个环节与逐个验证清单是下一篇 <a href="../reliability/">可靠性落地</a>；分区数与分区键在 <a href="../topic-partition/">分区设计</a>；集群与监听器在 <a href="../install/">生产级部署</a>；压测与瓶颈定位在 <a href="../performance/">性能调优与压测</a>；Rebalance、幂等 PID 与水位的机制回到 <a href="../">主干篇</a>。延迟消息、优先级、单条重试这些能力 Kafka 客户端层给不了，选型问题回到 <a href="../intro/">选型边界</a>。</p>
+<p><strong>不适用边界</strong>：这一篇只负责客户端怎么写。丢消息的六个环节与验证清单见 <a href="../reliability/">可靠性落地</a>；分区数与分区键见 <a href="../topic-partition/">分区设计</a>；集群与监听器见 <a href="../install/">生产级部署</a>；压测与瓶颈定位见 <a href="../performance/">性能调优与压测</a>；</p>
+<p>Rebalance、幂等 PID 与水位的机制回到 <a href="../">主干篇</a>。延迟消息、优先级、单条重试这些能力 Kafka 客户端层给不了，选型问题回到 <a href="../intro/">选型边界</a>。</p>
 
 <p>代码写对之后，下一步是把「会不会丢」这件事从感觉变成可验证：六个环节逐个过一遍。</p>
 

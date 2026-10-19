@@ -90,7 +90,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Apollo Server 是目前最常用的 GraphQL 服务实现，4.x 相比 3.x 是一次不小的重构：不再内置各框架的集成，生命周期钩子全部收进插件体系，错误处理接口也变了。这篇不讲「怎么跑起来 hello world」，讲的是<strong>一个对外提供服务的 Apollo Server 上线前必须配好的那些东西</strong>：context 的边界、插件埋点、错误脱敏、自省与沙盒的关闭、缓存为什么基本失效、订阅怎么水平扩展、以及字段使用统计怎么采集。</p>
+<p>Apollo Server 是常用的 GraphQL 服务实现，4.x 相比 3.x 是一次重构：不再内置各框架集成，钩子收进插件体系，错误处理接口也变了。这篇讲<strong>对外服务的 Apollo Server 上线前必配的东西</strong>：context 边界、插件埋点、错误脱敏、自省与沙盒关闭、缓存失效。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -104,7 +104,8 @@
 
 <h2>① 用法 · 可以直接抄的 server 装配</h2>
 
-<p>下面这份初始化把必配项都写进去了：<strong>关自省、禁沙盒、限请求体、深度上限、context 只做轻活、错误统一脱敏</strong>。抄的时候重点看三处注释——它们标出了三个最常见的线上事故点。每个钩子为什么挂在那个位置，见下面的原理层。</p>
+<p>下面这份初始化把必配项都写进去了：<strong>关自省、禁沙盒、限请求体、深度上限、context 只做轻活、错误统一脱敏</strong>。抄时重点看三处注释——它们标出了三个最常见的线上事故点。</p>
+<p>每个钩子为什么挂在那个位置，见下面的原理层。</p>
 
 <pre><code class="language-javascript">// server.js —— Apollo Server 4 完整初始化，可直接跑
 import { ApolloServer } from '@apollo/server';
@@ -172,7 +173,9 @@ app.use('/graphql',
 
 httpServer.listen(4000);</code></pre>
 
-<p>关掉 introspection 和沙盒之后，团队内部的开发体验要另外补上，否则这两个开关迟早会被人偷偷打开。取舍是这样的：<strong>不要为了 IDE 补全而在生产开自省，改成把 schema 当构建产物发布出去。</strong>后端在 CI 里导出 schema 文件、推到内部制品库或仓库，前端的 codegen 与编辑器插件读文件而不是读线上端点；确实需要交互式调试时，在内网单独跑一个带认证的实例，它可以开自省和沙盒，但连的是预发数据。这样做的代价是多一条发布流水线，而且 schema 文件可能滞后于服务一两次发布——这个滞后比把内部数据模型暴露给公网划算得多。</p>
+<p>关掉 introspection 和沙盒后，团队内部的开发体验要另外补上，否则这两个开关迟早会被人偷偷打开。取舍是：<strong>不要为了 IDE 补全而在生产开自省，改成把 schema 当构建产物发布出去。</strong></p>
+<p>后端在 CI 里导出 schema 文件、推到内部制品库或仓库，前端 codegen 与编辑器插件读文件而非线上端点；需要交互式调试时，在内网单独跑一个带认证的实例，它可以开自省和沙盒，但连的是预发数据。</p>
+<p>这样做的代价是多一条发布流水线，而且 schema 文件可能滞后于服务一两次发布——这个滞后比把内部数据模型暴露给公网划算得多。</p>
 
 <pre><code class="language-bash"># 四条上线前必须真的跑一遍的验证。只改了配置不算配好。
 
@@ -278,9 +281,10 @@ curl -s localhost:4000/graphql -H 'content-type: application/json' \
 
 <p>搞清这一节能解决「所有查询都慢了 30 毫秒，包括不需要登录的公开查询」。</p>
 
-<p>context 函数<strong>每个请求执行一次</strong>，这是它最重要的性质，也是它最容易被滥用的原因。放在这里的东西天然具有请求级生命周期，正好适合三类依赖：认证解析出来的身份、DataLoader 实例、数据库连接或事务句柄。</p>
+<p>context 函数<strong>每个请求执行一次</strong>，这是它最重要的性质，也是最容易被滥用的原因。放在这里的东西天然有请求级生命周期，适合三类依赖：认证解析出的身份、DataLoader 实例、数据库连接或事务句柄。</p>
 
-<p>反过来，它也是<strong>全局路径上的串行瓶颈</strong>：任何放进去的 IO 都会加到每一个请求的耗时上，包括那些根本不需要它的公开查询。常见的错误是在 context 里同步查一次用户表、查一次权限表、拉一次配置中心。正确做法是认证走本地验签，权限和配置走带 TTL 的本地缓存，真正需要按用户查的数据交给 resolver 按需触发。</p>
+<p>反过来，它也是<strong>全局路径上的串行瓶颈</strong>：任何放进去的 IO 都会加到每个请求的耗时上，包括根本不需要它的公开查询。常见错误是在 context 里同步查一次用户表、一次权限表、拉一次配置中心。</p>
+<p>正确做法是认证走本地验签，权限和配置走带 TTL 的本地缓存，真正需要按用户查的数据交给 resolver 按需触发。</p>
 
 <table>
 <thead><tr><th>放进 context 的东西</th><th>是否合适</th><th>原因</th></tr></thead>
@@ -300,7 +304,7 @@ curl -s localhost:4000/graphql -H 'content-type: application/json' \
 
 <p>搞清这一节能解决「复杂度校验加了却没省下开销」——钩子挂错位置时，数据库查询已经发出去了。</p>
 
-<p>Server 4 把所有埋点能力都交给插件。理解钩子的触发顺序很重要，因为<strong>做什么事必须挂在对的钩子上</strong>：复杂度校验要在执行之前；响应改写只能在最后一步。</p>
+<p>Server 4 把埋点能力都交给插件。理解钩子的触发顺序很重要，因为<strong>做什么事必须挂在对的钩子上</strong>：复杂度校验要在执行之前，响应改写只能在最后一步。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -336,7 +340,8 @@ sequenceDiagram
 <tr><td>willSendResponse</td><td>最终响应体</td><td>耗时直方图、响应体大小、慢查询日志、响应改写</td><td>改写响应要小心，别把 errors 吞掉</td></tr>
 </tbody></table>
 
-<p>监控这件事有一条必须强调：<strong>所有指标都要按 operation 维度打，不能按 URL 打</strong>。GraphQL 只有一个端点，按 URL 打点的结果是一条毫无用处的曲线。主维度用规范化后的查询签名，客户端自报的 <code>operationName</code> 只作可读标签；并且一定要给匿名查询单独留一个标签，线上如果匿名查询占比很高，说明客户端没给查询命名，后续所有分析都会失去抓手。</p>
+<p>监控有一条必须强调：<strong>所有指标都要按 operation 维度打，不能按 URL 打</strong>。GraphQL 只有一个端点，按 URL 打点的结果是一条毫无用处的曲线。主维度用规范化后的查询签名，客户端自报的 <code>operationName</code> 只作可读标签；</p>
+<p>并且一定要给匿名查询单独留一个标签，线上如果匿名查询占比很高，说明客户端没给查询命名，后续所有分析都会失去抓手。</p>
 <pre><code class="language-javascript">// plugins/metrics.js —— 监控必须按 operation 维度打点，不能按 URL
 // 所有查询都打在同一个 /graphql 上，按 URL 统计等于没有统计
 export const metricsPlugin = {
@@ -416,7 +421,8 @@ export const metricsPlugin = {
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">生产环境泄漏堆栈是最常见的 GraphQL 信息泄露</div>
-    <p>直接 <code>return formattedError</code> 等于把内部错误原文交出去。真实案例里泄漏过数据库表名和 SQL 片段、内部服务域名与端口、文件系统路径与项目结构、依赖库版本号。Server 4 在生产模式下默认不带堆栈，但只要有人为了排查方便打开 <code>includeStacktraceInErrorResponses</code>，或者把原始异常 message 直接塞进 GraphQLError，就一样会漏。稳妥做法是在 formatError 里对 INTERNAL_SERVER_ERROR 一律换成固定文案，只保留 traceId。</p>
+    <p>直接 <code>return formattedError</code> 等于把内部错误原文交出去。真实案例里泄漏过数据库表名和 SQL 片段、内部服务域名与端口、文件系统路径与项目结构、依赖库版本号。</p>
+<p>Server 4 在生产模式默认不带堆栈，但只要有人为排查方便打开 <code>includeStacktraceInErrorResponses</code>，或把原始异常 message 直接塞进 GraphQLError，就一样会漏。稳妥做法是在 formatError 里对 INTERNAL_SERVER_ERROR 一律换固定文案，只留 traceId。</p>
 </div>
 
 <h2>② 原理 · 四层防护各自拦什么，以及 APQ 不是安全机制</h2>
@@ -459,14 +465,15 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">自动持久化查询不是安全机制</div>
-    <p>APQ 的流程是：客户端先只发查询的 hash，服务端没见过就让客户端把完整文本补上来注册，之后同一 hash 直接复用。<strong>任何客户端都能注册任意查询</strong>，所以它的作用只有省请求带宽、以及配合 GET 让查询可以被 CDN 缓存。真正的防护是构建期白名单：查询清单随服务一起发布，生产环境只认清单里的 hash，不在清单里的一律拒绝。把 APQ 当白名单用，是我见过传播最广的 GraphQL 安全误解。</p>
+    <p>APQ 的流程是：客户端先只发查询的 hash，服务端没见过就让客户端把完整文本补上来注册，之后同一 hash 直接复用。<strong>任何客户端都能注册任意查询</strong>，所以它只省请求带宽，以及配合 GET 让查询可被 CDN 缓存。</p>
+<p>真正的防护是构建期白名单：查询清单随服务一起发布，生产只认清单里的 hash，不在清单里的一律拒绝。把 APQ 当白名单用，是传播最广的 GraphQL 安全误解。</p>
 </div>
 
 <h2>② 原理 · 缓存：为什么基本失效，以及怎么找回一部分</h2>
 
 <p>搞清这一节能解决「上线后源站流量翻了几倍，CDN 一点没帮上忙」。</p>
 
-<p>REST 的缓存能力大半来自 HTTP 语义：GET 加 URL 天然是缓存键，配上 ETag 和 Cache-Control，CDN 和浏览器就能替你挡掉大量流量。GraphQL 默认把这套全丢了——<strong>同一个 URL、POST 方法、查询在请求体里</strong>，缓存中间件无法区分两个请求，只能全部穿透到源站。</p>
+<p>REST 的缓存能力大半来自 HTTP 语义：GET 加 URL 天然是缓存键，配上 ETag 和 Cache-Control，CDN 和浏览器就能替你挡掉大量流量。GraphQL 把这套全丢了——<strong>同一个 URL、POST 方法、查询在请求体里</strong>，缓存中间件无法区分两个请求，只能全部穿透到源站。</p>
 
 <table>
 <thead><tr><th>缓存层次</th><th>在 GraphQL 里怎么用</th><th>能挡住多少</th><th>代价与坑</th></tr></thead>
@@ -478,13 +485,13 @@ flowchart TB
 <tr><td>跨请求数据缓存</td><td>loader 背后接 Redis 等外部缓存</td><td>热点对象的主要挡量层</td><td>写操作要精确失效；缓存键必须带权限维度</td></tr>
 </tbody></table>
 
-<p>结论是：GraphQL 的缓存要靠<strong>应用层自己搭</strong>，而且每一层都要处理「带身份的数据不能进共享缓存」这个问题。如果你的业务本来严重依赖 CDN，这件事的成本要提前算进选型账单，账单全貌见<a href="../rest-vs-graphql/">选型篇</a>。</p>
+<p>结论是：GraphQL 的缓存要靠<strong>应用层自己搭</strong>，且每层都要处理「带身份的数据不能进共享缓存」。如果业务本来严重依赖 CDN，这件事的成本要提前算进选型账单，全貌见 <a href="../rest-vs-graphql/">选型篇</a>。</p>
 
 <h2>② 原理 · 订阅的生产化</h2>
 
 <p>搞清这一节能解决「本地好使，上了多实例之后订阅随机收不到消息」。</p>
 
-<p>订阅在单机开发时毫无难度，水平扩展时才暴露真正的问题：<strong>内存里的 PubSub 只在单进程内有效</strong>。用户连在 A 实例，事件由处理写请求的 B 实例发出，A 上的订阅者收不到任何东西。这个 bug 在本地和单实例测试环境永远不会出现。</p>
+<p>订阅在单机开发时毫无难度，水平扩展时才暴露问题：<strong>内存里的 PubSub 只在单进程内有效</strong>。用户连在 A 实例，事件由处理写请求的 B 实例发出，A 上的订阅者收不到，这个 bug 在本地和单实例环境永远不会出现。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -546,9 +553,10 @@ flowchart TB
 <tr><td>适合谁</td><td>多团队协作、Schema 需要评审</td><td>后端单团队掌控、语言类型系统强</td></tr>
 </tbody></table>
 
-<p>不管选哪条路线，两件事都必须做。第一是<strong>CI 里的破坏性变更检测</strong>：把上一版 Schema 存成快照，每次提交做 diff，删字段、改类型、参数由可选变必填这些一律拦下，需要放行时走显式审批（流水线卡点的做法见<a href="../../../devops/cicd/">CI/CD</a>）。第二是<strong>字段级使用统计</strong>，它是安全删字段的唯一前提。采集方式就是上面那个插件里的 <code>willResolveField</code>，把 <code>父类型名.字段名</code> 作为标签计数；成本敏感时可以只对标了废弃的字段全量统计，其余采样。</p>
+<p>不管选哪条路线，两件事都必须做。第一是<strong>CI 里的破坏性变更检测</strong>：把上一版 Schema 存成快照，每次提交做 diff，删字段、改类型、参数由可选变必填一律拦下，放行时走显式审批（卡点做法见 <a href="../../../devops/cicd/">CI/CD</a>）。</p>
+<p>第二是<strong>字段级使用统计</strong>，它是安全删字段的唯一前提。采集方式就是上面插件里的 <code>willResolveField</code>，把 <code>父类型名.字段名</code> 作为标签计数；成本敏感时只对标了废弃的字段全量统计，其余采样。</p>
 
-<p>测试上有两层。resolver 单测直接调函数，注入假的 parent 和 context，验证取数与权限逻辑；集成测试用 <code>server.executeOperation</code>，不必起 HTTP 服务，还能顺手注入一个查询计数器，把「防 N+1 回归」变成一条断言。</p>
+<p>测试上有两层。resolver 单测直接调函数，注入假的 parent 和 context，验证取数与权限逻辑；集成测试用 <code>server.executeOperation</code>，不必起 HTTP 服务，还能注入一个查询计数器，把「防 N+1 回归」变成一条断言。</p>
 <pre><code class="language-javascript">// __tests__/order.test.js —— 集成测试用 executeOperation，不用起 HTTP 服务
 import assert from 'node:assert';
 import { ApolloServer } from '@apollo/server';
@@ -578,7 +586,7 @@ test('订单详情返回明细，且越权时 email 为 null', async () =&gt; {
 
 <h2>③ 场景 · 三种部署形态各该配到哪一步</h2>
 
-<p>必配项清单是一个下限，但<strong>投入顺序由「谁能给你发查询」决定</strong>。客户端完全可控时，持久化查询白名单是性价比最高的一步；客户端不可控时，这条路直接走不通，只能在评分和配额上多花功夫。</p>
+<p>必配项清单是一个下限，但<strong>投入顺序由「谁能给你发查询」决定</strong>。客户端完全可控时，持久化查询白名单性价比最高；客户端不可控时，这条路走不通，只能在评分和配额上多花功夫。</p>
 
 <table>
 <thead><tr><th>场景</th><th>该做到哪一步</th><th>为什么停在这里</th><th>代价</th></tr></thead>

@@ -244,7 +244,8 @@ sequenceDiagram
     EH-->>C: 翻译成状态码与统一响应体
     Note over H,EH: 关键前提 handler 里不要提前写响应<br/>一旦 Response 已 committed 处理器就改不了响应体了
 </div>
-<p>Gin 里没有这条通路。Gin 提供 <code>c.Error(err)</code> 把 error 追加到 <code>c.Errors</code> 切片，但它<strong>不会中断流程、不会生成响应</strong>，只是记账；要实现统一错误响应，得自己写一个中间件在 <code>c.Next()</code> 之后检查 <code>c.Errors</code> 并写响应，而且所有 handler 都必须自觉「只调 <code>c.Error</code> 然后 return，绝不自己写响应」。约定一旦被破坏——比如某个新同事顺手写了 <code>c.JSON(500, ...)</code>——统一格式就有了一个漏洞，而且编译不会报错。</p>
+<p>Gin 里没有这条通路。Gin 提供 <code>c.Error(err)</code> 把 error 追加到 <code>c.Errors</code> 切片，但它<strong>不会中断流程、不会生成响应</strong>，只是记账；要实现统一错误响应，得自己写一个中间件在 <code>c.Next()</code> 之后检查 <code>c.Errors</code> 并写响应，而且所有 handler 都必须自觉「只调 <code>c.Error</code> 然后 return，绝不自己写响应」。</p>
+<p>约定一旦被破坏——比如某个新同事顺手写了 <code>c.JSON(500, ...)</code>——统一格式就有了一个漏洞，而且编译不会报错。</p>
 <table>
 <thead><tr><th>错误来源</th><th>Echo 的处理路径</th><th>Gin 的处理路径</th><th>Gin 侧的风险点</th></tr></thead>
 <tbody>
@@ -372,7 +373,8 @@ flowchart TB
 <tr><td>优雅退出</td><td>e.Shutdown</td><td>取底层 http.Server 自己 Shutdown</td><td>能力等价</td></tr>
 </tbody>
 </table>
-<p>顺带说一个和 Gin 完全相同的坑：<strong>Echo 的 <code>Group</code> 级中间件也只对之后注册的路由生效</strong>。写成先 <code>g.GET(...)</code> 再 <code>g.Use(auth)</code>，那条路由是不带认证的，而代码读起来完全像是带了。这类问题在 review 时很难发现，最好的防御是把中间件注册全部集中在一个装配函数里，路由注册严格排在它之后。</p>
+<p>顺带说一个和 Gin 完全相同的坑：<strong>Echo 的 <code>Group</code> 级中间件也只对之后注册的路由生效</strong>。写成先 <code>g.GET(...)</code> 再 <code>g.Use(auth)</code>，那条路由是不带认证的，而代码读起来完全像是带了。</p>
+<p>这类问题在 review 时很难发现，最好的防御是把中间件注册全部集中在一个装配函数里，路由注册严格排在它之后。</p>
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">迁移时最容易漏的两处</div>
@@ -407,8 +409,11 @@ flowchart TB
     S --> Q5{"只有几个内部接口且无中间件需求"}
     Q5 -->|"是"| STD["直接用标准库<br/>Go 1.22 的 ServeMux 已够用"]
 </div>
-<p>我的结论：<strong>新项目、团队规模不大、接口数量会长到几十上百个，选 Echo</strong>；<strong>已有 Gin 技术栈、或者依赖特定三方中间件、或者团队新人多，继续用 Gin</strong>，把统一错误中间件写好、写进模板、在 review 里守住「handler 不直接写错误响应」这条线，能拿到八成的同等效果。两个框架都不是错误选择，比不过来的那点性能不要作为决策依据。</p>
-<p><strong>不适用边界</strong>：框架选型解决不了的问题不要指望它。接口的字段命名、版本化、错误码分层属于契约设计，不是框架能力；认证授权与输入校验的安全边界见 <a href="../../../api/security/">接口安全</a>；每请求一个 goroutine 模型下的并发正确性、以及中间件里起后台任务的生命周期在 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>；超时与取消怎么一路传到下游在 <a href="../context/">Go Context 的传播、取消与误用</a>；「要不要用框架」这个更上层的问题在下一篇。</p>
+<p>我的结论：<strong>新项目、团队规模不大、接口数量会长到几十上百个，选 Echo</strong>；</p>
+<p><strong>已有 Gin 技术栈、或者依赖特定三方中间件、或者团队新人多，继续用 Gin</strong>，把统一错误中间件写好、写进模板、在 review 里守住「handler 不直接写错误响应」这条线，能拿到八成的同等效果。</p>
+<p>两个框架都不是错误选择，比不过来的那点性能不要作为决策依据。</p>
+<p><strong>不适用边界</strong>：框架选型解决不了的问题不要指望它。接口的字段命名、版本化、错误码分层属于契约设计，不是框架能力；认证授权与输入校验的安全边界见 <a href="../../../api/security/">接口安全</a>；</p>
+<p>每请求一个 goroutine 模型下的并发正确性、以及中间件里起后台任务的生命周期在 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>；超时与取消怎么一路传到下游在 <a href="../context/">Go Context 的传播、取消与误用</a>；「要不要用框架」这个更上层的问题在下一篇。</p>
 <p>这条路径上，上一篇讲的是 Gin 的路由树与中间件 index 模型，本篇把 Echo 与它逐项对照，下一篇把视角抬高一层：从「选哪个框架」变成「该不该用框架、用哪一档」。</p>
 
 <div class="callout-title">避坑清单</div>

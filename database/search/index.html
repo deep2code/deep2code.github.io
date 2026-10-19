@@ -89,7 +89,9 @@
             <span class="meta-item">🏷️ Elasticsearch</span>
         </div>
     </header>
-<p>「Elasticsearch 快是因为倒排索引」这句话只对了三分之一。<strong>倒排索引只回答一个问题：哪些文档包含这个词。</strong>排序、聚合要的是反向问题——这个文档在某个字段上的值是多少；数值和日期的范围查询走的是另一套结构；把文档内容取回来又是第三套。一个查询慢在哪、为什么关掉某个 mapping 选项就报错、为什么聚合会把堆打满，全都取决于它落在哪套结构上。这篇按「结构决定代价」的顺序讲：三种存储结构、mapping 与分析器、segment 生命周期、分片规划、缓存与查询上下文、分页与聚合，最后是集群角色与选主。</p>
+<p>「Elasticsearch 快是因为倒排索引」这句话只对了三分之一。<strong>倒排索引只回答一个问题：哪些文档包含这个词。</strong>排序、聚合要的是反向问题——这个文档在某个字段上的值是多少；</p>
+<p>数值和日期的范围查询走的是另一套结构；把文档内容取回来又是第三套。一个查询慢在哪、为什么关掉某个 mapping 选项就报错、为什么聚合会把堆打满，全都取决于它落在哪套结构上。</p>
+<p>这篇按「结构决定代价」的顺序讲：三种存储结构、mapping 与分析器、segment 生命周期、分片规划、缓存与查询上下文、分页与聚合，最后是集群角色与选主。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -216,15 +218,18 @@ flowchart TB
 <tr><td>fielddata</td><td>text 字段的正排值</td><td>对 text 强行排序或聚合</td><td>默认关闭；开启会把值加载进堆</td><td>堆内，高基数字段上是 OOM 主因之一</td></tr>
 </tbody></table>
 
-<p>由此可以推出两条实践结论。第一，<strong>「只用来展示、不参与检索」的大字段应该同时 <code>index: false</code> 和 <code>doc_values: false</code></strong>，它只留在 <code>_source</code> 里，磁盘和缓存压力都会明显下降。第二，<strong>永远不要为了对 text 字段排序去开 fielddata</strong>，正确做法是加一个 keyword 子字段——这也是 ES 默认动态映射会替你做的事。</p>
+<p>由此可以推出两条实践结论。第一，<strong>「只用来展示、不参与检索」的大字段应该同时 <code>index: false</code> 和 <code>doc_values: false</code></strong>，它只留在 <code>_source</code> 里，磁盘和缓存压力都会明显下降。</p>
+<p>第二，<strong>永远不要为了对 text 字段排序去开 fielddata</strong>，正确做法是加一个 keyword 子字段——这也是 ES 默认动态映射会替你做的事。</p>
 
 <h2>② 原理 · mapping 与分析器决定了你「能查到什么」</h2>
 
 <p>搞清这一节能解决的现象是：数据写进去了、用 ID 也取得到，但按词怎么都搜不出来。</p>
 
-<p>ES 里检索能力的上限在写入时就被 mapping 锁定了：<strong>查询只能查到分析器产出的 token</strong>。同一段文本，用 standard 分析器写入的中文会被切成单字，用 ik_smart 写入会切成词；而查询时如果 search_analyzer 与写入时不一致，就会出现「明明有这条数据却查不到」。索引已经建好后改分析器不会重写历史数据，只能 reindex。</p>
+<p>ES 里检索能力的上限在写入时就被 mapping 锁定了：<strong>查询只能查到分析器产出的 token</strong>。同一段文本，用 standard 分析器写入的中文会被切成单字，用 ik_smart 写入会切成词；</p>
+<p>而查询时如果 search_analyzer 与写入时不一致，就会出现「明明有这条数据却查不到」。索引已经建好后改分析器不会重写历史数据，只能 reindex。</p>
 
-<p>比分析器更常出事的是<strong>动态映射</strong>。ES 默认 <code>dynamic: true</code>，遇到没见过的字段就自动推断类型并写进 mapping。把不可枚举的东西当字段名（指标名、用户 ID、业务自定义标签作为 JSON key）就会触发映射爆炸：字段数撞上 <code>index.mapping.total_fields.limit</code>（默认 1000）后写入直接失败，而在撞上之前，集群状态已经因为巨大的 mapping 变得臃肿，每次 mapping 更新都要全集群同步。</p>
+<p>比分析器更常出事的是<strong>动态映射</strong>。ES 默认 <code>dynamic: true</code>，遇到没见过的字段就自动推断类型并写进 mapping。</p>
+<p>把不可枚举的东西当字段名（指标名、用户 ID、业务自定义标签作为 JSON key）就会触发映射爆炸：字段数撞上 <code>index.mapping.total_fields.limit</code>（默认 1000）后写入直接失败，而在撞上之前，集群状态已经因为巨大的 mapping 变得臃肿，每次 mapping 更新都要全集群同步。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -269,7 +274,8 @@ flowchart TB
   }
 }</code></pre>
 
-<p>这段 mapping 里有四个刻意的选择：<code>dynamic: strict</code> 让未声明字段直接报错而不是悄悄进 mapping；<code>raw_payload</code> 关掉索引与正排，只做展示；<code>labels</code> 用 <code>flattened</code> 承接业务自定义的键值对，整个对象只占一个字段位；<code>trace_id</code> 只做等值查询，不需要排序聚合，关掉 <code>doc_values</code> 省一份磁盘。另外 <strong><code>ignore_above: 256</code> 是静默生效的</strong>——超过 256 字节的值不会报错，只是不进倒排索引，于是「这条数据存在但用 keyword 精确查不到」。</p>
+<p>这段 mapping 里有四个刻意的选择：<code>dynamic: strict</code> 让未声明字段直接报错而不是悄悄进 mapping；<code>raw_payload</code> 关掉索引与正排，只做展示；<code>labels</code> 用 <code>flattened</code> 承接业务自定义的键值对，整个对象只占一个字段位；</p>
+<p><code>trace_id</code> 只做等值查询，不需要排序聚合，关掉 <code>doc_values</code> 省一份磁盘。另外 <strong><code>ignore_above: 256</code> 是静默生效的</strong>——超过 256 字节的值不会报错，只是不进倒排索引，于是「这条数据存在但用 keyword 精确查不到」。</p>
 
 <h2>② 原理 · segment 生命周期：近实时的来源与代价</h2>
 
@@ -303,13 +309,16 @@ stateDiagram-v2
 <tr><td>_forcemerge?max_num_segments=1</td><td>手动</td><td>把分片压成单个 segment，提升查询效率</td><td>只能对不再写入的索引做；对活跃索引执行会产生远超 5gb 的 segment，此后被删文档永不回收</td></tr>
 </tbody></table>
 
-<p>顺便纠正一个流传很广的说法：<strong>ES 并没有「每 30 分钟 flush 一次」的默认行为</strong>，那是很老版本文档留下的印象。现在 flush 主要由 translog 大小触发，具体的持久性保证由 <code>translog.durability</code> 决定，而不是 flush 周期。真正影响「宕机丢多少」的是 translog 策略，不是 refresh 也不是 flush 间隔。</p>
+<p>顺便纠正一个流传很广的说法：<strong>ES 并没有「每 30 分钟 flush 一次」的默认行为</strong>，那是很老版本文档留下的印象。现在 flush 主要由 translog 大小触发，具体的持久性保证由 <code>translog.durability</code> 决定，而不是 flush 周期。</p>
+<p>真正影响「宕机丢多少」的是 translog 策略，不是 refresh 也不是 flush 间隔。</p>
 
 <h2>② 原理 · 分片规划：不可改的那个数字</h2>
 
 <p>搞清这一节能解决的现象是：磁盘水位很低、CPU 也不高，集群却频繁出现集群状态更新超时与长 GC。</p>
 
-<p>主分片数在索引创建后不能原地改，因为路由公式 <code>hash(_routing) % number_of_primary_shards</code> 直接依赖它。能做的只有 split、shrink 或 reindex，三者都有前置条件。更重要的是<strong>分片不是免费的</strong>：每个分片是一个独立 Lucene index，有自己的词典、文件句柄、segment 元数据和 merge 线程配额，还要占一份集群状态。几百个索引每个都开 5 分片 1 副本，最后压垮集群的往往不是磁盘，而是主节点上的集群状态更新和数据节点的堆。</p>
+<p>主分片数在索引创建后不能原地改，因为路由公式 <code>hash(_routing) % number_of_primary_shards</code> 直接依赖它。能做的只有 split、shrink 或 reindex，三者都有前置条件。</p>
+<p>更重要的是<strong>分片不是免费的</strong>：每个分片是一个独立 Lucene index，有自己的词典、文件句柄、segment 元数据和 merge 线程配额，还要占一份集群状态。</p>
+<p>几百个索引每个都开 5 分片 1 副本，最后压垮集群的往往不是磁盘，而是主节点上的集群状态更新和数据节点的堆。</p>
 
 <table>
 <thead><tr><th>场景</th><th>分片策略</th><th>调整手段与前置条件</th><th>典型失误</th></tr></thead>
@@ -360,7 +369,8 @@ sequenceDiagram
     Note over C,S2: 代价只与翻多深有关 与最终返回几条无关
 </div>
 
-<p>这就是 <code>index.max_result_window</code> 默认卡在 10000 的原因，也是为什么把它调大是在饮鸩止渴——分片越多、页码越深，协调节点的归并内存与网络传输量线性放大。正确的替代是 <code>search_after</code>：用上一页最后一条的排序值做游标，每个分片只返回游标之后的 size 条。它有两个硬性要求：<strong>排序字段组合必须唯一</strong>（否则会漏数据或重复，通常追加一个 tiebreaker），以及最好配合 point in time 拿到稳定快照。</p>
+<p>这就是 <code>index.max_result_window</code> 默认卡在 10000 的原因，也是为什么把它调大是在饮鸩止渴——分片越多、页码越深，协调节点的归并内存与网络传输量线性放大。</p>
+<p>正确的替代是 <code>search_after</code>：用上一页最后一条的排序值做游标，每个分片只返回游标之后的 size 条。它有两个硬性要求：<strong>排序字段组合必须唯一</strong>（否则会漏数据或重复，通常追加一个 tiebreaker），以及最好配合 point in time 拿到稳定快照。</p>
 
 <pre><code class="language-bash"># 1) 开一个 point in time，拿到 pit id；keep_alive 只要覆盖整次翻页即可
 curl -s -XPOST 'http://es:9200/orders/_pit?keep_alive=2m'
@@ -378,7 +388,9 @@ curl -s -XPOST 'http://es:9200/_search' -H 'Content-Type: application/json' -d '
 # 3) 翻完必须显式关闭 pit：它会持有 segment 不被回收，忘关等于慢性磁盘泄漏
 curl -s -XDELETE 'http://es:9200/_pit' -H 'Content-Type: application/json' -d '{"id":"PIT_ID_HERE"}'</code></pre>
 
-<p>聚合的风险在另一个方向：<strong>桶的数量由数据决定，不由请求决定</strong>。<code>terms</code> 聚合的 <code>size</code> 只控制返回多少个桶，分片上实际要统计的是 <code>shard_size</code> 个（默认比 size 更大），高基数字段加上嵌套子聚合，桶数是乘法关系，很容易撞上 <code>search.max_buckets</code>（默认 65536）或直接触发 circuit breaker。另外 <code>terms</code> 聚合在多分片下的计数<strong>本身就是近似的</strong>，响应里的 <code>doc_count_error_upper_bound</code> 就是误差上界；需要精确排序的 top-N 只能靠提高 <code>shard_size</code> 逼近，或改用 <code>composite</code> 聚合分页遍历全部桶。</p>
+<p>聚合的风险在另一个方向：<strong>桶的数量由数据决定，不由请求决定</strong>。</p>
+<p><code>terms</code> 聚合的 <code>size</code> 只控制返回多少个桶，分片上实际要统计的是 <code>shard_size</code> 个（默认比 size 更大），高基数字段加上嵌套子聚合，桶数是乘法关系，很容易撞上 <code>search.max_buckets</code>（默认 65536）或直接触发 circuit breaker。</p>
+<p>另外 <code>terms</code> 聚合在多分片下的计数<strong>本身就是近似的</strong>，响应里的 <code>doc_count_error_upper_bound</code> 就是误差上界；需要精确排序的 top-N 只能靠提高 <code>shard_size</code> 逼近，或改用 <code>composite</code> 聚合分页遍历全部桶。</p>
 
 <table>
 <thead><tr><th>Circuit breaker</th><th>默认阈值</th><th>拦截什么</th><th>触发时怎么判断</th></tr></thead>
@@ -393,9 +405,12 @@ curl -s -XDELETE 'http://es:9200/_pit' -H 'Content-Type: application/json' -d '{
 
 <p>搞清这一节能解决的现象是：一次大聚合之后整个集群抖动、主节点切换，而查询本身并没有报错。</p>
 
-<p>节点角色要显式规划：<strong>候选主节点（master-eligible）只做集群状态管理</strong>，不该同时承担数据和聚合压力，因为一次大聚合引发的长 GC 会让它失去心跳并触发选主。协调节点（不带任何 data/master 角色）负责接请求、归并结果，是深分页和大聚合的堆压力承受者，独立出来可以保护数据节点。数据节点在 7.x 之后细分为 content/hot/warm/cold/frozen，配合 ILM 做冷热分层。</p>
+<p>节点角色要显式规划：<strong>候选主节点（master-eligible）只做集群状态管理</strong>，不该同时承担数据和聚合压力，因为一次大聚合引发的长 GC 会让它失去心跳并触发选主。</p>
+<p>协调节点（不带任何 data/master 角色）负责接请求、归并结果，是深分页和大聚合的堆压力承受者，独立出来可以保护数据节点。数据节点在 7.x 之后细分为 content/hot/warm/cold/frozen，配合 ILM 做冷热分层。</p>
 
-<p>选主机制上，<code>discovery.zen.minimum_master_nodes</code> 已在 7.0 <strong>移除</strong>——继续在配置文件里写它不会生效，只会让人误以为脑裂被防住了。现在集群维护一个<strong>投票配置</strong>，法定人数由它自动推导，节点加入或退出时自动调整。人工只需要做两件事：首次引导集群时用 <code>cluster.initial_master_nodes</code> 指定初始候选列表（之后必须删掉，否则重启时可能引导出第二个集群），以及永久下线候选主节点时使用投票排除接口，避免一次性移除过多候选把法定人数打破。</p>
+<p>选主机制上，<code>discovery.zen.minimum_master_nodes</code> 已在 7.0 <strong>移除</strong>——继续在配置文件里写它不会生效，只会让人误以为脑裂被防住了。现在集群维护一个<strong>投票配置</strong>，法定人数由它自动推导，节点加入或退出时自动调整。</p>
+<p>人工只需要做两件事：首次引导集群时用 <code>cluster.initial_master_nodes</code> 指定初始候选列表（之后必须删掉，否则重启时可能引导出第二个集群）。</p>
+<p>以及永久下线候选主节点时使用投票排除接口，避免一次性移除过多候选把法定人数打破。</p>
 
 <pre><code class="language-bash"># 分片与索引体量：先看哪个索引、哪个分片大得离谱
 curl -s 'http://es:9200/_cat/indices?v&amp;h=index,health,pri,rep,docs.count,docs.deleted,store.size,pri.store.size&amp;s=pri.store.size:desc'
@@ -430,7 +445,8 @@ curl -s -XPOST 'http://es:9200/orders/_search?pretty' -H 'Content-Type: applicat
 <tr><td>用自然语言描述意图、同一概念多种叫法</td><td>在关键词召回之上叠一层 <code>dense_vector</code> 的 knn，用排名融合合并</td><td>两路分数量纲不同，直接相加没有意义</td><td>要维护嵌入模型版本，且过滤条件与近邻搜索的交互会影响召回率</td></tr>
 </tbody></table>
 
-<p><strong>不适用边界</strong>：ES 不是主库——没有跨文档事务、refresh 前不可见、版本冲突需要业务处理，把它当唯一存储迟早要重建数据。需要主键读写与事务的部分留在关系库，索引与执行计划的取舍见 <a href="../mysql/">MySQL</a> 与 <a href="../postgresql/index-optimize/">PostgreSQL 索引优化</a>；只有几百篇文档的站内搜索用不着集群；需要按键取值的热点读走缓存，见 <a href="../cache/">缓存的收益与代价</a>；向量检索的形态与索引参数见 <a href="../vector/">向量数据库</a>。</p>
+<p><strong>不适用边界</strong>：ES 不是主库——没有跨文档事务、refresh 前不可见、版本冲突需要业务处理，把它当唯一存储迟早要重建数据。需要主键读写与事务的部分留在关系库，索引与执行计划的取舍见 <a href="../mysql/">MySQL</a> 与 <a href="../postgresql/index-optimize/">PostgreSQL 索引优化</a>；</p>
+<p>只有几百篇文档的站内搜索用不着集群；需要按键取值的热点读走缓存，见 <a href="../cache/">缓存的收益与代价</a>；向量检索的形态与索引参数见 <a href="../vector/">向量数据库</a>。</p>
 
 <p>这一篇讲的是 ES 自身的结构与代价。把它放到具体产品里还有一层问题没解决：站内搜索到底该用哪一档实现——几百篇文档的静态站和千万级业务数据，答案完全不同。</p>
 

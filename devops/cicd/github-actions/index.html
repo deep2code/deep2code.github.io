@@ -90,11 +90,16 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>GitHub Actions 的上手门槛低，但真正让人卡住的从来不是 YAML 语法，而是三个执行语义上的事实：<strong>job 之间不共享文件系统</strong>、<strong>缓存是不可变且按分支隔离的</strong>、<strong>事件类型决定了这条流水线能不能碰到密钥</strong>。这三件事没搞清楚，写出来的流水线要么慢，要么在某个分支上诡异地失败，要么直接成为供应链攻击的入口。这篇只讲机制和可以直接抄走的配置；流水线本身的设计原则与落地节奏，详见站内《CI/CD 工具选型》。</p>
+<p>GitHub Actions 的上手门槛低，但真正让人卡住的从来不是 YAML 语法，而是三个执行语义上的事实：<strong>job 之间不共享文件系统</strong>、<strong>缓存是不可变且按分支隔离的</strong>、<strong>事件类型决定了这条流水线能不能碰到密钥</strong>。</p>
+<p>这三件事没搞清楚，写出来的流水线要么慢，要么在某个分支上诡异地失败，要么直接成为供应链攻击的入口。这篇只讲机制和可以直接抄走的配置；</p>
+<p>流水线本身的设计原则与落地节奏，详见站内《CI/CD 工具选型》。</p>
 
 <h2>四层模型：workflow、job、step、action 各自的边界</h2>
 
-<p>这四层不是命名上的层级关系，而是<strong>隔离边界</strong>的层级关系。workflow 是一个事件响应单元，一次触发产生一次 run；job 是<strong>调度与隔离单元</strong>，每个 job 独占一台 runner；step 是 job 内部的顺序执行单元，共享同一个工作区；action 只是 step 的一种实现方式（另一种是 <code>run</code>）。搞清楚这一点，很多困惑自动消解：为什么 <code>cd</code> 在下一个 step 里失效（每个 <code>run</code> 是独立进程，只有工作目录默认相同）、为什么 <code>export</code> 的变量下一步读不到（要写进 <code>$GITHUB_ENV</code>）、为什么上一个 job 编译的二进制在下一个 job 里找不到（压根不是同一台机器）。</p>
+<p>这四层不是命名上的层级，而是<strong>隔离边界</strong>的层级关系。workflow 是一个事件响应单元，一次触发产生一次 run；job 是<strong>调度与隔离单元</strong>，每个 job 独占一台 runner。</p>
+<p>step 是 job 内部的顺序执行单元，共享同一个工作区；action 只是 step 的一种实现方式（另一种是 <code>run</code>）。</p>
+<p>搞清楚这一点，很多困惑自动消解：为什么 <code>cd</code> 在下一个 step 里失效（每个 <code>run</code> 是独立进程，只有工作目录默认相同）、为什么 <code>export</code> 的变量下一步读不到（要写进 <code>$GITHUB_ENV</code>）。</p>
+<p>为什么上一个 job 编译的二进制在下一个 job 里找不到（压根不是同一台机器）。</p>
 
 <table>
 <thead><tr><th>层级</th><th>隔离粒度</th><th>共享什么</th><th>不共享什么</th><th>高频误解</th></tr></thead>
@@ -107,7 +112,8 @@
 
 <h2>job 之间为什么拿不到文件：artifact 与 cache 两条通道</h2>
 
-<p>这是 GitHub Actions 最高频的困惑。<code>needs</code> 只表达<strong>执行顺序依赖</strong>，不表达数据依赖。每个 job 启动时 GitHub 分配一台干净的托管 runner，工作区是空的，连 <code>actions/checkout</code> 都得重新跑一遍。上游 job 产出的东西要想传下去只有三条路：小字符串走 <code>outputs</code>（有 1 MB 上限，且不能放密钥，它会明文出现在日志与 API 里）、构建产物走 artifact、可重建的依赖走 cache。</p>
+<p>这是 GitHub Actions 最高频的困惑。<code>needs</code> 只表达<strong>执行顺序依赖</strong>，不表达数据依赖。每个 job 启动时 GitHub 分配一台干净的托管 runner，工作区是空的，连 <code>actions/checkout</code> 都得重新跑一遍。</p>
+<p>上游 job 产出的东西要想传下去只有三条路：小字符串走 <code>outputs</code>（有 1 MB 上限，且不能放密钥，它会明文出现在日志与 API 里）、构建产物走 artifact、可重建的依赖走 cache。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -149,12 +155,15 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">artifact v3 已停服，v4 不是无痛升级</div>
-    <p><code>upload-artifact@v3</code> 已于 2025 年 1 月起停止服务。v4 的两个行为变更会直接打断老流水线：一是同一 run 内 artifact 名字必须唯一，矩阵构建里所有组合都上传 <code>coverage</code> 会报冲突，必须把 <code>matrix</code> 值拼进名字；二是 v4 的 <code>download-artifact</code> 不能下载 v3 上传的产物，反之亦然，混用时得到的是「找不到 artifact」而不是明确的版本错误。</p>
+    <p><code>upload-artifact@v3</code> 已于 2025 年 1 月起停止服务。v4 的两个行为变更会直接打断老流水线：一是同一 run 内 artifact 名字必须唯一，矩阵构建里所有组合都上传 <code>coverage</code> 会报冲突，必须把 <code>matrix</code> 值拼进名字；</p>
+<p>二是 v4 的 <code>download-artifact</code> 不能下载 v3 上传的产物，反之亦然，混用时得到的是「找不到 artifact」而不是明确的版本错误。</p>
 </div>
 
 <h2>触发器矩阵：pull_request_target 是真实的攻击面</h2>
 
-<p>事件类型决定三件事：工作流定义从哪个 ref 读取、<code>GITHUB_TOKEN</code> 的默认权限、fork 来的 PR 能不能拿到 secrets。<code>pull_request</code> 对 fork PR 做了严格降级：secrets 全部为空、<code>GITHUB_TOKEN</code> 只读。有人为了让 fork PR 也能跑需要密钥的步骤（打评论、上传预览），改用 <code>pull_request_target</code>——这个事件用的是<strong>基础分支</strong>的工作流定义，并且带完整 secrets。如果在里面显式检出 PR 的 commit 再执行构建脚本，攻击者只要在 fork 里改一行 <code>package.json</code> 的 <code>postinstall</code>，就能在带密钥的环境里执行任意代码。</p>
+<p>事件类型决定三件事：工作流定义从哪个 ref 读取、<code>GITHUB_TOKEN</code> 的默认权限、fork 来的 PR 能不能拿到 secrets。<code>pull_request</code> 对 fork PR 做了严格降级：secrets 全部为空、<code>GITHUB_TOKEN</code> 只读。</p>
+<p>有人为了让 fork PR 也能跑需要密钥的步骤（打评论、上传预览），改用 <code>pull_request_target</code>——这个事件用的是<strong>基础分支</strong>的工作流定义，并且带完整 secrets。</p>
+<p>如果在里面显式检出 PR 的 commit 再执行构建脚本，攻击者只要在 fork 里改一行 <code>package.json</code> 的 <code>postinstall</code>，就能在带密钥的环境里执行任意代码。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -188,12 +197,16 @@ sequenceDiagram
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">三种会直接泄露密钥的写法</div>
-    <p>一是 <code>pull_request_target</code> 里检出 <code>github.event.pull_request.head.sha</code> 然后执行项目脚本；二是把不受信输入（PR 标题、分支名、issue 正文）直接插进 <code>run</code> 的表达式里——表达式是在生成 shell 脚本<strong>之前</strong>做文本替换的，分支名里带分号和反引号就是命令注入，正确做法是先赋给 <code>env</code> 再用带引号的变量引用；三是公开仓库挂 self-hosted runner，任何人提个 PR 就能在你的内网机器上执行代码，而且 runner 工作区在多次构建之间是持久的。</p>
+    <p>一是 <code>pull_request_target</code> 里检出 <code>github.event.pull_request.head.sha</code> 然后执行项目脚本；二是把不受信输入（PR 标题、分支名、issue 正文）直接插进 <code>run</code> 的表达式里。</p>
+<p>表达式是在生成 shell 脚本<strong>之前</strong>做文本替换的，分支名里带分号和反引号就是命令注入，正确做法是先赋给 <code>env</code> 再用带引号的变量引用。</p>
+<p>三是公开仓库挂 self-hosted runner，任何人提个 PR 就能在你的内网机器上执行代码，而且 runner 工作区在多次构建之间是持久的。</p>
 </div>
 
 <h2>缓存机制：key 不可变、前缀匹配、分支单向可见</h2>
 
-<p><code>actions/cache</code> 有三条容易踩的规则。第一，<strong>缓存条目不可变</strong>：<code>key</code> 已存在时，job 结束时的写入会被静默忽略，日志里只有一行 Cache already exists。所以 key 里不含锁文件哈希的话，依赖更新后永远命中旧缓存，改 YAML 也救不回来，必须换 key 或手动删除。第二，<code>restore-keys</code> 是<strong>前缀匹配</strong>，按列表顺序尝试，同前缀下取最近创建的那条；命中 restore-keys 时 <code>cache-hit</code> 输出仍然不是 <code>true</code>，这个区分是刻意的——它意味着你拿到的是近似缓存，还需要跑一次增量安装。第三，缓存可见性是<strong>单向</strong>的：分支能读到自己和默认分支（以及父分支）的缓存，但默认分支读不到子分支写入的缓存。这解释了一个经典现象：PR 上缓存命中率很高，合进 main 之后第一次构建又慢回去了。</p>
+<p><code>actions/cache</code> 有三条容易踩的规则。第一，<strong>缓存条目不可变</strong>：<code>key</code> 已存在时，job 结束时的写入会被静默忽略，日志里只有一行 Cache already exists。所以 key 里不含锁文件哈希的话，依赖更新后永远命中旧缓存，改 YAML 也救不回来，必须换 key 或手动删除。</p>
+<p>第二，<code>restore-keys</code> 是<strong>前缀匹配</strong>，按列表顺序尝试，同前缀下取最近创建的那条；命中 restore-keys 时 <code>cache-hit</code> 输出仍然不是 <code>true</code>，这个区分是刻意的——它意味着你拿到的是近似缓存，还需要跑一次增量安装。</p>
+<p>第三，缓存可见性是<strong>单向</strong>的：分支能读到自己和默认分支（以及父分支）的缓存，但默认分支读不到子分支写入的缓存。这解释了一个经典现象：PR 上缓存命中率很高，合进 main 之后第一次构建又慢回去了。</p>
 
 <table>
 <thead><tr><th>已有缓存条目</th><th>本次 key</th><th>restore-keys</th><th>结果</th><th>cache-hit</th></tr></thead>
@@ -206,7 +219,8 @@ sequenceDiagram
 <tr><td>仓库缓存总量已到 10 GB</td><td>任意新 key</td><td>—</td><td>写入成功，但最近最少使用的旧条目被淘汰，表现为命中率忽高忽低</td><td>不定</td></tr>
 </tbody></table>
 
-<p>关于 <code>setup-*</code> 自带缓存与手写 <code>actions/cache</code>：能用内置的就用内置的。<code>setup-node</code>、<code>setup-go</code>、<code>setup-python</code>、<code>setup-java</code> 的 <code>cache</code> 参数会自动挑对目录、自动用锁文件算哈希，还处理了跨平台路径差异。只有三种情况需要手写：缓存内容不是包管理器目录（Rust 的 <code>target/</code>、Gradle 的 <code>build/</code>、Playwright 浏览器包）、需要只读缓存（用 <code>cache/restore</code> 子 action）、需要多级 restore-keys 降级策略。</p>
+<p>关于 <code>setup-*</code> 自带缓存与手写 <code>actions/cache</code>：能用内置的就用内置的。<code>setup-node</code>、<code>setup-go</code>、<code>setup-python</code>、<code>setup-java</code> 的 <code>cache</code> 参数会自动挑对目录、自动用锁文件算哈希，还处理了跨平台路径差异。</p>
+<p>只有三种情况需要手写：缓存内容不是包管理器目录（Rust 的 <code>target/</code>、Gradle 的 <code>build/</code>、Playwright 浏览器包）、需要只读缓存（用 <code>cache/restore</code> 子 action）、需要多级 restore-keys 降级策略。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -248,9 +262,12 @@ flowchart TB
 
 <h2>矩阵构建与并发控制</h2>
 
-<p>矩阵的坑集中在两个默认值上。<code>fail-fast</code> 默认为 <code>true</code>：任一组合失败，同 strategy 下其余正在跑的组合会被立刻取消，这在「想知道到底哪几个版本挂了」的场景非常碍事，排查期应显式关掉。<code>max-parallel</code> 不设时会用尽账户可用并发数，而并发数是<strong>账户级</strong>配额（免费版约 20 个并发作业，Team 与 Enterprise 逐级放宽，macOS runner 另有更严格的单独上限），一个仓库的大矩阵可以把全组织的流水线堵住。<code>include</code> 与 <code>exclude</code> 的语义也常被弄反：<code>exclude</code> 先删组合，<code>include</code> 后补——<code>include</code> 里的键如果能匹配上已有组合，就是给这个组合追加变量；匹配不上才新增组合。</p>
+<p>矩阵的坑集中在两个默认值上。<code>fail-fast</code> 默认为 <code>true</code>：任一组合失败，同 strategy 下其余正在跑的组合会被立刻取消，这在「想知道到底哪几个版本挂了」的场景非常碍事，排查期应显式关掉。</p>
+<p><code>max-parallel</code> 不设时会用尽账户可用并发数，而并发数是<strong>账户级</strong>配额（免费版约 20 个并发作业，Team 与 Enterprise 逐级放宽，macOS runner 另有更严格的单独上限），一个仓库的大矩阵可以把全组织的流水线堵住。</p>
+<p><code>include</code> 与 <code>exclude</code> 的语义也常被弄反：<code>exclude</code> 先删组合，<code>include</code> 后补——<code>include</code> 里的键如果能匹配上已有组合，就是给这个组合追加变量；匹配不上才新增组合。</p>
 
-<p><code>concurrency</code> 解决的是另一类浪费：同一个 PR 连推三次，三条流水线并行跑，前两条的结果已经没有意义。把 group 设成含 <code>github.head_ref</code> 的表达式并开启 <code>cancel-in-progress</code>，新 run 会自动取消同组旧 run。但主干与部署 job 上<strong>不要</strong>开 <code>cancel-in-progress</code>——部署被中途取消会留下半完成状态，正确做法是 group 用固定串（如 <code>deploy-prod</code>）而 <code>cancel-in-progress</code> 设为 false，让部署串行排队。</p>
+<p><code>concurrency</code> 解决的是另一类浪费：同一个 PR 连推三次，三条流水线并行跑，前两条的结果已经没有意义。把 group 设成含 <code>github.head_ref</code> 的表达式并开启 <code>cancel-in-progress</code>，新 run 会自动取消同组旧 run。</p>
+<p>但主干与部署 job 上<strong>不要</strong>开 <code>cancel-in-progress</code>——部署被中途取消会留下半完成状态，正确做法是 group 用固定串（如 <code>deploy-prod</code>）而 <code>cancel-in-progress</code> 设为 false，让部署串行排队。</p>
 
 <table>
 <thead><tr><th>配置</th><th>默认值</th><th>调错的后果</th><th>建议</th></tr></thead>
@@ -284,9 +301,11 @@ stateDiagram-v2
 
 <p>三件事按收益排序：显式写 <code>permissions</code>、用 OIDC 替掉长期云凭证、第三方 action 一律 pin commit sha。</p>
 
-<p><code>GITHUB_TOKEN</code> 是每次 run 自动签发的临时 token，随 job 结束失效。它的默认权限取决于仓库与组织设置：2023 年 2 月之后新建的仓库默认只读，但<strong>老仓库和迁移过来的仓库很可能仍是 read-write all</strong>。这意味着任何一个被投毒的第三方 action 都能推分支、改 workflow、发 release。正确做法是在 workflow 顶层写 <code>permissions</code> 只给 <code>contents: read</code>，再在真正需要写权限的单个 job 上按需提权。</p>
+<p><code>GITHUB_TOKEN</code> 是每次 run 自动签发的临时 token，随 job 结束失效。它的默认权限取决于仓库与组织设置：2023 年 2 月之后新建的仓库默认只读，但<strong>老仓库和迁移过来的仓库很可能仍是 read-write all</strong>。</p>
+<p>这意味着任何一个被投毒的第三方 action 都能推分支、改 workflow、发 release。正确做法是在 workflow 顶层写 <code>permissions</code> 只给 <code>contents: read</code>，再在真正需要写权限的单个 job 上按需提权。</p>
 
-<p>OIDC 是现在部署到云的标准做法：job 向 GitHub 申请一个带 claims（仓库、分支、环境、事件类型）的短期 JWT，云端 IAM 校验这些 claims 后换发临时凭证。它彻底消除了「AK/SK 躺在 Secrets 里、泄露了没人知道、轮换全靠人肉」的问题。关键细节是云端信任策略里的 <code>sub</code> 条件必须写细：只约束到仓库粒度，等于允许该仓库<strong>任何分支</strong>拿到生产权限，任何有 push 权限的人建个分支就能部署生产。</p>
+<p>OIDC 是现在部署到云的标准做法：job 向 GitHub 申请一个带 claims（仓库、分支、环境、事件类型）的短期 JWT，云端 IAM 校验这些 claims 后换发临时凭证。它彻底消除了「AK/SK 躺在 Secrets 里、泄露了没人知道、轮换全靠人肉」的问题。</p>
+<p>关键细节是云端信任策略里的 <code>sub</code> 条件必须写细：只约束到仓库粒度，等于允许该仓库<strong>任何分支</strong>拿到生产权限，任何有 push 权限的人建个分支就能部署生产。</p>
 
 <table>
 <thead><tr><th>做法</th><th>凭证形态</th><th>泄露影响面</th><th>轮换成本</th><th>要注意的点</th></tr></thead>
@@ -398,7 +417,9 @@ jobs:
 
 <h2>复用：workflow_call 与 composite action 怎么选</h2>
 
-<p>两者解决的是不同粒度的重复。<code>workflow_call</code>（可复用工作流）复用的是<strong>整个 job 及其 runner 选择、权限、环境</strong>，调用方以 job 为单位引用，被调用方跑在自己的 runner 上、有自己的 <code>permissions</code>；它适合「整条标准构建发布链」这种大块复用，也是集中管控权限与合规检查的好位置。composite action 复用的是<strong>一串 step</strong>，跑在调用者的同一台 runner 上、能读写当前工作区，适合「装工具链、算版本号、登录镜像仓库」这类片段。选择标准很简单：需要换 runner 或独立权限就用 workflow_call，只是想少写几行 step 就用 composite action。</p>
+<p>两者解决的是不同粒度的重复。<code>workflow_call</code>（可复用工作流）复用的是<strong>整个 job 及其 runner 选择、权限、环境</strong>，调用方以 job 为单位引用，被调用方跑在自己的 runner 上、有自己的 <code>permissions</code>；</p>
+<p>它适合「整条标准构建发布链」这种大块复用，也是集中管控权限与合规检查的好位置。composite action 复用的是<strong>一串 step</strong>，跑在调用者的同一台 runner 上、能读写当前工作区，适合「装工具链、算版本号、登录镜像仓库」这类片段。</p>
+<p>选择标准很简单：需要换 runner 或独立权限就用 workflow_call，只是想少写几行 step 就用 composite action。</p>
 
 <table>
 <thead><tr><th>维度</th><th>workflow_call</th><th>composite action</th></tr></thead>
@@ -500,14 +521,17 @@ curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
     <div class="callout-title">最容易踩的坑</div>
     <p>1）以为 <code>needs</code> 能传文件：每个 job 一台新机器，必须走 artifact。<br/>
     2）<code>pull_request_target</code> 里检出 PR 的 sha 再跑项目脚本，等于把全部 secrets 交给任何人。<br/>
-    3）把 PR 标题、分支名这类不受信输入直接写进 <code>run</code> 的表达式，构成 shell 注入；应先经 <code>env</code> 再引用。<br/>
+    3）把 PR 标题、分支名这类不受信输入直接写进 <code>run</code> 的表达式，构成 shell 注入；应先经 <code>env</code> 再引用。</p>
+<p><br/>
     4）缓存 key 不含锁文件哈希：缓存不可覆盖，从此永久命中首次内容。<br/>
     5）用 cache 传部署产物：某天 7 天未访问被清理，发布凭空失败。<br/>
-    6）第三方 action 写 <code>@v3</code>：tag 可被重新指向，供应链投毒就靠这个，一律 pin commit sha。<br/>
+    6）第三方 action 写 <code>@v3</code>：tag 可被重新指向，供应链投毒就靠这个，一律 pin commit sha。</p>
+<p><br/>
     7）不写 <code>permissions</code>：老仓库默认 read-write all，一个投毒 action 就能改你的 workflow。<br/>
     8）部署 job 开 <code>cancel-in-progress</code>：发布中途被取消，留下一半新一半旧的状态。<br/>
     9）<code>fetch-depth</code> 保持默认 1，却在流水线里 <code>git describe</code> 或比对 base 分支，必然失败。<br/>
-    10）矩阵不设 <code>max-parallel</code> 与 <code>timeout-minutes</code>：占满账户并发，卡死的 job 烧 6 小时额度。<br/>
+    10）矩阵不设 <code>max-parallel</code> 与 <code>timeout-minutes</code>：占满账户并发，卡死的 job 烧 6 小时额度。</p>
+<p><br/>
     11）公开仓库挂 self-hosted runner：任何人提 PR 就能在你的内网机器上执行代码，且工作区跨构建残留。<br/>
     12）以为密钥打码等于安全：日志打码只匹配原文，base64 或逐字符拆分即可绕过，安全要靠权限收敛而不是靠打码。</p>
 </div>

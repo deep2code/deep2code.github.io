@@ -91,7 +91,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>关于 context 的代码审查意见，十条里有八条是同一类问题：ctx 被传下去了，但传的过程中语义断了——中间某层换成了 <code>context.Background()</code>、子调用设了比父更长的超时、或者被调方压根没有 <code>select</code> 它。这类错误不报错、不崩，只在压力上来时表现为请求悬挂和连接池耗尽。这篇先给能直接照抄的传播定式与排查步骤，再展开语义细节。并发结构本身在 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>，运行时层面的表现在 <a href="../">Go 运行时模型</a>。</p>
+<p>关于 context 的代码审查意见，十条里有八条是同一类问题：ctx 被传下去了，但传的过程中语义断了——中间某层换成了 <code>context.Background()</code>、子调用设了比父更长的超时、或者被调方压根没有 <code>select</code> 它。</p>
+<p>这类错误不报错、不崩，只在压力上来时表现为请求悬挂和连接池耗尽。这篇先给能直接照抄的传播定式与排查步骤，再展开语义细节。</p>
+<p>并发结构本身在 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>，运行时层面的表现在 <a href="../">Go 运行时模型</a>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -285,7 +287,8 @@ flowchart TB
 </div>
 <h2>② 原理 · 取消是协作式的：这是最核心的认知</h2>
 <p>这一节解释排查步骤第 4 步为什么必须去读被调方的代码：运行时没有任何机制能强行中断一段正在跑的逻辑。</p>
-<p>把一个 ctx 传进函数，<strong>不会</strong>让这个函数自动具备超时能力。运行时没有任何机制去强制中断一段正在跑的代码。取消生效只有两条路径：<strong>被调用方自己 select <code>ctx.Done()</code></strong>，或者<strong>把 ctx 继续往下传给一个真正支持它的库</strong>（库内部最终还是走第一条路）。</p>
+<p>把一个 ctx 传进函数，<strong>不会</strong>让这个函数自动具备超时能力。运行时没有任何机制去强制中断一段正在跑的代码。</p>
+<p>取消生效只有两条路径：<strong>被调用方自己 select <code>ctx.Done()</code></strong>，或者<strong>把 ctx 继续往下传给一个真正支持它的库</strong>（库内部最终还是走第一条路）。</p>
 <p>所以「我传了 ctx 但超时没生效」几乎总是因为链条中间断了。下面这张时序图画的是一次正常工作的取消传播：</p>
 <div class="mermaid">
 sequenceDiagram
@@ -312,7 +315,8 @@ sequenceDiagram
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">「传了 ctx 就有超时」是错觉</div>
-    <p>把 ctx 传给一个不检查它的函数，等于传了个用不上的参数。典型例子：自己写的 <code>for</code> 循环批处理、纯 CPU 计算、调用某些只把 ctx 放在签名里但内部没用的第三方库、以及 <code>os/exec</code> 里用 <code>exec.Command</code> 而不是 <code>exec.CommandContext</code>。判断一个库是否真支持，看它内部有没有 select <code>ctx.Done()</code> 或者把 ctx 往下传给标准库的带 ctx 方法。</p>
+    <p>把 ctx 传给一个不检查它的函数，等于传了个用不上的参数。典型例子：自己写的 <code>for</code> 循环批处理、纯 CPU 计算、调用某些只把 ctx 放在签名里但内部没用的第三方库、以及 <code>os/exec</code> 里用 <code>exec.Command</code> 而不是 <code>exec.CommandContext</code>。</p>
+<p>判断一个库是否真支持，看它内部有没有 select <code>ctx.Done()</code> 或者把 ctx 往下传给标准库的带 ctx 方法。</p>
 </div>
 
 <h2>② 原理 · 超时预算的向下传递</h2>
@@ -332,12 +336,14 @@ flowchart TB
     Q4 -->|"是"| KEEP["直接沿用父 ctx<br/>或用剩余时间减去收尾预留"]
     Q4 -->|"否"| NEW["WithTimeout 本层期望值<br/>并立刻 defer cancel"]
 </div>
-<p>用法层那份封装里的错误判定用的是 <code>errors.Is</code>，这一点不能省：<code>DeadlineExceeded</code> 和 <code>Canceled</code> 经常被下游库包装过一层，<code>err == context.Canceled</code> 会漏判。区分这两者在监控上很重要——<code>Canceled</code> 多数是客户端主动断开（用户刷新页面、上游超时重试），不该计入服务端错误率；<code>DeadlineExceeded</code> 才是自己慢了。</p>
+<p>用法层那份封装里的错误判定用的是 <code>errors.Is</code>，这一点不能省：<code>DeadlineExceeded</code> 和 <code>Canceled</code> 经常被下游库包装过一层，<code>err == context.Canceled</code> 会漏判。</p>
+<p>区分这两者在监控上很重要——<code>Canceled</code> 多数是客户端主动断开（用户刷新页面、上游超时重试），不该计入服务端错误率；<code>DeadlineExceeded</code> 才是自己慢了。</p>
 
 <h2>② 原理 · WithValue：该放什么，不该放什么</h2>
 <p>搞清这条边界能避免一类最难重构的代码：函数签名不再说明它需要什么，删一个 ctx key 只能靠线上崩溃才知道影响面。</p>
 <p><code>WithValue</code> 的定位很窄：<strong>只放请求级的横切元数据</strong>——traceID、请求 ID、用户身份、租户标识、语言偏好。判断标准是「这个值是否需要穿过不关心它的中间层」，traceID 要穿过整条调用链才有意义，而业务参数不需要。</p>
-<p>不该放的是<strong>可选参数与依赖</strong>。把 <code>pageSize</code>、数据库句柄、logger 实例塞进 ctx，会带来三个后果：函数签名不再说明它需要什么、类型不安全（取出来要断言且可能是 nil）、编译器和 IDE 完全无法校验。重构时最痛苦的代码往往就是这种——你不知道删掉某个 ctx key 会让哪里在运行时崩。</p>
+<p>不该放的是<strong>可选参数与依赖</strong>。把 <code>pageSize</code>、数据库句柄、logger 实例塞进 ctx，会带来三个后果：函数签名不再说明它需要什么、类型不安全（取出来要断言且可能是 nil）、编译器和 IDE 完全无法校验。</p>
+<p>重构时最痛苦的代码往往就是这种——你不知道删掉某个 ctx key 会让哪里在运行时崩。</p>
 <pre><code class="language-go">// ctxkey.go：ctx value 的标准封装模式，每个包自己维护一份
 
 // key 必须是包内私有类型，避免跨包碰撞。
@@ -387,13 +393,15 @@ func UserFrom(ctx context.Context) (*User, bool) {
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">频繁超时会让连接池失效</div>
-    <p>这是个容易被忽视的负反馈：下游变慢导致超时增多，每次超时都关闭一条连接，连接池被掏空后每个请求都要重新建连（加上 TLS 握手），这又进一步拉高延迟、造成更多超时。所以给下游设超时的同时，一定要配熔断或限流，不要让系统在这个环上转。连接池本身的参数调优详见站内连接池与 ORM 篇。</p>
+    <p>这是个容易被忽视的负反馈：下游变慢导致超时增多，每次超时都关闭一条连接，连接池被掏空后每个请求都要重新建连（加上 TLS 握手），这又进一步拉高延迟、造成更多超时。</p>
+<p>所以给下游设超时的同时，一定要配熔断或限流，不要让系统在这个环上转。连接池本身的参数调优详见站内连接池与 ORM 篇。</p>
 </div>
 
 <h2>② 原理 · 服务端的 ctx：r.Context、BaseContext 与优雅关闭</h2>
 <p>搞清这三者的父子关系，能解释「每次发版都固定出现一批 502」这个几乎所有团队都踩过的坑。</p>
 <p><code>r.Context()</code> 的生命周期绑在这次请求上，<strong>客户端断开连接时它会被取消</strong>。这带来一个有用的能力：长耗时接口可以据此提前放弃计算，不为已经走掉的客户端做无用功。</p>
-<p>但有个边界要注意：<strong>响应已经写了一部分时，取消不能简单地 return</strong>。HTTP 状态码和已写入的头部无法撤回，流式接口（SSE、chunked、大文件下载）中途放弃只会让客户端拿到截断的响应。这种情况下要么在写第一个字节之前完成所有可能失败的工作，要么用协议层面的手段（SSE 发一个 error 事件、chunked 用尾部标记）告知客户端数据不完整。</p>
+<p>但有个边界要注意：<strong>响应已经写了一部分时，取消不能简单地 return</strong>。HTTP 状态码和已写入的头部无法撤回，流式接口（SSE、chunked、大文件下载）中途放弃只会让客户端拿到截断的响应。</p>
+<p>这种情况下要么在写第一个字节之前完成所有可能失败的工作，要么用协议层面的手段（SSE 发一个 error 事件、chunked 用尾部标记）告知客户端数据不完整。</p>
 <div class="mermaid">
 flowchart TB
     R["收到 ctx.Done"] --> Q1{"响应是否已开始写"}
@@ -481,7 +489,9 @@ func main() {
         <tr><td>后台任务需要请求里的 traceID</td><td>手工把元数据拷进从 <code>Background</code> 派生的新 ctx</td><td>请求 ctx 一结束就取消，任务会表现成「看起来没执行」</td><td>要维护一份拷贝逻辑，新增元数据时容易漏</td></tr>
     </tbody>
 </table>
-<p><strong>不适用边界</strong>：context 不是限流器也不是重试框架，它只表达「还要不要继续」；并发结构、限流与 fan-out 收敛在 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>。连接池大小、事务边界与 ORM 层参数在 <a href="../../../database/">数据库系列</a>。一次请求的耗时到底花在哪、超时阈值该定多少要靠数据说话，方法在 <a href="../../../observability/">可观测系列</a>。goroutine 泄漏与 GC 表现在 <a href="../">Go 运行时模型</a>。日志里怎么带上 traceID 并保证每条都有，见 <a href="../slog/">结构化日志与 log/slog</a>；框架层把 ctx 交到 handler 手上的方式差异见 <a href="../iris/">Go Web 框架选型方法论</a>；ctx 相关行为怎么写成可靠的测试见 <a href="../../testing/">测试策略与可测性设计</a>。</p>
+<p><strong>不适用边界</strong>：context 不是限流器也不是重试框架，它只表达「还要不要继续」；并发结构、限流与 fan-out 收敛在 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>。连接池大小、事务边界与 ORM 层参数在 <a href="../../../database/">数据库系列</a>。</p>
+<p>一次请求的耗时到底花在哪、超时阈值该定多少要靠数据说话，方法在 <a href="../../../observability/">可观测系列</a>。goroutine 泄漏与 GC 表现在 <a href="../">Go 运行时模型</a>。日志里怎么带上 traceID 并保证每条都有，见 <a href="../slog/">结构化日志与 log/slog</a>；</p>
+<p>框架层把 ctx 交到 handler 手上的方式差异见 <a href="../iris/">Go Web 框架选型方法论</a>；ctx 相关行为怎么写成可靠的测试见 <a href="../../testing/">测试策略与可测性设计</a>。</p>
 <p>这条路径上，上一篇解决「并发结构怎么搭」，本篇解决「这些并发单元什么时候该停」。下一篇换一个维度：怎么让一段逻辑服务多种类型而不退化成 <code>interface{}</code> 加断言。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../concurrency/">← 上一步：Go 并发原语与常见并发 bug</a> · <a href="../generics/">下一步：Go 泛型的机制与约束设计 →</a></p>

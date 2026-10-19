@@ -67,7 +67,9 @@
                         <h1 class="article-title">Hono 的路由与上下文机制</h1>
                     </header>
                     <div class="article-content">
-<p>Hono 快的原因不是「代码少」，而是<strong>它不在请求时遍历路由表，而是先把路由表编译成匹配器</strong>。理解这套机制才能解释三件常见的怪事：为什么换一行 import 就有性能差异、为什么第一个请求明显更慢、为什么加一条正则路由会让框架直接抛异常。框架定位与生态取舍在 <a href="../hono/">Hono 总览</a>，洋葱链执行顺序与内置中间件边界在 <a href="../hono-middleware/">中间件篇</a>；这篇先给类型安全路由与上下文对象的最小写法，再谈路由匹配、上下文和类型链路这三层机制。</p>
+<p>Hono 快的原因不是「代码少」，而是<strong>它不在请求时遍历路由表，而是先把路由表编译成匹配器</strong>。</p>
+<p>理解这套机制才能解释三件常见的怪事：为什么换一行 import 就有性能差异、为什么第一个请求明显更慢、为什么加一条正则路由会让框架直接抛异常。</p>
+<p>框架定位与生态取舍在 <a href="../hono/">Hono 总览</a>，洋葱链执行顺序与内置中间件边界在 <a href="../hono-middleware/">中间件篇</a>；这篇先给类型安全路由与上下文对象的最小写法，再谈路由匹配、上下文和类型链路这三层机制。</p>
 
 
 <div class="callout callout-info">
@@ -81,7 +83,8 @@
 </div>
 
 <h2>① 用法 · 类型安全路由与 validator 的最小写法</h2>
-<p>Hono 的路由写法有两条决定成败的规则，两条都在下面这段代码里：<strong>链式连写</strong>（否则类型不累积，客户端补全直接消失），以及 <strong>validator 必须作为同一次方法调用的中间参数传进去</strong>（否则 <code>c.req.valid</code> 拿不到类型）。这两条违反了都不报错、代码照样跑，所以要当成写法纪律记住，原因见原理层。</p>
+<p>Hono 的路由写法有两条决定成败的规则，两条都在下面这段代码里：<strong>链式连写</strong>（否则类型不累积，客户端补全直接消失），以及 <strong>validator 必须作为同一次方法调用的中间参数传进去</strong>（否则 <code>c.req.valid</code> 拿不到类型）。</p>
+<p>这两条违反了都不报错、代码照样跑，所以要当成写法纪律记住，原因见原理层。</p>
 <pre><code class="language-bash"># 校验器与 schema 库是两个独立包，zValidator 只是把 zod 接进 Hono 的校验入口
 npm i hono zod @hono/zod-validator</code></pre>
 <pre><code class="language-typescript">import { Hono } from 'hono'
@@ -219,8 +222,10 @@ flowchart TB
 </div>
 
 <h2>② 原理 · RegExpRouter 的一次匹配，与它拒绝的模式</h2>
-<p>流传最广的误解是「RegExpRouter 就是用正则一条条 test」。事实相反：逐条 test 才是最慢的做法，RegExpRouter 做的是<strong>把所有路径合并成一个正则，并在构建期算出每个捕获组对应哪条路由的哪个参数</strong>。请求进来只做一次匹配，拿到的是命中路由的 handler 链加参数映射，匹配耗时与路由条数基本脱钩。</p>
-<p>合并是有代价的：当两条路径在同一位置产生无法共存的约束时，合并失败，RegExpRouter 会抛 <code>UnsupportedPathError</code>。默认配置下你看不到这个异常——SmartRouter 会吞掉它并回退 TrieRouter，于是你只是<strong>静默失去了预编译的收益</strong>，性能回归的原因藏在一条路径写法里。</p>
+<p>流传最广的误解是「RegExpRouter 就是用正则一条条 test」。事实相反：逐条 test 才是最慢的做法，RegExpRouter 做的是<strong>把所有路径合并成一个正则，并在构建期算出每个捕获组对应哪条路由的哪个参数</strong>。</p>
+<p>请求进来只做一次匹配，拿到的是命中路由的 handler 链加参数映射，匹配耗时与路由条数基本脱钩。</p>
+<p>合并是有代价的：当两条路径在同一位置产生无法共存的约束时，合并失败，RegExpRouter 会抛 <code>UnsupportedPathError</code>。</p>
+<p>默认配置下你看不到这个异常——SmartRouter 会吞掉它并回退 TrieRouter，于是你只是<strong>静默失去了预编译的收益</strong>，性能回归的原因藏在一条路径写法里。</p>
 
 <table>
 <thead>
@@ -258,7 +263,9 @@ stateDiagram-v2
     L2 --> L2: 后续请求复用已锁定的匹配器
 </div>
 
-<p>这个「延迟到首个请求」的设计带来三个工程后果。一是<strong>压测必须预热</strong>，首发请求包含匹配器构建，把它算进 P99 就是在测构建速度。二是<strong>路由写法问题不会在启动时暴露</strong>，CI 里跑得好好的项目上线后性能不如预期，根因可能只是某条路由触发了回退。三是在每个 isolate 都要重新执行顶层代码的边缘环境里，<strong>这份构建成本按 isolate 计</strong>，路由表越大越明显，这也是边缘部署时要控制路由规模的原因之一，运行时差异见站内 Hono 跨运行时部署篇。</p>
+<p>这个「延迟到首个请求」的设计带来三个工程后果。一是<strong>压测必须预热</strong>，首发请求包含匹配器构建，把它算进 P99 就是在测构建速度。</p>
+<p>二是<strong>路由写法问题不会在启动时暴露</strong>，CI 里跑得好好的项目上线后性能不如预期，根因可能只是某条路由触发了回退。</p>
+<p>三是在每个 isolate 都要重新执行顶层代码的边缘环境里，<strong>这份构建成本按 isolate 计</strong>，路由表越大越明显，这也是边缘部署时要控制路由规模的原因之一，运行时差异见站内 Hono 跨运行时部署篇。</p>
 
 <pre><code class="language-typescript">import { Hono } from 'hono'
 import { RegExpRouter } from 'hono/router/reg-exp-router'
@@ -369,7 +376,8 @@ app.post('/webhook', verifySignature, async (c) =&gt; {
 <p>要写能同时跑在 Node 与 Workers 上的中间件，对 <code>c.executionCtx</code> 必须做能力探测而不是假定存在，探测写法与边缘侧的后台任务边界见站内 Hono 跨运行时部署篇。</p>
 
 <h2>② 原理 · 路径参数的类型推导从哪里开始退化</h2>
-<p>Hono 的路径参数类型不来自任何代码生成，而是<strong>从路径字符串的字面量类型里解析出来的</strong>。这决定了它的脆弱点：任何让字面量退化成 <code>string</code> 的写法都会让 <code>c.req.param</code> 失去键约束。常见退化来源有三类——把路径抽成普通变量、用数组循环批量注册路由、把路径拼接进模板字符串。想保留推导就给常量加 <code>as const</code>，或者干脆接受退化并在 handler 里显式校验。</p>
+<p>Hono 的路径参数类型不来自任何代码生成，而是<strong>从路径字符串的字面量类型里解析出来的</strong>。这决定了它的脆弱点：任何让字面量退化成 <code>string</code> 的写法都会让 <code>c.req.param</code> 失去键约束。</p>
+<p>常见退化来源有三类——把路径抽成普通变量、用数组循环批量注册路由、把路径拼接进模板字符串。想保留推导就给常量加 <code>as const</code>，或者干脆接受退化并在 handler 里显式校验。</p>
 <p>另外注意：正则约束 <code>:id{[0-9]+}</code> 只影响匹配，不会把类型变成 <code>number</code>；可选参数会推成联合类型，忘了判空时 <code>undefined</code> 会一路流到查询层。</p>
 
 <h2>② 原理 · 从 validator 到 hc：类型链路的断点在哪</h2>
@@ -476,7 +484,8 @@ flowchart TB
 <tr><td>想通过换 router 提升吞吐</td><td>先量清瓶颈在哪，别动 router</td><td>路由查找是纳秒到微秒级，耗时主要在数据库、下游调用与序列化</td><td>方向错了会浪费整轮优化周期，诊断方法见 <a href="../performance/">性能诊断</a></td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：这一层解决不了中间件相关的问题——注册顺序、鉴权作用范围、<code>onError</code> 与 <code>notFound</code> 的分工、内置中间件的边界全部在 <a href="../hono-middleware/">中间件篇</a>；运行时能力差异、模块级状态与连接复用在 <a href="../hono-edge/">跨运行时部署</a>；该不该选 Hono 这个框架在 <a href="../hono/">总览篇</a> 与 <a href="../framework-compare/">框架选型</a>。真正的接口慢、内存涨、事件循环被堵，和路由匹配无关，见 <a href="../event-loop/">事件循环的六个阶段</a> 与 <a href="../performance/">性能诊断</a>。</p>
+<p><strong>不适用边界</strong>：这一层解决不了中间件相关的问题——注册顺序、鉴权作用范围、<code>onError</code> 与 <code>notFound</code> 的分工、内置中间件的边界全部在 <a href="../hono-middleware/">中间件篇</a>；运行时能力差异、模块级状态与连接复用在 <a href="../hono-edge/">跨运行时部署</a>；</p>
+<p>该不该选 Hono 这个框架在 <a href="../hono/">总览篇</a> 与 <a href="../framework-compare/">框架选型</a>。真正的接口慢、内存涨、事件循环被堵，和路由匹配无关，见 <a href="../event-loop/">事件循环的六个阶段</a> 与 <a href="../performance/">性能诊断</a>。</p>
 <p>这条路径上，上一篇讲的是框架的整体定位与可移植性边界，本篇拆开它的路由与上下文两层，下一篇继续往里走一层：中间件在这条链上按什么顺序执行、错误怎么传播。</p>
 
 <div class="callout-title">最容易踩的坑</div>

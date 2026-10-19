@@ -90,13 +90,16 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Argo CD 的同步（sync）常被理解成「Git 一改就 kubectl apply 一遍」。这个理解会让你在第一次遇到「明明没人动过，应用却永远显示 OutOfSync」时彻底失去方向。同步的本质是一个持续收敛的<strong>三方 diff</strong>，而它最难的部分不是把清单推上去，而是判断集群里的某个字段变化<strong>算不算漂移</strong>。</p>
+<p>Argo CD 的同步（sync）常被理解成「Git 一改就 kubectl apply 一遍」。这个理解会让你在第一次遇到「明明没人动过，应用却永远显示 OutOfSync」时彻底失去方向。</p>
+<p>同步的本质是一个持续收敛的<strong>三方 diff</strong>，而它最难的部分不是把清单推上去，而是判断集群里的某个字段变化<strong>算不算漂移</strong>。</p>
 
-<p>本文只讲同步机制本身：diff 从哪来、三个同步开关的精确语义、状态机、波次与 hooks、性能、救火姿势和失败排查。GitOps 的原则与协作纪律、从传统流水线迁移的步骤、Argo CD 自身的高可用部署，分别见站内《GitOps 核心原则》《ArgoCD 安装配置》两篇；滚动更新、探针、金丝雀这些部署策略层面的内容见站内 Kubernetes 与 CI/CD 部署策略两篇，这里不展开。</p>
+<p>本文只讲同步机制本身：diff 从哪来、三个同步开关的精确语义、状态机、波次与 hooks、性能、救火姿势和失败排查。</p>
+<p>GitOps 的原则与协作纪律、从传统流水线迁移的步骤、Argo CD 自身的高可用部署，分别见站内《GitOps 核心原则》《ArgoCD 安装配置》两篇；滚动更新、探针、金丝雀这些部署策略层面的内容见站内 Kubernetes 与 CI/CD 部署策略两篇，这里不展开。</p>
 
 <h2>一、同步到底在比较什么</h2>
 
-<p>application-controller 每个周期（默认 <code>timeout.reconciliation</code> 为 180 秒，配了 webhook 则由事件触发）做三件事：让 repo-server 把仓库渲染成最终清单、从集群缓存里取出对应的 live 对象、结合上次同步留下的所有权记录算出差异。<strong>渲染是必经步骤</strong>——仓库里放的是 Helm chart 或 kustomize 目录，diff 比较的是渲染产物而不是文件文本，所以「文件没变」并不代表「渲染结果没变」（values 引用了外部文件、chart 依赖没锁版本都会让渲染结果漂移）。</p>
+<p>application-controller 每个周期（默认 <code>timeout.reconciliation</code> 为 180 秒，配了 webhook 则由事件触发）做三件事：让 repo-server 把仓库渲染成最终清单、从集群缓存里取出对应的 live 对象、结合上次同步留下的所有权记录算出差异。</p>
+<p><strong>渲染是必经步骤</strong>——仓库里放的是 Helm chart 或 kustomize 目录，diff 比较的是渲染产物而不是文件文本，所以「文件没变」并不代表「渲染结果没变」（values 引用了外部文件、chart 依赖没锁版本都会让渲染结果漂移）。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -204,7 +207,8 @@ spec:
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">只配 ignoreDifferences 是半个方案</div>
-    <p><code>ignoreDifferences</code> 只影响<strong>差异计算</strong>，不影响<strong>实际写入</strong>。也就是说状态会变成 Synced，但下一次同步依然会把 <code>spec.replicas</code> 按仓库里的值写回去，于是 HPA 扩到 7、Argo CD 压回 2、HPA 再扩上去——你会在监控上看到副本数反复抖动。必须同时加 <code>RespectIgnoreDifferences=true</code>，这一条漏掉的概率极高。</p>
+    <p><code>ignoreDifferences</code> 只影响<strong>差异计算</strong>，不影响<strong>实际写入</strong>。也就是说状态会变成 Synced，但下一次同步依然会把 <code>spec.replicas</code> 按仓库里的值写回去，于是 HPA 扩到 7、Argo CD 压回 2、HPA 再扩上去。</p>
+<p>你会在监控上看到副本数反复抖动。必须同时加 <code>RespectIgnoreDifferences=true</code>，这一条漏掉的概率极高。</p>
 </div>
 
 <table>
@@ -327,7 +331,8 @@ data:
 
 <h2>五、同步波次与 hooks：顺序是怎么来的</h2>
 
-<p>Argo CD 内部先按 kind 有一个固定的默认顺序（Namespace、CRD 之类的基础对象排在前面），但跨 kind 的业务依赖必须靠 <code>argocd.argoproj.io/sync-wave</code> 显式表达。波次是整数，可以为负，<strong>同一 wave 内部并发提交，上一个 wave 的资源达到 Healthy 后才进入下一个 wave</strong>——这也意味着 wave 用多了同步耗时会线性增长。</p>
+<p>Argo CD 内部先按 kind 有一个固定的默认顺序（Namespace、CRD 之类的基础对象排在前面），但跨 kind 的业务依赖必须靠 <code>argocd.argoproj.io/sync-wave</code> 显式表达。</p>
+<p>波次是整数，可以为负，<strong>同一 wave 内部并发提交，上一个 wave 的资源达到 Healthy 后才进入下一个 wave</strong>——这也意味着 wave 用多了同步耗时会线性增长。</p>
 
 <table>
 <thead><tr><th>wave</th><th>放什么</th><th>为什么必须在前</th></tr></thead>
@@ -409,7 +414,8 @@ spec:
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">不要把 application-controller 缩容到 0</div>
-    <p>这是流传很广的应急做法，代价极大：所有应用同时失去自愈和状态上报，界面上的健康状态全部变成陈旧数据，你连「现在集群是什么样」都看不到；恢复副本的瞬间又会涌入一大批积压的同步，把 API Server 打满。正确做法是<strong>只针对出问题的那个 Application 关掉自动同步</strong>，影响范围收敛到一个应用。</p>
+    <p>这是流传很广的应急做法，代价极大：所有应用同时失去自愈和状态上报，界面上的健康状态全部变成陈旧数据，你连「现在集群是什么样」都看不到；</p>
+<p>恢复副本的瞬间又会涌入一大批积压的同步，把 API Server 打满。正确做法是<strong>只针对出问题的那个 Application 关掉自动同步</strong>，影响范围收敛到一个应用。</p>
 </div>
 
 <table>

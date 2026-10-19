@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Terraform 的所有魔力都建立在一个前提上：它知道「上一次我造出来的东西长什么样」。这份记忆就是 state。没有 state，<code>plan</code> 无法区分「这个资源需要新建」和「这个资源已经存在只是属性变了」，整个声明式模型直接崩塌。所以 state 不是缓存、不是临时文件，它是<strong>与云上真实资源同等重要的生产资产</strong>。</p>
+<p>Terraform 的所有魔力都建立在一个前提上：它知道「上一次我造出来的东西长什么样」。这份记忆就是 state。没有 state，<code>plan</code> 无法区分「这个资源需要新建」和「这个资源已经存在只是属性变了」，整个声明式模型直接崩塌。</p>
+<p>所以 state 不是缓存、不是临时文件，它是<strong>与云上真实资源同等重要的生产资产</strong>。</p>
 
 <p>本文只讲 state。Terraform 的基本语法与第一个项目见站内《Terraform 入门与 HCL 语法》，IaC 的核心模型与漂移概念见《IaC 基础设施即代码总览》，Terraform 与 Pulumi、CloudFormation、Ansible 的取舍见《IaC 工具对比》，模块的接口与版本设计见《Terraform Module 与最佳实践》。</p>
 
@@ -124,7 +125,8 @@ flowchart TB
     F --> D4["漂移：state 与云上现状不一致"]
 </div>
 
-<p>三条容易被忽略的事实。第一，<strong>dependencies 是存在 state 里的</strong>，不只在代码里——这就是为什么你删掉代码里的依赖关系后，销毁顺序依然按老的来。第二，<code>lineage</code> 保证你不会把 A 项目的 state 推到 B 项目的后端上（推错时 Terraform 会明确拒绝）。第三，<code>serial</code> 是并发保护的最后一道防线，两个人拿到同一个 serial 各自写回时，后写的会覆盖前者，这也是为什么锁不可省。</p>
+<p>三条容易被忽略的事实。第一，<strong>dependencies 是存在 state 里的</strong>，不只在代码里——这就是为什么你删掉代码里的依赖关系后，销毁顺序依然按老的来。第二，<code>lineage</code> 保证你不会把 A 项目的 state 推到 B 项目的后端上（推错时 Terraform 会明确拒绝）。</p>
+<p>第三，<code>serial</code> 是并发保护的最后一道防线，两个人拿到同一个 serial 各自写回时，后写的会覆盖前者，这也是为什么锁不可省。</p>
 
 <table>
 <thead><tr><th>state 丢失后的现象</th><th>资源类型举例</th><th>实际后果</th></tr></thead>
@@ -192,7 +194,8 @@ terraform {
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">别把后端配置做成「运行时才知道指向哪」</div>
-    <p>后端块里不允许引用变量，这是 Terraform 的有意设计——如果 state 的位置可以被变量决定，那么「我这次操作的是哪个环境」就成了运行时才确定的事，一个环境变量写错就把生产的 state 覆盖了。需要多环境时只能用 partial configuration，而且 <code>-backend-config</code> 文件必须入库并被评审。更稳的做法是每个环境一个目录，backend 块里把 bucket 和 key 写死。</p>
+    <p>后端块里不允许引用变量，这是 Terraform 的有意设计——如果 state 的位置可以被变量决定，那么「我这次操作的是哪个环境」就成了运行时才确定的事，一个环境变量写错就把生产的 state 覆盖了。</p>
+<p>需要多环境时只能用 partial configuration，而且 <code>-backend-config</code> 文件必须入库并被评审。更稳的做法是每个环境一个目录，backend 块里把 bucket 和 key 写死。</p>
 </div>
 
 <h2>三、状态锁：它拦住的到底是什么</h2>
@@ -217,7 +220,8 @@ sequenceDiagram
     Note over A,B: 如果 B 当时强行解锁并写回基于 serial 42 的 state，A 创建的资源就会从记录里消失
 </div>
 
-<p>锁保护的不是云上的资源，而是<strong>那一次 state 读改写的原子性</strong>。它防的是「两个人基于同一份旧 state 各自计算并写回」这种丢失更新。所以没有锁的后端（纯 S3 且未开 <code>use_lockfile</code>、也没配 DynamoDB）在单人使用时看不出问题，一旦两条流水线同时跑就会静默地把资源写丢。</p>
+<p>锁保护的不是云上的资源，而是<strong>那一次 state 读改写的原子性</strong>。它防的是「两个人基于同一份旧 state 各自计算并写回」这种丢失更新。</p>
+<p>所以没有锁的后端（纯 S3 且未开 <code>use_lockfile</code>、也没配 DynamoDB）在单人使用时看不出问题，一旦两条流水线同时跑就会静默地把资源写丢。</p>
 
 <table>
 <thead><tr><th>情况</th><th>该怎么做</th><th>不要做什么</th></tr></thead>
@@ -243,7 +247,8 @@ sequenceDiagram
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">sensitive 不是加密</div>
-    <p><code>sensitive = true</code> 做的唯一一件事是让 Terraform 在终端和 plan 输出里把值打成掩码，<strong>写进 state 时仍然是明文</strong>。同理，用 <code>data</code> 源从密钥服务里读出一个密码，这个密码就已经落进 state 了。因此结论只有一条：后端必须开加密、开版本控制并严格收口访问权限，<code>*.tfstate</code> 与 <code>*.tfstate.backup</code> 必须写进 <code>.gitignore</code>，能读这个 state 的人等于能读到环境里所有的密钥。</p>
+    <p><code>sensitive = true</code> 做的唯一一件事是让 Terraform 在终端和 plan 输出里把值打成掩码，<strong>写进 state 时仍然是明文</strong>。同理，用 <code>data</code> 源从密钥服务里读出一个密码，这个密码就已经落进 state 了。</p>
+<p>因此结论只有一条：后端必须开加密、开版本控制并严格收口访问权限，<code>*.tfstate</code> 与 <code>*.tfstate.backup</code> 必须写进 <code>.gitignore</code>，能读这个 state 的人等于能读到环境里所有的密钥。</p>
 </div>
 
 <h2>五、state 操作命令：什么时候用，误用会怎样</h2>
@@ -351,7 +356,8 @@ resource "aws_s3_bucket" "logs" {
   # 说明代码写得和云上现状不一致，改代码去贴合现状，而不是让 apply 去改线上。
 }</code></pre>
 
-<p><code>moved</code> 块相比 <code>state mv</code> 的优势在于它是<strong>声明式且进仓库</strong>的：所有人 apply 一次之后都会自动完成搬迁，不需要每个人手工敲命令；变更还能在 PR 里被看到。<code>moved</code> 块在完成迁移并且所有环境都 apply 过之后可以删掉，但不着急删也没有副作用。</p>
+<p><code>moved</code> 块相比 <code>state mv</code> 的优势在于它是<strong>声明式且进仓库</strong>的：所有人 apply 一次之后都会自动完成搬迁，不需要每个人手工敲命令；变更还能在 PR 里被看到。</p>
+<p><code>moved</code> 块在完成迁移并且所有环境都 apply 过之后可以删掉，但不着急删也没有副作用。</p>
 
 <h2>七、拆分 state：按爆炸半径而不是按目录好看</h2>
 
@@ -386,7 +392,8 @@ flowchart TB
     A2 -.->|"terraform_remote_state<br/>会形成输出结构耦合"| C1
 </div>
 
-<p>跨 state 取值有两条路。<code>terraform_remote_state</code> 直接读上游 state 的 output，代价是<strong>下游被上游的 output 结构绑死</strong>，上游改一个 output 名字下游就崩，而且下游需要上游 state 的读权限（等于能读到上游的所有敏感值）。更好的做法是用 <code>data</code> 源按标签或名字查询云上的真实资源——它只依赖「资源存在且带着约定的标签」这个弱契约，也不需要跨 state 的权限。</p>
+<p>跨 state 取值有两条路。<code>terraform_remote_state</code> 直接读上游 state 的 output，代价是<strong>下游被上游的 output 结构绑死</strong>，上游改一个 output 名字下游就崩，而且下游需要上游 state 的读权限（等于能读到上游的所有敏感值）。</p>
+<p>更好的做法是用 <code>data</code> 源按标签或名字查询云上的真实资源——它只依赖「资源存在且带着约定的标签」这个弱契约，也不需要跨 state 的权限。</p>
 
 <pre><code class="language-nginx"># ---------- 推荐：data 源按约定标签查询，不依赖上游 state ----------
 data "aws_vpc" "main" {
@@ -434,7 +441,9 @@ resource "aws_instance" "app" {
 <tr><td>靠 tfvars 区分</td><td>否</td><td>共用</td><td>极高：忘传 <code>-var-file</code> 就用默认值打到别的环境</td><td>只能作为目录隔离之上的补充</td></tr>
 </tbody></table>
 
-<p>灾备不是「开了版本控制就等于有备份」。真正需要的是三件事：后端开对象版本控制并设保留策略；CI 在每次 apply 前把 <code>state pull</code> 的结果归档到另一个账号或另一个桶（防止有人有权限把桶和版本一起删了）；<strong>每季度做一次恢复演练</strong>——在隔离环境里用备份 state 加当前代码跑一次 plan，确认输出是零变更。没演练过的备份不能算备份，常见的翻车是备份里的 <code>lineage</code> 与后端现有的不一致，恢复时被 Terraform 拒绝，而这件事只有演练过才会提前知道。</p>
+<p>灾备不是「开了版本控制就等于有备份」。真正需要的是三件事：后端开对象版本控制并设保留策略；CI 在每次 apply 前把 <code>state pull</code> 的结果归档到另一个账号或另一个桶（防止有人有权限把桶和版本一起删了）；</p>
+<p><strong>每季度做一次恢复演练</strong>——在隔离环境里用备份 state 加当前代码跑一次 plan，确认输出是零变更。</p>
+<p>没演练过的备份不能算备份，常见的翻车是备份里的 <code>lineage</code> 与后端现有的不一致，恢复时被 Terraform 拒绝，而这件事只有演练过才会提前知道。</p>
 
 <h2>九、反模式</h2>
 

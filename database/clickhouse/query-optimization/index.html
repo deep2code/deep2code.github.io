@@ -89,7 +89,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>ClickHouse 的查询优化没有一堆技巧，只有一条原则：<strong>让引擎少读 granule</strong>。一个 granule 默认覆盖 8192 行，是 ClickHouse 读取数据的最小单位——哪怕你只要一行，也要把它所在 granule 的相关列全部解压出来。后面所有手段，分区裁剪、主键前缀、跳数索引、PREWHERE、预聚合，都是这条原则的推论。至于列存为什么扫描快、稀疏索引的 mark 文件长什么样，详见站内《ClickHouse 架构与核心特性》，这里只用结论。</p>
+<p>ClickHouse 的查询优化没有一堆技巧，只有一条原则：<strong>让引擎少读 granule</strong>。一个 granule 默认覆盖 8192 行，是读取的最小单位——哪怕只要一行，也要把它所在 granule 的相关列全部解压。</p>
+<p>后面所有手段——分区裁剪、主键前缀、跳数索引、PREWHERE、预聚合——都是这条原则的推论。列存为什么扫描快、稀疏索引的 mark 文件长什么样，见《ClickHouse 架构与核心特性》，这里只用结论。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -103,7 +104,7 @@
 
 <h2>① 用法 · 拿到一条慢查询后的判读顺序</h2>
 
-<p>调 ClickHouse 的 SQL 不需要灵感，需要顺序。<strong>四个数按下面的次序量一遍，慢在哪一级就清楚了</strong>，而且每一级都有明确的下一步动作。顺序不能颠倒：分区裁剪不生效时，后面改 PREWHERE 毫无意义。</p>
+<p>调 ClickHouse 的 SQL 不需要灵感，需要顺序。<strong>四个数按下面次序量一遍，慢在哪一级就清楚了</strong>，每一级都有明确的下一步动作。顺序不能颠倒：分区裁剪不生效时，改 PREWHERE 毫无意义。</p>
 
 <table>
 <thead><tr><th>第几步</th><th>量什么</th><th>怎么量</th><th>健康信号</th><th>不健康时去看</th></tr></thead>
@@ -203,7 +204,8 @@ flowchart TB
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">判断优化是否有效的唯一硬指标不是耗时</div>
-    <p>同一条 SQL 第二次跑总是更快，因为页缓存命中了，这会让人误判优化生效。<strong>唯一可信的指标是 <code>read_rows</code> 和 <code>read_bytes</code> 的下降</strong>：这两个数字与缓存无关，只反映真实扫描量。优化前后各跑一次，从 <code>system.query_log</code> 里取这两列做对比；如果读取量没变而耗时变短了，你什么都没优化，只是把数据读进了缓存。</p>
+    <p>同一条 SQL 第二次跑总是更快，因为页缓存命中，这会让人误判优化生效。<strong>唯一可信的指标是 <code>read_rows</code> 和 <code>read_bytes</code> 的下降</strong>：它们与缓存无关，只反映真实扫描量。优化前后各跑一次，从 <code>system.query_log</code> 取这两列对比；</p>
+<p>如果读取量没变而耗时变短了，你什么都没优化，只是把数据读进了缓存。</p>
 </div>
 
 <h2>② 原理 · 先量化：EXPLAIN 与 query_log 怎么读</h2>
@@ -276,7 +278,8 @@ ORDER BY read_bytes DESC LIMIT 10;
 <tr><td><code>WHERE user_id IN (SELECT ...)</code> 且 user_id 不在主键里</td><td>非主键列没有索引可用</td><td>加 <code>bloom_filter</code> 跳数索引，或走字典 / 宽表打平</td></tr>
 </tbody></table>
 
-<p>分区裁剪遵守同一逻辑，但判断标准更严格：<strong>过滤条件必须能推导出分区表达式的取值</strong>。如果分区键是 <code>toYYYYMM(event_date)</code>，那么 <code>WHERE event_date &gt;= '2026-09-01' AND event_date &lt; '2026-10-01'</code> 可以被推导出属于 <code>202609</code> 这一个分区；而 <code>WHERE toString(event_date) LIKE '2026-09%'</code> 推导不出来，于是扫全部分区。把时间条件写成半开区间是最稳的写法，它同时满足分区裁剪和主键裁剪，而 <code>BETWEEN</code> 的闭区间在跨天边界上还容易多算一秒的数据。</p>
+<p>分区裁剪遵守同一逻辑，但标准更严：<strong>过滤条件必须能推导出分区表达式的取值</strong>。分区键是 <code>toYYYYMM(event_date)</code> 时，<code>WHERE event_date &gt;= '2026-09-01' AND event_date &lt; '2026-10-01'</code> 可推导出属于 <code>202609</code> 一个分区；而 <code>WHERE toString(event_date) LIKE '2026-09%'</code> 推导不出，于是扫全部分区。</p>
+<p>把时间条件写成半开区间是最稳的写法，它同时满足分区裁剪和主键裁剪，而 <code>BETWEEN</code> 的闭区间在跨天边界上还容易多算一秒的数据。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -295,7 +298,9 @@ flowchart TB
 
 <h2>② 原理 · PREWHERE：先读便宜的列，再读贵的列</h2>
 
-<p><code>PREWHERE</code> 是列存独有的优化：先只读过滤列判断哪些行命中，再按命中行去读其余列。ClickHouse 默认开启 <code>optimize_move_to_prewhere</code>，会自动把部分条件搬过去，但它的启发式基于列大小估算，两种场景下需要手写：<strong>一是过滤性最强的条件涉及函数或多个列</strong>，优化器不敢搬；<strong>二是表里有超大列</strong>（长 JSON、日志原文），此时哪怕过滤列筛掉的行不多，避免读大列的收益也极大。</p>
+<p><code>PREWHERE</code> 是列存独有的优化：先只读过滤列判断哪些行命中，再按命中行去读其余列。</p>
+<p>ClickHouse 默认开启 <code>optimize_move_to_prewhere</code>，会自动搬部分条件，但启发式基于列大小估算，两种场景需手写：<strong>一是过滤性最强的条件涉及函数或多个列</strong>，优化器不敢搬；</p>
+<p><strong>二是表里有超大列</strong>（长 JSON、日志原文），此时哪怕过滤列筛掉的行不多，避免读大列的收益也极大。</p>
 
 <pre><code class="language-sql">-- 反例：props 是几 KB 的 JSON 列，条件在 status 上，自动优化未必把它搬到 PREWHERE
 SELECT event_id, props FROM events
@@ -326,7 +331,8 @@ HAVING argMax(is_deleted, version) = 0;      -- 顺带过滤掉逻辑删除的�
 
 <h2>② 原理 · JOIN：ClickHouse 最痛的地方</h2>
 
-<p>这是从关系库转过来的人踩得最惨的一点：<strong>ClickHouse 默认的 hash join 会把右表全量读进内存建哈希表，而且优化器不会替你自动调换左右顺序</strong>。在 MySQL 或 PostgreSQL 里，优化器基于统计信息选择驱动表，小表自动做内表；在 ClickHouse 里你写错顺序，就是把大表塞内存然后 OOM。记住一句话：<strong>小表永远放右边。</strong></p>
+<p>这是从关系库转过来的人踩得最惨的一点：<strong>ClickHouse 默认的 hash join 会把右表全量读进内存建哈希表，优化器不会自动调换左右顺序</strong>。MySQL 或 PostgreSQL 里，优化器基于统计信息选驱动表，小表自动做内表；</p>
+<p>在 ClickHouse 里你写错顺序，就是把大表塞内存然后 OOM。记住一句话：<strong>小表永远放右边。</strong></p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -392,7 +398,8 @@ FROM system.dictionaries;
 
 <h2>② 原理 · 聚合与去重的内存账</h2>
 
-<p><code>GROUP BY</code> 的内存占用与<strong>分组基数</strong>成正比，与扫描行数关系不大。按 <code>event_type</code> 分组只有几十组，按 <code>user_id</code> 分组就是几千万组，后者会把哈希表撑爆。两个兜底开关：<code>max_bytes_before_external_group_by</code> 允许聚合落盘（建议设为 <code>max_memory_usage</code> 的一半），<code>max_bytes_before_external_sort</code> 对排序同理。落盘意味着慢，但比查询直接失败好。</p>
+<p><code>GROUP BY</code> 的内存占用与<strong>分组基数</strong>成正比，与扫描行数关系不大。按 <code>event_type</code> 分组只有几十组，按 <code>user_id</code> 就是几千万组，后者会撑爆哈希表。</p>
+<p>两个兜底开关：<code>max_bytes_before_external_group_by</code> 允许聚合落盘（建议设为 <code>max_memory_usage</code> 的一半），<code>max_bytes_before_external_sort</code> 对排序同理。落盘慢，但比查询直接失败好。</p>
 
 <table>
 <thead><tr><th>去重函数</th><th>算法</th><th>误差</th><th>内存量级（千万基数）</th><th>什么时候用</th></tr></thead>
@@ -408,12 +415,14 @@ FROM system.dictionaries;
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">能用近似就别用精确，这是 OLAP 的基本常识</div>
-    <p>一个日活看板显示 1023 万还是 1025 万，对决策没有任何影响，但 <code>uniqExact</code> 与 <code>uniqCombined</code> 之间可能是几 GB 内存和几十倍耗时的差距。真正需要精确值的只有对账类场景，而那类场景通常数据量也小。另外 <code>argMax</code>、<code>anyHeavy</code>、<code>quantileTDigest</code> 这类组合与近似函数也被严重低估：<code>argMax(status, version)</code> 一次聚合就替代了「取每个 key 最新一行」这种通常要写窗口函数或自连接的需求。</p>
+    <p>一个日活看板显示 1023 万还是 1025 万，对决策没有影响，但 <code>uniqExact</code> 与 <code>uniqCombined</code> 之间可能是几 GB 内存和几十倍耗时的差距。真正需要精确值的只有对账类场景，那类场景数据量通常也小。</p>
+<p>另外 <code>argMax</code>、<code>anyHeavy</code>、<code>quantileTDigest</code> 这类组合与近似函数也被严重低估：<code>argMax(status, version)</code> 一次聚合就替代了「取每个 key 最新一行」这种通常要写窗口函数或自连接的需求。</p>
 </div>
 
 <h2>② 原理 · 预计算：物化视图与 PROJECTION</h2>
 
-<p>ClickHouse 的物化视图<strong>不是定时刷新的视图，而是一个插入触发器</strong>。每次向源表写入一个数据块，物化视图的 SELECT 就在<strong>这个块</strong>上执行一次，结果追加到目标表。由此可以推出三条必然结论：它只对新写入的数据生效，历史数据必须手动回填；它看不到源表已有的数据，所以 <code>JOIN</code> 在 MV 里语义很危险；源表的 <code>DELETE</code> 和 <code>UPDATE</code> 不会传递到视图。</p>
+<p>ClickHouse 的物化视图<strong>不是定时刷新的视图，而是一个插入触发器</strong>。每次向源表写入一个数据块，物化视图的 SELECT 就在<strong>这个块</strong>上执行一次，结果追加到目标表。</p>
+<p>由此推出三条结论：它只对新写入的数据生效，历史数据必须手动回填；它看不到源表已有数据，<code>JOIN</code> 在 MV 里语义很危险；源表的 <code>DELETE</code> 和 <code>UPDATE</code> 不会传递到视图。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -510,7 +519,7 @@ GROUP BY hour ORDER BY hour;
 
 <h2>③ 场景 · 什么时候该停止调 SQL</h2>
 
-<p>调 SQL 的收益是有上限的。当读取量已经降到与结果规模同量级、裁剪比值也正常，继续改写法基本没有空间了——这时候问题在建模或者在组件选择上。下表给出越界信号与该往哪一层退。</p>
+<p>调 SQL 的收益有上限。当读取量已降到与结果规模同量级、裁剪比值也正常，继续改写法基本没有空间——问题在建模或组件选择上。下表给出越界信号与该往哪一层退。</p>
 
 <table>
 <thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
@@ -524,7 +533,8 @@ GROUP BY hour ORDER BY hour;
 <tr><td>排序键选错且无法追加列解决</td><td>新建表回灌再切流量</td><td><code>ORDER BY</code> 只能尾部追加，前缀不能重排</td><td>一次全量重写，要留出窗口与双跑</td></tr>
 </tbody></table>
 
-<p><strong>不适用边界</strong>：本篇只处理「一条 SQL 为什么慢」。排序键、分区键、codec 怎么定在 <a href="../table-import/">建表与写入</a>；宽表与星型、SCD 与分层在 <a href="../olap-practice/">OLAP 建模</a>；分布式 join 与 Distributed 表的两阶段聚合在 <a href="../architecture/">集群架构</a>；granule 与稀疏索引的物理布局在 <a href="../">ClickHouse 深度原理</a>。另外，写入侧的 part 数问题会以「查询越来越慢」的形式表现出来，但它不是查询问题，先去看写入批次。</p>
+<p><strong>不适用边界</strong>：本篇只处理「一条 SQL 为什么慢」。排序键、分区键、codec 怎么定在 <a href="../table-import/">建表与写入</a>；宽表与星型、SCD 与分层在 <a href="../olap-practice/">OLAP 建模</a>；分布式 join 与两阶段聚合在 <a href="../architecture/">集群架构</a>；granule 与稀疏索引在 <a href="../">ClickHouse 深度原理</a>。</p>
+<p>另外，写入侧的 part 数问题会以「查询越来越慢」的形式表现出来，但它不是查询问题，先去看写入批次。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../table-import/">← 上一步：ClickHouse 建表与写入：引擎选型、列压缩与批量导入</a> · <a href="../olap-practice/">下一步：ClickHouse OLAP 建模：星型模型、大宽表、SCD 与分层设计 →</a></p>
 

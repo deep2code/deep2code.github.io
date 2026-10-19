@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>PG 的元组结构、xmin/xmax 与 VACUUM 在主干篇已经讲过，这一篇只谈<strong>并发控制的实际行为</strong>：四个隔离级别真正的语义差异、PG 的可重复读为什么会让从 MySQL 迁来的应用大面积报错、SERIALIZABLE 的代价为什么是回滚率而不是锁等待、八种表锁的兼容关系，以及 PG 运维最大的坑——一个等锁的 DDL 会把它后面所有毫不相干的查询一起堵死。</p>
+<p>PG 的元组结构、xmin/xmax 与 VACUUM 在主干篇已经讲过，这一篇只谈<strong>并发控制的实际行为</strong>：四个隔离级别真正的语义差异、PG 的可重复读为什么会让从 MySQL 迁来的应用大面积报错。</p>
+<p>SERIALIZABLE 的代价为什么是回滚率而不是锁等待、八种表锁的兼容关系，以及 PG 运维最大的坑——一个等锁的 DDL 会把它后面所有毫不相干的查询一起堵死。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -206,11 +207,13 @@ SELECT pg_cancel_backend(12345);
 <div class="callout callout-info">
 <div class="callout-icon">💡</div>
 <div class="callout-title">READ COMMITTED 下最容易被忽略的语义</div>
-<p>RC 是<strong>语句级快照</strong>，所以 <code>UPDATE t SET n = n - 1 WHERE n &gt; 0</code> 在等到前一个事务释放锁之后，会拿<strong>最新版本</strong>重新检查 <code>n &gt; 0</code>，条件不成立就跳过这一行。这个行为是对的，但它意味着 <code>UPDATE ... WHERE status = 'pending'</code> 在并发下会出现「扫描时命中、最终没改」的情况，用返回的影响行数做业务判断时必须考虑到。想要「读到什么就基于什么写」，必须显式 <code>SELECT ... FOR UPDATE</code>，或者升到 RR 并接受失败重试。</p>
+<p>RC 是<strong>语句级快照</strong>，所以 <code>UPDATE t SET n = n - 1 WHERE n &gt; 0</code> 在等到前一个事务释放锁之后，会拿<strong>最新版本</strong>重新检查 <code>n &gt; 0</code>，条件不成立就跳过这一行。</p>
+<p>这个行为是对的，但它意味着 <code>UPDATE ... WHERE status = 'pending'</code> 在并发下会出现「扫描时命中、最终没改」的情况，用返回的影响行数做业务判断时必须考虑到。想要「读到什么就基于什么写」，必须显式 <code>SELECT ... FOR UPDATE</code>，或者升到 RR 并接受失败重试。</p>
 </div>
 
 <h2>② 原理 · PG 的 REPEATABLE READ 和 MySQL 的同名级别不是一回事</h2>
-<p>这是从 MySQL 迁到 PG 时<strong>最容易造成线上大面积报错</strong>的差异。两边都叫 REPEATABLE READ，行为却相反：MySQL 在 RR 下遇到并发更新同一行会<strong>阻塞等锁</strong>，等到了就在最新版本上继续；PG 用的是快照隔离加 first-updater-wins，第二个事务一旦发现这一行在自己快照之后被别人改过，<strong>立刻抛出 <code>could not serialize access due to concurrent update</code>，SQLSTATE 40001</strong>。没有等待，没有自动重试，事务直接死掉。原来在 MySQL 上「慢一点但会成功」的并发扣库存，迁到 PG 的 RR 下就变成大量 40001。</p>
+<p>这是从 MySQL 迁到 PG 时<strong>最容易造成线上大面积报错</strong>的差异。两边都叫 REPEATABLE READ，行为却相反：MySQL 在 RR 下遇到并发更新同一行会<strong>阻塞等锁</strong>，等到了就在最新版本上继续；</p>
+<p>PG 用的是快照隔离加 first-updater-wins，第二个事务一旦发现这一行在自己快照之后被别人改过，<strong>立刻抛出 <code>could not serialize access due to concurrent update</code>，SQLSTATE 40001</strong>。没有等待，没有自动重试，事务直接死掉。原来在 MySQL 上「慢一点但会成功」的并发扣库存，迁到 PG 的 RR 下就变成大量 40001。</p>
 <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -274,8 +277,10 @@ def deduct(cur):
     cur.execute("INSERT INTO stock_log(item_id, delta) VALUES (%s, -1)", (1,))</code></pre>
 
 <h2>② 原理 · SERIALIZABLE 用的是 SSI：代价是回滚率，不是锁等待</h2>
-<p>很多人以为 SERIALIZABLE 就是「读也加锁」，在 PG 上这是错的。PG 9.1 起用的是 <strong>SSI（Serializable Snapshot Isolation）</strong>：事务照样跑在快照隔离上，读操作<strong>不阻塞任何人</strong>，但内核会用谓词锁（<code>SIReadLock</code>，只记录不阻塞）跟踪「谁读了什么、谁写了什么」，一旦发现读写依赖形成了<strong>危险结构</strong>（一个事务既有进来的 rw 依赖又有出去的 rw 依赖，即所谓 pivot），就中止其中一个事务。</p>
-<p>所以 SERIALIZABLE 的开销表现在三处：跟踪读集合的内存（<code>max_pred_locks_per_transaction</code> 默认 64，超了会把行级谓词锁升级成页级甚至表级，<strong>误杀率随之上升</strong>）、CPU 上的依赖图维护、以及最关键的<strong>事务回滚率</strong>。它的适用前提只有一条：<strong>应用必须能安全重试整个事务</strong>。如果事务里夹了发短信、调外部支付这类不可重放的副作用，就不要用 SERIALIZABLE。</p>
+<p>很多人以为 SERIALIZABLE 就是「读也加锁」，在 PG 上这是错的。PG 9.1 起用的是 <strong>SSI（Serializable Snapshot Isolation）</strong>：事务照样跑在快照隔离上，读操作<strong>不阻塞任何人</strong>。</p>
+<p>但内核会用谓词锁（<code>SIReadLock</code>，只记录不阻塞）跟踪「谁读了什么、谁写了什么」，一旦发现读写依赖形成了<strong>危险结构</strong>（一个事务既有进来的 rw 依赖又有出去的 rw 依赖，即所谓 pivot），就中止其中一个事务。</p>
+<p>所以 SERIALIZABLE 的开销表现在三处：跟踪读集合的内存（<code>max_pred_locks_per_transaction</code> 默认 64，超了会把行级谓词锁升级成页级甚至表级，<strong>误杀率随之上升</strong>）、CPU 上的依赖图维护、以及最关键的<strong>事务回滚率</strong>。</p>
+<p>它的适用前提只有一条：<strong>应用必须能安全重试整个事务</strong>。如果事务里夹了发短信、调外部支付这类不可重放的副作用，就不要用 SERIALIZABLE。</p>
 <table>
 <thead>
 <tr><th>维度</th><th>READ COMMITTED</th><th>REPEATABLE READ</th><th>SERIALIZABLE（SSI）</th></tr>
@@ -293,12 +298,14 @@ def deduct(cur):
 <div class="callout callout-warning">
 <div class="callout-icon">⚠️</div>
 <div class="callout-title">只读事务也会被 SSI 中止</div>
-<p>SSI 可能中止一个<strong>纯只读</strong>的事务（报「could not serialize access due to read/write dependencies among transactions」），这不是 bug，是 SSI 打破危险结构时挑中了它。可以用 <code>BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE</code>：这样事务会先等到一个不可能产生冲突的安全快照再开始，<strong>永远不会被中止也永远不会中止别人</strong>，代价是开头可能要等一会儿。长时间的一致性报表就该用这个写法。</p>
+<p>SSI 可能中止一个<strong>纯只读</strong>的事务（报「could not serialize access due to read/write dependencies among transactions」），这不是 bug，是 SSI 打破危险结构时挑中了它。</p>
+<p>可以用 <code>BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE</code>：这样事务会先等到一个不可能产生冲突的安全快照再开始，<strong>永远不会被中止也永远不会中止别人</strong>，代价是开头可能要等一会儿。长时间的一致性报表就该用这个写法。</p>
 </div>
 
 <h2>② 原理 · 快照、xmin 水位与长事务的四重危害</h2>
 <p>快照的核心是三个东西：<code>xmin</code>（此刻最老的活跃事务 ID，比它小且已提交的都可见）、<code>xmax</code>（此刻的 XID 上界）、以及中间那批正在跑的事务列表。PG 13 起用 <code>pg_current_snapshot()</code> 查看，老版本是 <code>txid_current_snapshot()</code>。</p>
-<p>关键点在于：<strong>全局最老的那个 xmin 就是 VACUUM 的天花板</strong>。任何一个事务只要还持着快照，比它更新的所有死元组都不能被回收——哪怕这个事务在干的事情和那张表毫无关系。所以长事务在 PG 上的危害是四重的，而且每一重都能独立造成故障。</p>
+<p>关键点在于：<strong>全局最老的那个 xmin 就是 VACUUM 的天花板</strong>。任何一个事务只要还持着快照，比它更新的所有死元组都不能被回收——哪怕这个事务在干的事情和那张表毫无关系。</p>
+<p>所以长事务在 PG 上的危害是四重的，而且每一重都能独立造成故障。</p>
 <table>
 <thead>
 <tr><th>危害</th><th>机制</th><th>表现</th><th>排查入口</th></tr>
@@ -310,7 +317,8 @@ def deduct(cur):
 <tr><td>持有锁不放</td><td>事务里任何一条 DDL 或 <code>SELECT FOR UPDATE</code> 拿到的锁，要到事务结束才释放</td><td>后续 DDL 排队，连带堵死整张表的查询</td><td><code>pg_locks</code> 与 <code>pg_blocking_pids()</code></td></tr>
 </tbody>
 </table>
-<p>四类元凶里最常见的<strong>不是慢查询，而是 <code>idle in transaction</code></strong>：连接池里的连接开了事务、执行完一条语句、然后应用去干别的事（发消息、调 HTTP）忘了提交。这种连接 CPU 占用为零，任何慢查询监控都发现不了它，但它照样把 VACUUM 钉在原地。</p>
+<p>四类元凶里最常见的<strong>不是慢查询，而是 <code>idle in transaction</code></strong>：连接池里的连接开了事务、执行完一条语句、然后应用去干别的事（发消息、调 HTTP）忘了提交。</p>
+<p>这种连接 CPU 占用为零，任何慢查询监控都发现不了它，但它照样把 VACUUM 钉在原地。</p>
 <pre><code class="language-sql">-- 长事务与空闲事务排查：按事务持续时间倒序，state 是判断元凶类型的关键
 SELECT pid,
        state,                                     -- idle in transaction 是最常见元凶
@@ -382,7 +390,8 @@ flowchart TB
 </table>
 
 <h2>② 原理 · 行级锁四档与 SKIP LOCKED 的底层差异</h2>
-<p>行级锁不记在内存的锁表里，而是<strong>写在元组头的 xmax 上</strong>（多个持有者时才落到 multixact），所以 PG 不存在 InnoDB 那种「行锁太多升级成表锁」的问题，锁多少行都行，代价只是 WAL 与元组头的改动。四档强度从弱到强，选对了能显著降低冲突面。</p>
+<p>行级锁不记在内存的锁表里，而是<strong>写在元组头的 xmax 上</strong>（多个持有者时才落到 multixact），所以 PG 不存在 InnoDB 那种「行锁太多升级成表锁」的问题，锁多少行都行，代价只是 WAL 与元组头的改动。</p>
+<p>四档强度从弱到强，选对了能显著降低冲突面。</p>
 <table>
 <thead>
 <tr><th>子句</th><th>阻止别人做什么</th><th>谁在用</th><th>选它的理由</th></tr>
@@ -394,7 +403,8 @@ flowchart TB
 <tr><td><code>FOR UPDATE</code></td><td>阻止一切，包括 <code>FOR KEY SHARE</code></td><td>需要独占该行的业务逻辑</td><td>语义最清楚，但<strong>会和外键检查互相阻塞</strong>，父表上慎用</td></tr>
 </tbody>
 </table>
-<p><strong>外键为什么在 PG 8.1 之后不那么容易死锁</strong>，答案就在上表：早期版本外键检查用的是排他行锁，现在用 <code>FOR KEY SHARE</code>，只要父行的键没被改，子表的并发插入互不干扰。这也解释了一个常见误解——「PG 的外键会拖慢父表更新」在现代版本里只对<strong>修改键列</strong>成立。</p>
+<p><strong>外键为什么在 PG 8.1 之后不那么容易死锁</strong>，答案就在上表：早期版本外键检查用的是排他行锁，现在用 <code>FOR KEY SHARE</code>，只要父行的键没被改，子表的并发插入互不干扰。</p>
+<p>这也解释了一个常见误解——「PG 的外键会拖慢父表更新」在现代版本里只对<strong>修改键列</strong>成立。</p>
 <p>再加两个修饰词就凑出了 PG 最好用的并发原语：<code>NOWAIT</code> 拿不到锁立即报错（55P03），<code>SKIP LOCKED</code> <strong>跳过被别人锁住的行</strong>。后者是 PG 里实现任务队列的正确姿势，不需要额外的状态列轮询，也不会多个 worker 抢同一条。</p>
 <pre><code class="language-sql">-- 任务队列的标准写法：多个 worker 并发跑这段，彼此不会拿到同一行
 -- 关键点 1：子查询里先用 SKIP LOCKED 挑出可用行，再用 ctid 精准更新
@@ -431,7 +441,8 @@ SELECT pg_advisory_unlock(hashtext('nightly_settlement'));
 SELECT pg_try_advisory_xact_lock(hashtext('nightly_settlement'));</code></pre>
 
 <h2>② 原理 · DDL 的阻塞风险：一个等锁的 DDL 会堵死整张表</h2>
-<p>这是 PG 运维最大的坑，而且和 DDL 本身快不快无关。<strong>PG 的锁请求是排队的，并且队列是 FIFO 的</strong>：当一个 <code>ALTER TABLE</code> 在等 <code>ACCESS EXCLUSIVE</code> 锁时，它后面到达的所有请求——包括本来和它毫无冲突的 <code>SELECT</code>——都必须排在它后面等。于是一个「只改元数据、毫秒级完成」的 DDL，只要前面有一个跑了 10 分钟的报表查询挡着，就能让整张表在这 10 分钟里对所有人不可用，连接池瞬间打满，故障面扩散到整个应用。</p>
+<p>这是 PG 运维最大的坑，而且和 DDL 本身快不快无关。<strong>PG 的锁请求是排队的，并且队列是 FIFO 的</strong>：当一个 <code>ALTER TABLE</code> 在等 <code>ACCESS EXCLUSIVE</code> 锁时，它后面到达的所有请求——包括本来和它毫无冲突的 <code>SELECT</code>——都必须排在它后面等。</p>
+<p>于是一个「只改元数据、毫秒级完成」的 DDL，只要前面有一个跑了 10 分钟的报表查询挡着，就能让整张表在这 10 分钟里对所有人不可用，连接池瞬间打满，故障面扩散到整个应用。</p>
 <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -452,7 +463,8 @@ sequenceDiagram
     Q-->>D: DDL 拿到锁 毫秒级完成后释放
     Q-->>S1: 排队的查询才依次恢复
 </div>
-<p>正确做法只有一条：<strong>所有 DDL 会话都必须先设 <code>lock_timeout</code></strong>。拿不到锁就快速失败、退避重试，把「无限期堵住队列」变成「几秒内放弃」。另外 <code>ALTER TABLE</code> 的多个子操作会取其中最高的锁级别，所以拆成多条独立语句执行，而不是攒在一个事务里。</p>
+<p>正确做法只有一条：<strong>所有 DDL 会话都必须先设 <code>lock_timeout</code></strong>。拿不到锁就快速失败、退避重试，把「无限期堵住队列」变成「几秒内放弃」。</p>
+<p>另外 <code>ALTER TABLE</code> 的多个子操作会取其中最高的锁级别，所以拆成多条独立语句执行，而不是攒在一个事务里。</p>
 <table>
 <thead>
 <tr><th>DDL 操作</th><th>锁级别</th><th>是否重写全表</th><th>版本差异与规避手段</th></tr>
@@ -473,7 +485,9 @@ sequenceDiagram
 <div class="callout callout-warning">
 <div class="callout-icon">⚠️</div>
 <div class="callout-title">CREATE INDEX CONCURRENTLY 的三种失效模式</div>
-<p>第一，<strong>失败会留下一个 <code>indisvalid = false</code> 的无效索引</strong>，它不会被查询使用，却会照常参与写入维护，必须手工 <code>DROP INDEX CONCURRENTLY</code> 后重建——很多库里躺着的「莫名占空间的索引」就是这么来的。第二，<strong>不能在事务块里执行</strong>，也就不能放在需要原子性的迁移脚本事务里，很多迁移框架默认包事务，要单独关掉。第三，它需要等待所有早于它的事务结束才能完成两遍扫描，<strong>一个长事务就能让它挂住几小时</strong>，而它自己又持着 SHARE UPDATE EXCLUSIVE 锁把 VACUUM 挡在外面。</p>
+<p>第一，<strong>失败会留下一个 <code>indisvalid = false</code> 的无效索引</strong>，它不会被查询使用，却会照常参与写入维护，必须手工 <code>DROP INDEX CONCURRENTLY</code> 后重建——很多库里躺着的「莫名占空间的索引」就是这么来的。</p>
+<p>第二，<strong>不能在事务块里执行</strong>，也就不能放在需要原子性的迁移脚本事务里，很多迁移框架默认包事务，要单独关掉。</p>
+<p>第三，它需要等待所有早于它的事务结束才能完成两遍扫描，<strong>一个长事务就能让它挂住几小时</strong>，而它自己又持着 SHARE UPDATE EXCLUSIVE 锁把 VACUUM 挡在外面。</p>
 </div>
 <pre><code class="language-sql">-- DDL 安全模板：先卡住等锁时间，绝不允许无限期堵塞锁队列
 -- 在 psql 里 \set ON_ERROR_STOP on，配合外层脚本做退避重试
@@ -502,7 +516,8 @@ SELECT indexrelid::regclass AS 无效索引
 FROM   pg_index WHERE NOT indisvalid;   -- 有输出就 DROP INDEX CONCURRENTLY 后重建</code></pre>
 
 <h2>② 原理 · 死锁检测的判断路径</h2>
-<p>PG 不做预防，只做检测：每个等锁的进程在等待 <code>deadlock_timeout</code>（默认 1s）之后才去检查锁依赖图，发现环就<strong>中止代价最小的那个事务</strong>，报 40P01。把 <code>deadlock_timeout</code> 调小会让所有正常的锁等待都多付一次检测开销，调大则死锁要更久才被发现，默认值在绝大多数场景都是对的。真正该做的是打开 <code>log_lock_waits</code>，这样超过 <code>deadlock_timeout</code> 的等待会写进日志，附带阻塞者的语句。</p>
+<p>PG 不做预防，只做检测：每个等锁的进程在等待 <code>deadlock_timeout</code>（默认 1s）之后才去检查锁依赖图，发现环就<strong>中止代价最小的那个事务</strong>，报 40P01。</p>
+<p>把 <code>deadlock_timeout</code> 调小会让所有正常的锁等待都多付一次检测开销，调大则死锁要更久才被发现，默认值在绝大多数场景都是对的。真正该做的是打开 <code>log_lock_waits</code>，这样超过 <code>deadlock_timeout</code> 的等待会写进日志，附带阻塞者的语句。</p>
 <div class="mermaid">
 flowchart TB
     S["现象 应用大量超时或卡住"] --> Q1{"pg_stat_activity 里<br/>wait_event_type 是什么"}
@@ -550,7 +565,9 @@ SELECT pg_reload_conf();</code></pre>
 <tr><td>需要「同一业务动作只执行一次」</td><td>唯一约束或 <code>pg_try_advisory_xact_lock</code>，不要靠先查后插</td><td>先查后插在任何隔离级别下都有并发窗口，只有约束和锁能真正兜住</td><td>唯一约束冲突要在应用层翻译成业务语义；咨询锁的语义完全由应用自己定义，需要文档化</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：这一篇只解决单实例内部的并发。元组结构、<code>xmin</code> 与 <code>xmax</code> 的可见性判定、HOT 更新与 VACUUM 的机制在 <a href="../">PostgreSQL 主干篇</a>；<code>SKIP LOCKED</code> 要配的部分索引怎么建、计划为什么不走它在 <a href="../index-optimize/">索引选型与执行计划判读</a>；<code>max_locks_per_transaction</code> 这类需要重启的参数与部署形态在 <a href="../install/">生产部署与必调参数</a>；备库上的恢复冲突、<code>hot_standby_feedback</code> 把膨胀压力转移到主库在 <a href="../replication-ha/">复制与故障切换</a>；跨服务、跨库的一致性（<strong>本篇的隔离级别管不到它</strong>）在 <a href="../../../architecture/distributed/transaction/">分布式事务</a>，幂等落地在 <a href="../../../architecture/distributed/idempotency/">幂等设计</a>；MySQL 侧的 Next-Key 加锁范围与间隙锁在 <a href="../../mysql/">MySQL 深度原理</a>；「数据库到底是不是瓶颈」这一层在 <a href="../../optimization/">数据库性能优化：瓶颈定位顺序</a>。</p>
+<p><strong>不适用边界</strong>：这一篇只解决单实例内部的并发。元组结构、<code>xmin</code> 与 <code>xmax</code> 的可见性判定、HOT 更新与 VACUUM 的机制在 <a href="../">PostgreSQL 主干篇</a>；<code>SKIP LOCKED</code> 要配的部分索引怎么建、计划为什么不走它在 <a href="../index-optimize/">索引选型与执行计划判读</a>；</p>
+<p><code>max_locks_per_transaction</code> 这类需要重启的参数与部署形态在 <a href="../install/">生产部署与必调参数</a>；备库上的恢复冲突、<code>hot_standby_feedback</code> 把膨胀压力转移到主库在 <a href="../replication-ha/">复制与故障切换</a>；</p>
+<p>跨服务、跨库的一致性（<strong>本篇的隔离级别管不到它</strong>）在 <a href="../../../architecture/distributed/transaction/">分布式事务</a>，幂等落地在 <a href="../../../architecture/distributed/idempotency/">幂等设计</a>；MySQL 侧的 Next-Key 加锁范围与间隙锁在 <a href="../../mysql/">MySQL 深度原理</a>；「数据库到底是不是瓶颈」这一层在 <a href="../../optimization/">数据库性能优化：瓶颈定位顺序</a>。</p>
 <p>在这条路径上，上一篇让单条查询走对路径，本篇处理多个会话同时读写时的行为，下一篇把视角拉到实例之外：数据怎么复制出去、主库挂了怎么切、切完怎么验证。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../index-optimize/">← 上一步：PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN</a> · <a href="../replication-ha/">下一步：PostgreSQL 复制与故障切换：同步级别、复制槽、pg_rewind 与 Patroni →</a></p>

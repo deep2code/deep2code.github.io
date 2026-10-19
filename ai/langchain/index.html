@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="把 LangChain 拆成五层分别评估：模型与向量库适配层屏蔽了真实厂商差异所以值得用，RetrievalQA 这类高阶链与 PydanticOutputParser 只换了个名字所以不如自己写；LCEL 的 Runnable 协议一次性带来流式批量异步重试与回调，代价是调试堆栈变深；core 与 community 与厂商包的稳定性差异与锁版本策略；直接调 SDK 与 LlamaIndex 与 Semantic Kernel 的对照与选型结论；LangGraph 在需要循环与人工审批时的定位。">
+    <meta name="description" content="把 LangChain 拆成五层分别评估：模型与向量库适配层屏蔽真实厂商差异所以值得用，RetrievalQA 等高阶链不如自己写；LCEL 的 Runnable 协议带来流式、批量、异步、重试与回调，代价是调试堆栈变深；另附包拆分与 LangGraph 定位。">
     <meta name="keywords" content="LangChain,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/ai/langchain/">
     <meta property="og:title" content="LangChain 抽象设计与选型：LCEL、值不值得用、替代方案 - 资深码农">
-    <meta property="og:description" content="把 LangChain 拆成五层分别评估：模型与向量库适配层屏蔽了真实厂商差异所以值得用，RetrievalQA 这类高阶链与 PydanticOutputParser 只换了个名字所以不如自己写；LCEL 的 Runnable 协议一次性带来流式批量异步重试与回调，代价是调试堆栈变深；core 与 community 与厂商包的稳定性差异与锁版本策略；直接调 SDK 与 LlamaIndex 与 Semantic Kernel 的对照与选型结论；LangGraph 在需要循环与人工审批时的定位。">
+    <meta property="og:description" content="把 LangChain 拆成五层分别评估：模型与向量库适配层屏蔽真实厂商差异所以值得用，RetrievalQA 等高阶链不如自己写；LCEL 的 Runnable 协议带来流式、批量、异步、重试与回调，代价是调试堆栈变深；另附包拆分与 LangGraph 定位。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/ai/langchain/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="LangChain 抽象设计与选型：LCEL、值不值得用、替代方案 - 资深码农">
-    <meta name="twitter:description" content="把 LangChain 拆成五层分别评估：模型与向量库适配层屏蔽了真实厂商差异所以值得用，RetrievalQA 这类高阶链与 PydanticOutputParser 只换了个名字所以不如自己写；LCEL 的 Runnable 协议一次性带来流式批量异步重试与回调，代价是调试堆栈变深；core 与 community 与厂商包的稳定性差异与锁版本策略；直接调 SDK 与 LlamaIndex 与 Semantic Kernel 的对照与选型结论；LangGraph 在需要循环与人工审批时的定位。">
+    <meta name="twitter:description" content="把 LangChain 拆成五层分别评估：模型与向量库适配层屏蔽真实厂商差异所以值得用，RetrievalQA 等高阶链不如自己写；LCEL 的 Runnable 协议带来流式、批量、异步、重试与回调，代价是调试堆栈变深；另附包拆分与 LangGraph 定位。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -71,11 +71,13 @@
                     </header>
                     <div class="article-content">
 
-<p>LangChain 是近几年争议最大的框架：一边是最快的上手路径，一边是「抽象过度、调试地狱」的批评。这篇不复述教程，只回答三个工程问题——它到底把什么东西抽象掉了、这些抽象里哪些值得用哪些不如自己写、以及在什么规模下它是资产而不是负债。RAG 的分块与检索算法见站内 RAG 工程化实践一篇，检索侧数据工程见站内 RAG 检索侧数据工程一篇，Agent 的规划范式与多智能体见站内 AI Agent 一篇；本篇只谈框架本身。</p>
+<p>LangChain 是近几年争议最大的框架：一边是最快的上手路径，一边是「抽象过度、调试地狱」的批评。</p>
+<p>这篇不复述教程，只回答三个工程问题——它把什么东西抽象掉了、哪些抽象值得用哪些不如自己写、什么规模下它是资产而不是负债。</p>
+<p>RAG 分块与检索算法见站内 RAG 工程化实践一篇，检索侧数据工程见站内 RAG 检索侧数据工程一篇，Agent 规划范式与多智能体见站内 AI Agent 一篇；本篇只谈框架本身。</p>
 
 <h2>LangChain 实际提供的是五层东西</h2>
 
-<p>讨论「该不该用 LangChain」之所以经常各说各话，是因为它根本不是一个东西。它是五层独立的东西被打包在一个名字下面，每一层的成熟度和可替代性完全不同，必须分开评估。</p>
+<p>讨论「该不该用 LangChain」经常各说各话，是因为它根本不是一个东西。它是五层独立的东西打包在一个名字下，每一层的成熟度和可替代性完全不同，必须分开评估。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -119,11 +121,13 @@ flowchart TB
     DL --> DB
 </div>
 
-<p>看清这张图之后，那句「LangChain 抽象过度」就能翻译成一句更准确的话：<strong>第二层的适配是真本事，第四层的组合协议是真价值，争议全部集中在第三层里那些高阶封装上</strong>。绝大多数骂它的人骂的是第三层，绝大多数用它爽的人用的是第二层和第四层。</p>
+<p>看清这张图后，「LangChain 抽象过度」就能翻译成更准确的话：<strong>第二层的适配是真本事，第四层的组合协议是真价值，争议全部集中在第三层里那些高阶封装上</strong>。</p>
+<p>绝大多数骂它的人骂的是第三层，绝大多数用它爽的人用的是第二层和第四层。</p>
 
 <h2>一张值不值得用的判断表</h2>
 
-<p>判断标准只有一条，简单到可以当口诀用：<strong>这个抽象是否屏蔽了真实存在的差异</strong>。屏蔽了真实差异的值得用，因为那些差异你自己也要处理，而且处理起来又脏又琐碎。只是给几行代码换了个名字的不值得用，它没消除任何复杂度，只是把复杂度挪到了你看不见的地方，还额外收你一笔版本升级税。</p>
+<p>判断标准只有一条，简单到能当口诀：<strong>这个抽象是否屏蔽了真实存在的差异</strong>。屏蔽了真实差异的值得用，因为那些差异你自己也要处理，而且又脏又琐碎。</p>
+<p>只是给几行代码换了个名字的不值得用，它没消除任何复杂度，只是把复杂度挪到了你看不见的地方，还额外收你一笔版本升级税。</p>
 
 <table>
 <thead><tr><th>抽象</th><th>它屏蔽的真实差异</th><th>判断</th><th>理由与残留成本</th></tr></thead>
@@ -144,7 +148,8 @@ flowchart TB
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">一个反直觉的结论</div>
-    <p>LangChain 最值得用的两层，也就是适配层和 LCEL，恰好是最没有「框架感」的两层：它们不规定你的代码怎么组织，只提供统一接口和统一执行语义。而最有「框架感」的高阶链和 Agent 封装，恰好是最该躲开的。谁规定你怎么写业务，谁就是负债。</p>
+    <p>LangChain 最值得用的两层，也就是适配层和 LCEL，恰好是最没有「框架感」的：它们不规定你的代码怎么组织，只提供统一接口和统一执行语义。</p>
+<p>而最有「框架感」的高阶链和 Agent 封装，恰好最该躲开。谁规定你怎么写业务，谁就是负债。</p>
 </div>
 
 <h2>高阶链的问题不是慢，是藏掉了关键决策</h2>
@@ -197,11 +202,13 @@ chain = (
     | StrOutputParser()
 )</code></pre>
 
-<p>多写的这十几行换来的是：上下文预算可调、去重策略可换、引用编号可追溯、<code>build_context</code> 可以脱离 LLM 单元测试。<strong>省代码从来不是目标，能改和能测才是</strong>。这也给出了一个实用的检验标准：如果某个封装让你无法对其中的纯函数部分写单测，就别用它。</p>
+<p>多写的这十几行换来的是：上下文预算可调、去重策略可换、引用编号可追溯、<code>build_context</code> 可以脱离 LLM 单元测试。<strong>省代码从来不是目标，能改和能测才是</strong>。</p>
+<p>这也给出了一个实用的检验标准：如果某个封装让你无法对其中的纯函数部分写单测，就别用它。</p>
 
 <h2>LCEL：统一执行契约，收益与代价</h2>
 
-<p>LCEL 常被误解成「一个花哨的管道语法糖」。它的实质是<strong>给所有组件规定同一份执行契约</strong>：只要实现 Runnable 协议，就必须同时支持同步、异步、批量、流式、事件流五种执行方式，并且能被重试、回退、超时、回调统一包装。管道符只是拼装这份契约的语法。</p>
+<p>LCEL 常被误认为「花哨的管道语法糖」，实质是<strong>给所有组件规定同一份执行契约</strong>：实现 Runnable 协议，就得支持同步、异步、批量、流式、事件流五种执行方式，并能被重试、回退、超时、回调统一包装。</p>
+<p>管道符只是拼装这份契约的语法。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -240,11 +247,11 @@ sequenceDiagram
 </tbody>
 </table>
 
-<p>代价最真实的一条是调试体验：一个模板变量名写错，栈里可能出现七八层框架帧，最终异常信息指向 LangChain 内部的字典取值而不是你写错的那一行。所以<strong>用 LCEL 就必须配 tracing</strong>，靠读堆栈定位 LCEL 问题是低效的。</p>
+<p>代价最真实的一条是调试体验：模板变量名写错，栈里可能出现七八层框架帧，异常信息指向 LangChain 内部的字典取值，而不是你写错的那一行。所以<strong>用 LCEL 就必须配 tracing</strong>，靠读堆栈定位 LCEL 问题很低效。</p>
 
 <h2>包拆分与版本风险：采用它的头号成本</h2>
 
-<p>LangChain 做过一次彻底的包拆分，这件事对使用者是好消息，它把稳定的抽象和不稳定的集成分开了，让你有机会只依赖稳定的那部分。但前提是你知道哪个包稳定。</p>
+<p>LangChain 做过一次彻底的包拆分，这对使用者是好消息：它把稳定的抽象和不稳定的集成分开，让你能只依赖稳定的那部分。但前提是你知道哪个包稳定。</p>
 
 <table>
 <thead><tr><th>包</th><th>装了什么</th><th>稳定性</th><th>使用建议</th></tr></thead>
@@ -261,7 +268,8 @@ sequenceDiagram
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">community 包的真实风险</div>
-    <p>community 里的集成以社区一次性贡献居多，上游 SDK 一改就静默坏掉，而且坏法往往是「能跑但结果不对」，比如某个向量库集成把过滤条件悄悄忽略了。上生产前对每个 community 集成做一件事：读一遍它的源码，通常只有一两百行，比排查线上诡异问题便宜得多。</p>
+    <p>community 里的集成以社区一次性贡献居多，上游 SDK 一改就静默坏掉，而且坏法往往是「能跑但结果不对」，比如某个向量库集成把过滤条件悄悄忽略了。</p>
+<p>上生产前对每个 community 集成做一件事：读一遍它的源码，通常只有一两百行，比排查线上诡异问题便宜得多。</p>
 </div>
 
 <h2>把框架风险关进一个文件</h2>
@@ -377,7 +385,8 @@ flowchart TB
 
 <h2>LangGraph：链不够用的时候</h2>
 
-<p>LCEL 链是有向无环图，数据从一头进从另一头出，中间不能回头。这个限制在单轮流程里很舒服，在需要反复试探的流程里就变成硬墙：<strong>Agent 的本质是循环，而循环无法用链表达</strong>。硬要用链表达，就得把循环藏进某个执行器里，于是就有了 AgentExecutor 那种不透明的黑盒。</p>
+<p>LCEL 链是有向无环图，数据从一头进从另一头出，中间不能回头。这在单轮流程里很舒服，在需要反复试探的流程里就变成硬墙：<strong>Agent 的本质是循环，而循环无法用链表达</strong>。</p>
+<p>硬要用链表达，就得把循环藏进某个执行器里，于是就有了 AgentExecutor 那种不透明的黑盒。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -400,7 +409,8 @@ flowchart TB
     end
 </div>
 
-<p>LangGraph 值得单独采用的四个信号：<strong>需要断点恢复</strong>，用户关掉页面第二天继续，状态必须在存储里而不是在内存里；<strong>需要人工审批</strong>，图可以在某个节点挂起，等外部输入再继续；<strong>需要显式分支与循环</strong>，条件边是代码而不是模型的隐式行为；<strong>需要观测每一步</strong>，每次状态转移都是一条可回看的记录。这四条命中任意一条就不要在链上硬凑。具体实现见站内 LangChain Agent 的工程约束一篇。</p>
+<p>LangGraph 值得单独采用的四个信号：<strong>需要断点恢复</strong>，用户关掉页面第二天继续，状态必须在存储里而不是内存里；<strong>需要人工审批</strong>，图可在某个节点挂起，等外部输入再继续；</p>
+<p><strong>需要显式分支与循环</strong>，条件边是代码而不是模型的隐式行为；<strong>需要观测每一步</strong>，每次状态转移都是可回看的记录。四条命中任意一条，就别在链上硬凑。实现见站内 LangChain Agent 的工程约束一篇。</p>
 
 <h2>反模式</h2>
 

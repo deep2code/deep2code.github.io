@@ -89,7 +89,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>写 OLAP 表最反直觉的一点是：<strong>你在 OLTP 里学到的范式化训练，在这里基本要反过来用</strong>。OLTP 消除冗余是为了让单行更新安全且便宜，而分析型负载根本不更新单行，它只关心「一次查询要扫多少字节」。这篇讲数据怎么组织成能被高效扫描的形态。引擎的列存与向量化原理详见站内《ClickHouse 架构与核心特性》，分布式拓扑详见《ClickHouse 集群与分布式表》，与 Doris、Elasticsearch 的选型对比详见《ClickHouse vs Elasticsearch vs Doris》。</p>
+<p>写 OLAP 表最反直觉的一点是：<strong>你在 OLTP 里学到的范式化训练，在这里要反过来用</strong>。OLTP 消除冗余是为了单行更新安全且便宜，分析型负载根本不更新单行，只关心「一次查询要扫多少字节」。</p>
+<p>这篇讲数据怎么组织成能被高效扫描的形态。列存与向量化原理见《ClickHouse 架构与核心特性》，分布式拓扑见《ClickHouse 集群与分布式表》，选型对比见《ClickHouse vs Elasticsearch vs Doris》。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -103,7 +104,7 @@
 
 <h2>① 用法 · 从需求到建模的五步顺序</h2>
 
-<p>建模最常见的失败不是选错了星型或宽表，而是<strong>顺序错了</strong>：先画表结构，再回头发现查询模式对不上、重跑粒度对不上。下面五步的顺序是有依赖关系的，每一步的产出是下一步的输入。</p>
+<p>建模最常见的失败不是选错星型或宽表，而是<strong>顺序错了</strong>：先画表结构，再回头发现查询模式对不上、重跑粒度对不上。下面五步有依赖关系，每一步的产出是下一步的输入。</p>
 
 <table>
 <thead><tr><th>第几步</th><th>要问清什么</th><th>产出</th><th>跳过这步的后果</th></tr></thead>
@@ -199,7 +200,8 @@ FROM dwd.order_detail WHERE user_id = 1001 GROUP BY d ORDER BY d;
 
 <h2>② 原理 · 星型、雪花，与最终的大宽表</h2>
 
-<p>星型模型是一张事实表（订单、事件）加一圈维度表（用户、商品、地区），维度表直接挂在事实表上；雪花模型是把维度表再规范化一层（商品挂品类，品类挂一级类目）。这套方法论来自 MPP 和数仓时代，在 ClickHouse 上会遇到一个现实问题：<strong>ClickHouse 的 join 很贵，连星型模型的单层 join 都常常慢到无法接受</strong>，所以实践里往往一路退化到大宽表（One Big Table）。</p>
+<p>星型模型是一张事实表（订单、事件）加一圈维度表（用户、商品、地区），维度表直接挂在事实表上；雪花模型把维度表再规范化一层（商品挂品类，品类挂一级类目）。</p>
+<p>这套方法论来自 MPP 和数仓时代，在 ClickHouse 上会遇到一个现实问题：<strong>ClickHouse 的 join 很贵，连星型模型的单层 join 都常常慢到无法接受</strong>，所以实践里往往一路退化到大宽表（One Big Table）。</p>
 
 <div class="mermaid">
 erDiagram
@@ -251,7 +253,10 @@ erDiagram
 <tr><td>在 ClickHouse 的可行性</td><td>可行，前提是维表能进字典</td><td>不推荐</td><td>推荐，是最终形态</td></tr>
 </tbody></table>
 
-<p>宽表在列存里之所以代价没那么大，原因有两条：<strong>不查的列完全不读</strong>，一张两百列的表只查五列，IO 就只有这五列；<strong>冗余的维度属性压缩率极高</strong>，城市名这种低基数字符串上了 <code>LowCardinality</code> 之后，一亿行的实际占用可能只有几十 MB。真实代价也要说清楚：一是维度属性变更时必须回刷历史（用户改了城市，是否要改历史订单里的城市，这是业务口径问题不是技术问题）；二是 ETL 变重，关联逻辑从查询时挪到了写入时，链路更长也更容易出故障。折中方案是<strong>把变化极少且高频使用的维度打平进宽表，把变化频繁或属性很多的维度留在字典里用 <code>dictGet</code> 查</strong>。</p>
+<p>宽表在列存里之所以代价没那么大，原因有两条：<strong>不查的列完全不读</strong>，一张两百列的表只查五列，IO 就只有这五列；</p>
+<p><strong>冗余的维度属性压缩率极高</strong>，城市名这种低基数字符串上了 <code>LowCardinality</code> 之后，一亿行的实际占用可能只有几十 MB。</p>
+<p>真实代价也要说清楚：一是维度属性变更时必须回刷历史（用户改了城市，是否要改历史订单里的城市，这是业务口径问题不是技术问题）；</p>
+<p>二是 ETL 变重，关联逻辑从查询时挪到写入时，链路更长也更容易出故障。折中方案是<strong>把变化极少且高频的维度打平进宽表，变化频繁或属性多的维度留在字典里用 <code>dictGet</code> 查</strong>。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -270,7 +275,8 @@ flowchart TB
 
 <h2>② 原理 · 缓慢变化维：分析历史必须用当时的值</h2>
 
-<p>用户九月是青铜等级、十月升到黄金，那么「九月各等级用户的消费额」应该用哪个等级算？答案是九月的青铜。<strong>这不是性能问题，而是数据正确性问题</strong>，而且是报表口径争议里最常见的一类。用 <code>dictGet</code> 关联当前维度表的写法，会让历史报表的数字随维度变化而变动，昨天跑出来的月报今天再跑就不一样了。</p>
+<p>用户九月是青铜等级、十月升到黄金，「九月各等级用户的消费额」该用哪个等级算？答案是九月的青铜。<strong>这不是性能问题，而是数据正确性问题</strong>，是报表口径争议里最常见的一类。</p>
+<p>用 <code>dictGet</code> 关联当前维度表的写法，会让历史报表的数字随维度变化而变动，昨天跑出来的月报今天再跑就不一样了。</p>
 
 <table>
 <thead><tr><th>SCD 类型</th><th>做法</th><th>历史可追溯</th><th>在 ClickHouse 的落地</th><th>适用</th></tr></thead>
@@ -284,12 +290,13 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">这两类指标要分开设计</div>
-    <p>「按用户当时等级统计的历史消费」和「按用户当前等级统计的历史消费」是两个不同的业务指标，都合法，但必须在表设计上区分开：前者用事实表里冗余的快照维度列（如 <code>user_level_snapshot</code>），后者用 <code>dictGet</code> 实时查当前维度。一张表同时提供两列、并在字段命名上写清 snapshot 与 current，比事后解释报表为什么对不上要省事得多。</p>
+    <p>「按当时等级统计的历史消费」和「按当前等级统计的历史消费」是两个业务指标，都合法，但必须在表设计上区分：前者用事实表里冗余的快照维度列（如 <code>user_level_snapshot</code>），后者用 <code>dictGet</code> 实时查当前维度。</p>
+<p>一张表同时提供两列、并在字段命名上写清 snapshot 与 current，比事后解释报表为什么对不上要省事得多。</p>
 </div>
 
 <h2>② 原理 · 分层：ODS、DWD、DWS、ADS 在 ClickHouse 里怎么落</h2>
 
-<p>分层的意义在于把「解析清洗」「关联打平」「聚合汇总」三种变更频率完全不同的逻辑隔开，出问题时能定位到层、重跑时能只重跑一层。在 ClickHouse 里，前两层通常是 MergeTree 明细表加调度任务，后两层多用 AggregatingMergeTree 加物化视图。</p>
+<p>分层把「解析清洗」「关联打平」「聚合汇总」三种变更频率不同的逻辑隔开，出问题能定位到层、重跑只重跑一层。ClickHouse 里前两层通常是 MergeTree 明细表加调度任务，后两层多用 AggregatingMergeTree 加物化视图。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -399,11 +406,14 @@ GROUP BY stat_date ORDER BY stat_date;
 <tr><td>适用</td><td>指标集合稳定的业务看板</td><td>指标由用户自定义、数量不可控的监控平台</td></tr>
 </tbody></table>
 
-<p>时间粒度上，用三级汇总（分钟 / 小时 / 天）几乎是标准解法。收益的算法很直白：假设分钟级一天 1440 行每维度组合，小时级 24 行，天级 1 行。查一年的日趋势图，走天级是 365 行，走分钟级是 52 万行，差三个数量级。存储上小时级和天级加起来不到分钟级的 5%，几乎免费。<strong>关键是不要让上层直接查明细</strong>：看板固定查 DWS 或 ADS，明细层只留给排障和下钻。另外分钟级聚合表的 TTL 可以设得比天级短很多，比如分钟级留 7 天、小时级留 90 天、天级留 3 年。</p>
+<p>时间粒度上，三级汇总（分钟 / 小时 / 天）几乎是标准解法。收益算法很直白：分钟级一天 1440 行每维度组合，小时级 24 行，天级 1 行。查一年的日趋势图，走天级 365 行，走分钟级 52 万行，差三个数量级。</p>
+<p>存储上小时级和天级加起来不到分钟级的 5%，几乎免费。<strong>关键是不要让上层直接查明细</strong>：看板固定查 DWS 或 ADS，明细层只留给排障和下钻。</p>
+<p>另外分钟级聚合表的 TTL 可以设得比天级短很多，比如分钟级留 7 天、小时级留 90 天、天级留 3 年。</p>
 
 <h2>② 原理 · 幂等重跑是 ETL 的硬要求</h2>
 
-<p>任何离线任务都会失败重跑，也会因为口径修正而重算。<strong>能不能安全地重跑同一个时间段，是 ETL 设计里最硬的一条要求</strong>。在 ClickHouse 里，幂等的正确实现是「按分区整体替换」：先把数据算到临时表，再用 <code>REPLACE PARTITION</code> 原子替换目标分区。这样重跑一百次结果都一样，且切换瞬间完成。</p>
+<p>任何离线任务都会失败重跑，也会因为口径修正而重算。<strong>能不能安全地重跑同一个时间段，是 ETL 设计里最硬的一条要求</strong>。</p>
+<p>在 ClickHouse 里，幂等的正确实现是「按分区整体替换」：先把数据算到临时表，再用 <code>REPLACE PARTITION</code> 原子替换目标分区。这样重跑一百次结果都一样，且切换瞬间完成。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -469,11 +479,14 @@ DROP TABLE dws.order_1d_tmp;
 <tr><td>加 batch_id 列查询时过滤最新</td><td>逻辑版本</td><td>无</td><td>存储翻倍，查询变复杂</td><td>只在无法按分区切分时才考虑</td></tr>
 </tbody></table>
 
-<p>数据质量上，最少要做三件事：<strong>行数与核心指标双向对账</strong>（只比行数会漏掉金额错位这类问题）；<strong>空值语义写进字段注释</strong>（0 表示「值为零」还是「没采集到」必须约定，因为 ClickHouse 里我们用默认值替代了 Nullable，这层语义只能靠约定保留）；<strong>去重策略只选一侧</strong>——要么写入侧靠 ReplacingMergeTree 和分区替换保证幂等，要么查询侧统一用 <code>argMax</code> 去重，两边都做会互相掩盖问题，出错时无法定位。</p>
+<p>数据质量上，最少要做三件事：<strong>行数与核心指标双向对账</strong>（只比行数会漏掉金额错位这类问题）；</p>
+<p><strong>空值语义写进字段注释</strong>（0 表示「值为零」还是「没采集到」必须约定，因为 ClickHouse 里我们用默认值替代了 Nullable，这层语义只能靠约定保留）；</p>
+<p><strong>去重策略只选一侧</strong>——要么写入侧靠 ReplacingMergeTree 和分区替换保证幂等，要么查询侧统一用 <code>argMax</code> 去重，两边都做会互相掩盖问题，出错时无法定位。</p>
 
 <h2>② 原理 · 实时与离线的口径一致</h2>
 
-<p>Lambda 架构的经典问题不是维护两套代码累，而是<strong>两条链路的口径会悄悄分叉</strong>：实时链路为了低延迟用了近似去重，离线链路用精确去重；实时链路把退款算进当天，离线链路算进原单日期。到了月底对账，差异已经无法归因。</p>
+<p>Lambda 架构的经典问题不是维护两套代码累，而是<strong>两条链路的口径会悄悄分叉</strong>：实时链路为低延迟用近似去重，离线用精确去重；</p>
+<p>实时把退款算进当天，离线算进原单日期。月底对账时差异已无法归因。</p>
 
 <table>
 <thead><tr><th>做法</th><th>一致性</th><th>维护成本</th><th>适用</th></tr></thead>
@@ -484,7 +497,8 @@ DROP TABLE dws.order_1d_tmp;
 <tr><td>两套独立代码</td><td>差，长期必然分叉</td><td>高</td><td>不推荐</td></tr>
 </tbody></table>
 
-<p>落地的关键动作是把聚合逻辑写成一份可参数化的 SQL 模板，实时链路以分钟为窗口调用它、离线链路以天为窗口调用它，指标定义只存在一处。同时把「时间语义」显式写清：用事件时间还是处理时间、迟到数据的容忍窗口多长、超出窗口的迟到数据进哪个分区，这三个问题不明确，两条链路必然对不上。</p>
+<p>落地的关键动作是把聚合逻辑写成一份可参数化的 SQL 模板，实时链路以分钟为窗口调用它、离线链路以天为窗口调用它，指标定义只存在一处。</p>
+<p>同时把「时间语义」写清：用事件时间还是处理时间、迟到数据容忍窗口多长、超窗数据进哪个分区，这三个不明确，两条链路必然对不上。</p>
 
 <h2>② 原理 · 漏斗、留存、路径：ClickHouse 特有的分析函数</h2>
 
@@ -565,7 +579,7 @@ FROM
 
 <h2>③ 场景 · 需求形态到建模方案</h2>
 
-<p>把前面的机制反过来用：拿到一类需求，直接查这张表定方案。代价列必须和业务方一起确认，因为其中几条（比如历史要不要跟着维度变）是口径问题而不是技术问题。</p>
+<p>把前面的机制反过来用：拿到一类需求，直接查这张表定方案。代价列必须和业务方一起确认，因为其中几条（如历史要不要跟着维度变）是口径问题而非技术问题。</p>
 
 <table>
 <thead><tr><th>需求形态</th><th>建模方案</th><th>为什么</th><th>代价</th></tr></thead>
@@ -594,7 +608,8 @@ FROM
 <tr><td>用 DELETE 加 INSERT 做重跑</td><td>异步 mutation 导致双倍数据窗口</td><td><code>REPLACE PARTITION</code> 原子替换</td></tr>
 </tbody></table>
 
-<p><strong>不适用边界</strong>：建模解决的是「数据怎么组织」，不解决单条 SQL 的写法问题——那在 <a href="../query-optimization/">查询优化</a>；引擎、codec 与写入批次在 <a href="../table-import/">建表与写入</a>；跨分片的 join 与两阶段聚合在 <a href="../architecture/">集群架构</a>；为什么冗余在列存里不贵，回到 <a href="../">ClickHouse 深度原理</a>。另外两件事明确不属于建模层：需要行级 upsert 的场景应该在 <a href="../compare/">选型阶段</a> 就换引擎，而上游埋点的字段规范与埋点治理是数据采集侧的问题，建模只能承接不能修补。</p>
+<p><strong>不适用边界</strong>：建模解决「数据怎么组织」，不解决单条 SQL 写法——那在 <a href="../query-optimization/">查询优化</a>；引擎、codec 与写入批次在 <a href="../table-import/">建表与写入</a>；跨分片 join 与两阶段聚合在 <a href="../architecture/">集群架构</a>；冗余为何在列存里不贵，见 <a href="../">ClickHouse 深度原理</a>。</p>
+<p>另外两件事不属于建模层：需要行级 upsert 的场景应在 <a href="../compare/">选型阶段</a> 就换引擎，上游埋点的字段规范与治理是数据采集侧的问题，建模只能承接不能修补。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../query-optimization/">← 上一步：ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合</a> · <a href="../architecture/">下一步：ClickHouse 集群架构：分片、副本与 Distributed 表 →</a></p>
 

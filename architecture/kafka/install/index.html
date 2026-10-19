@@ -90,7 +90,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>解压加启动这件事，官方 quickstart 五分钟就能讲完，网上也不缺复制粘贴的命令清单。真正让人半夜起来的是另外几件事：监听器配错导致客户端「连得上但发不出」、漏了格式化步骤导致启动直接失败、堆内存配了 32GB 反而变慢、上线三个月后发现磁盘规划少算了副本数。这篇只讲这些——<strong>部署阶段需要做的决策，以及上线前必须做完的验证</strong>。</p>
+<p>解压加启动这件事，官方 quickstart 五分钟就能讲完，网上也不缺复制粘贴的命令清单。</p>
+<p>半夜让人起来的是另外几件事：监听器配错导致客户端「连得上但发不出」、漏了格式化步骤导致启动直接失败、堆内存配了 32GB 反而变慢、上线三个月后发现磁盘规划少算了副本数。</p>
+<p>这篇只讲这些——<strong>部署阶段需要做的决策，以及上线前必须做完的验证</strong>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -192,7 +194,7 @@ bin/kafka-topics.sh --bootstrap-server kafka-b1.internal:9092 --describe --topic
 bin/kafka-topics.sh --bootstrap-server kafka-b1.internal:9092 --describe --under-replicated-partitions
 bin/kafka-topics.sh --bootstrap-server kafka-b1.internal:9092 --describe --unavailable-partitions</code></pre>
 
-<p><strong>内外网双监听是这一步最容易配错的地方</strong>，而且错了之后的症状极具误导性：能连上、能列主题，一发消息就超时。下面三条命令专门用来验证监听器，别靠肉眼读配置：</p>
+<p><strong>内外网双监听是这一步最容易配错的地方</strong>，错了之后的症状极具误导性：能连上、能列主题，一发消息就超时。下面三条命令专门验证监听器，别靠肉眼读配置：</p>
 
 <pre><code class="language-bash"># 验证一：让集群把它「告诉客户端的地址」打印出来。这是最直接的验证手段
 bin/kafka-broker-api-versions.sh --bootstrap-server kafka-b1.internal:9092 | grep -i 'id:'
@@ -254,7 +256,7 @@ bin/kafka-run-class.sh kafka.tools.GetOffsetShell \
 
 <h2>② 原理 · KRaft 的角色模型与 controller quorum</h2>
 
-<p>搞清这一节能解决「进程都活着，为什么建主题一直超时」。KRaft 把元数据也做成了一个 Raft 复制的日志，因此集群里出现了两类角色：<strong>controller 负责复制和提交元数据，broker 负责承载分区数据</strong>。一个进程扮演什么角色由 <code>process.roles</code> 决定。</p>
+<p>「进程都活着，为什么建主题一直超时」：KRaft 把元数据也做成一个 Raft 复制的日志，集群里因此出现两类角色：<strong>controller 负责复制和提交元数据，broker 负责承载分区数据</strong>。进程扮演什么角色由 <code>process.roles</code> 决定。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -288,11 +290,12 @@ flowchart TB
 <tr><td><code>broker,controller</code></td><td>两者兼任，混部</td><td>开发机、测试环境、极小规模集群</td><td>broker 侧的磁盘与网络压力会推高元数据提交延迟，元数据卡顿会放大成全集群分区不可用</td></tr>
 </tbody></table>
 
-<p>quorum 数量必须是<strong>奇数</strong>，通常 3 台，超大集群用 5 台。原因是 Raft 需要多数派确认：3 台的多数派是 2，容忍 1 台故障；4 台的多数派是 3，同样只容忍 1 台故障，却多花一台机器并增加一份复制开销。偶数节点唯一的作用是让你多付钱。</p>
+<p>quorum 数量必须是<strong>奇数</strong>，通常 3 台，超大集群用 5 台。Raft 需要多数派确认：3 台的多数派是 2，容忍 1 台故障；4 台的多数派是 3，同样只容忍 1 台故障，却多花一台机器和一份复制开销。偶数节点只是多付钱。</p>
 
 <h2>② 原理 · 监听器：listeners 与 advertised.listeners 的分工</h2>
 
-<p>搞清这个两段式流程能解决那个最有误导性的症状：<code>listeners</code> 和 <code>advertised.listeners</code> 只差一个词，但职责完全不同——<strong>前者是「我在本机绑哪个地址和端口」，后者是「我告诉客户端该怎么连我」</strong>。客户端配的 <code>bootstrap.servers</code> 只用于第一次取元数据，之后所有生产与消费请求都改用元数据里返回的 advertised 地址。</p>
+<p><code>listeners</code> 和 <code>advertised.listeners</code> 只差一个词，职责却完全不同——<strong>前者是「我在本机绑哪个地址和端口」，后者是「我告诉客户端该怎么连我」</strong>。</p>
+<p>客户端配的 <code>bootstrap.servers</code> 只用于第一次取元数据，之后所有生产与消费请求都改用元数据里返回的 advertised 地址。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -321,7 +324,9 @@ sequenceDiagram
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">三条监听器铁律</div>
-    <p>第一，<code>advertised.listeners</code> 里绝不能出现 <code>0.0.0.0</code>，那是绑定地址不是可达地址，客户端拿到后无法使用。第二，每台 broker 的 advertised 地址必须各不相同且唯一指向自己，三台写成同一个地址会让客户端把所有请求打到一台上并不断报 leader 不匹配。第三，<code>controller.listener.names</code> 指定的监听器只用于内部 Raft，不要把它加进 <code>advertised.listeners</code>，也不要让客户端去连它。三条都可以用用法层的验证命令当场证伪。</p>
+    <p>第一，<code>advertised.listeners</code> 里绝不能出现 <code>0.0.0.0</code>，那是绑定地址不是可达地址，客户端拿到后无法使用。</p>
+<p>第二，每台 broker 的 advertised 地址必须各不相同且唯一指向自己，三台写成同一个地址会让客户端把所有请求打到一台上并不断报 leader 不匹配。</p>
+<p>第三，<code>controller.listener.names</code> 指定的监听器只用于内部 Raft，不要加进 <code>advertised.listeners</code>，也别让客户端连它。三条都能用用法层的验证命令当场证伪。</p>
 </div>
 
 <h2>② 原理 · 磁盘、文件系统与主机层参数</h2>
@@ -374,9 +379,13 @@ cat /proc/$(pgrep -f kafka.Kafka)/limits | grep 'open files'</code></pre>
 
 <p><strong>单节点磁盘需求 = 日均消息条数 乘 平均消息字节数 乘 副本数 乘 保留天数 除以 压缩比 除以 节点数 再乘 1.4 余量</strong></p>
 
-<p>三个漏项按出现频率排序：<strong>副本数必须乘进去</strong>，RF 等于 3 时集群总占用是原始数据的三倍；<strong>压缩比必须实测</strong>，JSON 日志用 zstd 常能压到几分之一，已经是二进制或加密的数据几乎压不动，抄来的比例会让你少买一半磁盘；<strong>余量至少留 40%</strong>，因为分区重分配期间数据会临时双写、突发流量会让保留期内数据量超预期，而磁盘写满的后果不是变慢而是 broker 直接把分区标为离线。举例：日均 5 亿条、平均 800 字节、RF 3、保留 7 天、压缩比 4、6 个节点，单节点约需 <code>5e8 乘 800 乘 3 乘 7 除以 4 除以 6 乘 1.4</code>，约 3.4TB。</p>
+<p>三个漏项按出现频率排序：<strong>副本数必须乘进去</strong>，RF 等于 3 时集群总占用是原始数据的三倍；</p>
+<p><strong>压缩比必须实测</strong>，JSON 日志用 zstd 常能压到几分之一，已经是二进制或加密的数据几乎压不动，抄来的比例会让你少买一半磁盘；</p>
+<p><strong>余量至少留 40%</strong>，因为分区重分配期间数据会临时双写、突发流量会让保留期内数据量超预期，而磁盘写满的后果不是变慢，是 broker 直接把分区标为离线。</p>
+<p>举例：日均 5 亿条、平均 800 字节、RF 3、保留 7 天、压缩比 4、6 个节点，单节点约需 <code>5e8 乘 800 乘 3 乘 7 除以 4 除以 6 乘 1.4</code>，约 3.4TB。</p>
 
-<p>另一条容量约束是<strong>分区总数</strong>。单台 broker 承载的分区副本数受文件句柄、生产端批次缓冲、故障恢复时的选举耗时三重限制；KRaft 模式下集群可承载的分区规模比 ZooKeeper 时代高出若干量级，但仍要监控 controller 的元数据提交延迟。分区数的具体推导与上限约束见下一篇 <a href="../topic-partition/">分区设计</a>。</p>
+<p>另一条容量约束是<strong>分区总数</strong>。单台 broker 承载的分区副本数受文件句柄、生产端批次缓冲、故障恢复时的选举耗时三重限制；</p>
+<p>KRaft 模式下集群可承载的分区规模比 ZooKeeper 时代高出若干量级，但仍要监控 controller 的元数据提交延迟。分区数的具体推导与上限约束见下一篇 <a href="../topic-partition/">分区设计</a>。</p>
 
 <h2>② 原理 · 上线前四项验证与输出判读</h2>
 
@@ -451,7 +460,8 @@ stateDiagram-v2
     end note
 </div>
 
-<p>两阶段的意义是<strong>保留回退能力</strong>：第一阶段协议版本仍是旧的，新旧 broker 可以共存，发现问题可以把二进制换回去；第二阶段提升协议版本后，旧版本 broker 无法识别新协议写下的数据，这一步之后不可回退。所以第二阶段要等第一阶段稳定运行一段时间再做。</p>
+<p>两阶段的意义是<strong>保留回退能力</strong>：第一阶段协议版本仍是旧的，新旧 broker 可共存，发现问题能把二进制换回去；第二阶段提升协议版本后，旧 broker 无法识别新协议写下的数据，这一步之后不可回退。</p>
+<p>所以第二阶段要等第一阶段稳定运行一段时间再做。</p>
 
 <h2>③ 场景 · 五种部署形态的真实成本</h2>
 
@@ -482,7 +492,8 @@ flowchart TB
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">一个常被忽略的算账方式</div>
-    <p>自建三节点集群的机器成本可能只有托管服务的三分之一，但要算上：一个人熟悉 Kafka 运维的时间、7 乘 24 的值班、每年至少一次的版本升级、磁盘扩容与分区重分配的操作窗口，以及第一次事故的业务损失。日消息量在千万条以下、团队少于二十人时，托管几乎总是更划算；量级上去之后自建的成本优势才会真正显现。</p>
+    <p>自建三节点集群的机器成本可能只有托管的三分之一，但要算上：一个人熟悉 Kafka 运维的时间、7 乘 24 的值班、每年至少一次的版本升级、磁盘扩容与分区重分配窗口。</p>
+<p>还要算第一次事故的业务损失。日消息量在千万条以下、团队少于二十人时，托管几乎总是更划算；量级上去后自建的成本优势才显现。</p>
 </div>
 
 <h2>③ 场景 · 启动与运行失败对照表</h2>
@@ -502,7 +513,8 @@ flowchart TB
 <tr><td>磁盘写满后分区全部离线</td><td>容量规划漏算副本数或保留期，且没留余量</td><td>紧急时缩短 <code>retention.ms</code> 让清理线程释放段文件，之后扩盘并重新做容量规划</td></tr>
 </tbody></table>
 
-<p><strong>不适用边界</strong>：这一篇只负责把集群按生产标准立起来。要不要用 Kafka 在上一篇 <a href="../intro/">选型边界</a>；topic 建几个分区、分区键怎么选是下一步的事；客户端参数怎么配在 <a href="../producer-consumer/">生产者与消费者实战</a>；压测怎么做与瓶颈怎么定位在 <a href="../performance/">性能调优与压测</a>；ISR、水位与 acks 的机制回到 <a href="../">主干篇</a>。ACL、SASL 机制选择与证书轮换属于安全域，不在本篇范围。</p>
+<p><strong>不适用边界</strong>：这一篇只负责把集群按生产标准立起来。要不要用 Kafka 见上一篇 <a href="../intro/">选型边界</a>；topic 建几个分区、分区键怎么选是下一步；客户端参数怎么配见 <a href="../producer-consumer/">生产者与消费者实战</a>；</p>
+<p>压测怎么做与瓶颈怎么定位在 <a href="../performance/">性能调优与压测</a>；ISR、水位与 acks 的机制回到 <a href="../">主干篇</a>。ACL、SASL 机制选择与证书轮换属于安全域，不在本篇范围。</p>
 
 <p>集群起来、验证通过之后，下一步是决定每个 topic 开几个分区——这个决定一旦做错，后面只能在破坏顺序性和继续堆积之间二选一。</p>
 

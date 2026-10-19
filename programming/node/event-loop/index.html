@@ -89,7 +89,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>事件循环是 Node.js 讲得最多也最糊的一块：教程停在「单线程加非阻塞 IO」，线上真正咬人的细节全在阶段边界和队列优先级里。这篇的靶子很具体——<strong>让你能在十分钟内测出「服务是不是被事件循环卡住了」，并且判断卡在主线程、线程池还是下游</strong>，然后再解释这些结论为什么成立。单线程模型本身的适用边界在 <a href="../">Node.js 后端的适用边界</a>，profile 与堆快照的完整判读在 <a href="../performance/">Node.js 性能诊断</a>。</p>
+<p>事件循环是 Node.js 讲得最多也最糊的一块：教程停在「单线程加非阻塞 IO」，线上真正咬人的细节全在阶段边界和队列优先级里。</p>
+<p>这篇的靶子很具体——<strong>让你能在十分钟内测出「服务是不是被事件循环卡住了」，并且判断卡在主线程、线程池还是下游</strong>，然后再解释这些结论为什么成立。</p>
+<p>单线程模型本身的适用边界在 <a href="../">Node.js 后端的适用边界</a>，profile 与堆快照的完整判读在 <a href="../performance/">Node.js 性能诊断</a>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -190,7 +192,8 @@ node -e "setTimeout(function(){},9e5); console.log(process.getActiveResourcesInf
 
 <h2>② 原理 · 一轮循环的六个阶段</h2>
 <p>搞清这一节能解决「回调为什么没有按我以为的时间点执行」，也是上面第 3 步与第 5 步分层的依据。</p>
-<p>libuv 的一轮迭代按固定顺序穿过六个阶段。每个阶段有自己的回调队列，<strong>进入某个阶段后会把该阶段队列里的回调执行完（或达到系统相关的上限）才进入下一阶段</strong>。当没有任何活跃的 handle 和 request 时，循环退出，进程自然结束。</p>
+<p>libuv 的一轮迭代按固定顺序穿过六个阶段。每个阶段有自己的回调队列，<strong>进入某个阶段后会把该阶段队列里的回调执行完（或达到系统相关的上限）才进入下一阶段</strong>。</p>
+<p>当没有任何活跃的 handle 和 request 时，循环退出，进程自然结束。</p>
 <div class="mermaid">
 stateDiagram-v2
     state "timers 到期的定时器回调" as Timers
@@ -270,7 +273,8 @@ fs.readFile(__filename, () =&gt; {
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">递归 nextTick 能让整个进程假死</div>
-    <p>因为 nextTick 队列在进入下一阶段前必须清空，而清空过程中新增的项会追加到同一队列，循环永远走不到 poll 阶段。表现是 CPU 单核 100%、进程还活着、健康检查端口不响应、日志停止输出。同样的代码换成 <code>setImmediate</code> 递归则完全安全——每轮只执行本轮已入队的那一批，IO 回调能插进来。</p>
+    <p>因为 nextTick 队列在进入下一阶段前必须清空，而清空过程中新增的项会追加到同一队列，循环永远走不到 poll 阶段。表现是 CPU 单核 100%、进程还活着、健康检查端口不响应、日志停止输出。</p>
+<p>同样的代码换成 <code>setImmediate</code> 递归则完全安全——每轮只执行本轮已入队的那一批，IO 回调能插进来。</p>
 </div>
 <pre><code class="language-javascript">// 场景：对 200 万条记录做 CPU 计算，又不想让健康检查超时
 // 错误写法：nextTick 递归，poll 阶段永远进不去，服务假死
@@ -295,8 +299,10 @@ function goodChunk(items, i = 0, batch = 500) {
 
 <h2>② 原理 · 为什么主模块里 setTimeout 与 setImmediate 顺序不稳定</h2>
 <p>搞清这一节能解决一类恶心的 CI 问题：本地稳定通过的单测在构建机上随机失败。</p>
-<p>这是最经典的输出顺序题。答案不是「随机」，而是取决于<strong>进程从启动到第一次进入 timers 阶段花了多久</strong>。<code>setTimeout(fn, 0)</code> 被 Node 钳成 1ms，第一次进入 timers 阶段时：如果已经过了 1ms，定时器到期，先打印 timers 的回调；如果还没到 1ms，timers 阶段空过，接着走到 check 阶段先打印 immediate。机器负载、启动时加载的模块数量都会改变这个结果。</p>
-<p>而在任何 IO 回调内部注册时，顺序是确定的：IO 回调运行在 poll 阶段，本轮的下一站就是 check，所以 <code>setImmediate</code> 一定先于 <code>setTimeout</code> 执行。结论很实用：<strong>不要让业务逻辑或单元测试依赖这两者的相对顺序</strong>，需要「给 IO 让路」就用 <code>setImmediate</code>，需要「同步代码结束后立刻」就用微任务。</p>
+<p>这是最经典的输出顺序题。答案不是「随机」，而是取决于<strong>进程从启动到第一次进入 timers 阶段花了多久</strong>。<code>setTimeout(fn, 0)</code> 被 Node 钳成 1ms，第一次进入 timers 阶段时：如果已经过了 1ms，定时器到期，先打印 timers 的回调；</p>
+<p>如果还没到 1ms，timers 阶段空过，接着走到 check 阶段先打印 immediate。机器负载、启动时加载的模块数量都会改变这个结果。</p>
+<p>而在任何 IO 回调内部注册时，顺序是确定的：IO 回调运行在 poll 阶段，本轮的下一站就是 check，所以 <code>setImmediate</code> 一定先于 <code>setTimeout</code> 执行。</p>
+<p>结论很实用：<strong>不要让业务逻辑或单元测试依赖这两者的相对顺序</strong>，需要「给 IO 让路」就用 <code>setImmediate</code>，需要「同步代码结束后立刻」就用微任务。</p>
 
 <h2>② 原理 · poll 阶段阻塞多久，由最近的定时器决定</h2>
 <p>搞清这一节能解决两个观测上的困惑：空闲进程 CPU 为什么是 0%，以及加了一个 1ms 定时器之后系统调用为什么暴涨。</p>
@@ -314,7 +320,8 @@ function goodChunk(items, i = 0, batch = 500) {
 
 <h2>② 原理 · libuv 线程池承担什么，不承担什么</h2>
 <p>搞清这一节能解决用法层第 4 步那个判断：延迟正常、CPU 不忙，接口却慢，问题在哪。</p>
-<p>这是排查「延迟很高但 CPU 不忙」时最容易漏掉的一层。网络 IO 由内核的 epoll / kqueue / IOCP 直接通知，不占线程；而文件系统操作、<code>dns.lookup</code>、部分 crypto 和 zlib 操作在操作系统层面<strong>没有可用的异步接口</strong>，libuv 只能把它们丢进线程池里用阻塞方式跑完再回调。线程池默认只有 4 个线程。</p>
+<p>这是排查「延迟很高但 CPU 不忙」时最容易漏掉的一层。网络 IO 由内核的 epoll / kqueue / IOCP 直接通知，不占线程；</p>
+<p>而文件系统操作、<code>dns.lookup</code>、部分 crypto 和 zlib 操作在操作系统层面<strong>没有可用的异步接口</strong>，libuv 只能把它们丢进线程池里用阻塞方式跑完再回调。线程池默认只有 4 个线程。</p>
 <div class="mermaid">
 flowchart TB
     subgraph LOOP["JS 主线程 事件循环"]
@@ -339,7 +346,8 @@ flowchart TB
     POOL --> B
     B --> A
 </div>
-<p>推论非常明确：<strong>并发 1000 个 <code>fs.readFile</code>，真正同时在跑的只有 4 个</strong>，其余全在线程池队列里排队。这时候 CPU 可能只有 20%（线程都在等磁盘），但 p99 延迟已经几百毫秒。同理，用 <code>crypto.pbkdf2</code> 做密码校验时，4 个线程被 CPU 密集的 KDF 占满，同一进程里的 <code>fs</code> 和 <code>dns.lookup</code> 全部跟着排队——这是最隐蔽的相互影响。</p>
+<p>推论非常明确：<strong>并发 1000 个 <code>fs.readFile</code>，真正同时在跑的只有 4 个</strong>，其余全在线程池队列里排队。这时候 CPU 可能只有 20%（线程都在等磁盘），但 p99 延迟已经几百毫秒。</p>
+<p>同理，用 <code>crypto.pbkdf2</code> 做密码校验时，4 个线程被 CPU 密集的 KDF 占满，同一进程里的 <code>fs</code> 和 <code>dns.lookup</code> 全部跟着排队——这是最隐蔽的相互影响。</p>
 <table>
 <thead><tr><th>症状</th><th>是否线程池饱和</th><th>判定方法</th><th>处理方向</th></tr></thead>
 <tbody>
@@ -374,7 +382,8 @@ UV_THREADPOOL_SIZE=8 node /tmp/pool.js
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">UV_THREADPOOL_SIZE 不是越大越好</div>
-    <p>上限是 1024。磁盘 IO 密集场景，线程数超过磁盘队列深度后收益归零；CPU 密集的 KDF 与 zlib，线程数超过可用核数后只增加上下文切换和内存（每个线程有独立栈）。容器里更要小心：CPU limit 只有 1 核时把池调到 16，只会让所有请求一起变慢。先压测再定值，常见落点是 8 到 16。容器 CPU 配额与 Node 的关系详见 <a href="../">Node.js 总览</a>。</p>
+    <p>上限是 1024。磁盘 IO 密集场景，线程数超过磁盘队列深度后收益归零；CPU 密集的 KDF 与 zlib，线程数超过可用核数后只增加上下文切换和内存（每个线程有独立栈）。</p>
+<p>容器里更要小心：CPU limit 只有 1 核时把池调到 16，只会让所有请求一起变慢。先压测再定值，常见落点是 8 到 16。容器 CPU 配额与 Node 的关系详见 <a href="../">Node.js 总览</a>。</p>
 </div>
 
 <h2>② 原理 · 定时器的精度与漂移</h2>
@@ -413,7 +422,8 @@ sequenceDiagram
 
 <h2>③ 场景 · 从症状到定位：分诊流程与反模式</h2>
 <p>前面几节是机制，这里收成一张流程图和两张判断表：看到某个症状，直接照着走。</p>
-<p>一句结论：<strong>事件循环延迟是 Node 服务最重要的单一健康指标，比 CPU 使用率更早、更准确地反映问题</strong>，因为线程池排队和下游阻塞不会体现在 CPU 上，而任何形式的主线程阻塞都会立刻体现在延迟直方图上。采集方式用 <code>perf_hooks.monitorEventLoopDelay</code>，告警阈值量级、直方图 p99 的判读、以及火焰图和堆快照的配合方法，详见 <a href="../performance/">Node.js 性能诊断</a>；单线程模型的适用边界、容器里的 CPU 配额与进程模型，详见 <a href="../">Node.js 总览</a>。</p>
+<p>一句结论：<strong>事件循环延迟是 Node 服务最重要的单一健康指标，比 CPU 使用率更早、更准确地反映问题</strong>，因为线程池排队和下游阻塞不会体现在 CPU 上，而任何形式的主线程阻塞都会立刻体现在延迟直方图上。</p>
+<p>采集方式用 <code>perf_hooks.monitorEventLoopDelay</code>，告警阈值量级、直方图 p99 的判读、以及火焰图和堆快照的配合方法，详见 <a href="../performance/">Node.js 性能诊断</a>；单线程模型的适用边界、容器里的 CPU 配额与进程模型，详见 <a href="../">Node.js 总览</a>。</p>
 <div class="mermaid">
 flowchart TD
     S["接口 p99 明显变高"] --> Q1{"CPU 是否单核接近 100%"}
@@ -450,7 +460,8 @@ flowchart TD
 <tr><td>在 close 事件之前就释放资源</td><td>close callbacks 阶段才是句柄真正销毁的时机</td><td>清理逻辑挂在 close 事件里</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：如果延迟直方图一直正常，问题就不在事件循环，继续在这里挖是浪费时间——去查线程池并发、下游 RT、连接池等待与 GC。内存持续增长、堆快照怎么读、火焰图怎么对比，在 <a href="../performance/">Node.js 性能诊断</a>；该不该用 Node、容器里的 CPU 与内存配额，在 <a href="../">Node.js 后端的适用边界</a>；框架层中间件叠太多导致的每请求固定开销，在 <a href="../framework-compare/">Node.js Web 框架选型</a>。</p>
+<p><strong>不适用边界</strong>：如果延迟直方图一直正常，问题就不在事件循环，继续在这里挖是浪费时间——去查线程池并发、下游 RT、连接池等待与 GC。内存持续增长、堆快照怎么读、火焰图怎么对比，在 <a href="../performance/">Node.js 性能诊断</a>；</p>
+<p>该不该用 Node、容器里的 CPU 与内存配额，在 <a href="../">Node.js 后端的适用边界</a>；框架层中间件叠太多导致的每请求固定开销，在 <a href="../framework-compare/">Node.js Web 框架选型</a>。</p>
 <p>这条路径上，上一篇划定了 Node 能做什么，本篇解释「为什么会卡、怎么测出卡」，下一篇把测出来的现象变成可操作的四类数据采集。</p>
 
 <div class="callout-title">最容易踩的坑</div>

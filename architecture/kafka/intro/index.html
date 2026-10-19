@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>几乎所有 Kafka 的误用，都能追溯到同一个起点：把它当成一个「吞吐量特别大的消息队列」。这个类比在前十分钟很好用，在之后的每一次事故里都会害人。这篇不讲实现细节，只解决一个问题——<strong>Kafka 是哪一类系统，什么时候该用，什么时候明确不该用</strong>。</p>
+<p>几乎所有 Kafka 的误用都能追溯到同一个起点：把它当成「吞吐量特别大的消息队列」。这个类比在前十分钟很好用，之后的每一次事故里都会害人。</p>
+<p>这篇不讲实现细节，只解决一个问题——<strong>Kafka 是哪一类系统，什么时候该用，什么时候明确不该用</strong>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -133,7 +134,7 @@ flowchart TB
     Q3 -->|"需要"| YES1["用 Kafka<br/>这是它的主场"]
 </div>
 
-<p>如果结论是「可以用」，花五分钟亲手把它和队列的区别跑出来。下面这段的关键是第三条命令：<strong>只换一个 <code>group.id</code>，同一份数据能被完整地再读一遍</strong>，队列模型里这批消息在第一次消费后就消失了。</p>
+<p>如果结论是「可以用」，花五分钟亲手把区别跑出来。下面这段的关键是第三条命令：<strong>只换一个 <code>group.id</code>，同一份数据能被完整地再读一遍</strong>，队列模型里这批消息第一次消费后就消失了。</p>
 
 <pre><code class="language-bash"># 建一个 3 分区 3 副本的 topic，保留 7 天
 # 副本数不能超过 broker 数，否则直接报 InvalidReplicationFactor
@@ -189,9 +190,11 @@ bin/kafka-run-class.sh kafka.tools.GetOffsetShell \
 
 <h2>② 原理 · 本质是可重放的提交日志，不是队列</h2>
 
-<p>搞清这一条能解决用法层里前两问为什么是决定性的。用一句话给 Kafka 下定义：<strong>它是一个分布式的、可重放的、分区内有序的提交日志（commit log）</strong>。「日志」在这里不是 <code>log.info()</code> 那种日志，而是数据库领域的 WAL 概念——一个只能在尾部追加、每条记录有单调递增编号、按编号顺序读取的文件。Kafka 做的事就是把这个结构分布式化、分区化，然后开放给任意多个读者。</p>
+<p>搞清这一条能解决用法层里前两问为什么是决定性的。用一句话给 Kafka 下定义：<strong>它是一个分布式的、可重放的、分区内有序的提交日志（commit log）</strong>。</p>
+<p>「日志」在这里不是 <code>log.info()</code> 那种日志，而是数据库领域的 WAL 概念——只能在尾部追加、每条记录有单调递增编号、按编号顺序读取的文件。Kafka 做的事就是把这个结构分布式化、分区化，开放给任意多个读者。</p>
 
-<p>队列和日志的区别在于<strong>读取是否是破坏性的</strong>。队列的出队操作会改变队列本身：消息被取走，别人再也看不到。日志的读取只是「从第 N 个字节开始顺序扫」，扫完什么都没变，另一个读者可以从第 0 个字节重新扫一遍。这个差别听起来很小，但它单方面决定了 Kafka 的几乎全部特性：</p>
+<p>队列和日志的区别在于<strong>读取是否是破坏性的</strong>。队列的出队操作会改变队列本身：消息被取走，别人再也看不到。</p>
+<p>日志的读取只是「从第 N 个字节开始顺序扫」，扫完什么都没变，另一个读者能从第 0 个字节重新扫一遍。这个差别听起来很小，却单方面决定了 Kafka 的几乎全部特性：</p>
 
 <ul>
 <li><strong>消息被消费后不删除。</strong>删除的唯一触发条件是保留策略到期，跟有没有消费者完全无关。</li>
@@ -204,12 +207,13 @@ bin/kafka-run-class.sh kafka.tools.GetOffsetShell \
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">一个能立刻用上的判断标准</div>
-    <p>如果你的需求是「把一个任务交给某个 worker 处理掉」，那是队列语义，Kafka 只是勉强能做。如果你的需求是「记录下所有发生的事实，让现在和将来的多个系统各自解读」，那是日志语义，Kafka 就是为此设计的。前者选 Kafka 会在延迟消息、单条重试、优先级上处处别扭；后者选 RabbitMQ 会在第二个下游接入时就卡住。</p>
+    <p>需求是「把一个任务交给某个 worker 处理掉」，那是队列语义，Kafka 只是勉强能做。需求是「记录下所有发生的事实，让现在和将来的多个系统各自解读」，那是日志语义，Kafka 就是为此设计的。</p>
+<p>前者选 Kafka 会在延迟消息、单条重试、优先级上处处别扭；后者选 RabbitMQ 会在第二个下游接入时就卡住。</p>
 </div>
 
 <h2>② 原理 · 核心概念的归属关系</h2>
 
-<p>搞清这张图能解决一类反复出现的误判：把 Topic 当成并行度单位、把 Consumer 当成订阅单位。下面这张图把物理归属（谁存在谁里面）和逻辑对应（谁消费谁）画在一起。</p>
+<p>反复出现的误判有两类：把 Topic 当成并行度单位、把 Consumer 当成订阅单位。下面这张图把物理归属（谁存在谁里面）和逻辑对应（谁消费谁）画在一起。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -249,7 +253,8 @@ flowchart TB
     CGB -.-> OFF
 </div>
 
-<p>图里有三条容易被忽略的事实：<strong>Topic 是一个纯逻辑名字，它在磁盘上并不存在</strong>，存在的是 <code>orders-0</code>、<code>orders-1</code> 这些分区目录；<strong>同一个分区的 Leader 和 Follower 一定在不同 broker 上</strong>，否则副本毫无意义；<strong>两个消费组消费同一批分区时读的是同一份文件</strong>，不会产生数据拷贝，多接一个下游的存储成本是零。</p>
+<p>图里有三条容易被忽略的事实：<strong>Topic 是一个纯逻辑名字，它在磁盘上并不存在</strong>，存在的是 <code>orders-0</code>、<code>orders-1</code> 这些分区目录；<strong>同一分区的 Leader 与 Follower 一定在不同 broker 上</strong>，否则副本毫无意义；</p>
+<p><strong>两个消费组消费同一批分区时读的是同一份文件</strong>，不会产生数据拷贝，多接一个下游的存储成本是零。</p>
 
 <table>
 <thead><tr><th>概念</th><th>它是什么的单位</th><th>硬约束与最容易搞错的点</th></tr></thead>
@@ -286,7 +291,8 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">流传最广的错误说法：Kafka 快是因为它不删消息</div>
-    <p>顺序写和不逐条删确实有帮助，但「Kafka 比 RabbitMQ 快」的主因是批量化与分区并行：生产端把成百上千条消息攒成一个批次一次网络往返写入，消费端一次 fetch 拉回整个批次，单条消息的协议开销被摊薄到接近零；同时一个 topic 的写入被摊到多个 broker 的多个分区上。如果你把 <code>linger.ms</code> 设成 0、每条消息都同步等待确认、只建一个分区，Kafka 的吞吐会掉到和传统 MQ 同一量级甚至更低。攒批与零拷贝的具体机制见站内 <a href="../">Kafka 主干篇</a>。</p>
+    <p>顺序写和不逐条删有帮助，但「Kafka 比 RabbitMQ 快」的主因是批量化与分区并行：生产端把成百上千条消息攒成一批、一次网络往返写入，消费端一次 fetch 拉回整批，单条消息的协议开销被摊薄到接近零；</p>
+<p>同时一个 topic 的写入被摊到多个 broker 的多个分区上。如果把 <code>linger.ms</code> 设成 0、每条消息都同步等确认、只建一个分区，Kafka 吞吐会掉到与传统 MQ 同一量级甚至更低。攒批与零拷贝机制见站内 <a href="../">Kafka 主干篇</a>。</p>
 </div>
 
 <h2>② 原理 · 一条消息的生命周期：写入、被多组消费、过期</h2>
@@ -318,7 +324,8 @@ sequenceDiagram
     Note over L,C: 若此时有消费组位点落在被删段内<br/>它会收到位点越界错误并按 auto.offset.reset 跳位
 </div>
 
-<p>最后那条 Note 描述的是一个真实的线上事故形态：消费者停机超过保留期后再启动，位点指向的数据已经被清理，<code>auto.offset.reset=latest</code> 会让它<strong>静默跳到队尾，中间的数据被无声丢弃</strong>；设成 <code>earliest</code> 则会从最早可用位点重新消费，造成大量重复。这两种行为都不是你想要的，正确做法是监控消费组位点与最早可用位点之间的距离（用法层第四条命令）。</p>
+<p>最后那条 Note 是一个真实的线上事故形态：消费者停机超过保留期后再启动，位点指向的数据已被清理，<code>auto.offset.reset=latest</code> 会让它<strong>静默跳到队尾，中间的数据被无声丢弃</strong>；</p>
+<p>设成 <code>earliest</code> 则会从最早可用位点重新消费，造成大量重复。两种行为都不是你想要的，正确做法是监控消费组位点与最早可用位点之间的距离（用法层第四条命令）。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -355,7 +362,8 @@ bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 
 <h2>② 原理 · KRaft 取代 ZooKeeper 意味着什么</h2>
 
-<p>搞清这一节能解决「网上教程为什么都要先启动 ZooKeeper」的困惑。KRaft 不是「换了个协调服务」，它的思路是<strong>把元数据也当成一个 Kafka 日志来存</strong>。集群里的主题列表、分区分配、ISR 状态、配置变更全部变成内部元数据主题里的一条条记录，由 controller quorum 用 Raft 协议复制，broker 像普通消费者一样订阅这个日志并增量应用。实际变化有三点：</p>
+<p>搞清这一节能解决「网上教程为什么都要先启动 ZooKeeper」的困惑。KRaft 不是「换了个协调服务」，它的思路是<strong>把元数据也当成一个 Kafka 日志来存</strong>。</p>
+<p>集群里的主题列表、分区分配、ISR 状态、配置变更全部变成内部元数据主题里的记录，由 controller quorum 用 Raft 协议复制，broker 像普通消费者一样订阅该日志并增量应用。实际变化有三点：</p>
 
 <ul>
 <li><strong>少一个组件。</strong>不用再部署、监控、调优、升级一套 ZooKeeper 集群，也不用再向新人解释「为什么 ZK 挂了 Kafka 还能读写但建不了 topic」。</li>
@@ -377,7 +385,9 @@ bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">新集群不要再纠结这件事</div>
-    <p>今天搭的任何新集群都应该直接用 KRaft，网上大量「先启动 ZooKeeper 再启动 Kafka」的教程已经过时。存量 ZK 集群的迁移不要拖到 4.0 逼上门再做，因为官方迁移路径只存在于 3.5 到 3.9，跨过这个区间就只能重建集群加数据搬迁。具体的 <code>process.roles</code>、quorum 规划和 <code>kafka-storage.sh format</code> 步骤见下一篇 <a href="../install/">生产级部署</a>。</p>
+    <p>今天搭的新集群都应该直接用 KRaft，网上大量「先启动 ZooKeeper 再启动 Kafka」的教程已过时。</p>
+<p>存量 ZK 集群的迁移不要拖到 4.0 逼上门再做，官方迁移路径只存在于 3.5 到 3.9。</p>
+<p>跨过这个区间只能重建集群加数据搬迁。具体的 <code>process.roles</code>、quorum 规划和 <code>kafka-storage.sh format</code> 步骤见下一篇 <a href="../install/">生产级部署</a>。</p>
 </div>
 
 <h2>② 原理 · 八条流传很广的错误说法</h2>
@@ -412,7 +422,7 @@ bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 </tbody>
 </table>
 
-<p>这四类的共同特征是<strong>同一份数据有多个读者，或者需要回溯</strong>。只要你的场景里出现了这两个词之一，Kafka 的运维复杂度就买到了对应的价值；两个都没有，就看下面这张禁区表。</p>
+<p>这四类的共同特征是<strong>同一份数据有多个读者，或者需要回溯</strong>。场景里出现这两个词之一，Kafka 的运维复杂度就买到了对应价值；两个都没有，就看下面这张禁区表。</p>
 
 <table>
 <thead><tr><th>不该用的场景</th><th>硬上 Kafka 会写出什么</th><th>更合适的方案</th></tr></thead>
@@ -426,7 +436,8 @@ bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">用消费者 sleep 实现延迟，是最危险的一种绕法</div>
-    <p>很多团队用 Kafka 做延迟消息时，让消费者拉到消息后 sleep 到目标时间再处理。问题是两次 poll 之间的间隔一旦超过 <code>max.poll.interval.ms</code>（常见默认 5 分钟），协调者会认为这个实例已死并触发重平衡，分区被转给别人，你 sleep 的那条消息会被另一个实例重新拉到并再 sleep 一次，形成无限重平衡加重复处理。重平衡的触发条件见站内 <a href="../">Kafka 主干篇</a>。</p>
+    <p>很多团队用 Kafka 做延迟消息，让消费者拉到消息后 sleep 到目标时间再处理。两次 poll 间隔一旦超过 <code>max.poll.interval.ms</code>（常见默认 5 分钟），协调者就认为该实例已死并触发重平衡。</p>
+<p>分区转给别人后，你 sleep 的那条消息会被另一个实例重新拉到并再 sleep 一次，形成无限重平衡加重复处理。重平衡的触发条件见站内 <a href="../">Kafka 主干篇</a>。</p>
 </div>
 
 <h2>③ 场景 · 生态组件要不要引入</h2>
@@ -442,9 +453,10 @@ bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 </tbody>
 </table>
 
-<p>判断标准很简单：<strong>这些组件都是为了省掉你自己写的代码，如果你要写的代码比维护它们更少，就别引入</strong>。绝大多数业务只用 core 的生产者消费者 API 加一套 Lag 监控，就覆盖了全部需求。</p>
+<p>判断标准很简单：<strong>这些组件都是为了省掉你自己写的代码，如果你要写的代码比维护它们更少，就别引入</strong>。绝大多数业务只用 core 的生产者消费者 API 加一套 Lag 监控就够。</p>
 
-<p><strong>不适用边界</strong>：这一篇只负责「是不是该用它」。集群怎么搭、监听器怎么配是下一步的事；分区数怎么定在 <a href="../topic-partition/">分区设计</a>；参数为什么这么设在 <a href="../producer-consumer/">生产者与消费者实战</a>；存储与副本的实现机制回到 <a href="../">主干篇</a>。跨 MQ 的横向选型在 <a href="../../messaging/compare/">消息队列选型</a>，通用的可靠投递模式在 <a href="../../messaging/reliable/">可靠消息投递</a>，别用调参数来回答选型问题。</p>
+<p><strong>不适用边界</strong>：这一篇只负责「是不是该用它」。集群怎么搭、监听器怎么配是下一步；分区数怎么定见 <a href="../topic-partition/">分区设计</a>；参数为什么这么设见 <a href="../producer-consumer/">生产者与消费者实战</a>；存储与副本机制回到 <a href="../">主干篇</a>。</p>
+<p>跨 MQ 的横向选型在 <a href="../../messaging/compare/">消息队列选型</a>，通用的可靠投递模式在 <a href="../../messaging/reliable/">可靠消息投递</a>，别用调参数来回答选型问题。</p>
 
 <p>这一篇是整条路径的第一站：确认该用 Kafka 之后，接下来才是把集群按生产标准搭起来。</p>
 

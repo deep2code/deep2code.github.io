@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Kafka 的绝大多数参数都能在线改，改错了改回来就行。分区数和分区键不是——<strong>分区只能增不能减，而增加分区会立刻改变 key 到分区的映射；分区键一旦上线，改了就等于换一套顺序性语义</strong>。这两个决策做错，代价是一次主题级别的数据迁移。这篇只谈这两件事怎么定。</p>
+<p>Kafka 绝大多数参数都能在线改，改错改回来就行。分区数和分区键不是——<strong>分区只能增不能减，增加分区会立刻改变 key 到分区的映射；分区键一旦上线，改了就等于换一套顺序性语义</strong>。</p>
+<p>这两个决策做错，代价是一次主题级别的数据迁移。这篇只谈这两件事怎么定。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -152,7 +153,7 @@ flowchart TB
     Q3 -->|"不能放弃"| K3["为热点实体单独建主题<br/>或换更细粒度的 key<br/>例如实体 id 拼业务类型"]
 </div>
 
-<p>键选完之后要<strong>验证</strong>，不能等到堆积了才发现倾斜。下面三条命令按顺序跑，它们回答的是三个不同的问题：谁在堆、是写入倾斜还是消费慢、热点 key 是哪个。</p>
+<p>键选完要<strong>验证</strong>，不能等堆积了才发现倾斜。下面三条命令按序跑，回答三个问题：谁在堆、是写入倾斜还是消费慢、热点 key 是哪个。</p>
 
 <pre><code class="language-bash"># 判定第一步：逐分区看 LAG，绝对不要只看总和
 bin/kafka-consumer-groups.sh --bootstrap-server kafka-1:9092 \
@@ -218,7 +219,9 @@ bin/kafka-console-consumer.sh --bootstrap-server kafka-1:9092 \
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">被忽略最多的一条是生产端内存</div>
-    <p>一个 Producer 实例往 1000 个分区写、<code>batch.size</code> 保持默认 16KB，理论峰值缓冲需求是 16MB，已经占掉默认 <code>buffer.memory</code> 的一半；如果有人把 <code>batch.size</code> 调到 256KB 去「优化吞吐」，需求就变成 256MB，远超默认值，结果是 <code>send()</code> 在缓冲区满时阻塞住业务线程。这类故障的排查方向常常一开始就跑偏，因为 broker 的所有指标都正常。</p>
+    <p>一个 Producer 实例往 1000 个分区写、<code>batch.size</code> 保持默认 16KB，理论峰值缓冲需求是 16MB，已占掉默认 <code>buffer.memory</code> 的一半；</p>
+<p>若把 <code>batch.size</code> 调到 256KB 去「优化吞吐」，需求就变成 256MB，远超默认值，结果是 <code>send()</code> 在缓冲区满时阻塞业务线程。</p>
+<p>这类故障的排查方向常常一开始就跑偏，因为 broker 的所有指标都正常。</p>
 </div>
 
 <h2>② 原理 · 扩分区为什么当场打断顺序</h2>
@@ -245,7 +248,9 @@ flowchart TB
     BAD --> FIX["结论 扩分区必须在业务低峰执行<br/>并先把该主题积压清零<br/>必要时短暂停写"]
 </div>
 
-<p>Kafka <strong>不会为了修正映射而搬迁任何已有数据</strong>，老分区里的老消息原地不动。所以这个窗口期的长度就是「老分区里还有未消费消息」的时长，把积压清零就等于把窗口压到零。至于分区为什么不能减少：删掉一个分区就必须决定里面的数据怎么办，搬到别的分区会破坏 offset 连续性与分区内有序，直接丢弃是静默丢数据，两种都不可接受，于是 Kafka 干脆禁止。真的需要减少时，唯一办法是新建一个分区数正确的主题做一次迁移。</p>
+<p>Kafka <strong>不会为修正映射而搬迁已有数据</strong>，老分区里的老消息原地不动。所以窗口期长度就是「老分区里还有未消费消息」的时长，把积压清零就等于把窗口压到零。</p>
+<p>分区为什么不能减少：删掉一个分区就得决定里面的数据怎么办，搬到别的分区会破坏 offset 连续性与分区内有序，直接丢弃是静默丢数据，两种都不可接受，于是 Kafka 干脆禁止。</p>
+<p>真的需要减少时，唯一办法是新建一个分区数正确的主题做一次迁移。</p>
 
 <h2>② 原理 · 分区器的行为与 2.4 的那次变化</h2>
 
@@ -260,7 +265,8 @@ flowchart TB
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">粘性分区器会造成一种假倾斜</div>
-    <p>用秒级粒度观察单个分区的写入速率时，粘性分区器会让某个分区在一小段时间内明显高于其他分区，这是攒批策略的正常表现，不是数据倾斜。判断倾斜要看分钟级以上的累计量或 offset 增速，并且只有在使用了 key 的主题上才需要认真怀疑倾斜。</p>
+    <p>用秒级粒度看单个分区写入速率时，粘性分区器会让某分区在一小段时间内明显高于其他分区，这是攒批策略的正常表现，不是数据倾斜。</p>
+<p>判断倾斜要看分钟级以上的累计量或 offset 增速，并且只有在使用了 key 的主题上才需要认真怀疑倾斜。</p>
 </div>
 
 <pre><code class="language-java">// 场景：九成流量来自少数几个大商户，直接用 merchantId 做 key 会把单分区打满
@@ -333,7 +339,9 @@ public class HotKeySaltingPartitioner implements Partitioner {
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">最常见的顺序性幻觉</div>
-    <p>「我用了 key，所以顺序是保证的」——这句话只在消费端也是串行处理的前提下成立。很多实现会在 <code>poll()</code> 拿到一批消息后丢给线程池加速处理，这一步直接把分区内的顺序抹掉了。如果要并发又要保序，必须在消费端按 key 的哈希把消息路由到固定的工作线程，让同一 key 始终由同一个线程串行处理，写法见 <a href="../producer-consumer/">生产者与消费者实战</a>。另外生产端也要注意：允许重试且 in-flight 请求大于 1 时，失败重试会让后发的消息先落盘，必须靠幂等 Producer 兜住，幂等与事务的边界见 <a href="../">主干篇</a>。</p>
+    <p>「我用了 key，所以顺序有保证」只在消费端也串行处理时成立。很多实现会在 <code>poll()</code> 拿到一批消息后丢给线程池加速处理，这一步直接把分区内顺序抹掉了。</p>
+<p>如果要并发又要保序，必须在消费端按 key 的哈希把消息路由到固定的工作线程，让同一 key 始终由同一个线程串行处理，写法见 <a href="../producer-consumer/">生产者与消费者实战</a>。</p>
+<p>另外生产端也要注意：允许重试且 in-flight 请求大于 1 时，失败重试会让后发的消息先落盘，必须靠幂等 Producer 兜住，幂等与事务的边界见 <a href="../">主干篇</a>。</p>
 </div>
 
 <h2>② 原理 · 副本数、min.insync.replicas 与机架感知</h2>
@@ -351,7 +359,9 @@ public class HotKeySaltingPartitioner implements Partitioner {
 <tr><td>RF=1</td><td>0</td><td>0</td><td>仅限本地开发；磁盘损坏就是永久丢失</td></tr>
 </tbody></table>
 
-<p>机架感知靠 <code>broker.rack</code>：给每台 broker 标注机架或可用区标识，Kafka 在分配副本时会尽量让同一分区的副本分散在不同机架上，从而让整机架掉电只损失一个副本。注意两点：<strong>标注必须在建主题之前完成</strong>，已有主题的副本分布不会自动调整，需要用重分配工具手动改；<strong>跨可用区的副本同步会产生跨区流量</strong>，云上这部分费用常常被漏算，而且 RTT 增加会让 <code>acks=all</code> 的写入延迟上升，必要时配合 <code>replica.selector.class</code> 让消费者就近读副本。</p>
+<p>机架感知靠 <code>broker.rack</code>：给每台 broker 标注机架或可用区标识，Kafka 在分配副本时会尽量让同一分区的副本分散在不同机架上，从而让整机架掉电只损失一个副本。</p>
+<p>注意两点：<strong>标注必须在建主题之前完成</strong>，已有主题的副本分布不会自动调整，需要用重分配工具手动改；</p>
+<p><strong>跨可用区的副本同步会产生跨区流量</strong>，云上这部分费用常常被漏算，而且 RTT 增加会让 <code>acks=all</code> 的写入延迟上升，必要时配合 <code>replica.selector.class</code> 让消费者就近读副本。</p>
 
 <h2>② 原理 · compact 与 delete 的语义差异</h2>
 
@@ -376,11 +386,14 @@ stateDiagram-v2
     end note
 </div>
 
-<p><code>compact</code> 与 <code>delete</code> 的语义差异可以这样记：<strong>delete 回答「最近这段时间发生了什么」，compact 回答「现在的状态是什么」</strong>。compact 主题的核心价值是可重建：一个新下游从头读完整个主题，就得到了全量状态快照，这也是 CDC 最终态、配置下发、维表同步的标准做法。三个容易踩的点：compact <strong>只保证每个 key 的最新值必定保留，不保证旧版本立刻消失</strong>（活跃段不参与压实，所以短期内仍会读到多个版本）；<strong>无 key 消息在 compact 主题里是无意义的</strong>，无法被去重；两种策略可以同时写成 <code>compact,delete</code>，语义是先按 key 压实再按时间清理，适合状态量大但历史 key 会彻底废弃的场景。</p>
+<p><code>compact</code> 与 <code>delete</code> 的语义差异可以这样记：<strong>delete 回答「最近这段时间发生了什么」，compact 回答「现在的状态是什么」</strong>。</p>
+<p>compact 主题的核心价值是可重建：一个新下游从头读完整个主题，就得到了全量状态快照，这也是 CDC 最终态、配置下发、维表同步的标准做法。</p>
+<p>三个容易踩的点：compact <strong>只保证每个 key 的最新值必定保留，不保证旧版本立刻消失</strong>（活跃段不参与压实，短期内仍会读到多个版本）；<strong>无 key 消息在 compact 主题里无意义</strong>，无法被去重；</p>
+<p>两种策略可以同时写成 <code>compact,delete</code>，语义是先按 key 压实再按时间清理，适合状态量大但历史 key 会彻底废弃的场景。</p>
 
 <h2>③ 场景 · 从需求反推一组分区参数</h2>
 
-<p>前面把每个维度拆开讲了，落地时需要的是反向映射：手上这个需求，分区数、分区键、RF 与清理策略该怎么组合。下表每一行都是一个完整组合，代价列是选了它就必须一起接受的。</p>
+<p>前面把每个维度拆开讲了，落地时需要反向映射：手上这个需求，分区数、分区键、RF 与清理策略怎么组合。下表每行是一个完整组合，代价列是选了就必须一起接受的。</p>
 
 <table>
 <thead><tr><th>需求</th><th>组合怎么定</th><th>为什么是这个组合</th><th>代价</th></tr></thead>
@@ -397,7 +410,8 @@ stateDiagram-v2
 
 <h2>③ 场景 · 存量主题要改：扩分区与重分配的代价</h2>
 
-<p>如果分区数或副本分布已经错了，能用的手段只有三种，代价差别很大：<strong>扩分区</strong>（便宜但打断顺序）、<strong>重分配</strong>（不影响语义但吃带宽）、<strong>新建主题迁移</strong>（唯一能减少分区数的办法，但要改上下游）。重分配的过程与它的重负载点如下：</p>
+<p>如果分区数或副本分布已经错了，能用的手段只有三种，代价差别很大：<strong>扩分区</strong>（便宜但打断顺序）、<strong>重分配</strong>（不影响语义但吃带宽）、</p>
+<p><strong>新建主题迁移</strong>（唯一能减少分区数的办法，但要改上下游）。重分配的过程与它的重负载点如下：</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -455,7 +469,8 @@ bin/kafka-leader-election.sh --bootstrap-server kafka-1:9092 \
 <tr><td>主题元信息登记</td><td>负责人、保留期、峰值量级、下游清单</td><td>没有登记时，没人敢删任何主题，集群里会长期堆积僵尸主题占用句柄与分区配额</td></tr>
 </tbody></table>
 
-<p><strong>不适用边界</strong>：这一篇只负责主题与分区的结构决策。集群与监听器怎么配在上一篇 <a href="../install/">生产级部署</a>；客户端参数与 poll 循环怎么写是下一步；丢消息的六个环节在 <a href="../reliability/">可靠性落地</a>；单分区吞吐上不去怎么定位在 <a href="../performance/">性能调优与压测</a>；分段日志与 ISR 水位的实现机制回到 <a href="../">主干篇</a>。要不要用 Kafka 这一层在 <a href="../intro/">选型边界</a>，不要靠调分区数来回答。</p>
+<p><strong>不适用边界</strong>：这篇只负责主题与分区的结构决策。集群与监听器配置见上一篇 <a href="../install/">生产级部署</a>；客户端参数与 poll 循环是下一步；丢消息的六个环节见 <a href="../reliability/">可靠性落地</a>；</p>
+<p>单分区吞吐上不去怎么定位在 <a href="../performance/">性能调优与压测</a>；分段日志与 ISR 水位的实现机制回到 <a href="../">主干篇</a>。要不要用 Kafka 这一层在 <a href="../intro/">选型边界</a>，不要靠调分区数来回答。</p>
 
 <p>分区数与分区键定下来之后，下一步是把生产者与消费者写对——前面维持的顺序性，很容易在消费端一行线程池代码里全部作废。</p>
 

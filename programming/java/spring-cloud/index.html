@@ -186,7 +186,8 @@ public class OrderFacade {
         return OrderView.degraded(id);   // 返回可降级的兜底值，而不是让异常继续上抛
     }
 }</code></pre>
-<p>Feign 留下来是因为「用接口声明远程调用」确实省样板代码，但它的默认配置对生产相当不友好。下面这份参数每一项都有理由，注意超时是<strong>两层</strong>：连接超时是建立 TCP 连接的上限，读超时是等待响应的上限，语义完全不同，只配一个等于没配。</p>
+<p>Feign 留下来是因为「用接口声明远程调用」确实省样板代码，但它的默认配置对生产相当不友好。</p>
+<p>下面这份参数每一项都有理由，注意超时是<strong>两层</strong>：连接超时是建立 TCP 连接的上限，读超时是等待响应的上限，语义完全不同，只配一个等于没配。</p>
 <pre><code class="language-yaml">spring:
   cloud:
     openfeign:
@@ -288,7 +289,9 @@ flowchart TB
     R4 --> MESH
 </div>
 
-<p>这张图的重点在第三个分组：<strong>左边一列里有一半的能力，K8s 平台本身就提供了</strong>。这也是用法层那张替换表的依据。还要补一个容器化之后才凸显的问题：<strong>两套健康视图会不一致</strong>。K8s 依据探针结果摘除 Endpoints，注册中心依据心跳摘除实例，两者的判定周期和判定条件不同。滚动更新时经常出现这种状况：Pod 已经被 K8s 从 Endpoints 里摘掉，注册中心里还挂着，客户端从注册中心拿到地址直连过去，撞上正在终止的 Pod。探针语义、<code>preStop</code> 与滚动更新的时序细节见 <a href="../../../devops/kubernetes/">Kubernetes 深度剖析</a>。</p>
+<p>这张图的重点在第三个分组：<strong>左边一列里有一半的能力，K8s 平台本身就提供了</strong>。这也是用法层那张替换表的依据。还要补一个容器化之后才凸显的问题：<strong>两套健康视图会不一致</strong>。</p>
+<p>K8s 依据探针结果摘除 Endpoints，注册中心依据心跳摘除实例，两者的判定周期和判定条件不同。</p>
+<p>滚动更新时经常出现这种状况：Pod 已经被 K8s 从 Endpoints 里摘掉，注册中心里还挂着，客户端从注册中心拿到地址直连过去，撞上正在终止的 Pod。探针语义、<code>preStop</code> 与滚动更新的时序细节见 <a href="../../../devops/kubernetes/">Kubernetes 深度剖析</a>。</p>
 
 <h2>② 原理 · OpenFeign 的机制与四个高频坑</h2>
 
@@ -320,7 +323,9 @@ sequenceDiagram
     Note over B,P: 坑四 若配了 Retryer<br/>上面整段会被重放 非幂等接口会重复执行
 </div>
 
-<p><strong>坑一是实例列表的新鲜度。</strong>Spring Cloud LoadBalancer 默认缓存服务实例列表，缓存过期时间是秒级。下游缩容或重启时，客户端会在一小段时间内继续把请求发给已经不存在的实例，表现为间歇性连接拒绝。这属于注册发现的固有延迟，解法是下游优雅停机加客户端重试幂等接口，详见 <a href="../../../architecture/governance/service-discovery/">服务注册与发现</a>。用 K8s Service 时这个延迟换成了 Endpoints 更新与 kube-proxy 规则下发的延迟，量级相近，所以优雅停机这一步在哪条路线上都省不掉。</p>
+<p><strong>坑一是实例列表的新鲜度。</strong>Spring Cloud LoadBalancer 默认缓存服务实例列表，缓存过期时间是秒级。下游缩容或重启时，客户端会在一小段时间内继续把请求发给已经不存在的实例，表现为间歇性连接拒绝。</p>
+<p>这属于注册发现的固有延迟，解法是下游优雅停机加客户端重试幂等接口，详见 <a href="../../../architecture/governance/service-discovery/">服务注册与发现</a>。</p>
+<p>用 K8s Service 时这个延迟换成了 Endpoints 更新与 kube-proxy 规则下发的延迟，量级相近，所以优雅停机这一步在哪条路线上都省不掉。</p>
 
 <p><strong>坑二是默认没有连接池</strong>，这是对性能影响最大的一条。Feign 的默认 <code>Client</code> 实现基于 JDK 的 <code>HttpURLConnection</code>，每次调用都要重新完成 TCP 三次握手，走 HTTPS 还要再加一次 TLS 握手。内网调用的实际延迟里，握手可能占到一半以上。</p>
 
@@ -333,14 +338,17 @@ sequenceDiagram
 <tr><td>Spring 的 <code>RestClient</code> 或 WebClient</td><td>取决于底层实现</td><td>新版本支持用它们作为 Feign 底座</td><td>想统一项目里所有 HTTP 出站栈时选它</td></tr>
 </tbody></table>
 
-<p><strong>坑三是异常类型的丢失。</strong>下游返回 400 带着业务错误码，默认 <code>ErrorDecoder</code> 会统一抛 <code>FeignException.BadRequest</code>，错误码藏在响应体字符串里。上游的全局异常处理拿不到结构化信息，只能按状态码粗粒度处理。正确做法是自定义 <code>ErrorDecoder</code>，把下游的错误响应体反序列化成内部异常类型。</p>
+<p><strong>坑三是异常类型的丢失。</strong>下游返回 400 带着业务错误码，默认 <code>ErrorDecoder</code> 会统一抛 <code>FeignException.BadRequest</code>，错误码藏在响应体字符串里。上游的全局异常处理拿不到结构化信息，只能按状态码粗粒度处理。</p>
+<p>正确做法是自定义 <code>ErrorDecoder</code>，把下游的错误响应体反序列化成内部异常类型。</p>
 
-<p><strong>坑四是重试。</strong>Feign 默认的 <code>Retryer.NEVER_RETRY</code> 是个正确的默认值，很多文章却把「配上 <code>Retryer</code>」当作优化建议。<strong>超时不等于请求没到达下游</strong>——很可能下游已经执行成功，只是响应慢或者响应包在网络上丢了。对创建订单、扣减余额这类接口重试，等于制造重复操作。</p>
+<p><strong>坑四是重试。</strong>Feign 默认的 <code>Retryer.NEVER_RETRY</code> 是个正确的默认值，很多文章却把「配上 <code>Retryer</code>」当作优化建议。<strong>超时不等于请求没到达下游</strong>——很可能下游已经执行成功，只是响应慢或者响应包在网络上丢了。</p>
+<p>对创建订单、扣减余额这类接口重试，等于制造重复操作。</p>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">要重试，先有幂等</div>
-    <p>只有下游明确幂等时才能开重试，且必须配退避与上限。判断标准不是「这个接口看起来是查询」，而是下游有没有按业务唯一键做去重。幂等的四种落地方式见站内 <a href="../../../architecture/distributed/idempotency/">幂等设计</a>。另外重试要和熔断一起看：下游抖动时，N 倍的重试流量往往就是把它彻底压死的那一下。</p>
+    <p>只有下游明确幂等时才能开重试，且必须配退避与上限。判断标准不是「这个接口看起来是查询」，而是下游有没有按业务唯一键做去重。幂等的四种落地方式见站内 <a href="../../../architecture/distributed/idempotency/">幂等设计</a>。</p>
+<p>另外重试要和熔断一起看：下游抖动时，N 倍的重试流量往往就是把它彻底压死的那一下。</p>
 </div>
 
 <p>坑三与坑四对应的代码是同一个配置类，它也是 Feign 侧唯一需要手写的类：</p>
@@ -390,7 +398,8 @@ public class FeignConfig {
 
 <p>如果你的项目里还有 <code>spring-cloud-starter-sleuth</code>，它在 Boot 3 上根本装不起来。Sleuth 的能力已经并入 <strong>Micrometer Tracing</strong>，底层桥接 Brave 或 OpenTelemetry，对外走 W3C 的 <code>traceparent</code> 头传播。</p>
 
-<p>真正的变化是 <code>Observation</code> API 的引入。以前埋一个关键操作，要在指标侧写一遍 <code>Timer</code>、在链路侧写一遍 <code>Span</code>，两边的标签还容易写得不一致；现在一次 <code>Observation</code> 声明同时产出指标和 span，标签共享。traceId 依然会自动进日志的 MDC，日志里只要在 pattern 里加上占位符就能打出来。指标、日志、链路三支柱怎么关联、采样率怎么定，见站内 <a href="../../../observability/tracing/">分布式链路追踪</a>，本文不展开。</p>
+<p>真正的变化是 <code>Observation</code> API 的引入。以前埋一个关键操作，要在指标侧写一遍 <code>Timer</code>、在链路侧写一遍 <code>Span</code>，两边的标签还容易写得不一致；现在一次 <code>Observation</code> 声明同时产出指标和 span，标签共享。</p>
+<p>traceId 依然会自动进日志的 MDC，日志里只要在 pattern 里加上占位符就能打出来。指标、日志、链路三支柱怎么关联、采样率怎么定，见站内 <a href="../../../observability/tracing/">分布式链路追踪</a>，本文不展开。</p>
 
 <h2>② 原理 · 分布式事务：大多数场景不该引入 Seata</h2>
 
@@ -398,15 +407,19 @@ public class FeignConfig {
 
 <p>Seata 提供 AT、TCC、Saga、XA 四种模式，它们的语义差别和适用边界见站内 <a href="../../../architecture/distributed/transaction/">分布式事务</a>。这里只给一个工程判断：<strong>绝大多数业务应该用本地消息表，而不是引入 Seata。</strong></p>
 
-<p>理由有三条。第一，Seata 的 AT 模式依赖全局锁和 <code>undo_log</code> 表，在高并发下全局锁本身就是瓶颈，而且一旦协调者不可用，业务写入全部阻塞——你为了一致性引入了一个新的单点。第二，它的回滚靠反向 SQL 生成，遇到触发器、存储过程、或者被其他系统并发改过的行，反向 SQL 可能补偿错数据，而这类问题极难在测试阶段发现。第三，调试成本高：一个跨三个服务的事务出问题，要同时看三个服务的日志加协调者日志加 undo 表。</p>
+<p>理由有三条。第一，Seata 的 AT 模式依赖全局锁和 <code>undo_log</code> 表，在高并发下全局锁本身就是瓶颈，而且一旦协调者不可用，业务写入全部阻塞——你为了一致性引入了一个新的单点。</p>
+<p>第二，它的回滚靠反向 SQL 生成，遇到触发器、存储过程、或者被其他系统并发改过的行，反向 SQL 可能补偿错数据，而这类问题极难在测试阶段发现。</p>
+<p>第三，调试成本高：一个跨三个服务的事务出问题，要同时看三个服务的日志加协调者日志加 undo 表。</p>
 
-<p>本地消息表的做法是：业务数据和「待发送消息」写在<strong>同一个本地数据库事务</strong>里，提交后由后台任务扫表投递到 MQ，消费方按业务唯一键幂等处理。没有额外中间件、失败可以无限重放、排查只看两张表。代价是最终一致而非强一致，以及需要消费方真正做到幂等。绝大多数下单、发券、积分场景要的就是最终一致。事务边界与「提交后再发消息」的具体写法见 <a href="../spring-core/">Spring 核心机制</a>。</p>
+<p>本地消息表的做法是：业务数据和「待发送消息」写在<strong>同一个本地数据库事务</strong>里，提交后由后台任务扫表投递到 MQ，消费方按业务唯一键幂等处理。没有额外中间件、失败可以无限重放、排查只看两张表。</p>
+<p>代价是最终一致而非强一致，以及需要消费方真正做到幂等。绝大多数下单、发券、积分场景要的就是最终一致。事务边界与「提交后再发消息」的具体写法见 <a href="../spring-core/">Spring 核心机制</a>。</p>
 
 <h2>② 原理 · 配置与启动的两个陷阱</h2>
 
 <p>搞清这一节能解决两类「文件明明在那里却不生效」的现象。</p>
 
-<p><strong>第一个是 <code>bootstrap.yml</code> 不再默认生效。</strong>从 Spring Cloud 2020 起，bootstrap 上下文默认关闭，必须显式引入 <code>spring-cloud-starter-bootstrap</code> 依赖，否则 <code>bootstrap.yml</code> 会被完全忽略——现象是配置中心地址读不到、启动时报「找不到配置」，而文件明明躺在那里。更推荐的做法是改用 <code>spring.config.import</code> 声明外部配置源（用法层那份配置就是这么写的），这是新版本的标准方式，不再依赖 bootstrap 上下文这层特殊机制。</p>
+<p><strong>第一个是 <code>bootstrap.yml</code> 不再默认生效。</strong>从 Spring Cloud 2020 起，bootstrap 上下文默认关闭，必须显式引入 <code>spring-cloud-starter-bootstrap</code> 依赖，否则 <code>bootstrap.yml</code> 会被完全忽略——现象是配置中心地址读不到、启动时报「找不到配置」，而文件明明躺在那里。</p>
+<p>更推荐的做法是改用 <code>spring.config.import</code> 声明外部配置源（用法层那份配置就是这么写的），这是新版本的标准方式，不再依赖 bootstrap 上下文这层特殊机制。</p>
 
 <p><strong>第二个是 <code>@RefreshScope</code> 的作用域陷阱。</strong>它的实现是把 Bean 包一层代理，收到刷新事件后销毁目标实例，下次访问时重新创建并重新注入属性。这意味着三件事：</p>
 
@@ -430,18 +443,21 @@ sequenceDiagram
     RB-->>APP: 用新配置继续处理
 </div>
 
-<p>结论是：<strong><code>@RefreshScope</code> 只适合无状态、且每次调用都重新读取字段值的 Bean</strong>。数据库连接池的最大连接数、线程池的核心线程数这类「初始化时读一次」的参数，靠它刷新是无效的，必须用组件自己提供的动态调整 API。配置中心侧的推送机制、长轮询与本地快照兜底见 <a href="../../../architecture/governance/config-client/">配置中心</a>。</p>
+<p>结论是：<strong><code>@RefreshScope</code> 只适合无状态、且每次调用都重新读取字段值的 Bean</strong>。数据库连接池的最大连接数、线程池的核心线程数这类「初始化时读一次」的参数，靠它刷新是无效的，必须用组件自己提供的动态调整 API。</p>
+<p>配置中心侧的推送机制、长轮询与本地快照兜底见 <a href="../../../architecture/governance/config-client/">配置中心</a>。</p>
 
 <h2>② 原理 · 版本矩阵：Spring Cloud 最大的坑</h2>
 
 <p>搞清这一节能避免一整类「编译通过、运行期炸」的问题，它们的根因全在依赖版本组合上。</p>
 
-<p>Spring Cloud 是一个聚合项目，它用「发布列车」的方式锁定内部几十个组件的版本组合，并声明兼容的 Spring Boot 区间。<strong>这个对应关系必须严格遵守，没有任何调整空间。</strong>Spring Cloud 从 2020 版起改用年份命名（此前是 Hoxton、Greenwich 这类伦敦地铁站名），Boot 3 只能配 2022 年之后的车次。</p>
+<p>Spring Cloud 是一个聚合项目，它用「发布列车」的方式锁定内部几十个组件的版本组合，并声明兼容的 Spring Boot 区间。<strong>这个对应关系必须严格遵守，没有任何调整空间。</strong></p>
+<p>Spring Cloud 从 2020 版起改用年份命名（此前是 Hoxton、Greenwich 这类伦敦地铁站名），Boot 3 只能配 2022 年之后的车次。</p>
 
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">别相信任何文章里写死的版本号，包括这篇</div>
-    <p>版本对应关系随时间变化，唯一可信来源是 Spring Cloud 官网的发布列车页面和 Maven 仓库里 BOM 的 pom 文件，后者会直接声明它依赖的 Boot 版本。正确的工程做法是：<strong>只在父 pom 的 dependencyManagement 里导入 Spring Boot 与 Spring Cloud 两个 BOM，子模块引依赖时一律不写版本号</strong>，并且禁止任何人单独升级某个组件的版本。</p>
+    <p>版本对应关系随时间变化，唯一可信来源是 Spring Cloud 官网的发布列车页面和 Maven 仓库里 BOM 的 pom 文件，后者会直接声明它依赖的 Boot 版本。</p>
+<p>正确的工程做法是：<strong>只在父 pom 的 dependencyManagement 里导入 Spring Boot 与 Spring Cloud 两个 BOM，子模块引依赖时一律不写版本号</strong>，并且禁止任何人单独升级某个组件的版本。</p>
 </div>
 
 <table>
@@ -468,7 +484,8 @@ java -jar app.jar --debug 2&gt;&amp;1 | sed -n '/CONDITIONS EVALUATION REPORT/,/
 
 <h2>③ 场景 · 三条路线怎么选，以及在 K8s 上还需不需要 Spring Cloud</h2>
 
-<p>这是本文最重要的结构性判断。把 Spring Cloud 的能力和 K8s 的能力逐项对齐，会发现重叠得相当厉害：服务发现有 Service，负载均衡有 kube-proxy 的转发规则，配置有 ConfigMap 与 Secret，入口网关有 Ingress 或 Gateway API，健康检查有探针，灰度有多 Deployment 加 Service 选择器。<strong>在 K8s 上再搭一套 Eureka 加 Config Server，是把平台已经做好的事在应用层重做一遍。</strong></p>
+<p>这是本文最重要的结构性判断。把 Spring Cloud 的能力和 K8s 的能力逐项对齐，会发现重叠得相当厉害：服务发现有 Service，负载均衡有 kube-proxy 的转发规则，配置有 ConfigMap 与 Secret，入口网关有 Ingress 或 Gateway API，健康检查有探针，灰度有多 Deployment 加 Service 选择器。</p>
+<p><strong>在 K8s 上再搭一套 Eureka 加 Config Server，是把平台已经做好的事在应用层重做一遍。</strong></p>
 
 <table>
 <thead><tr><th>维度</th><th>路线 A Spring Cloud 全家桶</th><th>路线 B K8s 原生加轻量库</th><th>路线 C 服务网格</th></tr></thead>
@@ -523,7 +540,8 @@ flowchart TB
 <tr><td>logger-level 设成 full 上生产</td><td>请求体与响应体全量进日志，泄漏敏感数据且日志量爆炸</td><td>生产用 basic，排查时临时对单个客户端调成 full</td></tr>
 </tbody></table>
 
-<p><strong>不适用边界</strong>：这篇只讨论组件取舍与客户端配置。服务该不该拆、边界怎么划在 <a href="../../../architecture/microservices/split/">微服务的代价模型</a>；熔断与限流的阈值怎么定在 <a href="../../../architecture/governance/circuit-breaker/">熔断与限流</a>；网关的责任边界在 <a href="../../../architecture/governance/api-gateway/">API 网关</a>；幂等与分布式事务的落地方式在 <a href="../../../architecture/distributed/">分布式系统核心</a>；探针语义、滚动更新时序、<code>preStop</code> 与优雅停机的配合在 <a href="../../../devops/kubernetes/">Kubernetes 深度剖析</a>；链路采样与三支柱关联在 <a href="../../../observability/tracing/">分布式链路追踪</a>；<code>javax</code> 到 <code>jakarta</code> 的迁移与依赖扫描在 <a href="../java17-springboot3/">Java 8 升 17 的实战路径</a>。</p>
+<p><strong>不适用边界</strong>：这篇只讨论组件取舍与客户端配置。服务该不该拆、边界怎么划在 <a href="../../../architecture/microservices/split/">微服务的代价模型</a>；熔断与限流的阈值怎么定在 <a href="../../../architecture/governance/circuit-breaker/">熔断与限流</a>；网关的责任边界在 <a href="../../../architecture/governance/api-gateway/">API 网关</a>；</p>
+<p>幂等与分布式事务的落地方式在 <a href="../../../architecture/distributed/">分布式系统核心</a>；探针语义、滚动更新时序、<code>preStop</code> 与优雅停机的配合在 <a href="../../../devops/kubernetes/">Kubernetes 深度剖析</a>；链路采样与三支柱关联在 <a href="../../../observability/tracing/">分布式链路追踪</a>；<code>javax</code> 到 <code>jakarta</code> 的迁移与依赖扫描在 <a href="../java17-springboot3/">Java 8 升 17 的实战路径</a>。</p>
 <p>这条路径上，前四篇都在讲单个进程内部的事，本篇第一次把视角推到进程之间；下一篇回到工程动作本身——把这一整套东西从 Java 8 加 Boot 2 搬到 Java 17 加 Boot 3。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../orm/">← 上一步：JPA 持久化上下文与 MyBatis 选型</a> · <a href="../java17-springboot3/">下一步：Java 8 升 17 与 Spring Boot 2 升 3 的实战路径 →</a></p>

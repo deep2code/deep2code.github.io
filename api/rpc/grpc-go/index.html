@@ -91,7 +91,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>HTTP/2 的帧与流控、四种调用模式的边界、deadline 端到端传播的机制、错误模型里 status 与 details 的设计、keepalive 与中间代理造成的偶发断连，都在<a href="../grpc/">gRPC 的传输机制与工程落地</a>里。这一篇不重复那些，只讲 <strong>Go 这个具体实现里那些会让你半夜起来的细节</strong>：版本、拦截器、停机、泄漏、测试。</p>
+<p>HTTP/2 的帧与流控、四种调用模式的边界、deadline 端到端传播的机制、错误模型里 status 与 details 的设计、keepalive 与中间代理造成的偶发断连，都在<a href="../grpc/">gRPC 的传输机制与工程落地</a>里。</p>
+<p>这一篇不重复那些，只讲 <strong>Go 这个具体实现里那些会让你半夜起来的细节</strong>：版本、拦截器、停机、泄漏、测试。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -370,16 +371,20 @@ flowchart TB
     end
     SRV --> BIZ["业务逻辑。ctx 必须继续往下传，否则取消到这里就断了"]
 </div>
-<p>两个位置关系要记牢：<strong>StatsHandler 比拦截器链更靠外</strong>，所以链路上下文在你的日志拦截器运行之前就已经解出来了；而<strong>service config 里的重试发生在客户端拦截器之内</strong>，你在客户端拦截器里看到的是一次逻辑调用，看不到它底下重试了几次。</p>
+<p>两个位置关系要记牢：<strong>StatsHandler 比拦截器链更靠外</strong>，所以链路上下文在你的日志拦截器运行之前就已经解出来了；</p>
+<p>而<strong>service config 里的重试发生在客户端拦截器之内</strong>，你在客户端拦截器里看到的是一次逻辑调用，看不到它底下重试了几次。</p>
 
 <h2>② 原理 · context：取消怎么才算真的传到底</h2>
 <p>搞清这一节，能解决「客户端早返回了，服务端还在跑慢查询」与「handler 里 go 出去的任务为什么立刻失败」。</p>
-<p>服务端 handler 拿到的 <code>ctx</code> 会在两种情况下被取消：客户端主动断开，或者 deadline 到期。但<strong>取消只有被一路传下去才有意义</strong>。把 <code>ctx</code> 换成 <code>context.Background()</code> 去查数据库，是 Go 服务里最普遍的一类浪费——客户端早就超时返回了，服务端还在慢查询上占着连接和内存。</p>
-<p>反方向也有个坑：<strong><code>handler</code> 一返回，它的 <code>ctx</code> 立刻被取消</strong>。所以在 handler 里 <code>go</code> 出去一个异步任务、还把这个 ctx 带上，那个任务几乎必然立刻失败。要做异步收尾，用 <code>context.WithoutCancel</code> 剥掉取消信号（Go 1.21 起），或者干脆投给一个有自己生命周期的后台队列。至于流式方法，<code>stream.Context()</code> 的生命周期和这次调用绑定，同样不能带出去。Go 侧 context 与协程生命周期的系统讲法见站内 <a href="../../../programming/go/concurrency/">Go 并发编程</a>。</p>
+<p>服务端 handler 拿到的 <code>ctx</code> 会在两种情况下被取消：客户端主动断开，或者 deadline 到期。但<strong>取消只有被一路传下去才有意义</strong>。</p>
+<p>把 <code>ctx</code> 换成 <code>context.Background()</code> 去查数据库，是 Go 服务里最普遍的一类浪费——客户端早就超时返回了，服务端还在慢查询上占着连接和内存。</p>
+<p>反方向也有个坑：<strong><code>handler</code> 一返回，它的 <code>ctx</code> 立刻被取消</strong>。所以在 handler 里 <code>go</code> 出去一个异步任务、还把这个 ctx 带上，那个任务几乎必然立刻失败。</p>
+<p>要做异步收尾，用 <code>context.WithoutCancel</code> 剥掉取消信号（Go 1.21 起），或投给一个有自己生命周期的后台队列。流式方法的 <code>stream.Context()</code> 生命周期和这次调用绑定，同样不能带出去。Go 侧 context 与协程生命周期见站内 <a href="../../../programming/go/concurrency/">Go 并发编程</a>。</p>
 
 <h2>② 原理 · 拦截器：两条链、顺序与 recover</h2>
 <p>搞清这一节，能解决「流式接口里的 panic 为什么直接打挂进程」与「为什么告警长期误报」。</p>
-<p><strong>grpc-go 不会替你兜 panic</strong>：handler 在服务流的 goroutine 里跑，panic 一路冒上去就是进程退出。这一点和多数 HTTP 框架的默认行为相反，是 Go gRPC 服务上线初期最常见的事故来源。更容易漏的是<strong>一元和流式是两条完全独立的链</strong>，只在一元链上挂了 recover，流式方法照样能把进程打挂。</p>
+<p><strong>grpc-go 不会替你兜 panic</strong>：handler 在服务流的 goroutine 里跑，panic 一路冒上去就是进程退出。这一点和多数 HTTP 框架的默认行为相反，是 Go gRPC 服务上线初期最常见的事故来源。</p>
+<p>更容易漏的是<strong>一元和流式是两条完全独立的链</strong>，只在一元链上挂了 recover，流式方法照样能把进程打挂。</p>
 <table>
 <thead><tr><th>类型</th><th>能拿到什么</th><th>适合做</th><th>做不到</th></tr></thead>
 <tbody>
@@ -390,7 +395,8 @@ flowchart TB
 <tr><td>StatsHandler</td><td>逐条消息的生命周期事件</td><td>指标与链路追踪，流式观测唯一准确的方式</td><td>不能改请求，也不能中断调用</td></tr>
 </tbody>
 </table>
-<p>顺序规则：链式选项里<strong>先传入的在最外层</strong>，所以 recover 应该放第一个，让它能兜住后面所有拦截器和 handler 的 panic。还有一条边界要写进团队规范：<strong>recover 只救得了同一个 goroutine</strong>，handler 里自己 <code>go</code> 出去的协程发生 panic 依然会打挂进程，这类地方必须各自带 recover。</p>
+<p>顺序规则：链式选项里<strong>先传入的在最外层</strong>，所以 recover 应该放第一个，让它能兜住后面所有拦截器和 handler 的 panic。</p>
+<p>还有一条边界要写进团队规范：<strong>recover 只救得了同一个 goroutine</strong>，handler 里自己 <code>go</code> 出去的协程发生 panic 依然会打挂进程，这类地方必须各自带 recover。</p>
 <pre><code class="language-go">// recover 要分别挂在两条链上。注意它只救得了同一个 goroutine：
 // handler 里 go 出去的协程发生 panic，照样打挂整个进程。
 func recoveryUnary(ctx context.Context, req any, info *grpc.UnaryServerInfo,
@@ -474,7 +480,9 @@ func (s *orderServer) GetOrder(ctx context.Context, req *pb.GetOrderRequest) (*p
 <tr><td><code>Unknown</code></td><td><strong>handler 直接 return 了普通 error</strong></td><td>算</td><td>这是服务端的 bug，去补 status 转换</td></tr>
 </tbody>
 </table>
-<p>客户端侧的判读有个细节常被忽略：<code>status.FromError</code> 的第二个返回值表示「这个 error 到底是不是服务端返回的 status」。<strong>为 false 时说明它是本地错误</strong>（连不上、序列化失败、本地 ctx 取消），此时拿到的码只是被填成了 Unknown 或 Canceled，不能用来做业务分支。另外，把 status 用 <code>fmt.Errorf</code> 包一层之后还能不能被识别出来，取决于 grpc-go 版本——<strong>不要依赖这个解包行为</strong>，跨层传递时要么原样返回，要么显式重建 status。</p>
+<p>客户端侧的判读有个细节常被忽略：<code>status.FromError</code> 的第二个返回值表示「这个 error 到底是不是服务端返回的 status」。</p>
+<p><strong>为 false 时说明它是本地错误</strong>（连不上、序列化失败、本地 ctx 取消），此时拿到的码只是被填成了 Unknown 或 Canceled，不能用来做业务分支。</p>
+<p>另外，把 status 用 <code>fmt.Errorf</code> 包一层之后还能不能被识别出来，取决于 grpc-go 版本——<strong>不要依赖这个解包行为</strong>，跨层传递时要么原样返回，要么显式重建 status。</p>
 <div class="mermaid">
 flowchart TB
     E["一次调用返回了错误"] --> Q1{"status.FromError 的第二个返回值"}
@@ -493,7 +501,8 @@ flowchart TB
 <h2>② 原理 · 客户端：惰性连接与 service config</h2>
 <p>搞清这一节，能解决「从 Dial 迁到 NewClient 后测试全挂」与「启动时以为连上了其实没有」。</p>
 <p><code>grpc.Dial</code> 已经废弃，换成 <code>grpc.NewClient</code>。这次替换不是改个名字，有两个行为差异会直接让代码跑不起来。</p>
-<p>第一，<strong>它不建连就返回</strong>，通道处于 IDLE，第一次 RPC 才触发连接。因此 <code>err == nil</code> 完全不代表服务端活着，拿它当启动期健康检查是错的；想预热就显式调 <code>Connect()</code>，因为 <code>NewClient</code> <strong>不支持</strong> <code>WithBlock</code> 那一组选项。第二，<strong>默认解析器从 passthrough 变成了 dns</strong>，目标串会走 DNS 解析路径；测试里用自定义拨号器时必须显式写 <code>passthrough:///</code> 前缀，否则它会真的去解析一个不存在的域名——这是从 Dial 迁过来时最典型的翻车点。</p>
+<p>第一，<strong>它不建连就返回</strong>，通道处于 IDLE，第一次 RPC 才触发连接。因此 <code>err == nil</code> 完全不代表服务端活着，拿它当启动期健康检查是错的；想预热就显式调 <code>Connect()</code>，因为 <code>NewClient</code> <strong>不支持</strong> <code>WithBlock</code> 那一组选项。</p>
+<p>第二，<strong>默认解析器从 passthrough 变成了 dns</strong>，目标串会走 DNS 解析路径；测试里用自定义拨号器时必须显式写 <code>passthrough:///</code> 前缀，否则它会真的去解析一个不存在的域名——这是从 Dial 迁过来时最典型的翻车点。</p>
 <div class="mermaid">
 stateDiagram-v2
     state "IDLE：NewClient 返回后就在这里，还没建连" as Idle
@@ -513,7 +522,7 @@ stateDiagram-v2
     TF --> Down: Close
     Down --> [*]
 </div>
-<p>停在 TRANSIENT_FAILURE 时，默认行为是<strong>快速失败</strong>：调用立刻返回 Unavailable 而不是等着重连。加 <code>grpc.WaitForReady(true)</code> 会改成阻塞到通道就绪或 deadline 到期——它把「连不上」从立即失败变成了超时，用在启动期依赖上合适，用在在线请求上会放大故障时的排队。</p>
+<p>停在 TRANSIENT_FAILURE 时，默认行为是<strong>快速失败</strong>：调用立刻返回 Unavailable 而不等重连。加 <code>grpc.WaitForReady(true)</code> 会改成阻塞到通道就绪或 deadline 到期——它把「连不上」从立即失败变成超时，用在启动期依赖上合适，用在在线请求上会放大故障排队。</p>
 <table>
 <thead><tr><th>service config 字段</th><th>含义</th><th>容易配错的地方</th></tr></thead>
 <tbody>
@@ -528,7 +537,9 @@ stateDiagram-v2
 
 <h2>② 原理 · 流式接口的资源释放与泄漏排查</h2>
 <p>搞清这一节，能解决「协程数单调上涨」「没有请求 CPU 也不降」这两类线上现象。</p>
-<p>流式调用的泄漏几乎都来自同一个误解：<strong>以为流会自己关</strong>。客户端侧只要没读到结束标志就提前退出循环，这条流在传输层依然存在，读循环协程也不会退出。标准写法是创建流之前用可取消的上下文包一层并立刻 <code>defer cancel()</code>，这样无论从哪个分支返回都会把流关掉。服务端侧对应的规则是：<strong>handler 一返回流就结束</strong>，所以在 handler 里起的协程必须在返回前收敛，否则它们会拿着一个已取消的上下文继续跑。</p>
+<p>流式调用的泄漏几乎都来自同一个误解：<strong>以为流会自己关</strong>。客户端侧只要没读到结束标志就提前退出循环，这条流在传输层依然存在，读循环协程也不会退出。</p>
+<p>标准写法是创建流之前用可取消的上下文包一层并立刻 <code>defer cancel()</code>，这样无论从哪个分支返回都会把流关掉。</p>
+<p>服务端侧对应的规则是：<strong>handler 一返回流就结束</strong>，所以在 handler 里起的协程必须在返回前收敛，否则它们会拿着一个已取消的上下文继续跑。</p>
 <pre><code class="language-go">// 服务端流的客户端侧：不读到结束就退出会泄漏，必须靠 cancel 收尾。
 func firstN(ctx context.Context, c pb.OrderServiceClient, n int) ([]*pb.Order, error) {
 	// 这两行是流式调用的标准写法。少了 defer cancel()，一旦提前 break，
@@ -596,7 +607,8 @@ sequenceDiagram
 <tr><td><code>MaxConnectionAge</code></td><td>服务端 keepalive 参数</td><td>不限</td><td>不设则老连接永不重连，扩容出来的实例长期没有流量</td></tr>
 </tbody>
 </table>
-<p>还有一个容易被忽略的前提：<strong>gRPC 是长连接，摘掉 Endpoints 并不会断开已建立的连接</strong>。真正让客户端换实例的是 GOAWAY。所以顺序必须是「先让新连接不再选到我（摘流），再对老连接发 GOAWAY（GracefulStop）」，反过来做就会在窗口期里制造一批失败请求。探针与 preStop 的完整语义见站内 <a href="../../../devops/kubernetes/">Kubernetes</a>。</p>
+<p>还有一个容易被忽略的前提：<strong>gRPC 是长连接，摘掉 Endpoints 并不会断开已建立的连接</strong>。真正让客户端换实例的是 GOAWAY。</p>
+<p>所以顺序必须是「先让新连接不再选到我（摘流），再对老连接发 GOAWAY（GracefulStop）」，反过来做就会在窗口期里制造一批失败请求。探针与 preStop 的完整语义见站内 <a href="../../../devops/kubernetes/">Kubernetes</a>。</p>
 
 <h2>③ 场景 · 不同项目形态该配到哪一步</h2>
 <p>上面所有手段不必一次做全。下表按项目形态给该做到哪一步，以及停在这里的理由。</p>

@@ -82,8 +82,10 @@
                     </header>
                     <div class="article-content">
 <h2>布局不是样式：dot 在解四个优化问题</h2>
-<p>对 Graphviz 的挫败感几乎都来自同一个错误预期——以为 <code>rankdir</code>、<code>nodesep</code> 这些属性是 CSS，调一调就能把节点摆到想要的位置。实际上 <code>dot</code> 走的是分层布局（Sugiyama 风格，对应 Gansner、Koutsofios、North、Vo 1993 年那篇 <em>A Technique for Drawing Directed Graphs</em>），整条流水线是四个前后依赖的优化问题，属性只是往这些问题里塞约束和权重。</p>
-<p>这四个阶段依次是：把回边反转成有向无环图后用<strong>网络单纯形</strong>求解分层；用<strong>减少交叉的启发式</strong>决定每层内部的顺序；再解一次优化问题得到坐标；最后把长边在中间层打成虚拟节点串，用分段贝塞尔穿过它们。理解这个顺序，你就知道每个属性能影响哪一步、不能影响哪一步。</p>
+<p>对 Graphviz 的挫败感几乎都来自同一个错误预期——以为 <code>rankdir</code>、<code>nodesep</code> 这些属性是 CSS，调一调就能把节点摆到想要的位置。</p>
+<p>实际上 <code>dot</code> 走的是分层布局（Sugiyama 风格，对应 Gansner、Koutsofios、North、Vo 1993 年那篇 <em>A Technique for Drawing Directed Graphs</em>），整条流水线是四个前后依赖的优化问题，属性只是往这些问题里塞约束和权重。</p>
+<p>这四个阶段依次是：把回边反转成有向无环图后用<strong>网络单纯形</strong>求解分层；用<strong>减少交叉的启发式</strong>决定每层内部的顺序；再解一次优化问题得到坐标；</p>
+<p>最后把长边在中间层打成虚拟节点串，用分段贝塞尔穿过它们。理解这个顺序，你就知道每个属性能影响哪一步、不能影响哪一步。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -140,14 +142,16 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">阶段二决定了 DOT 文件的 diff 稳定性</div>
-    <p>层内顺序受节点与边的书写顺序影响。这意味着生成 DOT 的程序如果遍历的是哈希表，输出顺序每次不同，渲染出来的图就会无谓地大改一次。生成器必须对节点和边做确定性排序——这是把图纳入版本管理的前提，比任何样式调整都重要。</p>
+    <p>层内顺序受节点与边的书写顺序影响。这意味着生成 DOT 的程序如果遍历的是哈希表，输出顺序每次不同，渲染出来的图就会无谓地大改一次。</p>
+<p>生成器必须对节点和边做确定性排序——这是把图纳入版本管理的前提，比任何样式调整都重要。</p>
 </div>
 
 <h2>rank、cluster、constraint 的真实语义</h2>
 <p>三个最常被误解的关键字，逐个说清它们到底约束了什么：</p>
 <p><strong>rank</strong> 是「分层方向上的同一层」，与 <code>rankdir</code> 无关。<code>rankdir=LR</code> 只是把坐标系旋转一次，同一层从一行变成一列，语义不变。<code>rank=min</code>/<code>source</code> 把节点钉在最上层，<code>max</code>/<code>sink</code> 钉在最下层，<code>same</code> 则要求成员同层——但它们默认在所属 cluster 内部生效，跨 cluster 需要 <code>newrank=true</code>。</p>
 <p><strong>cluster</strong> 必须以 <code>cluster</code> 开头命名才会被当作簇（这是字符串前缀约定，不是关键字）。dot 处理簇的方式是先把簇整体当成一个节点参与上层排布，再递归布局内部，所以它保证的是「成员占据连续的若干层」，而不是「一个封闭容器」。外部的边完全可以横穿一个簇的矩形范围。要让边停在簇边界上，需要 <code>compound=true</code> 并在边上写 <code>lhead=cluster_x</code> 或 <code>ltail=cluster_x</code>。</p>
-<p><strong>constraint=false</strong> 是处理循环依赖最有用的一个属性。有向图里只要有环，阶段一就必须反转一部分回边，被反转的边由 DFS 顺序决定，往往不是你希望的那条，结果整张图的层级都失去意义。把已知的回边显式标成 <code>constraint=false</code>，等于告诉引擎「这条边不参与分层」，层级立刻恢复可读。</p>
+<p><strong>constraint=false</strong> 是处理循环依赖最有用的一个属性。有向图里只要有环，阶段一就必须反转一部分回边，被反转的边由 DFS 顺序决定，往往不是你希望的那条，结果整张图的层级都失去意义。</p>
+<p>把已知的回边显式标成 <code>constraint=false</code>，等于告诉引擎「这条边不参与分层」，层级立刻恢复可读。</p>
 
 <pre><code>strict digraph deps {
     // rankdir 只影响最后的坐标系旋转，不改变「层」的语义
@@ -342,7 +346,8 @@ def emit(nodes, edges):
 </code></pre>
 
 <h2>输出格式、字体与中文</h2>
-<p>输出格式的选择标准不是「清不清晰」，而是「产物还要不要被再加工」。<code>-Tdot</code> 和 <code>-Tjson</code> 这两个文本目标最容易被忽略，它们让布局结果变成可编程的数据：前者带坐标可复用，后者带每个图元的绘制信息，足以自己写一个交互式渲染器。</p>
+<p>输出格式的选择标准不是「清不清晰」，而是「产物还要不要被再加工」。</p>
+<p><code>-Tdot</code> 和 <code>-Tjson</code> 这两个文本目标最容易被忽略，它们让布局结果变成可编程的数据：前者带坐标可复用，后者带每个图元的绘制信息，足以自己写一个交互式渲染器。</p>
 
 <table>
 <thead><tr><th>目标格式</th><th>类型</th><th>能否再加工</th><th>字体行为</th><th>适用场景</th></tr></thead>
@@ -368,7 +373,8 @@ def emit(nodes, edges):
 </table>
 
 <h2>和站内其他篇的分工</h2>
-<p>本文只谈布局算法与大图治理。<strong>该不该画这张图、画错在哪</strong>属于信息设计，见站内《技术文档里的图：该画什么，不该画什么》；<strong>DOT 和 Mermaid、PlantUML、D2 之间怎么选、产物怎么进 CI</strong>见站内《文本即图工具的选型矩阵》；<strong>Mermaid 自身的语法边界</strong>见站内《Mermaid 的语法边界与工程化用法》；<strong>PlantUML 为什么也依赖 dot、以及它的建模用法</strong>见站内《PlantUML 的建模表达力与协作流程》。</p>
+<p>本文只谈布局算法与大图治理。<strong>该不该画这张图、画错在哪</strong>属于信息设计，见站内《技术文档里的图：该画什么，不该画什么》；<strong>DOT 和 Mermaid、PlantUML、D2 之间怎么选、产物怎么进 CI</strong>见站内《文本即图工具的选型矩阵》；</p>
+<p><strong>Mermaid 自身的语法边界</strong>见站内《Mermaid 的语法边界与工程化用法》；<strong>PlantUML 为什么也依赖 dot、以及它的建模用法</strong>见站内《PlantUML 的建模表达力与协作流程》。</p>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>

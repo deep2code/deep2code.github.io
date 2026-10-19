@@ -240,7 +240,8 @@ python3 -X dev -W error::DeprecationWarning -m pytest -q
 <p>这一层不解释为什么，比如「为什么默认值只求值一次」「为什么 list 边遍历边删不报错」「为什么 <code>__del__</code> 的时机不可依赖」，都在下面的原理层，按同样的顺序展开。</p>
 
 <h2>② 原理 · 默认参数与闭包：求值时机的两个坑</h2>
-<p>搞清这一节能解决的现象是：函数「有记忆」，第二次请求带上了第一次的数据。函数的默认值在<strong>函数定义时求值一次</strong>，之后所有调用共享同一个对象。所以 <code>def f(x=[])</code> 里的那个 list 是整个进程共用的，调用之间会互相污染；<code>def f(t=datetime.now())</code> 拿到的是进程启动那一刻的时间，永远不会变。</p>
+<p>搞清这一节能解决的现象是：函数「有记忆」，第二次请求带上了第一次的数据。函数的默认值在<strong>函数定义时求值一次</strong>，之后所有调用共享同一个对象。</p>
+<p>所以 <code>def f(x=[])</code> 里的那个 list 是整个进程共用的，调用之间会互相污染；<code>def f(t=datetime.now())</code> 拿到的是进程启动那一刻的时间，永远不会变。</p>
 
 <p>闭包则相反，它捕获的是<strong>变量本身而不是当时的值</strong>。循环里创建的 lambda 全都指向同一个循环变量，等到真正调用时，循环早已结束，它们读到的都是最后一个值。</p>
 
@@ -306,7 +307,9 @@ sequenceDiagram
 </tbody>
 </table>
 
-<p><code>is</code> 比较的是身份（内存地址），<code>==</code> 比较的是值。危险的地方在于：CPython 缓存了小整数（约 -5 到 256）和短的类标识符字符串，于是 <code>a = 256; b = 256; a is b</code> 是 True，换成 1000 就是 False；同一行里的字面量还可能被常量折叠成同一个对象，让交互式环境和脚本里的结果不一致。<strong><code>is</code> 只能用于 <code>None</code>、<code>True</code>、<code>False</code> 和自定义哨兵这类单例</strong>，其余一律用 <code>==</code>（ruff F632 会抓 <code>is</code> 比较字面量）。驻留的实现细节与它在性能上的正当用途（<code>sys.intern</code>）见<a href="../internals/">CPython 实现细节</a>。</p>
+<p><code>is</code> 比较的是身份（内存地址），<code>==</code> 比较的是值。危险的地方在于：CPython 缓存了小整数（约 -5 到 256）和短的类标识符字符串，于是 <code>a = 256; b = 256; a is b</code> 是 True，换成 1000 就是 False；</p>
+<p>同一行里的字面量还可能被常量折叠成同一个对象，让交互式环境和脚本里的结果不一致。<strong><code>is</code> 只能用于 <code>None</code>、<code>True</code>、<code>False</code> 和自定义哨兵这类单例</strong>，其余一律用 <code>==</code>（ruff F632 会抓 <code>is</code> 比较字面量）。</p>
+<p>驻留的实现细节与它在性能上的正当用途（<code>sys.intern</code>）见<a href="../internals/">CPython 实现细节</a>。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -382,9 +385,11 @@ def good(conn, payload):
 </code></pre>
 
 <h2>② 原理 · 容器与序列：迭代中修改，以及 += 的双重身份</h2>
-<p>搞清这一节能解决的现象是：删除逻辑「漏掉了一半」，而代码看起来完全对称。迭代过程中修改容器，后果分两种：dict 和 set 会直接抛 <code>RuntimeError: dictionary changed size during iteration</code>，这算好事；而 list <strong>不报错，只是静默跳过元素</strong>——删掉当前元素后，后面的元素整体前移，迭代器的下标却继续往后走，于是每删一个就漏检一个。正确做法是「构造新列表」或「倒序遍历」。</p>
+<p>搞清这一节能解决的现象是：删除逻辑「漏掉了一半」，而代码看起来完全对称。迭代过程中修改容器，后果分两种：dict 和 set 会直接抛 <code>RuntimeError: dictionary changed size during iteration</code>，这算好事；</p>
+<p>而 list <strong>不报错，只是静默跳过元素</strong>——删掉当前元素后，后面的元素整体前移，迭代器的下标却继续往后走，于是每删一个就漏检一个。正确做法是「构造新列表」或「倒序遍历」。</p>
 
-<p><code>+=</code> 对可变与不可变对象的行为完全不同：对 list 它调用 <code>__iadd__</code> 就地扩展（等价于 <code>extend</code>，会影响所有引用这个 list 的地方）；对 tuple、str、int 这些不可变类型，它只能新建对象再重新绑定名字。由此产生一个经典报错：元组里装了一个 list，对它做 <code>+=</code> 会<strong>先改成功、再抛异常</strong>。</p>
+<p><code>+=</code> 对可变与不可变对象的行为完全不同：对 list 它调用 <code>__iadd__</code> 就地扩展（等价于 <code>extend</code>，会影响所有引用这个 list 的地方）；对 tuple、str、int 这些不可变类型，它只能新建对象再重新绑定名字。</p>
+<p>由此产生一个经典报错：元组里装了一个 list，对它做 <code>+=</code> 会<strong>先改成功、再抛异常</strong>。</p>
 
 <pre><code class="language-python"># ===== 迭代中修改 =====
 items = [1, 2, 2, 3, 2, 4]
@@ -434,7 +439,8 @@ print(t)                     # ([1, 9], [2])  元素已经被改了，异常来�
 </table>
 
 <h2>② 原理 · 时间与编码：两个最贵的默认值</h2>
-<p>搞清这一节能解决的现象是：时间「差了几个小时」，而这种错法能通过全部单测。<code>datetime</code> 分 naive（不带 tzinfo）和 aware（带 tzinfo）两种。二者<strong>不能相互比较也不能相减</strong>，会抛 <code>TypeError</code>。更麻烦的是 naive 时间本身没有含义：同一个 naive 值在不同机器上代表不同的时刻，跨时区部署、夏令时切换、数据库时区配置不一致时全都会出问题。</p>
+<p>搞清这一节能解决的现象是：时间「差了几个小时」，而这种错法能通过全部单测。<code>datetime</code> 分 naive（不带 tzinfo）和 aware（带 tzinfo）两种。二者<strong>不能相互比较也不能相减</strong>，会抛 <code>TypeError</code>。</p>
+<p>更麻烦的是 naive 时间本身没有含义：同一个 naive 值在不同机器上代表不同的时刻，跨时区部署、夏令时切换、数据库时区配置不一致时全都会出问题。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -476,7 +482,8 @@ with open("legacy.log", encoding="utf-8", errors="replace") as f:
 <p>编码的规则很短：<code>str</code> 是文本、<code>bytes</code> 是字节，边界处显式 <code>encode</code> / <code>decode</code>；<strong>所有 <code>open</code> 都要写 <code>encoding="utf-8"</code></strong>。Python 3.15 起默认编码会转为 UTF-8，但在那之前，不写 encoding 的代码在不同平台上行为不同，而这类 bug 通常在处理到一条中文数据时才爆发。ruff 的 PLW1514 能把所有漏写的地方一次列出来。</p>
 
 <h2>② 原理 · 析构：<code>__del__</code> 的时机为什么不可依赖</h2>
-<p>搞清这一节能解决的现象是：文件句柄或连接「大部分时候」会释放，偶尔耗尽；以及 <code>__del__</code> 里的错误在日志系统里完全查不到。CPython 的引用计数确实能做到「计数归零立即调用 <code>__del__</code>」，问题在于这条保证的适用范围比大多数人以为的窄得多。</p>
+<p>搞清这一节能解决的现象是：文件句柄或连接「大部分时候」会释放，偶尔耗尽；以及 <code>__del__</code> 里的错误在日志系统里完全查不到。</p>
+<p>CPython 的引用计数确实能做到「计数归零立即调用 <code>__del__</code>」，问题在于这条保证的适用范围比大多数人以为的窄得多。</p>
 <table>
 <thead><tr><th>你以为的</th><th>实际行为</th><th>该用什么</th></tr></thead>
 <tbody>
@@ -487,7 +494,8 @@ with open("legacy.log", encoding="utf-8", errors="replace") as f:
 <tr><td>换个实现也一样</td><td>PyPy 等实现没有引用计数，析构时机完全不同，依赖它的代码迁移时才暴露</td><td>不依赖时机；需要兜底用 <code>weakref.finalize</code></td></tr>
 </tbody>
 </table>
-<p><code>weakref.finalize</code> 与 <code>__del__</code> 的关键差别是：它把清理动作与对象解耦，回调里不持有对象本身（所以不会像 <code>__del__</code> 那样意外延长生命周期），并且在解释器退出时会被尽量执行。但它仍然只是兜底——真正可靠的资源释放只有一种形态，就是把生命周期写进 <code>with</code>。忘写 <code>with</code> 的地方交给 <code>python3 -X dev</code>：它会把 <code>ResourceWarning</code> 打出来，配合 <code>-W error</code> 就能在 CI 里变成失败。</p>
+<p><code>weakref.finalize</code> 与 <code>__del__</code> 的关键差别是：它把清理动作与对象解耦，回调里不持有对象本身（所以不会像 <code>__del__</code> 那样意外延长生命周期），并且在解释器退出时会被尽量执行。</p>
+<p>但它仍然只是兜底——真正可靠的资源释放只有一种形态，就是把生命周期写进 <code>with</code>。忘写 <code>with</code> 的地方交给 <code>python3 -X dev</code>：它会把 <code>ResourceWarning</code> 打出来，配合 <code>-W error</code> 就能在 CI 里变成失败。</p>
 
 <h2>③ 场景 · 哪些交给门禁、哪些必须靠人</h2>
 <p>这张图是上面所有条目的归类：能静态检出的一律进 CI，剩下的才需要人的注意力。</p>
@@ -534,7 +542,9 @@ flowchart TB
 <tr><td>高并发长驻服务</td><td>迭代中修改与可变全局的相关单测带并发用例；<code>-X dev</code> 跑一轮集成测试</td><td>静默跳过元素与句柄泄漏都只在压力下暴露</td><td>测试变慢，要维护一套压力用例</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：完整的 ruff 与 mypy 配置、pre-commit 与 CI 的分工在<a href="../tooling/">Python 依赖与工程工具链</a>；这些写法在性能上的含义（<code>+=</code> 拼接的二次复杂度、<code>pop(0)</code>、字符串驻留）在<a href="../internals/">CPython 实现细节</a>；对象模型、引用计数与 GC 在<a href="../core/">Python 运行时机制</a>；多线程下的竞态与「看起来像语义坑」的并发问题不在这里，见<a href="../concurrency/">Python 并发的三条路线与选择</a>；框架层的坑（依赖注入的缓存范围、响应模型的字段过滤）在<a href="../fastapi/">FastAPI 的机制与生产化</a>。如果一个问题只在多个进程或多个请求同时发生时出现，它不是本篇覆盖的语义陷阱。</p>
+<p><strong>不适用边界</strong>：完整的 ruff 与 mypy 配置、pre-commit 与 CI 的分工在<a href="../tooling/">Python 依赖与工程工具链</a>；这些写法在性能上的含义（<code>+=</code> 拼接的二次复杂度、<code>pop(0)</code>、字符串驻留）在<a href="../internals/">CPython 实现细节</a>；对象模型、引用计数与 GC 在<a href="../core/">Python 运行时机制</a>；</p>
+<p>多线程下的竞态与「看起来像语义坑」的并发问题不在这里，见<a href="../concurrency/">Python 并发的三条路线与选择</a>；框架层的坑（依赖注入的缓存范围、响应模型的字段过滤）在<a href="../fastapi/">FastAPI 的机制与生产化</a>。</p>
+<p>如果一个问题只在多个进程或多个请求同时发生时出现，它不是本篇覆盖的语义陷阱。</p>
 <p>这条路径上，上一篇解释解释器为什么这么跑，本篇只管「结果对不对」，下一篇把视角从单个文件抬到版本与生态：同样的代码换个解释器、换个小版本，哪些假设会不成立。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../internals/">← 上一步：CPython 实现细节：字节码、解释器与性能特征</a> · <a href="../ecosystem/">下一步：Python 生态的选型与演进：版本、实现与替代方案 →</a></p>

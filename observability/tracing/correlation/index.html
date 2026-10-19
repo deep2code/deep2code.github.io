@@ -67,11 +67,14 @@
                         <h1 class="article-title">日志指标链路三者关联：traceID、exemplar 与下钻路径</h1>
                     </header>
                     <div class="article-content">
-<p><strong>本篇只讲「关联」这一件事</strong>：怎么用 traceID 把日志、指标、链路真正串成一条可以一路点下去的排障路径。Span 数据模型与 SpanKind、W3C traceparent 传播协议与断链场景、头部采样与尾部采样、Collector pipeline，都在站内 <a href="../opentelemetry/">OpenTelemetry 怎么接</a> 里写透了，本篇不重复；日志字段规范与上下文透传的代码见 <a href="../../logging/structured/">结构化日志落地</a>，日志派生指标与告警见 <a href="../../logging/log-metrics/">从日志派生指标与告警</a>。</p>
+<p><strong>本篇只讲「关联」这一件事</strong>：怎么用 traceID 把日志、指标、链路真正串成一条可以一路点下去的排障路径。Span 数据模型与 SpanKind、W3C traceparent 传播协议与断链场景、头部采样与尾部采样、Collector pipeline，都在站内 <a href="../opentelemetry/">OpenTelemetry 怎么接</a> 里写透了，本篇不重复；</p>
+<p>日志字段规范与上下文透传的代码见 <a href="../../logging/structured/">结构化日志落地</a>，日志派生指标与告警见 <a href="../../logging/log-metrics/">从日志派生指标与告警</a>。</p>
 
 <h2>为什么关联比单独任何一支都重要</h2>
 <p>三大支柱各自回答一个问题：<strong>指标告诉你哪里坏了</strong>（订单服务 P99 从 200ms 涨到 2s），<strong>链路告诉你哪一跳慢</strong>（慢在库存服务的一次 DB 查询上），<strong>日志告诉你为什么</strong>（那次查询命中了一个没走索引的分支，因为灰度配置把某个开关打开了）。任何一支单独存在时，它的回答都在半路上断掉。</p>
-<p>三者割裂的具体表现是：拿到告警后，人在三个系统之间用<strong>时间戳和 IP 做手工 join</strong>。指标面板显示 10:12 有尖刺，于是去日志系统把时间窗设成 10:11 到 10:13，搜出六万条，靠肉眼找可疑的；找到一条可疑日志后拿它的 pod 名和时间点，去链路系统按服务加时间范围翻，翻出几十条 trace，再一条条看哪条对得上。这个过程通常要几十分钟，而且结论经常是错的——时间戳对齐误差、同一秒内多个请求、时钟漂移，都会让你 join 到错误的那一条上。</p>
+<p>三者割裂的具体表现是：拿到告警后，人在三个系统之间用<strong>时间戳和 IP 做手工 join</strong>。指标面板显示 10:12 有尖刺，于是去日志系统把时间窗设成 10:11 到 10:13，搜出六万条，靠肉眼找可疑的；</p>
+<p>找到一条可疑日志后拿它的 pod 名和时间点，去链路系统按服务加时间范围翻，翻出几十条 trace，再一条条看哪条对得上。</p>
+<p>这个过程通常要几十分钟，而且结论经常是错的——时间戳对齐误差、同一秒内多个请求、时钟漂移，都会让你 join 到错误的那一条上。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -141,7 +144,9 @@ sequenceDiagram
 <div class="callout callout-tip">
 <div class="callout-icon">✅</div>
 <div class="callout-title">把 traceID 返回给客户端，收益极高但极少人做</div>
-<p>加一行响应头，用户报障时就能直接给你 traceID，你一次精确查询就还原出完整现场，不用再问「大概几点」「什么账号」。前端把它展示在错误提示里（哪怕是折叠的小字），客服工单模板加一个字段，这件事的总实现量不到半天。担心信息泄露的话：traceID 本身不含业务语义，它只是一个随机的 128 位 ID，泄露它并不能反查任何数据——前提是你的日志查询接口本身有权限控制。</p>
+<p>加一行响应头，用户报障时就能直接给你 traceID，你一次精确查询就还原出完整现场，不用再问「大概几点」「什么账号」。</p>
+<p>前端把它展示在错误提示里（哪怕是折叠的小字），客服工单模板加一个字段，这件事的总实现量不到半天。</p>
+<p>担心信息泄露的话：traceID 本身不含业务语义，它只是一个随机的 128 位 ID，泄露它并不能反查任何数据——前提是你的日志查询接口本身有权限控制。</p>
 </div>
 
 <pre><code class="language-go">// Go：一个中间件同时做四件事
@@ -210,7 +215,8 @@ func Observe(next http.Handler) http.Handler {
 // promhttp.HandlerFor(reg, promhttp.HandlerOpts{EnableOpenMetrics: true})</code></pre>
 
 <h2>exemplar：跨过「P99 高」到「哪一条慢」的鸿沟</h2>
-<p>直方图是聚合结构，它的设计目的就是丢掉个体。所以「P99 是 2 秒」这句话本身无法继续追问下去，过去只能靠时间窗回日志里翻慢请求，而慢请求在总量里可能只占万分之一。exemplar 的做法很直接：<strong>让每个 bucket 附带少量具体样本的 traceID</strong>，Grafana 在延迟面板上把它们画成小点，点一下就跳到那条 trace。它解决的是可观测性里最实际的一个断层。</p>
+<p>直方图是聚合结构，它的设计目的就是丢掉个体。所以「P99 是 2 秒」这句话本身无法继续追问下去，过去只能靠时间窗回日志里翻慢请求，而慢请求在总量里可能只占万分之一。</p>
+<p>exemplar 的做法很直接：<strong>让每个 bucket 附带少量具体样本的 traceID</strong>，Grafana 在延迟面板上把它们画成小点，点一下就跳到那条 trace。它解决的是可观测性里最实际的一个断层。</p>
 
 <table>
 <thead>
@@ -255,7 +261,8 @@ flowchart TB
     A5 --> A6
 </div>
 
-<p>具体配置在 Grafana 里是两个能力：<strong>derived fields</strong>（Loki 数据源里用正则从日志行提取 <code>trace_id</code>，自动渲染成指向链路数据源的按钮）和 <strong>data links / tracesToLogs</strong>（从 trace 详情反向跳到按 traceID 过滤的日志查询）。两个方向都要配，因为排障既会从指标往下走，也会从一条可疑日志往上找链路。</p>
+<p>具体配置在 Grafana 里是两个能力：<strong>derived fields</strong>（Loki 数据源里用正则从日志行提取 <code>trace_id</code>，自动渲染成指向链路数据源的按钮）和 <strong>data links / tracesToLogs</strong>（从 trace 详情反向跳到按 traceID 过滤的日志查询）。</p>
+<p>两个方向都要配，因为排障既会从指标往下走，也会从一条可疑日志往上找链路。</p>
 
 <pre><code class="language-yaml"># Grafana 数据源 provisioning：把三者双向打通
 apiVersion: 1
@@ -316,7 +323,9 @@ datasources:
 
 <h2>跨系统关联的实现细节：字段名与采样</h2>
 <p>两个细节能让上面所有配置全部失效。</p>
-<p><strong>第一是字段名。</strong>不同语言的 SDK 与日志库默认输出的 trace 字段名不一样，同一家公司里常见四五种写法并存。字段名不统一时，derived field 规则、跳转链接、查询模板都得按服务写一份，新服务接入必然漏配，而且漏配的表现是「按钮不出现」，很容易被当成 Grafana 的问题。唯一可靠的做法是在内部 logger 封装里<strong>把字段名写死</strong>，不给业务方选择权。</p>
+<p><strong>第一是字段名。</strong>不同语言的 SDK 与日志库默认输出的 trace 字段名不一样，同一家公司里常见四五种写法并存。</p>
+<p>字段名不统一时，derived field 规则、跳转链接、查询模板都得按服务写一份，新服务接入必然漏配，而且漏配的表现是「按钮不出现」，很容易被当成 Grafana 的问题。</p>
+<p>唯一可靠的做法是在内部 logger 封装里<strong>把字段名写死</strong>，不给业务方选择权。</p>
 
 <table>
 <thead>
@@ -361,7 +370,8 @@ flowchart TB
 </table>
 
 <h2>异步与批处理：用 links，不要硬套父子关系</h2>
-<p>MQ 消费、定时任务、重试这三类场景，把它们塞成父子关系会得到畸形的 trace：生产者和消费者可能相隔几小时，一条 trace 的时间跨度变成几小时；一个批次消费 500 条消息，这 500 条来自 500 个不同的上游请求，硬套父子等于把 500 棵树粘成一团。OTel 为此提供了 <strong>span links</strong>：表达「有因果关系，但不是同一次调用」。</p>
+<p>MQ 消费、定时任务、重试这三类场景，把它们塞成父子关系会得到畸形的 trace：生产者和消费者可能相隔几小时，一条 trace 的时间跨度变成几小时；</p>
+<p>一个批次消费 500 条消息，这 500 条来自 500 个不同的上游请求，硬套父子等于把 500 棵树粘成一团。OTel 为此提供了 <strong>span links</strong>：表达「有因果关系，但不是同一次调用」。</p>
 
 <table>
 <thead>

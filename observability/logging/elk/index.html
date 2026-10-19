@@ -228,7 +228,8 @@ flowchart TB
         </tr>
     </tbody>
 </table>
-<p>结论很实用：<strong>如果应用已经输出 JSON，Logstash 基本可以省掉</strong>，把剩下的一点点处理（补时间戳、脱敏、删无用字段）放进 Ingest Pipeline，链路少一个有状态组件。只有当你需要跨多种异构日志格式做重解析、或者要把同一份数据分发到多个异构后端时，Logstash 才值得留。</p>
+<p>结论很实用：<strong>如果应用已经输出 JSON，Logstash 基本可以省掉</strong>，把剩下的一点点处理（补时间戳、脱敏、删无用字段）放进 Ingest Pipeline，链路少一个有状态组件。</p>
+<p>只有当你需要跨多种异构日志格式做重解析、或者要把同一份数据分发到多个异构后端时，Logstash 才值得留。</p>
 <pre><code class="language-yaml">filebeat.inputs:
   - type: filestream            # 7.14 起推荐，取代已废弃的 log 类型
     id: app-json-log            # filestream 必须有唯一 id；改动这个 id 等于让它从头重读一遍
@@ -279,12 +280,15 @@ processors:
 
 <h2>索引设计：这套系统真正的核心</h2>
 <p>日志平台的成败几乎全部由索引设计决定。要点有四个：按时间滚动、用模板统一、用 ILM 自动分层、把分片数算对。</p>
-<p><strong>按时间分索引</strong>的理由不是「好看」，而是：删除整个索引是常数时间操作，而按条件删除文档要走一遍查询加标记删除，代价高且不回收空间；同时时间范围查询可以直接跳过整个索引。日均 100GB 以下按天分，超过就按小时分或者用 rollover 按大小滚动。</p>
-<p><strong>分片数怎么定</strong>：目标是单个主分片落在 20 到 50GB，日志这种写入后几乎不更新、以时间过滤为主的数据可以取上限。计算方式是「单索引预估主数据量 ÷ 目标分片大小」向上取整，并尽量取数据节点数的整数倍以便均衡分布。</p>
+<p><strong>按时间分索引</strong>的理由不是「好看」，而是：删除整个索引是常数时间操作，而按条件删除文档要走一遍查询加标记删除，代价高且不回收空间；同时时间范围查询可以直接跳过整个索引。</p>
+<p>日均 100GB 以下按天分，超过就按小时分或者用 rollover 按大小滚动。</p>
+<p><strong>分片数怎么定</strong>：目标是单个主分片落在 20 到 50GB，日志这种写入后几乎不更新、以时间过滤为主的数据可以取上限。</p>
+<p>计算方式是「单索引预估主数据量 ÷ 目标分片大小」向上取整，并尽量取数据节点数的整数倍以便均衡分布。</p>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">主分片数创建后不可修改</div>
-    <p>这是硬约束。想改只能 <code>_split</code>（成倍放大）、<code>_shrink</code>（成因子缩小，且要求所有分片先迁到同一节点）或者 reindex 重建，三种方式在数据量大时都很痛。正确的应对是按时间滚动创建索引，让一次错误的规划最多影响一天的数据，而不是影响全部历史。</p>
+    <p>这是硬约束。想改只能 <code>_split</code>（成倍放大）、<code>_shrink</code>（成因子缩小，且要求所有分片先迁到同一节点）或者 reindex 重建，三种方式在数据量大时都很痛。</p>
+<p>正确的应对是按时间滚动创建索引，让一次错误的规划最多影响一天的数据，而不是影响全部历史。</p>
 </div>
 <table>
     <thead>
@@ -467,11 +471,14 @@ curl -X PUT "localhost:9200/_index_template/logs-template" -H 'Content-Type: app
     }
   }
 }'</code></pre>
-<p>两个参数值得单独解释。<code>refresh_interval</code> 默认是 1 秒，意思是写入后最多 1 秒可被搜索到，代价是频繁生成新段；日志场景把它放宽到 30 秒，写入吞吐通常能提升三成以上，而「日志晚 30 秒能搜到」完全可以接受。<code>index.codec</code> 设成 <code>best_compression</code> 会换用压缩率更高的算法，存储能省两到三成，代价是取原文时 CPU 略高——日志是典型的写多读少，这笔交易很划算。</p>
+<p>两个参数值得单独解释。<code>refresh_interval</code> 默认是 1 秒，意思是写入后最多 1 秒可被搜索到，代价是频繁生成新段；日志场景把它放宽到 30 秒，写入吞吐通常能提升三成以上，而「日志晚 30 秒能搜到」完全可以接受。</p>
+<p><code>index.codec</code> 设成 <code>best_compression</code> 会换用压缩率更高的算法，存储能省两到三成，代价是取原文时 CPU 略高——日志是典型的写多读少，这笔交易很划算。</p>
 
 <h2>mapping 的坑：字段爆炸与 text/keyword</h2>
-<p><strong>动态映射是字段爆炸的源头。</strong>默认情况下 ES 见到新字段就自动推断类型并加进 mapping。日志里只要有人把变量拼进了字段名（比如把用户 ID 当成 key），字段数就会无限增长，先是 mapping 变成几 MB 拖慢集群状态同步，接着撞上 <code>index.mapping.total_fields.limit</code>（默认 1000）导致写入直接报错。</p>
-<p>三种应对策略：<code>"dynamic": true</code> 是默认（危险）；<code>"dynamic": false</code> 表示未声明的字段照样存进原始文档、但不建索引也不能检索（推荐的折中，出问题时至少数据还在）；<code>"dynamic": "strict"</code> 表示遇到未声明字段直接拒绝写入（契约最强，但一次上线加字段忘了改模板就会丢日志）。日志平台建议用 <code>false</code>，并配合 mapping 评审。</p>
+<p><strong>动态映射是字段爆炸的源头。</strong>默认情况下 ES 见到新字段就自动推断类型并加进 mapping。</p>
+<p>日志里只要有人把变量拼进了字段名（比如把用户 ID 当成 key），字段数就会无限增长，先是 mapping 变成几 MB 拖慢集群状态同步，接着撞上 <code>index.mapping.total_fields.limit</code>（默认 1000）导致写入直接报错。</p>
+<p>三种应对策略：<code>"dynamic": true</code> 是默认（危险）；<code>"dynamic": false</code> 表示未声明的字段照样存进原始文档、但不建索引也不能检索（推荐的折中，出问题时至少数据还在）；</p>
+<p><code>"dynamic": "strict"</code> 表示遇到未声明字段直接拒绝写入（契约最强，但一次上线加字段忘了改模板就会丢日志）。日志平台建议用 <code>false</code>，并配合 mapping 评审。</p>
 <table>
     <thead>
         <tr>
@@ -653,10 +660,13 @@ curl -X PUT "localhost:9200/logs-*/_settings" -H 'Content-Type: application/json
         </tr>
     </tbody>
 </table>
-<p>成本控制的四个抓手，按性价比排：<strong>按用途分索引并设不同保留期</strong>（调试日志留 3 天、业务日志 15 天、审计日志 180 天，比统一 30 天省一半以上）；<strong>冷热分层</strong>（只有 hot 层需要 SSD）；<strong>关掉不需要检索的大字段的索引</strong>；<strong>采样低价值日志</strong>（比如健康检查的访问日志按 1% 采样，或者干脆在采集层丢掉）。</p>
+<p>成本控制的四个抓手，按性价比排：<strong>按用途分索引并设不同保留期</strong>（调试日志留 3 天、业务日志 15 天、审计日志 180 天，比统一 30 天省一半以上）；<strong>冷热分层</strong>（只有 hot 层需要 SSD）；<strong>关掉不需要检索的大字段的索引</strong>；</p>
+<p><strong>采样低价值日志</strong>（比如健康检查的访问日志按 1% 采样，或者干脆在采集层丢掉）。</p>
 
 <h2>结构化日志是前提，日志规范是底线</h2>
-<p><strong>用 grok 正则解析非结构化日志，是整条链路里最脆的一环。</strong>它是 CPU 消耗最大的处理器，写得不好会发生灾难性回溯把管道卡死；更要命的是它与日志文案强耦合——开发改一句日志措辞，解析就失配，字段变成未解析状态，往往几周后才有人发现。正确做法是在应用侧直接输出 JSON，把级别、服务、追踪标识、耗时、状态码都作为独立字段，采集端只做透传。</p>
+<p><strong>用 grok 正则解析非结构化日志，是整条链路里最脆的一环。</strong>它是 CPU 消耗最大的处理器，写得不好会发生灾难性回溯把管道卡死；</p>
+<p>更要命的是它与日志文案强耦合——开发改一句日志措辞，解析就失配，字段变成未解析状态，往往几周后才有人发现。</p>
+<p>正确做法是在应用侧直接输出 JSON，把级别、服务、追踪标识、耗时、状态码都作为独立字段，采集端只做透传。</p>
 <p>下面这条 Ingest Pipeline 演示了结构化之后处理层还需要做的几件事：脱敏、清掉换行、删无用字段、失败兜底。</p>
 <pre><code class="language-bash">curl -X PUT "localhost:9200/_ingest/pipeline/logs-sanitize" -H 'Content-Type: application/json' -d '
 {

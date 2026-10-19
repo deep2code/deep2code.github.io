@@ -176,10 +176,14 @@ app.post('/orders', {
 <h2>② 原理 · 五个框架，三种中间件模型</h2>
 <p>搞清这一节能解决迁移时最费时间的一类工作：把「响应之后做点什么」从一种模型翻译到另一种。</p>
 <p>Express、Koa、Fastify、NestJS、Hono 在「中间件」这个词下面藏着三套完全不同的机制，这是选型里影响最深远、被讨论得最少的一层。</p>
-<p><strong>线性 next 回调（Express）</strong>：中间件是 <code>(req, res, next)</code>，框架维护一个有序数组，调 <code>next()</code> 才往下走。它没有「回程」这个概念——函数一旦调完 <code>next()</code> 就返回了，下游什么时候结束它不知道。所以计时、审计、统一改写响应这类后置逻辑在 Express 里只能靠监听 <code>res</code> 的 <code>finish</code> / <code>close</code> 事件，或者干脆猴补丁劫持 <code>res.end</code>、<code>res.write</code>（compression、response-time 这类中间件都是这么干的，也正是多个中间件互相打架的根源）。</p>
-<p><strong>洋葱 async（Koa、Hono）</strong>：中间件是 <code>async (ctx, next)</code>，<code>await next()</code> 之后的代码就是回程。后置逻辑、<code>try/catch</code> 兜住下游全部异常、<code>finally</code> 里打点，都是语言本身就成立的写法，不需要框架提供额外机制。代价是每一层都在调用栈上多压一个 async 帧，而且任何一层忘了 <code>await</code>，回程就会跑在下游还没结束的时候。</p>
-<p><strong>固定阶段钩子（Fastify）</strong>：Fastify 不用洋葱，它把一次请求切成语义明确的阶段，你往阶段上挂钩子。想改什么东西，必须挂在允许改它的那个阶段——这看起来啰嗦，实际是把「什么时候能改响应体」这类隐式知识变成了 API 约束。</p>
-<p><strong>双层结构（NestJS）</strong>：NestJS 有两套并存。底层平台（Express 或 Fastify）的中间件照常跑在最外面；Nest 自己的 Guard、Interceptor、Pipe、Filter 跑在路由匹配之后，因此拿得到「即将执行哪个 controller 方法」这类元信息，代价是没匹配上路由的请求根本走不到这些增强器。其中 Interceptor 用 RxJS 包裹 handler 的返回流，是这套里唯一有回程语义的。</p>
+<p><strong>线性 next 回调（Express）</strong>：中间件是 <code>(req, res, next)</code>，框架维护一个有序数组，调 <code>next()</code> 才往下走。它没有「回程」这个概念——函数一旦调完 <code>next()</code> 就返回了，下游什么时候结束它不知道。</p>
+<p>所以计时、审计、统一改写响应这类后置逻辑在 Express 里只能靠监听 <code>res</code> 的 <code>finish</code> / <code>close</code> 事件，或者干脆猴补丁劫持 <code>res.end</code>、<code>res.write</code>（compression、response-time 这类中间件都是这么干的，也正是多个中间件互相打架的根源）。</p>
+<p><strong>洋葱 async（Koa、Hono）</strong>：中间件是 <code>async (ctx, next)</code>，<code>await next()</code> 之后的代码就是回程。后置逻辑、<code>try/catch</code> 兜住下游全部异常、<code>finally</code> 里打点，都是语言本身就成立的写法，不需要框架提供额外机制。</p>
+<p>代价是每一层都在调用栈上多压一个 async 帧，而且任何一层忘了 <code>await</code>，回程就会跑在下游还没结束的时候。</p>
+<p><strong>固定阶段钩子（Fastify）</strong>：Fastify 不用洋葱，它把一次请求切成语义明确的阶段，你往阶段上挂钩子。</p>
+<p>想改什么东西，必须挂在允许改它的那个阶段——这看起来啰嗦，实际是把「什么时候能改响应体」这类隐式知识变成了 API 约束。</p>
+<p><strong>双层结构（NestJS）</strong>：NestJS 有两套并存。底层平台（Express 或 Fastify）的中间件照常跑在最外面；Nest 自己的 Guard、Interceptor、Pipe、Filter 跑在路由匹配之后，因此拿得到「即将执行哪个 controller 方法」这类元信息，代价是没匹配上路由的请求根本走不到这些增强器。</p>
+<p>其中 Interceptor 用 RxJS 包裹 handler 的返回流，是这套里唯一有回程语义的。</p>
 <div class="mermaid">
 flowchart TB
     ROOT{"中间件靠什么串起来?"}
@@ -250,7 +254,8 @@ app.use(async (ctx, next) =&gt; {
 <h2>② 原理 · Express 4 的 async 异常：没人接的那个 Promise</h2>
 <p>搞清这一节能解决一个经常被误判的故障组合：偶发 504 加容器莫名重启。</p>
 <p>「Express 不自动捕获 async 异常」这句话流传很广，但后果常被说成「请求挂住」就结束了，实际是两个后果同时发生。</p>
-<p>Express 4 的路由层确实有 <code>try/catch</code>，但它只包住对 handler 的<strong>同步调用</strong>，并且完全忽略 handler 的返回值。你的 <code>async</code> 函数返回一个 promise，没人 <code>await</code> 它：第一，reject 不会转交给错误中间件，也没有任何响应写回，请求一直占着连接直到网关超时；第二，这是一个未处理的 rejection，而 Node 15 起 <code>--unhandled-rejections</code> 默认是 <code>throw</code>，等于抛出未捕获异常——没装 <code>process.on('unhandledRejection')</code> 的进程会直接退出。所以线上表现往往是「偶发 504 + 容器莫名重启」，很多人会误判成内存或健康检查问题。</p>
+<p>Express 4 的路由层确实有 <code>try/catch</code>，但它只包住对 handler 的<strong>同步调用</strong>，并且完全忽略 handler 的返回值。你的 <code>async</code> 函数返回一个 promise，没人 <code>await</code> 它：第一，reject 不会转交给错误中间件，也没有任何响应写回，请求一直占着连接直到网关超时；</p>
+<p>第二，这是一个未处理的 rejection，而 Node 15 起 <code>--unhandled-rejections</code> 默认是 <code>throw</code>，等于抛出未捕获异常——没装 <code>process.on('unhandledRejection')</code> 的进程会直接退出。所以线上表现往往是「偶发 504 + 容器莫名重启」，很多人会误判成内存或健康检查问题。</p>
 <div class="mermaid">
 stateDiagram-v2
     [*] --> 匹配路由
@@ -281,7 +286,8 @@ stateDiagram-v2
 <tr><td>Hono</td><td>进 onError</td><td>进 onError</td><td>逃到 process 级或运行时兜底</td><td>onError 里避免把原始 message 吐给客户端</td></tr>
 </tbody>
 </table>
-<p>结论很明确：所有现代框架都能接住 handler 里的 async 异常，只有 Express 4 不能；而<strong>没有一个框架</strong>能接住定时器和事件回调里抛出的错。进程级的 <code>uncaughtException</code> / <code>unhandledRejection</code> 处理器只该用来打日志然后优雅退出，不要用它把进程留着继续跑——那时候状态已经不可信了（骨架见 <a href="../">Node.js 后端的适用边界</a>）。</p>
+<p>结论很明确：所有现代框架都能接住 handler 里的 async 异常，只有 Express 4 不能；而<strong>没有一个框架</strong>能接住定时器和事件回调里抛出的错。</p>
+<p>进程级的 <code>uncaughtException</code> / <code>unhandledRejection</code> 处理器只该用来打日志然后优雅退出，不要用它把进程留着继续跑——那时候状态已经不可信了（骨架见 <a href="../">Node.js 后端的适用边界</a>）。</p>
 <pre><code class="language-javascript">// Express 4 必备的包装器：把返回值接上 catch，交给错误中间件
 const wrap = (fn) =&gt; (req, res, next) =&gt;
   Promise.resolve(fn(req, res, next)).catch(next)
@@ -307,8 +313,10 @@ app.use((err, req, res, next) =&gt; {
 <p>搞清这一节能解决两件事：判断这份性能收益在你的接口里还剩多少，以及为什么返回字段会莫名消失。</p>
 <p>Fastify 的性能优势不是「实现得更精致」，是把两段本来在每个请求里重复做的解释型工作，挪到启动时编译成了专用函数。</p>
 <p><strong>校验</strong>：注册路由时，ajv 把你的 JSON Schema 编译成一个针对这个 schema 的校验函数（生成源码再实例化），运行时只是调一个普通函数。手写 <code>if (typeof x !== 'string')</code> 式校验或者每请求解释一遍 schema，开销完全不是一个量级。</p>
-<p><strong>序列化</strong>：声明了 response schema，Fastify 用 fast-json-stringify 生成一个专用的字符串拼接函数。通用序列化必须在运行时枚举对象的键、判断每个值的类型、处理 toJSON 与循环引用；而专用函数里键名是写死的字面量，类型是已知的，直接拼。响应形状固定时这是实打实的 CPU 节省，响应体越大越明显。</p>
-<p>代价也很具体：生成的序列化函数<strong>只输出 schema 里声明过的属性</strong>，没声明的字段被静默丢掉。这是 Fastify 最高频的「字段莫名消失」来源，好处是顺手防住了密码哈希这类内部字段泄漏。另外类型声明错了会输出被转换后的值而不是报错；响应形状不固定（任意 key 的字典、联合类型很多的 payload）时，schema 要么写不出来，要么写成 <code>additionalProperties: true</code> 退回通用路径，收益归零，这种接口就别硬套。</p>
+<p><strong>序列化</strong>：声明了 response schema，Fastify 用 fast-json-stringify 生成一个专用的字符串拼接函数。通用序列化必须在运行时枚举对象的键、判断每个值的类型、处理 toJSON 与循环引用；而专用函数里键名是写死的字面量，类型是已知的，直接拼。</p>
+<p>响应形状固定时这是实打实的 CPU 节省，响应体越大越明显。</p>
+<p>代价也很具体：生成的序列化函数<strong>只输出 schema 里声明过的属性</strong>，没声明的字段被静默丢掉。这是 Fastify 最高频的「字段莫名消失」来源，好处是顺手防住了密码哈希这类内部字段泄漏。</p>
+<p>另外类型声明错了会输出被转换后的值而不是报错；响应形状不固定（任意 key 的字典、联合类型很多的 payload）时，schema 要么写不出来，要么写成 <code>additionalProperties: true</code> 退回通用路径，收益归零，这种接口就别硬套。</p>
 <div class="mermaid">
 sequenceDiagram
     participant C as 客户端
@@ -345,7 +353,8 @@ sequenceDiagram
 <tr><td>onError</td><td>错误已决定要回给客户端</td><td>仅观测</td><td>错误日志与告警</td><td>在这里抛新错，覆盖原始错误</td></tr>
 </tbody>
 </table>
-<p>另一个容易忽略的机制是<strong>封装作用域</strong>：Fastify 的插件默认形成一个作用域，里面注册的钩子、装饰器、路由只在这个子树可见。这是它做模块边界的方式，也是「我明明装饰了 request，另一个插件里却 undefined」的答案——要跨作用域共享就得用 fastify-plugin 显式打破封装。这个模型比 Express 那种全局 <code>app.use</code> 可控得多，但需要先理解它才不会一路踩。</p>
+<p>另一个容易忽略的机制是<strong>封装作用域</strong>：Fastify 的插件默认形成一个作用域，里面注册的钩子、装饰器、路由只在这个子树可见。</p>
+<p>这是它做模块边界的方式，也是「我明明装饰了 request，另一个插件里却 undefined」的答案——要跨作用域共享就得用 fastify-plugin 显式打破封装。这个模型比 Express 那种全局 <code>app.use</code> 可控得多，但需要先理解它才不会一路踩。</p>
 <pre><code class="language-javascript">const app = Fastify({
   logger: { level: 'info' },   // pino 结构化日志，比同步写 stdout 的日志中间件开销低得多
   bodyLimit: 1048576,          // 默认 1MB。超限直接 413，不要等到 handler 里才判断大小
@@ -392,7 +401,8 @@ app.addHook('onResponse', async (req, reply) =&gt; {
 <tr><td>NestJS</td><td>不自己匹配，完全交给底层适配器</td><td>随适配器变</td><td>随适配器变</td><td>随适配器变</td></tr>
 </tbody>
 </table>
-<p>顺序敏感带来的真实故障是这样的：Express 里先注册了 <code>/users/:id</code>，再注册 <code>/users/export</code>，那么 <code>/users/export</code> 永远会被前者吃掉，<code>req.params.id</code> 等于字符串 export，业务逻辑去查一个不存在的用户然后返回 404，看起来像数据问题。Fastify 和 Hono 的树式/合成式匹配让静态段天然优先，不会出现这个问题。反过来，Fastify 对重复注册直接抛错，迁移老项目时经常在启动阶段就炸出一批历史遗留的重复路由——这是好事，只是要有准备。</p>
+<p>顺序敏感带来的真实故障是这样的：Express 里先注册了 <code>/users/:id</code>，再注册 <code>/users/export</code>，那么 <code>/users/export</code> 永远会被前者吃掉，<code>req.params.id</code> 等于字符串 export，业务逻辑去查一个不存在的用户然后返回 404，看起来像数据问题。</p>
+<p>Fastify 和 Hono 的树式/合成式匹配让静态段天然优先，不会出现这个问题。反过来，Fastify 对重复注册直接抛错，迁移老项目时经常在启动阶段就炸出一批历史遗留的重复路由——这是好事，只是要有准备。</p>
 
 <h2>② 原理 · 装饰器式 DI 的代价</h2>
 <p>搞清这一节能解决 NestJS 选型里最实际的问题：这套约束值不值这些代价。</p>
@@ -408,7 +418,8 @@ app.addHook('onResponse', async (req, reply) =&gt; {
 <tr><td>适配器抽象（Express / Fastify 可换）</td><td>换底层不用改 controller</td><td>抽象层遮住了底层能力</td><td>底层特有的中间件、请求对象扩展、流式细节在切换时全部要重写</td></tr>
 </tbody>
 </table>
-<p>判断标准不是项目大小，而是<strong>有多少横切逻辑需要在多人协作下保持一致</strong>。三个人维护二十个接口，DI 带来的约束收益抵不上心智成本；十几个人共享一套鉴权、审计、多租户上下文、事务边界，那这套约束省下来的 review 和返工时间会远超学习成本。</p>
+<p>判断标准不是项目大小，而是<strong>有多少横切逻辑需要在多人协作下保持一致</strong>。三个人维护二十个接口，DI 带来的约束收益抵不上心智成本；</p>
+<p>十几个人共享一套鉴权、审计、多租户上下文、事务边界，那这套约束省下来的 review 和返工时间会远超学习成本。</p>
 
 <h2>② 原理 · 性能差异的机制归因与量级判断</h2>
 <p>搞清这一节能解决一个具体决定：要不要为了性能换框架——大多数情况下答案是不换。</p>
@@ -426,7 +437,8 @@ app.addHook('onResponse', async (req, reply) =&gt; {
 </tbody>
 </table>
 <p>归纳成两句可用的判断：<strong>框架开销是每请求近似固定的 CPU 成本</strong>，所以 handler 里只要有一次数据库往返或外部调用，这个固定成本在总延迟里的占比就被大幅稀释；<strong>真正会把框架差距放大的只有两类场景</strong>——极高 QPS 的小响应（网关、健康检查、边缘转发），以及大响应体序列化，因为它既是 CPU 密集又会阻塞事件循环，把同一进程上其他请求的延迟一起拖高（机制见 <a href="../event-loop/">事件循环的六个阶段</a>，怎么量延迟和抓火焰图见 <a href="../performance/">性能诊断</a>）。</p>
-<p>还有两个常见的推理错误值得点出来。一是拿空路由跑分的倍数外推到业务接口——空路由测的是固定开销，业务接口里它可能只占百分之几。二是把运行时和框架混成一个变量：换到 Bun 上 HTTP 层实现变了，这跟你选哪个框架是两件独立的事，别把两者的收益记在同一笔账上（Bun 的取舍见站内 Bun 专题）。</p>
+<p>还有两个常见的推理错误值得点出来。一是拿空路由跑分的倍数外推到业务接口——空路由测的是固定开销，业务接口里它可能只占百分之几。</p>
+<p>二是把运行时和框架混成一个变量：换到 Bun 上 HTTP 层实现变了，这跟你选哪个框架是两件独立的事，别把两者的收益记在同一笔账上（Bun 的取舍见站内 Bun 专题）。</p>
 
 <h2>③ 场景 · 按业务形态选框架与退出成本</h2>
 <p>把前面的机制换算成按形态的建议，并把「三年后想换」这件事明码标价。</p>
@@ -454,8 +466,10 @@ app.addHook('onResponse', async (req, reply) =&gt; {
 <tr><td>Hono</td><td>Context 对象</td><td>路由与中间件</td><td>业务逻辑；Web 标准 Request/Response 到处通用</td><td>低，但换到需要 Node 原生能力的场景要补适配</td></tr>
 </tbody>
 </table>
-<p>有一条可以显著压低退出成本的做法，和框架无关：<strong>不要把框架对象传进领域层</strong>。service 的入参是已校验的普通对象，返回普通对象，框架只负责在边界上做解析、校验、序列化。做到这一点，任何框架的退出成本都会降到「重写边界层」；做不到，哪怕选了最轻的框架也会被拖住。</p>
-<p><strong>不适用边界</strong>：换框架解决不了运行时层面的问题——单线程的硬约束在 <a href="../">Node.js 后端的适用边界</a>，阻塞与线程池在 <a href="../event-loop/">事件循环的六个阶段与实际影响</a>，慢在哪要靠 <a href="../performance/">性能诊断</a> 的四类数据定位；类型与构建链路的选择在 <a href="../typescript/">TypeScript 工程化</a>。如果分诊结论是「等下游」或「主线程在算」，那么无论选哪个框架，延迟都不会变。</p>
+<p>有一条可以显著压低退出成本的做法，和框架无关：<strong>不要把框架对象传进领域层</strong>。service 的入参是已校验的普通对象，返回普通对象，框架只负责在边界上做解析、校验、序列化。</p>
+<p>做到这一点，任何框架的退出成本都会降到「重写边界层」；做不到，哪怕选了最轻的框架也会被拖住。</p>
+<p><strong>不适用边界</strong>：换框架解决不了运行时层面的问题——单线程的硬约束在 <a href="../">Node.js 后端的适用边界</a>，阻塞与线程池在 <a href="../event-loop/">事件循环的六个阶段与实际影响</a>，慢在哪要靠 <a href="../performance/">性能诊断</a> 的四类数据定位；</p>
+<p>类型与构建链路的选择在 <a href="../typescript/">TypeScript 工程化</a>。如果分诊结论是「等下游」或「主线程在算」，那么无论选哪个框架，延迟都不会变。</p>
 <p>这条路径上，前面几篇给的是运行时与工程链路的约束，本篇把它们换算成框架选择，下一篇深入这套里约束最强、退出成本也最高的那一个。</p>
 
 <div class="callout-title">最容易踩的坑</div>

@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="LangChain 上手要掌握的只有四件事：四种消息类型的语义与工具调用的多轮协议、ChatPromptTemplate 的历史占位符与花括号转义这个高频坑、LCEL 的串联并行透传与重试回退组合子、结构化输出该用模型原生接口而不是 PydanticOutputParser。另附流式与结构化解析为何冲突、astream_events 怎么推中间状态、为什么必须全链路异步、以及只有 tracing 能看到真正发出的 prompt。">
+    <meta name="description" content="LangChain 上手要掌握四件事：四种消息类型与工具调用的多轮协议、ChatPromptTemplate 的历史占位符与花括号转义坑、LCEL 的串联并行与重试回退组合子、结构化输出用模型原生接口而非 PydanticOutputParser；另附流式、全链路异步与 tracing。">
     <meta name="keywords" content="LangChain,LangChain 入门,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/ai/langchain/intro/">
     <meta property="og:title" content="LangChain 上手：LCEL、消息抽象与结构化输出 - LangChain - 资深码农">
-    <meta property="og:description" content="LangChain 上手要掌握的只有四件事：四种消息类型的语义与工具调用的多轮协议、ChatPromptTemplate 的历史占位符与花括号转义这个高频坑、LCEL 的串联并行透传与重试回退组合子、结构化输出该用模型原生接口而不是 PydanticOutputParser。另附流式与结构化解析为何冲突、astream_events 怎么推中间状态、为什么必须全链路异步、以及只有 tracing 能看到真正发出的 prompt。">
+    <meta property="og:description" content="LangChain 上手要掌握四件事：四种消息类型与工具调用的多轮协议、ChatPromptTemplate 的历史占位符与花括号转义坑、LCEL 的串联并行与重试回退组合子、结构化输出用模型原生接口而非 PydanticOutputParser；另附流式、全链路异步与 tracing。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/ai/langchain/intro/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="LangChain 上手：LCEL、消息抽象与结构化输出 - LangChain">
-    <meta name="twitter:description" content="LangChain 上手要掌握的只有四件事：四种消息类型的语义与工具调用的多轮协议、ChatPromptTemplate 的历史占位符与花括号转义这个高频坑、LCEL 的串联并行透传与重试回退组合子、结构化输出该用模型原生接口而不是 PydanticOutputParser。另附流式与结构化解析为何冲突、astream_events 怎么推中间状态、为什么必须全链路异步、以及只有 tracing 能看到真正发出的 prompt。">
+    <meta name="twitter:description" content="LangChain 上手要掌握四件事：四种消息类型与工具调用的多轮协议、ChatPromptTemplate 的历史占位符与花括号转义坑、LCEL 的串联并行与重试回退组合子、结构化输出用模型原生接口而非 PydanticOutputParser；另附流式、全链路异步与 tracing。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,11 +68,13 @@
                     </header>
                     <div class="article-content">
 
-<p>上手 LangChain 需要真正搞懂的只有四件事：消息抽象、Prompt 模板、LCEL 组合子、结构化输出。剩下的都是这四件事的排列组合。这篇按这个顺序讲，每一处都标出常见的错法——因为网上教程里的写法有相当比例已经过时或者不可靠。RAG 的装配见站内 LangChain 搭 RAG 一篇，Agent 见站内 LangChain Agent 工程约束一篇。</p>
+<p>上手 LangChain 需要真正搞懂的只有四件事：消息抽象、Prompt 模板、LCEL 组合子、结构化输出。剩下的都是这四件事的排列组合。</p>
+<p>这篇按这个顺序讲，每处都标出常见错法——网上教程的写法有相当比例已过时或不可靠。RAG 的装配见站内 LangChain 搭 RAG 一篇，Agent 见站内 LangChain Agent 工程约束一篇。</p>
 
 <h2>消息抽象：为什么现在一律用 chat 接口</h2>
 
-<p>LangChain 早期有两套模型接口：<code>LLM</code> 收字符串返字符串，<code>ChatModel</code> 收消息列表返消息。<strong>现在一律用 <code>ChatModel</code></strong>，原因不是风格偏好，而是<code>LLM</code> 接口拿不到角色区分、拿不到工具调用、拿不到多模态内容块。很多老教程用 <code>OpenAI</code> 而不是 <code>ChatOpenAI</code>，抄过来会发现工具调用根本没法用。</p>
+<p>LangChain 早期有两套模型接口：<code>LLM</code> 收字符串返字符串，<code>ChatModel</code> 收消息列表返消息。<strong>现在一律用 <code>ChatModel</code></strong>，原因不是风格偏好，而是<code>LLM</code> 接口拿不到角色区分、工具调用、多模态内容块。</p>
+<p>很多老教程用 <code>OpenAI</code> 而不是 <code>ChatOpenAI</code>，抄过来会发现工具调用根本没法用。</p>
 
 <table>
 <thead><tr><th>消息类型</th><th>语义</th><th>谁产生</th><th>常见错误</th></tr></thead>
@@ -139,7 +141,8 @@ for m in msgs.to_messages():
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">花括号踩坑的隐蔽形态</div>
-    <p>报错还算好事。更麻烦的是模板里写了正则量词、LaTeX、C 风格代码这类含花括号的内容，有些恰好能通过解析，于是变量被替换成空字符串，prompt 静默变形，你看到的只是「模型效果不稳定」。凡是 prompt 里要放代码或 JSON，一律走变量注入。</p>
+    <p>报错还算好事。更麻烦的是模板里写了正则量词、LaTeX、C 风格代码这类含花括号的内容，有些恰好能通过解析，变量被替换成空字符串，prompt 静默变形，你只看到「模型效果不稳定」。</p>
+<p>凡是 prompt 要放代码或 JSON，一律走变量注入。</p>
 </div>
 
 <h2>LCEL 的核心组合子</h2>
@@ -249,7 +252,8 @@ asyncio.run(main())</code></pre>
 
 <h2>结构化输出：别再用提示词硬约束</h2>
 
-<p>这是本篇最该纠正的一个流传很广的做法。<strong><code>PydanticOutputParser</code> 的原理是把 JSON Schema 说明塞进 prompt，然后希望模型照做</strong>；而 <code>with_structured_output</code> 走的是模型原生的工具调用或 JSON 模式，约束发生在解码阶段，由服务端保证输出可解析。两者可靠性不在一个量级。</p>
+<p>这是本篇最该纠正的一个流传很广的做法。<strong><code>PydanticOutputParser</code> 的原理是把 JSON Schema 说明塞进 prompt，然后希望模型照做</strong>；</p>
+<p>而 <code>with_structured_output</code> 走模型原生的工具调用或 JSON 模式，约束发生在解码阶段，由服务端保证输出可解析。两者可靠性不在一个量级。</p>
 
 <table>
 <thead><tr><th>方式</th><th>约束发生在哪</th><th>可靠性</th><th>失败表现</th><th>额外成本</th></tr></thead>
@@ -310,7 +314,8 @@ def log_bad_sample(text, raw, err):
 
 <h2>流式输出，以及它和结构化解析的冲突</h2>
 
-<p>用户感知到的快慢主要是<strong>首个分片到达的时间</strong>，不是总生成时长。所以流式不是锦上添花，是延迟工程里性价比最高的一步。但流式和结构化解析在原理上打架：解析需要完整合法的 JSON，流式要求半截就能用。</p>
+<p>用户感知到的快慢主要是<strong>首个分片到达的时间</strong>，不是总生成时长。所以流式不是锦上添花，是延迟工程里性价比最高的一步。</p>
+<p>但流式和结构化解析在原理上打架：解析需要完整合法的 JSON，流式要求半截就能用。</p>
 
 <table>
 <thead><tr><th>接口</th><th>产出什么</th><th>适合</th><th>代价</th></tr></thead>
@@ -370,7 +375,8 @@ flowchart TB
 
 <h2>异步与调试</h2>
 
-<p><strong>LLM 调用是长耗时 IO，同步接口会把线程或事件循环占住</strong>。用 <code>ainvoke</code> 和 <code>abatch</code> 之后，同一进程能撑住的并发高一个数量级。要注意异步必须全链路：链里只要有一个只实现同步方法的组件，框架会把它扔进线程池执行，并发上限重新被线程数卡住——community 里的老组件经常是这种情况。</p>
+<p><strong>LLM 调用是长耗时 IO，同步接口会把线程或事件循环占住</strong>。用 <code>ainvoke</code> 和 <code>abatch</code> 之后，同一进程能撑住的并发高一个数量级。</p>
+<p>异步必须全链路：链里只要有一个只实现同步方法的组件，框架会把它扔进线程池执行，并发上限重新被线程数卡住——community 的老组件经常如此。</p>
 
 <table>
 <thead><tr><th>调试手段</th><th>能看到什么</th><th>局限</th></tr></thead>
@@ -383,7 +389,7 @@ flowchart TB
 </tbody>
 </table>
 
-<p>排查「为什么模型答错」只有一个有效路径：<strong>看真正发出去的 prompt</strong>。十次里有八九次答案就在那里——历史被裁掉了关键一轮、检索片段根本没提到这个事、变量渲染成了空字符串。凭猜测改 prompt 是最浪费时间的做法。</p>
+<p>排查「模型为什么答错」只有一个有效路径：<strong>看真正发出去的 prompt</strong>。十次里有八九次答案就在那里——历史裁掉了关键一轮、检索片段没提到这个事、变量渲染成空字符串。凭猜测改 prompt 最浪费时间。</p>
 
 <h2>反模式</h2>
 

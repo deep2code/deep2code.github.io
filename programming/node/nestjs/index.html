@@ -90,7 +90,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>NestJS 的本质是一句话：<strong>把 Spring 那套 IoC 容器、依赖注入和模块化边界搬到了 Node。</strong>它没有发明新的运行时能力，默认情况下底层还是 Express（可换 Fastify 适配器），它带来的全部价值是「约定」——把一个中大型团队在 Express 项目里迟早要自己长出来的分层、DI、统一校验与错误处理，提前固化成框架能力。相应地，它的代价也全部来自这层约定：编译链依赖装饰器元数据、启动要扫描模块图、打包体积更大、上手门槛更高。这篇讲清它的执行模型和这些代价具体贵在哪。</p>
+<p>NestJS 的本质是一句话：<strong>把 Spring 那套 IoC 容器、依赖注入和模块化边界搬到了 Node。</strong></p>
+<p>它没有发明新的运行时能力，默认情况下底层还是 Express（可换 Fastify 适配器），它带来的全部价值是「约定」——把一个中大型团队在 Express 项目里迟早要自己长出来的分层、DI、统一校验与错误处理，提前固化成框架能力。</p>
+<p>相应地，它的代价也全部来自这层约定：编译链依赖装饰器元数据、启动要扫描模块图、打包体积更大、上手门槛更高。这篇讲清它的执行模型和这些代价具体贵在哪。</p>
 
 
 <div class="callout callout-info">
@@ -104,7 +106,9 @@
 </div>
 
 <h2>① 用法 · 最小可用骨架与「要做什么 → 写在哪一层」</h2>
-<p>NestJS 的上手成本不在语法，而在「这几个文件各写什么、哪几行不写就会在生产上出问题」。下面这份骨架是一个能跑起来的单领域服务：一个业务模块、一个 provider、一个 controller、一份带校验的 DTO、一个全局异常过滤器，再加上 <code>main.ts</code> 里必须显式配置的四件事。注释只说明为什么要这么写，机制解释全部留给原理层。</p>
+<p>NestJS 的上手成本不在语法，而在「这几个文件各写什么、哪几行不写就会在生产上出问题」。</p>
+<p>下面这份骨架是一个能跑起来的单领域服务：一个业务模块、一个 provider、一个 controller、一份带校验的 DTO、一个全局异常过滤器，再加上 <code>main.ts</code> 里必须显式配置的四件事。</p>
+<p>注释只说明为什么要这么写，机制解释全部留给原理层。</p>
 <pre><code class="language-bash"># 脚手架与按领域生成一组文件（controller、service、module、dto 一次生成）
 npx @nestjs/cli new order-api
 npx nest generate resource order
@@ -306,7 +310,8 @@ sequenceDiagram
 <p>还有一个容易踩的细节：<strong>中间件运行在适配器层（Express 或 Fastify），它比 Guard 更早，也拿不到 Nest 的执行上下文</strong>。所以需要读取路由元数据的逻辑（例如按 handler 上的装饰器决定要不要鉴权）只能写在 Guard 里，写在中间件里是拿不到 <code>ctx.getHandler()</code> 的。</p>
 
 <h2>② 原理 · DI 与作用域：单例是默认，也应该是终点</h2>
-<p>先纠正一个流传很广的说法：「NestJS 因为有 DI 所以运行时慢」。<strong>DEFAULT 作用域的 provider 是进程级单例，依赖树在启动阶段解析一次，运行期调用等同普通方法调用，没有容器查找开销。</strong>NestJS 相对裸 Express 的吞吐差距主要来自默认适配器和装饰器路由的包装层，换 Fastify 适配器能拿回大部分（数字见 <a href="../framework-compare/">Express vs NestJS vs Fastify</a>）。真正昂贵的是作用域用错。</p>
+<p>先纠正一个流传很广的说法：「NestJS 因为有 DI 所以运行时慢」。<strong>DEFAULT 作用域的 provider 是进程级单例，依赖树在启动阶段解析一次，运行期调用等同普通方法调用，没有容器查找开销。</strong></p>
+<p>NestJS 相对裸 Express 的吞吐差距主要来自默认适配器和装饰器路由的包装层，换 Fastify 适配器能拿回大部分（数字见 <a href="../framework-compare/">Express vs NestJS vs Fastify</a>）。真正昂贵的是作用域用错。</p>
 <table>
     <thead>
         <tr><th>作用域</th><th>实例数量</th><th>合理用途</th><th>代价与坑</th></tr>
@@ -317,7 +322,9 @@ sequenceDiagram
         <tr><td><code>TRANSIENT</code></td><td>每个注入点一份</td><td>需要各自持有独立状态的工具类，例如带前缀的 logger</td><td>实例数量随注入点线性增长；容易和单例混淆导致状态丢失</td></tr>
     </tbody>
 </table>
-<p><strong>绝大多数用 REQUEST 作用域的真实动机只是「想拿到当前请求的 traceId 和用户」。</strong>这件事的正确做法是 <code>AsyncLocalStorage</code>：在中间件或 Interceptor 里 <code>run()</code> 一次，把上下文放进去，所有 provider 保持单例、按需读取。至于循环依赖，<code>forwardRef</code> 能让它跑起来，但它是止血而非设计——出现循环依赖通常说明两个模块的职责边界划错了，更好的解法是抽出共享的下层模块，或把一个方向改成事件通知。模块划分的原则见站内 DDD 相关内容：<strong>按业务领域划模块，不要按技术层次划</strong>。ControllersModule / ServicesModule / RepositoriesModule 这种结构里，每个模块都要导出全部内容、每个模块都被所有人 imports，模块边界形同虚设。</p>
+<p><strong>绝大多数用 REQUEST 作用域的真实动机只是「想拿到当前请求的 traceId 和用户」。</strong>这件事的正确做法是 <code>AsyncLocalStorage</code>：在中间件或 Interceptor 里 <code>run()</code> 一次，把上下文放进去，所有 provider 保持单例、按需读取。</p>
+<p>至于循环依赖，<code>forwardRef</code> 能让它跑起来，但它是止血而非设计——出现循环依赖通常说明两个模块的职责边界划错了，更好的解法是抽出共享的下层模块，或把一个方向改成事件通知。</p>
+<p>模块划分的原则见站内 DDD 相关内容：<strong>按业务领域划模块，不要按技术层次划</strong>。ControllersModule / ServicesModule / RepositoriesModule 这种结构里，每个模块都要导出全部内容、每个模块都被所有人 imports，模块边界形同虚设。</p>
 <div class="mermaid">
 stateDiagram-v2
     [*] --> 扫描模块图
@@ -534,7 +541,9 @@ flowchart TB
         <tr><td>同一套领域逻辑要同时服务 HTTP、定时任务与消息消费</td><td>逻辑全部放 Service，三个入口各写一层薄适配</td><td>写在 Controller 里的业务无法被非 HTTP 入口复用，单测还被迫起 HTTP</td><td>事务边界要重新界定在 Service 上；幂等性要自己保证，消息入口会重复投递</td></tr>
     </tbody>
 </table>
-<p><strong>不适用边界</strong>：NestJS 解决不了运行时层面的问题。单线程被同步计算堵住、事件循环延迟、内存增长的定位在 <a href="../event-loop/">事件循环的六个阶段</a> 与 <a href="../performance/">性能诊断</a>；装饰器元数据依赖的那套编译配置、跨包共享类型、<code>strict</code> 选项的取舍在 <a href="../typescript/">TypeScript 工程化</a>；框架之间的中间件模型与吞吐差异在 <a href="../framework-compare/">框架选型</a>；接口契约、错误码与版本策略属于接口设计范畴，见 <a href="../../../api/">接口与协议系列</a>。本篇只负责「构件怎么分层、代价贵在哪、什么形态下值得」。</p>
+<p><strong>不适用边界</strong>：NestJS 解决不了运行时层面的问题。单线程被同步计算堵住、事件循环延迟、内存增长的定位在 <a href="../event-loop/">事件循环的六个阶段</a> 与 <a href="../performance/">性能诊断</a>；</p>
+<p>装饰器元数据依赖的那套编译配置、跨包共享类型、<code>strict</code> 选项的取舍在 <a href="../typescript/">TypeScript 工程化</a>；框架之间的中间件模型与吞吐差异在 <a href="../framework-compare/">框架选型</a>；接口契约、错误码与版本策略属于接口设计范畴，见 <a href="../../../api/">接口与协议系列</a>。</p>
+<p>本篇只负责「构件怎么分层、代价贵在哪、什么形态下值得」。</p>
 <p>这条路径上，上一篇比较的是各框架的中间件模型与真实开销，本篇把其中「约定最强」的那一端讲透，下一篇转向另一端——把 Web 标准 Request 与 Response 当作唯一抽象、几乎不提供任何约定的轻量框架。</p>
 <h2>③ 场景 · 反模式对照表</h2>
 <table>

@@ -104,7 +104,8 @@
 </div>
 
 <h2>① 用法 · 上 GraphQL 之前必须先配好的四件事</h2>
-<p>这一层不解释机制，只给清单。<strong>graphql-js 本身不限深度、不限复杂度、也没有请求超时</strong>，Apollo Server 默认开着内省，所以「装上就能跑」和「能上生产」之间差的就是下面四件事。每一件都必须在预发环境真的验证一次——只把配置写进代码不算配好，验证方法见下面的 curl 片段。为什么闸门要卡在这几个位置、为什么静态复杂度只能当粗筛，见下一节起的原理部分。</p>
+<p>这一层不解释机制，只给清单。<strong>graphql-js 本身不限深度、不限复杂度、也没有请求超时</strong>，Apollo Server 默认开着内省，所以「装上就能跑」和「能上生产」之间差的就是下面四件事。</p>
+<p>每一件都必须在预发环境真的验证一次——只把配置写进代码不算配好，验证方法见下面的 curl 片段。为什么闸门要卡在这几个位置、为什么静态复杂度只能当粗筛，见下一节起的原理部分。</p>
 
 <pre><code class="language-typescript">import { ApolloServer, type ApolloServerPlugin } from '@apollo/server';
 import { GraphQLError } from 'graphql';
@@ -264,8 +265,10 @@ curl -s localhost:4000/graphql -H "authorization: Bearer $TOKEN_A" -H 'content-t
 
 <h2>② 原理 · 一个端点、一个 200：复杂度被挪到了服务端</h2>
 <p>搞清这一节能解决「为什么我们原来那套运维面板和限流规则一夜之间全废了」。</p>
-<p>REST 体系里，URL 本身就是运维的抓手：限流按路径、缓存按路径、审计按路径、鉴权按路由、慢接口排行按路径。GraphQL 把这个维度整个抹掉了——所有请求都打到同一个端点，真正的意图藏在请求体里。于是每一项运维能力都得往下沉一层，重建在「操作」和「字段」两个新维度上。</p>
-<p>顺手纠正两个流传很广的说法。<strong>GraphQL 并不是只能用 POST</strong>：规范允许用 GET 传查询，这也是让 CDN 有机会参与缓存的唯一途径，只是受 URL 长度限制，要配合持久化查询才好用。<strong>也不是永远返回 200</strong>：传统的 <code>application/json</code> 响应固定 200，而规范定义的 <code>application/graphql-response+json</code> 允许请求级失败用 4xx 表达（解析或校验不通过返回 400）。真实行为取决于服务端实现和客户端发的 <code>Accept</code> 头，监控要同时覆盖两种形态。</p>
+<p>REST 体系里，URL 本身就是运维的抓手：限流按路径、缓存按路径、审计按路径、鉴权按路由、慢接口排行按路径。GraphQL 把这个维度整个抹掉了——所有请求都打到同一个端点，真正的意图藏在请求体里。</p>
+<p>于是每一项运维能力都得往下沉一层，重建在「操作」和「字段」两个新维度上。</p>
+<p>顺手纠正两个流传很广的说法。<strong>GraphQL 并不是只能用 POST</strong>：规范允许用 GET 传查询，这也是让 CDN 有机会参与缓存的唯一途径，只是受 URL 长度限制，要配合持久化查询才好用。</p>
+<p><strong>也不是永远返回 200</strong>：传统的 <code>application/json</code> 响应固定 200，而规范定义的 <code>application/graphql-response+json</code> 允许请求级失败用 4xx 表达（解析或校验不通过返回 400）。真实行为取决于服务端实现和客户端发的 <code>Accept</code> 头，监控要同时覆盖两种形态。</p>
 <table>
 <thead><tr><th>运维能力</th><th>REST 里靠什么</th><th>GraphQL 里必须落在哪</th><th>不做的后果</th></tr></thead>
 <tbody>
@@ -308,8 +311,10 @@ flowchart TB
 
 <h2>② 原理 · schema 即契约：没有版本号，只有可加不可减</h2>
 <p>搞清这一节能解决「为什么我们的 schema 只增不减，字段永远删不掉」，以及「为什么加一个枚举值就打挂了老版本 App」。</p>
-<p>很多人第一反应是「为什么不搞个 /v2」。原因是版本号的粒度和 GraphQL 对不上：一个查询可以任意组合字段，做版本就得把整个 schema 复制一份，两份之间的 resolver、权限规则、缓存声明全部双写。GraphQL 选的是<strong>字段级演进</strong>——加字段永远安全，删字段必须走 deprecation 流程。</p>
-<p>最容易搞错的是方向性：<strong>输出位置和输入位置的兼容方向是相反的</strong>。输出字段从可空收紧成非空是兼容的，因为客户端本来就在处理 null；输入字段从可空收紧成非空是破坏性的，因为老客户端根本不会传它。还有一条几乎所有人都会踩：给输出位置的枚举<strong>新增</strong>一个值也是破坏性变更，老客户端的分支里没有这一项。</p>
+<p>很多人第一反应是「为什么不搞个 /v2」。原因是版本号的粒度和 GraphQL 对不上：一个查询可以任意组合字段，做版本就得把整个 schema 复制一份，两份之间的 resolver、权限规则、缓存声明全部双写。</p>
+<p>GraphQL 选的是<strong>字段级演进</strong>——加字段永远安全，删字段必须走 deprecation 流程。</p>
+<p>最容易搞错的是方向性：<strong>输出位置和输入位置的兼容方向是相反的</strong>。输出字段从可空收紧成非空是兼容的，因为客户端本来就在处理 null；</p>
+<p>输入字段从可空收紧成非空是破坏性的，因为老客户端根本不会传它。还有一条几乎所有人都会踩：给输出位置的枚举<strong>新增</strong>一个值也是破坏性变更，老客户端的分支里没有这一项。</p>
 <table>
 <thead><tr><th>变更</th><th>输出位置</th><th>输入位置</th><th>安全做法</th></tr></thead>
 <tbody>
@@ -341,7 +346,8 @@ stateDiagram-v2
     Rollback --> Dep
     Gone --> [*]
 </div>
-<p>这条链上最容易断的是「用量观测」。<strong>没有字段级用量统计，<code>@deprecated</code> 就只是一句注释</strong>，字段永远删不掉。移动端尤其要注意最后一步：老版本 App 可能在线上挂两三年，字段的真实下线周期由它决定，不由你的发布节奏决定。SDL 写法与可空性冒泡规则见<a href="intro/">入门篇</a>。</p>
+<p>这条链上最容易断的是「用量观测」。<strong>没有字段级用量统计，<code>@deprecated</code> 就只是一句注释</strong>，字段永远删不掉。</p>
+<p>移动端尤其要注意最后一步：老版本 App 可能在线上挂两三年，字段的真实下线周期由它决定，不由你的发布节奏决定。SDL 写法与可空性冒泡规则见<a href="intro/">入门篇</a>。</p>
 <pre><code class="language-graphql"># 契约演进的规则全都能从 SDL 上读出来，关键是记住输入和输出的方向是相反的
 
 type Order implements Node {
@@ -384,14 +390,18 @@ enum OrderStatus {
 
 <h2>② 原理 · 执行器怎么跑一个查询：字段级 resolver 与并发边界</h2>
 <p>搞清这一节能解决「明明只加了一个字段，下游调用量翻了十倍」和「一个请求里塞三个 mutation 为什么没变快」。</p>
-<p>执行分三步：解析成 AST、对着 schema 校验、然后<strong>逐字段递归执行</strong>。这里有个普遍误解：「只有我自己写了 resolver 的字段才有开销」。实际上<strong>每个字段都有 resolver</strong>，没写就用默认解析器去读父对象的同名属性，字段数本身就是成本——一个请求 500 个字段就是 500 次函数调用加 500 次错误捕获。</p>
-<p>并发规则也常被讲反：<strong>同一层的多个字段是并行执行的</strong>（graphql-js 用 <code>Promise.all</code> 推进），<strong>但 Mutation 的根字段规范要求串行</strong>，这是为了让一个请求里的多个写操作有确定顺序。所以指望「一个请求里塞三个 mutation 来并行提速」是无效的，反而会让这个请求的耗时变成三者之和，超时预算要按串行算。</p>
-<p>resolver 拿到的第四个参数 <code>info</code> 里有当前字段的 AST 和完整的 selection set，这是<strong>唯一能做投影下推的地方</strong>——想只 SELECT 客户端真正请求的列，只能从这里读。另一个容易漏的点是<strong>取消不会自动传播</strong>：客户端断开连接后，多数实现的 resolver 会继续跑到底，下游调用一个不少。要真正止损，得自己把中断信号从 HTTP 层串到每个数据源调用上。</p>
-<p>资源放大有四个来源，量级完全不同：<strong>字段总数</strong>是线性的（同一个昂贵字段起 50 个别名就放大 50 倍，而且别名计数必须在片段展开之后做）；<strong>列表乘积</strong>是指数的（三层各取 100 条就是百万级 resolver 调用）；<strong>嵌套层数</strong>在环形关系下可以无限累乘；<strong>逐元素取数</strong>就是 N+1，成因与攒批手段详见<a href="n-plus-one/">性能篇</a>。内省查询本身也是一个深嵌套查询，生产环境应当关闭。</p>
+<p>执行分三步：解析成 AST、对着 schema 校验、然后<strong>逐字段递归执行</strong>。这里有个普遍误解：「只有我自己写了 resolver 的字段才有开销」。</p>
+<p>实际上<strong>每个字段都有 resolver</strong>，没写就用默认解析器去读父对象的同名属性，字段数本身就是成本——一个请求 500 个字段就是 500 次函数调用加 500 次错误捕获。</p>
+<p>并发规则也常被讲反：<strong>同一层的多个字段是并行执行的</strong>（graphql-js 用 <code>Promise.all</code> 推进），<strong>但 Mutation 的根字段规范要求串行</strong>，这是为了让一个请求里的多个写操作有确定顺序。</p>
+<p>所以指望「一个请求里塞三个 mutation 来并行提速」是无效的，反而会让这个请求的耗时变成三者之和，超时预算要按串行算。</p>
+<p>resolver 拿到的第四个参数 <code>info</code> 里有当前字段的 AST 和完整的 selection set，这是<strong>唯一能做投影下推的地方</strong>——想只 SELECT 客户端真正请求的列，只能从这里读。</p>
+<p>另一个容易漏的点是<strong>取消不会自动传播</strong>：客户端断开连接后，多数实现的 resolver 会继续跑到底，下游调用一个不少。要真正止损，得自己把中断信号从 HTTP 层串到每个数据源调用上。</p>
+<p>资源放大有四个来源，量级完全不同：<strong>字段总数</strong>是线性的（同一个昂贵字段起 50 个别名就放大 50 倍，而且别名计数必须在片段展开之后做）；<strong>列表乘积</strong>是指数的（三层各取 100 条就是百万级 resolver 调用）；</p>
+<p><strong>嵌套层数</strong>在环形关系下可以无限累乘；<strong>逐元素取数</strong>就是 N+1，成因与攒批手段详见<a href="n-plus-one/">性能篇</a>。内省查询本身也是一个深嵌套查询，生产环境应当关闭。</p>
 
 <h2>② 原理 · 闸门为什么必须卡在解析之后、执行之前</h2>
 <p>搞清这一节能解决「我们加了复杂度限制，为什么恶意查询还是把数据库打满了」——通常是闸门挂晚了，钱已经花出去才开始判断。</p>
-<p>复杂度要算在 <code>didResolveOperation</code> 这一步：文档已经解析校验完、variables 已经拿到，但一个 resolver 都还没跑。这是唯一既算得准、又还来得及拒绝的位置。放到 resolver 里熔断就晚了。深度检查更简单，它是纯静态的，放在校验阶段最省。</p>
+<p>复杂度要算在 <code>didResolveOperation</code> 这一步：文档已解析校验完、variables 已拿到，但一个 resolver 都还没跑。这是唯一既算得准、又来得及拒绝的位置。放到 resolver 里熔断就晚了。深度检查是纯静态的，放校验阶段最省。</p>
 <pre><code class="language-typescript">import { type ApolloServerPlugin } from '@apollo/server';
 import { GraphQLError, separateOperations } from 'graphql';
 import { getComplexity, simpleEstimator, fieldExtensionsEstimator } from 'graphql-query-complexity';
@@ -426,7 +436,9 @@ const complexityPlugin = (max: number): ApolloServerPlugin =&gt; ({
   },
 });</code></pre>
 <p>静态复杂度只是<strong>估算</strong>：它不知道某个 id 背后是 3 条数据还是 30 万条。所以它挡的是「明显不合理的形状」，真实资源保护还得靠执行期的超时和下游并发上限兜底，两者缺一不可。</p>
-<p>持久化查询这块有个必须分清的边界：<strong>自动持久化查询是性能手段，不是安全手段</strong>。它的流程是客户端先发哈希、服务端没见过就回一个未找到的错误码、客户端再把全文发上来注册——任何人都可以注册任意查询。要当安全机制用，必须换成构建期生成清单、运行期只放行清单内哈希、并关闭动态注册的白名单模式。</p>
+<p>持久化查询这块有个必须分清的边界：<strong>自动持久化查询是性能手段，不是安全手段</strong>。</p>
+<p>它的流程是客户端先发哈希、服务端没见过就回一个未找到的错误码、客户端再把全文发上来注册——任何人都可以注册任意查询。</p>
+<p>要当安全机制用，必须换成构建期生成清单、运行期只放行清单内哈希、并关闭动态注册的白名单模式。</p>
 <div class="mermaid">
 sequenceDiagram
     participant C as 客户端
@@ -442,11 +454,12 @@ sequenceDiagram
     E-->>C: 边缘直接命中，不回源
     Note over E,G: 能进边缘缓存的前提是查询幂等<br/>且响应里不含任何用户态字段
 </div>
-<p>换成白名单模式后要接受两个工程约束：<strong>发布顺序变严格</strong>（必须先让服务端拿到新清单，再放量新客户端），以及<strong>清单只能加不能删</strong>（要一直兼容还在线上的最老客户端版本）。移动端团队尤其要把这两点写进发布流程，否则灰度期会大面积报「查询未注册」。</p>
+<p>换成白名单模式后要接受两个工程约束：<strong>发布顺序变严格</strong>（必须先让服务端拿到新清单，再放量新客户端），以及<strong>清单只能加不能删</strong>（要一直兼容还在线上的最老客户端版本）。</p>
+<p>移动端团队尤其要把这两点写进发布流程，否则灰度期会大面积报「查询未注册」。</p>
 
 <h2>② 原理 · 缓存为什么难，以及能找回哪几层</h2>
 <p>搞清这一节能解决「上了 GraphQL 之后 CDN 命中率归零，压力全压到数据库」。</p>
-<p>难点有三个，都不是实现问题而是模型问题：请求意图在 body 里，HTTP 中间层看不懂；响应是按查询形状临时拼出来的，不对应任何稳定资源标识；同一个字段在不同查询里的合理 TTL 不一样。缓存只能自己分层重建。</p>
+<p>难点有三个，都不是实现问题而是模型问题：请求意图在 body 里，HTTP 中间层看不懂；响应按查询形状临时拼出来，不对应任何稳定资源标识；同一字段在不同查询里合理 TTL 不一样。缓存得自己分层重建。</p>
 <table>
 <thead><tr><th>缓存层</th><th>键是什么</th><th>命中率来源</th><th>失效手段</th><th>会脏在哪</th></tr></thead>
 <tbody>
@@ -457,11 +470,13 @@ sequenceDiagram
 <tr><td>客户端归一化缓存</td><td><code>__typename</code> + id</td><td>同一对象在多个视图间共享</td><td>mutation 返回完整对象</td><td>拿不到 id 的类型无法归一化，写完列表不刷新</td></tr>
 </tbody>
 </table>
-<p>字段级 TTL 声明有个容易忽略的传播规则：<strong>整份响应的可缓存时间取所有被请求字段里最小的那个</strong>。只要一个查询里混进了一个不可缓存的用户态字段，整份响应就不可公共缓存。所以真正有效的做法是<strong>把用户态字段从公共查询里拆出去</strong>，让公共部分能进边缘缓存，私有部分单独一条链路。Apollo 侧的具体配置见<a href="apollo/">实战篇</a>，缓存键与失效模式的通用讨论见<a href="../../database/cache/">缓存设计</a>。</p>
+<p>字段级 TTL 声明有个容易忽略的传播规则：<strong>整份响应的可缓存时间取所有被请求字段里最小的那个</strong>。只要一个查询里混进了一个不可缓存的用户态字段，整份响应就不可公共缓存。</p>
+<p>所以真正有效的做法是<strong>把用户态字段从公共查询里拆出去</strong>，让公共部分能进边缘缓存，私有部分单独一条链路。Apollo 侧的具体配置见<a href="apollo/">实战篇</a>，缓存键与失效模式的通用讨论见<a href="../../database/cache/">缓存设计</a>。</p>
 
 <h2>② 原理 · 可观测性：按 operation 聚合，而不是按 URL</h2>
 <p>搞清这一节能解决「仪表盘全绿但用户在报错」，以及「只知道 /graphql 慢，定不到具体字段」。</p>
-<p>上线第一天就会发现：所有 access log 的 path 都一样，原来那套按 URL 排序的慢接口面板彻底失效。重建时的第一个决策是<strong>选什么当主维度</strong>。答案不是客户端自报的 <code>operationName</code>——它可以缺失、可以重名、也可以伪造。主维度应该是<strong>把文档规范化（去空白、排序、剥离字面量）之后算出的签名</strong>，<code>operationName</code> 只作可读标签挂在旁边。</p>
+<p>上线第一天就会发现：所有 access log 的 path 都一样，原来那套按 URL 排序的慢接口面板彻底失效。重建时的第一个决策是<strong>选什么当主维度</strong>。答案不是客户端自报的 <code>operationName</code>——它可以缺失、可以重名、也可以伪造。</p>
+<p>主维度应该是<strong>把文档规范化（去空白、排序、剥离字面量）之后算出的签名</strong>，<code>operationName</code> 只作可读标签挂在旁边。</p>
 <table>
 <thead><tr><th>指标</th><th>维度</th><th>用来回答什么</th><th>高基数风险</th></tr></thead>
 <tbody>
@@ -518,7 +533,9 @@ sum by (parent_type, field) (increase(gql_field_calls_total[30d])) == 0</code></
 <tr><td>数据访问层强制带身份</td><td>所有取数入口统一过滤，漏不掉</td><td>需要改造取数层接口</td><td><strong>唯一可靠的位置</strong></td></tr>
 </tbody>
 </table>
-<p>最典型的漏点是<strong>反向遍历</strong>：查「我的订单」这条路径做了校验，但从某个订单对象反向取它的所有者字段、再取所有者的其他订单，这条路径上往往没人管。第二个漏点是 <strong>mutation 的返回对象</strong>：写操作本身鉴权了，但返回的对象上挂着一堆本来读不到的字段。第三个是错误信息泄露存在性——无权访问应当返回 null 加统一错误码，而不是「该订单属于其他用户」。联邦架构下还有实体解析入口这一类绕过路径，详见<a href="federation/">微服务篇</a>；越权本身的分类与自查清单见<a href="../security/auth-security/">认证授权安全</a>。</p>
+<p>最典型的漏点是<strong>反向遍历</strong>：查「我的订单」这条路径做了校验，但从某个订单对象反向取它的所有者字段、再取所有者的其他订单，这条路径上往往没人管。</p>
+<p>第二个漏点是 <strong>mutation 的返回对象</strong>：写操作鉴权了，但返回的对象上挂着一堆本来读不到的字段。第三个是错误信息泄露存在性——无权访问应返回 null 加统一错误码，而不是「该订单属于其他用户」。</p>
+<p>联邦架构下还有实体解析入口这一类绕过路径，详见<a href="federation/">微服务篇</a>；越权本身的分类与自查清单见<a href="../security/auth-security/">认证授权安全</a>。</p>
 
 <h2>③ 场景 · 该上 GraphQL，还是写个 BFF 就够了</h2>
 <p>判断依据只有两条：<strong>调用方是不是你自己控制的、一个页面要拼几个后端资源且组合是否经常变</strong>。前者决定你能不能用持久化查询白名单，后者决定聚合收益有多大。</p>
@@ -546,7 +563,8 @@ flowchart TB
 <tr><td>只是想「减少请求数」</td><td>不要为这个理由上 GraphQL</td><td>HTTP/2 之后连接复用已经很便宜，请求数不再是主要瓶颈</td><td>—，这是最常见的错误采用动机</td></tr>
 </tbody>
 </table>
-<p>不适用的边界说得再直接一点：<strong>如果没有人力补齐复杂度上限、持久化查询白名单、字段级鉴权和按签名的可观测这四项，就不要上</strong>。缺了它们的 GraphQL 服务不是「功能少一点」，而是把数据库的执行能力开放给了公网。逐项成本对照与迁移路径见<a href="rest-vs-graphql/">选型篇</a>。</p>
+<p>不适用的边界说得再直接一点：<strong>如果没有人力补齐复杂度上限、持久化查询白名单、字段级鉴权和按签名的可观测这四项，就不要上</strong>。</p>
+<p>缺了它们的 GraphQL 服务不是「功能少一点」，而是把数据库的执行能力开放给了公网。逐项成本对照与迁移路径见<a href="rest-vs-graphql/">选型篇</a>。</p>
 
 <h2>③ 场景 · 专题路径：五篇各自解决哪一段</h2>
 <p>这一篇是路径的起点，解决「要不要上、上了之后补哪些配置」；机制细节都在子篇里，按下面顺序读最省力。</p>

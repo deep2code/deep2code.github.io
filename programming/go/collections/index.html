@@ -263,7 +263,8 @@ func SumByCapped[T any, K comparable](
 <h2>② 原理 · Go 没有 Stream，这是刻意的</h2>
 <p>搞清这一节，能解释为什么上面全是循环而不是链式调用，以及什么时候破例用迭代器是划算的。</p>
 <p>从 Java 或 C# 过来的人第一件事就是找 <code>stream().filter().map().collect()</code>，然后发现 Go 什么都没有。这不是标准库没做完——<strong>Go 刻意不提供完整的流式 API</strong>，理由有三个，而且每一个都站得住脚。</p>
-<p>第一，<strong>错误处理</strong>：Go 的错误是返回值，链式调用里没有地方放它。第二，<strong>可读性</strong>：链式写法从里往外读，和执行顺序相反，调试时断点不好下。第三，<strong>性能</strong>：每一环都是一层闭包调用，还容易在中间产生临时切片，而一个显式循环可以一次遍历做完全部工作并且一次分配到位。</p>
+<p>第一，<strong>错误处理</strong>：Go 的错误是返回值，链式调用里没有地方放它。第二，<strong>可读性</strong>：链式写法从里往外读，和执行顺序相反，调试时断点不好下。</p>
+<p>第三，<strong>性能</strong>：每一环都是一层闭包调用，还容易在中间产生临时切片，而一个显式循环可以一次遍历做完全部工作并且一次分配到位。</p>
 <div class="mermaid">
 flowchart TB
     subgraph tier1["第一层 一次显式循环 绝大多数场景的答案"]
@@ -318,14 +319,17 @@ flowchart TB
 </table>
 
 <h2>② 原理 · 分组 key 的可比较性：两套规则，两类症状</h2>
-<p>搞清这一节，能解释用法层那张自查清单为什么长这样：<strong>Go 对 map key 的约束分编译期与运行期两套</strong>。编译期看静态类型——切片、map、函数不可比较，含这些字段的结构体也不可比较，所以直接编译失败；运行期只对接口类型生效——接口的静态类型是可比较的，但装进去的动态类型如果不可比较，读写那一刻才 panic。这就是为什么「含切片字段的结构体做 key」是编译错误，而「<code>map[any]T</code> 里塞了一个切片」是线上偶发崩溃。</p>
+<p>搞清这一节，能解释用法层那张自查清单为什么长这样：<strong>Go 对 map key 的约束分编译期与运行期两套</strong>。编译期看静态类型——切片、map、函数不可比较，含这些字段的结构体也不可比较，所以直接编译失败；</p>
+<p>运行期只对接口类型生效——接口的静态类型是可比较的，但装进去的动态类型如果不可比较，读写那一刻才 panic。这就是为什么「含切片字段的结构体做 key」是编译错误，而「<code>map[any]T</code> 里塞了一个切片」是线上偶发崩溃。</p>
 <p>可比较不等于可靠。相等语义由类型自己决定：结构体逐字段比较、指针比地址、浮点遵循 IEEE 754（于是 <code>NaN != NaN</code>，每次写入都是一个新条目，这个 map 会一直长）。<code>time.Time</code> 是这类问题里最常见的一个。</p>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">拿 time.Time 直接做分组 key</div>
-    <p><code>time.Time</code> 内部有三个字段：墙上时钟、单调时钟读数、以及一个 <code>*Location</code> 指针。<strong>两个表示同一时刻的 <code>time.Time</code> 用等号比较可能不相等</strong>——来自 <code>time.Now()</code> 的带单调读数，从数据库读出来的不带；时区不同的两个值即使时刻相同也不相等。用它做 key 的症状是「同一天被分成了三四个组」。正确做法是先 <code>Format</code> 成日期字符串，或者取 <code>Unix()</code> 时间戳再按粒度取整。</p>
+    <p><code>time.Time</code> 内部有三个字段：墙上时钟、单调时钟读数、以及一个 <code>*Location</code> 指针。<strong>两个表示同一时刻的 <code>time.Time</code> 用等号比较可能不相等</strong>——来自 <code>time.Now()</code> 的带单调读数，从数据库读出来的不带；时区不同的两个值即使时刻相同也不相等。</p>
+<p>用它做 key 的症状是「同一天被分成了三四个组」。正确做法是先 <code>Format</code> 成日期字符串，或者取 <code>Unix()</code> 时间戳再按粒度取整。</p>
 </div>
-<p>还有一层常被忽略的成本：<strong>key 的大小直接影响每次读写的开销</strong>。map 的每次查找都要算一遍哈希并做一次相等比较，key 是几十个字段的大结构体时这两步都不便宜。所以分组 key 只放真正参与分组的字段，不要图省事把整个业务对象塞进去。</p>
+<p>还有一层常被忽略的成本：<strong>key 的大小直接影响每次读写的开销</strong>。map 的每次查找都要算一遍哈希并做一次相等比较，key 是几十个字段的大结构体时这两步都不便宜。</p>
+<p>所以分组 key 只放真正参与分组的字段，不要图省事把整个业务对象塞进去。</p>
 
 <h2>② 原理 · 迭代器：range over func 的真实控制流</h2>
 <p>搞清这一节，能解决「自己写迭代器包装层却 panic 提示 yield 在返回 false 后又被调用」这一类问题。</p>
@@ -534,9 +538,12 @@ flowchart TB
 <tr><td>元素类型不可比较</td><td>提取一个可比较的标识作为 key</td><td>试图直接把切片当 key 编译失败</td></tr>
 </tbody>
 </table>
-<p>还有一个常被忽略的点：<strong>用 map 做集合时，写入顺序完全不保留</strong>。所以任何需要输出给用户、写进文件、或者参与后续比较的集合结果，都必须在最后显式排序，否则你会得到一个每次运行都不同的输出，diff 和测试断言全都没法写。这也是 <code>slices.Sorted(maps.Keys(m))</code> 这个组合在实际代码里出现频率如此高的原因。</p>
+<p>还有一个常被忽略的点：<strong>用 map 做集合时，写入顺序完全不保留</strong>。</p>
+<p>所以任何需要输出给用户、写进文件、或者参与后续比较的集合结果，都必须在最后显式排序，否则你会得到一个每次运行都不同的输出，diff 和测试断言全都没法写。</p>
+<p>这也是 <code>slices.Sorted(maps.Keys(m))</code> 这个组合在实际代码里出现频率如此高的原因。</p>
 <p><strong>不适用边界</strong>：两种情况不该用 map 当集合。一是元素数量极大且元素本身很小（比如几千万个整数），这时排序后用双指针归并在内存和速度上都更优，因为 map 每个条目都有哈希桶的额外开销，量级判断见 <a href="../../algorithms/">算法与数据结构在后端工程中的位置</a>；二是集合需要持久化或跨进程传递，那时有序切片是更自然的表示形式，序列化后也是稳定的。另外，聚合逻辑本身能用 SQL 表达时就不要搬到应用层，排序与切片操作的写法在 <a href="../sort/">排序与切片操作的现代写法</a>，给聚合函数写表驱动测试的方法在 <a href="../../testing/">测试策略与可测性设计</a>。</p>
-<p>回到最上面三样工具：<strong><code>map[K][]V</code> 做分组、<code>map[K]数值</code> 做累加、<code>map[T]struct{}</code> 做去重</strong>，配上泛型写一次 <code>GroupBy</code>、<code>CountBy</code>、<code>SumBy</code>，覆盖日常九成需求。<code>maps</code> 与 <code>slices</code> 包省掉的是琐碎的辅助函数，不是改变了做法；迭代器值得知道，但它的价值在于让自定义数据源可被 <code>range</code> 以及用 <code>iter.Seq2</code> 传 error，不是拿来当 Stream 用。</p>
+<p>回到最上面三样工具：<strong><code>map[K][]V</code> 做分组、<code>map[K]数值</code> 做累加、<code>map[T]struct{}</code> 做去重</strong>，配上泛型写一次 <code>GroupBy</code>、<code>CountBy</code>、<code>SumBy</code>，覆盖日常九成需求。<code>maps</code> 与 <code>slices</code> 包省掉的是琐碎的辅助函数，不是改变了做法；</p>
+<p>迭代器值得知道，但它的价值在于让自定义数据源可被 <code>range</code> 以及用 <code>iter.Seq2</code> 传 error，不是拿来当 Stream 用。</p>
 <p>本篇在簇里的位置：<a href="../sort/">排序与切片操作的现代写法</a> 解决的是「一个切片内部怎么排、怎么查、怎么改」，这篇往上走一层处理「多条记录之间的归并与聚合」，下一步离开数据操作，转向把这些代码组织成包与模块。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../sort/">← 上一步：排序与切片操作的现代写法</a> · <a href="../modules/">下一步：模块、包组织与依赖管理 →</a></p>

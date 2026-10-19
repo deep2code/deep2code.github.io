@@ -67,7 +67,7 @@
                         <h1 class="article-title">Procedure 设计：输入校验、中间件与鉴权</h1>
                     </header>
                     <div class="article-content">
-<p>router 只是命名空间，真正承载业务逻辑和安全边界的是 procedure。tRPC 把 procedure 设计成一条可组合的构建链：<code>.use()</code> 挂中间件、<code>.input()</code> 声明输入 schema、<code>.output()</code> 声明输出 schema、<code>.query()</code> 或 <code>.mutation()</code> 收尾。这条链上每一环都有明确的安全含义，写错一环就是一个漏洞。</p>
+<p>router 只是命名空间，真正承载业务逻辑与安全边界的是 procedure。tRPC 把 procedure 设计成一条可组合的构建链：<code>.use()</code> 挂中间件、<code>.input()</code> 声明输入 schema、<code>.output()</code> 声明输出 schema、<code>.query()</code> 或 <code>.mutation()</code> 收尾。每一环都有明确的安全含义，写错一环就是一个漏洞。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -183,7 +183,9 @@ export const adminProcedure = protectedProcedure.use(requireRole('admin'))</code
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">鉴权不能挂在路由前缀上，tRPC 没有这个东西</div>
-    <p>很多人从 Express 带来一个习惯：把鉴权中间件挂在 <code>/admin</code> 前缀上，前缀下的所有路由自动受保护。<strong>tRPC 没有路由级中间件</strong>——<code>router({ admin: adminRouter })</code> 里的 <code>admin</code> 只是拼出调用路径的一个键，它不会给子 procedure 附加任何行为。如果 <code>adminRouter</code> 里某个 procedure 是用 <code>publicProcedure</code> 定义的，它就是完全公开的，路径叫 <code>admin.deleteUser</code> 也一样能被未登录用户调用。中间件只能通过 <code>.use()</code> 组合在 procedure 的构建链上，所以纪律是：<strong>项目里只允许从 <code>publicProcedure</code>、<code>protectedProcedure</code>、<code>adminProcedure</code> 这几个显式导出的基座起手，禁止直接用 <code>t.procedure</code></strong>，并在 review 时按基座名而不是按目录结构判断一个接口有没有鉴权。</p>
+    <p>很多人从 Express 带来一个习惯：把鉴权中间件挂在 <code>/admin</code> 前缀上，前缀下所有路由自动受保护。<strong>tRPC 没有路由级中间件</strong>——<code>router({ admin: adminRouter })</code> 里的 <code>admin</code> 只是拼出调用路径的键，不会给子 procedure 附加任何行为。</p>
+<p>如果 <code>adminRouter</code> 里某个 procedure 是用 <code>publicProcedure</code> 定义的，它就是完全公开的，路径叫 <code>admin.deleteUser</code> 也一样能被未登录用户调用。</p>
+<p>中间件只能通过 <code>.use()</code> 组合在 procedure 构建链上，所以纪律是：<strong>只允许从 <code>publicProcedure</code>、<code>protectedProcedure</code>、<code>adminProcedure</code> 这几个显式导出的基座起手，禁止直接用 <code>t.procedure</code></strong>，review 时按基座名而非目录结构判断接口有没有鉴权。</p>
 </div>
 
 <pre><code class="language-typescript">// ===== 3) 水平权限（这条记录是不是你的）必须在 resolver 里做 =====
@@ -253,7 +255,7 @@ export const postMutations = router({
 <h2>② 原理 · input schema 是唯一的运行时防线</h2>
 <p>搞清这条，就知道为什么「端到端类型安全」不能替代校验——它保护的是调用方，不是服务端。</p>
 
-<p>这一点必须反复强调：<strong>TS 的类型在编译后完全擦除，服务端运行时没有任何类型信息</strong>。你的 procedure 收到的就是 <code>JSON.parse</code> 出来的裸对象。没有 <code>input()</code> 的 procedure 不是「输入类型是 undefined」，而是「任何人可以发任何东西进来」。</p>
+<p>这一点必须反复强调：<strong>TS 的类型在编译后完全擦除，服务端运行时没有任何类型信息</strong>。procedure 收到的就是 <code>JSON.parse</code> 出来的裸对象。没有 <code>input()</code> 的 procedure 不是「输入类型是 undefined」，而是「任何人可以发任何东西进来」。</p>
 
 <table>
 <thead><tr><th>schema 写法</th><th>挡住什么</th><th>不写的后果</th></tr></thead>
@@ -270,7 +272,7 @@ export const postMutations = router({
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">最危险的一行代码</div>
-    <p>把 <code>authorId</code>、<code>ownerId</code>、<code>role</code>、<code>isAdmin</code> 这类归属或权限字段放进 input schema，然后 <code>...input</code> 展开写库。调用方只要在请求体里加一个 <code>role: "admin"</code>，就完成了提权。<strong>所有归属与权限字段必须从 <code>ctx</code> 取，永远不能从 input 取</strong>，并且写操作的 input 建议一律加 <code>.strict()</code>。</p>
+    <p>把 <code>authorId</code>、<code>ownerId</code>、<code>role</code>、<code>isAdmin</code> 这类归属或权限字段放进 input schema，再用 <code>...input</code> 展开写库。调用方只要在请求体加一个 <code>role: "admin"</code> 就完成提权。<strong>所有归属与权限字段必须从 <code>ctx</code> 取，永远不能从 input 取</strong>，写操作的 input 建议一律加 <code>.strict()</code>。</p>
 </div>
 
 <h2>② 原理 · output schema：什么时候值得付这个维护成本</h2>
@@ -292,7 +294,7 @@ export const postMutations = router({
 <h2>② 原理 · middleware：把运行期守卫变成编译期类型收窄</h2>
 <p>搞清这个机制，就知道为什么「用错基座」会被编译器抓住，而「放错鉴权位置」不会。</p>
 
-<p>这是 tRPC 设计里最值得称赞的一点。<code>t.middleware</code> 拿到 <code>ctx</code> 和 <code>next</code>，<strong><code>next({ ctx: {...} })</code> 传入的新 ctx 会把类型向下游传递</strong>。于是鉴权中间件在运行期确认 session 存在之后，下游 resolver 里 <code>ctx.user</code> 的类型就从 <code>User | null</code> 收窄成了 <code>User</code>——不是靠断言，是编译器真的知道。</p>
+<p>这是 tRPC 设计里最值得称赞的一点。<code>t.middleware</code> 拿到 <code>ctx</code> 和 <code>next</code>，<strong><code>next({ ctx: {...} })</code> 传入的新 ctx 会把类型向下游传递</strong>。于是鉴权中间件在运行期确认 session 存在后，下游 resolver 里 <code>ctx.user</code> 的类型就从 <code>User | null</code> 收窄成 <code>User</code>——不是靠断言，是编译器真的知道。</p>
 
 <table>
 <thead><tr><th>位置</th><th><code>ctx.session</code> 类型</th><th><code>ctx.user</code> 类型</th><th>resolver 里需要判空吗</th></tr></thead>
@@ -323,12 +325,13 @@ sequenceDiagram
     L->>L: 计算耗时并按 path 打点上报
 </div>
 
-<p>最后一列那行「编译器会报错」是这套机制最大的实用价值：用 <code>publicProcedure</code> 写一段需要 <code>ctx.user</code> 的逻辑，类型检查就通不过。<strong>但反过来不成立</strong>——把一个不需要 <code>ctx.user</code> 的敏感操作（比如按 id 删记录）写成 <code>publicProcedure</code>，编译器不会有任何意见。所以基座选择仍然要靠 review 和约定，类型系统只兜住了一半。</p>
+<p>最后一列那行「编译器会报错」是这套机制最大的实用价值：用 <code>publicProcedure</code> 写一段需要 <code>ctx.user</code> 的逻辑，类型检查就通不过。<strong>但反过来不成立</strong>——把不需要 <code>ctx.user</code> 的敏感操作（如按 id 删记录）写成 <code>publicProcedure</code>，编译器不会有任何意见。</p>
+<p>所以基座选择仍然要靠 review 和约定，类型系统只兜住了一半。</p>
 
 <h2>② 原理 · procedure 分层为什么替代不了「路由级中间件」</h2>
 <p>搞清这一节，能解决「以为整个 admin 目录都受保护，其实有几个接口完全公开」。</p>
 
-<p>tRPC 的 <code>router</code> 只做一件事：把 procedure 组织成命名空间，决定客户端调用路径长什么样。<strong>它不是 Express 的 <code>app.use('/admin', auth)</code></strong>，嵌套关系不会向下传递任何行为。安全边界只由「这个 procedure 是从哪个基座 <code>.use()</code> 出来的」决定，与它挂在哪个 router 下完全无关。</p>
+<p>tRPC 的 <code>router</code> 只做一件事：把 procedure 组织成命名空间，决定客户端调用路径。<strong>它不是 Express 的 <code>app.use('/admin', auth)</code></strong>，嵌套关系不会向下传递任何行为。安全边界只由「procedure 从哪个基座 <code>.use()</code> 出来」决定，与它挂在哪个 router 下无关。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -351,7 +354,8 @@ flowchart TB
     ORG --> P4["team.invite 团队设置"]
 </div>
 
-<p>落地上有三条纪律能把这个风险压到最低：<strong>把 <code>t.procedure</code> 藏起来</strong>，只从 <code>server/trpc.ts</code> 导出三到四个基座，并用 lint 规则禁止其他文件直接用 <code>t.procedure</code>；<strong>基座名出现在每个 procedure 的第一行</strong>，review 时扫一眼就知道这个接口要不要登录；<strong>写一个遍历 router 的测试</strong>，断言「不在白名单里的 path 未登录调用时必须返回 UNAUTHORIZED」，这样新增接口漏挂基座会被测试直接拦住。</p>
+<p>落地上有三条纪律能把这个风险压到最低：<strong>把 <code>t.procedure</code> 藏起来</strong>，只从 <code>server/trpc.ts</code> 导出三到四个基座，用 lint 规则禁止其他文件直接用 <code>t.procedure</code>；<strong>基座名出现在每个 procedure 的第一行</strong>，review 扫一眼就知道接口要不要登录；</p>
+<p><strong>写一个遍历 router 的测试</strong>，断言「不在白名单里的 path 未登录调用时必须返回 UNAUTHORIZED」，这样新增接口漏挂基座会被测试直接拦住。</p>
 
 <h2>② 原理 · query、mutation 与 subscription 的真实差异</h2>
 <p>搞清这三者的硬性差异，能解决「偶发重复扣款」和「用户还没点按钮操作就执行了」。</p>
@@ -374,15 +378,18 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">把写操作写成 query 会同时触发三个问题</div>
-    <p>一是可能被 GET 缓存命中，副作用被跳过；二是可能被预取或悬停预加载提前触发，用户还没点就执行了；三是失败后被自动重试，副作用重复执行。只要有副作用就必须是 mutation，没有例外。至于幂等性与重试安全的完整讨论，见站内 <a href="../../design/best-practices/">API 设计最佳实践</a>。</p>
+    <p>一是可能被 GET 缓存命中，副作用被跳过；二是可能被预取或悬停预加载提前触发，用户还没点就执行；三是失败后被自动重试，副作用重复执行。只要有副作用就必须是 mutation，没有例外。</p>
+<p>至于幂等性与重试安全的完整讨论，见站内 <a href="../../design/best-practices/">API 设计最佳实践</a>。</p>
 </div>
 
-<p>subscription 还有一个容易踩的点：<strong>它的 context 只在连接建立时计算一次</strong>。长连接跑了两小时后，<code>ctx.session</code> 里的 token 早已过期，但订阅还在推送数据。生产上要么在推送逻辑里定期重新校验会话，要么给连接设置最大存活时间强制客户端重连。</p>
+<p>subscription 还有一个容易踩的点：<strong>它的 context 只在连接建立时计算一次</strong>。长连接跑了两小时后，<code>ctx.session</code> 里的 token 早已过期，但订阅还在推送数据。</p>
+<p>生产上要么在推送逻辑里定期重新校验会话，要么给连接设置最大存活时间强制客户端重连。</p>
 
 <h2>② 原理 · 鉴权的两层：垂直权限与水平权限</h2>
 <p>搞清这个分工，能解决最常见的一类越权：登录态校验通过，但记录不是你的。</p>
 
-<p>中间件能解决的只是「你是不是登录用户」「你是不是管理员」这类与具体资源无关的判断，也就是垂直权限。而「这条订单是不是你的」属于水平权限，<strong>它必须在 resolver 里查库比对，中间件做不到也不该做</strong>：中间件在 input 校验之前执行，输入结构不可信；而且归属规则每个 procedure 都不一样。</p>
+<p>中间件能解决的只是「你是不是登录用户」「你是不是管理员」这类与具体资源无关的判断，也就是垂直权限。</p>
+<p>而「这条订单是不是你的」属于水平权限，<strong>必须在 resolver 里查库比对，中间件做不到也不该做</strong>：中间件在 input 校验之前执行，输入结构不可信；且归属规则每个 procedure 都不一样。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -409,12 +416,14 @@ sequenceDiagram
     Note over H: 返回 FORBIDDEN 会泄露 id 是否存在<br/>敏感资源建议统一返回 NOT_FOUND
 </div>
 
-<p>越权的完整分类（水平、垂直、上下文越权）、枚举 id 的防护、以及为什么敏感资源要统一返回 NOT_FOUND，见站内 <a href="../../security/auth-security/">认证授权与越权防护</a>；会话与 token 本身的设计见站内 <a href="../../auth/jwt/">JWT 实践</a>。</p>
+<p>越权的完整分类（水平、垂直、上下文越权）、枚举 id 的防护、敏感资源为何统一返回 NOT_FOUND，见站内 <a href="../../security/auth-security/">认证授权与越权防护</a>；会话与 token 的设计见站内 <a href="../../auth/jwt/">JWT 实践</a>。</p>
 
 <h2>② 原理 · 事务与并发：next() 不抛异常带来的陷阱</h2>
 <p>搞清 <code>next()</code> 的返回值语义，能解决「失败的 mutation 居然提交了事务」这类最隐蔽的数据不一致。</p>
 
-<p>「中间件能改写 ctx」这个特性还有一个很实用的落地：<strong>写一个事务中间件，把 <code>ctx.db</code> 换成事务句柄</strong>。这样 resolver 里所有数据访问自动落在同一个事务里，既不用每个 procedure 手写事务包裹，也不会出现某个分支忘了用事务句柄这种漏网。类型上它同样是一次收窄：下游拿到的 <code>ctx.db</code> 就是事务类型，误用外层连接会直接编译报错。</p>
+<p>「中间件能改写 ctx」这个特性还有一个很实用的落地：<strong>写一个事务中间件，把 <code>ctx.db</code> 换成事务句柄</strong>。</p>
+<p>这样 resolver 里所有数据访问自动落在同一个事务里，既不用每个 procedure 手写事务包裹，也不会出现某个分支忘了用事务句柄这种漏网。</p>
+<p>类型上它同样是一次收窄：下游拿到的 <code>ctx.db</code> 就是事务类型，误用外层连接会直接编译报错。</p>
 
 <pre><code class="language-typescript">// 只给 mutation 用：query 包事务纯属浪费，还会白占连接
 const withTransaction = t.middleware(async ({ ctx, next, type }) =&gt; {
@@ -432,7 +441,8 @@ const withTransaction = t.middleware(async ({ ctx, next, type }) =&gt; {
 
 export const txProcedure = protectedProcedure.use(withTransaction)</code></pre>
 
-<p>上面注释里那行是真正的坑：<code>next()</code> 的返回值是一个带 <code>ok</code> 字段的结果对象，<strong>resolver 抛出的 TRPCError 不会穿透中间件往上冒</strong>，所以你必须自己判断并重新抛出，否则失败的 mutation 也会被提交事务。这个行为与 Express 那种「异常自动冒泡」的直觉相反，写日志和监控中间件时同样要注意——判断成败要看 <code>result.ok</code>，而不是用 try catch 包住 <code>next()</code>。</p>
+<p>上面注释里那行是真正的坑：<code>next()</code> 的返回值是带 <code>ok</code> 字段的结果对象，<strong>resolver 抛出的 TRPCError 不会穿透中间件往上冒</strong>，必须自己判断并重新抛出，否则失败的 mutation 也会提交事务。</p>
+<p>这个行为与 Express 那种「异常自动冒泡」的直觉相反，写日志和监控中间件时同样要注意——判断成败要看 <code>result.ok</code>，而不是用 try catch 包住 <code>next()</code>。</p>
 
 <table>
 <thead><tr><th>事务边界</th><th>写法</th><th>优点</th><th>风险</th></tr></thead>
@@ -443,7 +453,9 @@ export const txProcedure = protectedProcedure.use(withTransaction)</code></pre>
 <tr><td>跨服务写操作</td><td>数据库事务用不上</td><td>不适用</td><td>必须改成最终一致方案</td></tr>
 </tbody></table>
 
-<p>最后两条必须提醒。第一，<strong>事务里绝不能放外部 HTTP 调用</strong>：一个三秒超时的第三方接口会让事务持有连接三秒，并发一上来连接池立刻耗尽，症状是全站数据库操作一起变慢，而慢的根因看起来和这个接口毫无关系。第二，tRPC 的 batch 会让多个 mutation 在同一个 HTTP 请求里到达并各自开事务并发执行，<strong>如果两个 mutation 以相反顺序更新同样两行记录就会死锁</strong>；对策是固定更新顺序，或者把需要原子性的操作合并成一个 procedure。写操作的幂等与重试安全见站内 <a href="../../design/best-practices/">API 设计最佳实践</a>。</p>
+<p>最后两条必须提醒。第一，<strong>事务里绝不能放外部 HTTP 调用</strong>：三秒超时的第三方接口会让事务持有连接三秒，并发一上来连接池立刻耗尽，全站数据库操作一起变慢，而根因看起来与它无关。</p>
+<p>第二，tRPC 的 batch 会让多个 mutation 在同一个 HTTP 请求里到达并各自开事务并发执行，<strong>如果两个 mutation 以相反顺序更新同样两行记录就会死锁</strong>；对策是固定更新顺序，或把需要原子性的操作合并成一个 procedure。</p>
+<p>写操作的幂等与重试安全见站内 <a href="../../design/best-practices/">API 设计最佳实践</a>。</p>
 
 <h2>③ 场景 · 按接口类型决定要组合哪几层</h2>
 <p>同一套构建链，不同接口该组合的层数不同。下表给常见接口类型的推荐组合与代价。</p>

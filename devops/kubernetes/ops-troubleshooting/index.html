@@ -196,7 +196,8 @@ flowchart TB
 </div>
 
 <h2>② 原理 · 节点 NotReady 的成因清单</h2>
-<p>搞清这一节能解决「重启节点之后问题半小时又回来」的循环。<code>kubectl describe node</code> 的 <strong>Conditions</strong> 与 <strong>Taints</strong> 两段是唯一正确的第一入口——它们是 kubelet 自己上报的判断结果，比任何猜测都准。<code>Ready</code> 为 <code>Unknown</code> 意味着心跳丢失（问题在 kubelet 进程或它到 apiserver 的链路），为 <code>False</code> 则是 kubelet 活着但自认为不健康（通常是 CNI 或运行时）。</p>
+<p>搞清这一节能解决「重启节点之后问题半小时又回来」的循环。<code>kubectl describe node</code> 的 <strong>Conditions</strong> 与 <strong>Taints</strong> 两段是唯一正确的第一入口——它们是 kubelet 自己上报的判断结果，比任何猜测都准。</p>
+<p><code>Ready</code> 为 <code>Unknown</code> 意味着心跳丢失（问题在 kubelet 进程或它到 apiserver 的链路），为 <code>False</code> 则是 kubelet 活着但自认为不健康（通常是 CNI 或运行时）。</p>
 <table>
 <thead><tr><th>成因</th><th>识别信号</th><th>验证命令</th><th>处置</th></tr></thead>
 <tbody>
@@ -247,7 +248,8 @@ stateDiagram-v2
 <tr><td><code>pid.available</code></td><td>需显式配置</td><td>进程数耗尽，常见于应用疯狂 fork 或僵尸进程</td><td><code>ps -eLf | wc -l</code></td></tr>
 </tbody>
 </table>
-<p>驱逐<strong>顺序</strong>按 QoS 等级：BestEffort 先走，其次是 Burstable 中超出 requests 最多的，Guaranteed 最后。QoS 的判定规则与 CFS 限流机制见主干篇，这里只强调一个推论：<strong>不写 requests 的 Pod 就是驱逐名单上的第一名</strong>，所以 LimitRange 给默认 requests 不只是容量管理，也是稳定性措施。另外要区分两种「被杀」：驱逐是 kubelet 的主动行为，有 <code>Evicted</code> 事件；OOMKilled 是内核行为，退出码 137，只在容器状态里看得到。</p>
+<p>驱逐<strong>顺序</strong>按 QoS 等级：BestEffort 先走，其次是 Burstable 中超出 requests 最多的，Guaranteed 最后。QoS 的判定规则与 CFS 限流机制见主干篇，这里只强调一个推论：<strong>不写 requests 的 Pod 就是驱逐名单上的第一名</strong>，所以 LimitRange 给默认 requests 不只是容量管理，也是稳定性措施。</p>
+<p>另外要区分两种「被杀」：驱逐是 kubelet 的主动行为，有 <code>Evicted</code> 事件；OOMKilled 是内核行为，退出码 137，只在容器状态里看得到。</p>
 
 <pre><code class="language-bash"># ===== 节点磁盘巡检（DiskPressure 的标准处置流程）=====
 # 1. 容量和 inode 都要看，inode 耗尽时 df -h 完全看不出来
@@ -282,7 +284,8 @@ crictl stats                   # 节点上谁在吃资源
 </code></pre>
 
 <h2>② 原理 · 控制面故障</h2>
-<p>搞清这一节能识别一类静默故障：业务一切正常，但集群已经失去自愈能力，直到某个 Pod 崩掉却再也没被重建。控制面故障的共同特征是<strong>业务还在跑，但集群失去了变更与自愈能力</strong>——这比业务直接挂掉更危险，因为它对用户是静默的。</p>
+<p>搞清这一节能识别一类静默故障：业务一切正常，但集群已经失去自愈能力，直到某个 Pod 崩掉却再也没被重建。</p>
+<p>控制面故障的共同特征是<strong>业务还在跑，但集群失去了变更与自愈能力</strong>——这比业务直接挂掉更危险，因为它对用户是静默的。</p>
 <table>
 <thead><tr><th>故障</th><th>现象</th><th>业务影响</th><th>验证命令</th></tr></thead>
 <tbody>
@@ -340,7 +343,8 @@ kubectl get --raw=/metrics | grep apiserver_flowcontrol_rejected_requests_total 
 </table>
 
 <h2>② 原理 · 事件与日志在哪</h2>
-<p>搞清这一节能避免最无力的一种处境：故障过去了，证据也没了，复盘只能靠猜。一个必须记住的事实：<strong>Kubernetes 的 Event 默认只保留 1 小时</strong>（apiserver 的 <code>--event-ttl</code>），并且在事件风暴时会被聚合与丢弃。也就是说，凌晨三点的驱逐与重启，等你早上来看时 <code>kubectl get events</code> 已经什么都没有了。<strong>重要事件必须采集进日志系统</strong>，这是事后复盘的唯一依据。</p>
+<p>搞清这一节能避免最无力的一种处境：故障过去了，证据也没了，复盘只能靠猜。一个必须记住的事实：<strong>Kubernetes 的 Event 默认只保留 1 小时</strong>（apiserver 的 <code>--event-ttl</code>），并且在事件风暴时会被聚合与丢弃。</p>
+<p>也就是说，凌晨三点的驱逐与重启，等你早上来看时 <code>kubectl get events</code> 已经什么都没有了。<strong>重要事件必须采集进日志系统</strong>，这是事后复盘的唯一依据。</p>
 <table>
 <thead><tr><th>信息源</th><th>位置 / 命令</th><th>保留期</th><th>注意</th></tr></thead>
 <tbody>
@@ -403,7 +407,8 @@ flowchart TB
 <p>指标采集体系、告警分级与看板设计不在本篇展开，站内 <a href="../../../observability/">可观测性体系</a> 七篇与 <a href="../../../observability/logging/">日志工程</a> 四篇已经写透，本篇只回答「集群级该盯哪些数」。</p>
 
 <h2>② 原理 · 变更引发的故障：webhook 是最锋利的那把刀</h2>
-<p>搞清这一节能避免一类能把集群彻底锁死、且只能手工救回来的故障。集群级事故里，变更引发的占比远高于硬件故障。升级、CNI 更新、准入 webhook 上线是三大高危动作，其中 webhook 的破坏力最强，因为它<strong>横在每一次写请求的路径上</strong>。</p>
+<p>搞清这一节能避免一类能把集群彻底锁死、且只能手工救回来的故障。集群级事故里，变更引发的占比远高于硬件故障。</p>
+<p>升级、CNI 更新、准入 webhook 上线是三大高危动作，其中 webhook 的破坏力最强，因为它<strong>横在每一次写请求的路径上</strong>。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -491,7 +496,9 @@ spec:
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：Pod 级的状态含义、事件判读、退出码与 <code>exec</code> 验证在 <a href="../">主干篇</a>；系统预留、驱逐阈值、日志轮转这些「本来就该配对」的参数在 <a href="../install/">Kubernetes 集群部署形态与生产化配置</a>；卷挂不上与 PVC 绑不上的定位在 <a href="../storage/">Kubernetes 存储抽象与有状态服务的现实</a>；服务不通的分层验证在 <a href="../ingress-network/">Kubernetes Pod 网络模型、Ingress 与网络策略</a>；容器镜像与运行时本身的问题在 <a href="../../docker/">Docker</a>；指标采集、告警分级与看板在 <a href="../../../observability/">可观测性系列</a>；发布动作本身的回滚与卡住处理在 <a href="../helm/">Helm 的模板机制与它的适用边界</a> 与 <a href="../../gitops/">GitOps 系列</a>；应用层的重试、超时与幂等这类共因故障的根治在 <a href="../../../architecture/distributed/">分布式系统系列</a>。</p>
+<p><strong>不适用边界</strong>：Pod 级的状态含义、事件判读、退出码与 <code>exec</code> 验证在 <a href="../">主干篇</a>；系统预留、驱逐阈值、日志轮转这些「本来就该配对」的参数在 <a href="../install/">Kubernetes 集群部署形态与生产化配置</a>；</p>
+<p>卷挂不上与 PVC 绑不上的定位在 <a href="../storage/">Kubernetes 存储抽象与有状态服务的现实</a>；服务不通的分层验证在 <a href="../ingress-network/">Kubernetes Pod 网络模型、Ingress 与网络策略</a>；容器镜像与运行时本身的问题在 <a href="../../docker/">Docker</a>；指标采集、告警分级与看板在 <a href="../../../observability/">可观测性系列</a>；</p>
+<p>发布动作本身的回滚与卡住处理在 <a href="../helm/">Helm 的模板机制与它的适用边界</a> 与 <a href="../../gitops/">GitOps 系列</a>；应用层的重试、超时与幂等这类共因故障的根治在 <a href="../../../architecture/distributed/">分布式系统系列</a>。</p>
 
 <h2>③ 场景 · 应急预案</h2>
 <p>预案的价值在于「事发时不用思考」。四个高频场景的正确动作：</p>
@@ -550,7 +557,9 @@ kubectl get apiservices | grep -v 'True'                # 聚合 API 挂了也�
 </tbody>
 </table>
 
-<p>节点与集群级排障的核心是<strong>先分层、再看第一入口、最后才动手</strong>：影响面决定层级；节点级的第一入口是 <code>describe node</code> 的 Conditions 与 Taints，集群级的第一入口是 <code>readyz</code> 与 etcd 的 alarm 与 fsync。真正能减少事故的三件事不在排障阶段：把系统预留与驱逐阈值配对、把事件与审计采集起来、把证书与 etcd 水位做成告警。本篇是这条路径的最后一篇——从该不该上集群、怎么装、跑什么、配置怎么给、数据放哪、流量怎么进、清单怎么复用，到出问题怎么查，整条链路到这里闭合。</p>
+<p>节点与集群级排障的核心是<strong>先分层、再看第一入口、最后才动手</strong>：影响面决定层级；节点级的第一入口是 <code>describe node</code> 的 Conditions 与 Taints，集群级的第一入口是 <code>readyz</code> 与 etcd 的 alarm 与 fsync。</p>
+<p>真正能减少事故的三件事不在排障阶段：把系统预留与驱逐阈值配对、把事件与审计采集起来、把证书与 etcd 水位做成告警。</p>
+<p>本篇是这条路径的最后一篇——从该不该上集群、怎么装、跑什么、配置怎么给、数据放哪、流量怎么进、清单怎么复用，到出问题怎么查，整条链路到这里闭合。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../helm/">← 上一步：Helm 的模板机制与它的适用边界</a></p>
 

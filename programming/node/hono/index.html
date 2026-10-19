@@ -71,8 +71,10 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Hono 的介绍文常常停在「轻、快、Edge 原生」这三个词上。三个词都没错，但都没说清代价。它真正的设计决定只有一条：<strong>把 Web 标准的 Request 与 Response 当作唯一的抽象</strong>，框架自己不定义请求响应对象。可移植性、体积、跟 Express 完全不同的心智模型、以及它的能力边界，全都是这一条推导出来的结果。</p>
-<p>这篇是专题总览：先给能直接跑的最小 app 与四种运行时入口，再讲这条设计决定推导出的机制与取舍。路由匹配与上下文对象的实现细节在 <a href="../hono-intro/">路由与上下文机制</a>，洋葱链与内置中间件边界在 <a href="../hono-middleware/">中间件篇</a>，各运行时的部署差异在 <a href="../hono-edge/">跨运行时部署</a>。</p>
+<p>Hono 的介绍文常常停在「轻、快、Edge 原生」这三个词上。三个词都没错，但都没说清代价。它真正的设计决定只有一条：<strong>把 Web 标准的 Request 与 Response 当作唯一的抽象</strong>，框架自己不定义请求响应对象。</p>
+<p>可移植性、体积、跟 Express 完全不同的心智模型、以及它的能力边界，全都是这一条推导出来的结果。</p>
+<p>这篇是专题总览：先给能直接跑的最小 app 与四种运行时入口，再讲这条设计决定推导出的机制与取舍。</p>
+<p>路由匹配与上下文对象的实现细节在 <a href="../hono-intro/">路由与上下文机制</a>，洋葱链与内置中间件边界在 <a href="../hono-middleware/">中间件篇</a>，各运行时的部署差异在 <a href="../hono-edge/">跨运行时部署</a>。</p>
 
 
 <div class="callout callout-info">
@@ -86,7 +88,8 @@
 </div>
 
 <h2>① 用法 · 最小可用 app 与四种运行时入口</h2>
-<p>Hono 的工程结构有一条铁律：<strong>app 定义与服务入口分成两个文件</strong>。业务代码只 import <code>hono</code> 与标准 Web API，入口文件才允许碰运行时专属模块。这样做不是为了好看，而是因为只有这样才能在不改一行业务代码的前提下换部署目标。下面这份 <code>app.ts</code> 是可直接跑的最小形态。</p>
+<p>Hono 的工程结构有一条铁律：<strong>app 定义与服务入口分成两个文件</strong>。业务代码只 import <code>hono</code> 与标准 Web API，入口文件才允许碰运行时专属模块。</p>
+<p>这样做不是为了好看，而是因为只有这样才能在不改一行业务代码的前提下换部署目标。下面这份 <code>app.ts</code> 是可直接跑的最小形态。</p>
 <pre><code class="language-typescript">// app.ts —— 唯一一份业务代码，不 import 任何运行时专属模块
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
@@ -176,9 +179,12 @@ npx wrangler dev entry.workers.ts</code></pre>
 
 <h2>② 原理 · 设计前提：只有 Request 与 Response 两个抽象</h2>
 <p>这一节解释用法层里所有「为什么必须这么写」的源头：请求对象为什么只读、响应为什么必须是返回值、入口为什么要单独成文件。</p>
-<p>Express 和 Koa 的 <code>req</code> / <code>res</code> 是对 Node 的 <code>IncomingMessage</code> 和 <code>ServerResponse</code> 的包装，框架的 API 面跟 Node 的 HTTP 实现绑在一起。Hono 的处理函数签名是 <code>(c) =&gt; Response</code>：<code>c.req.raw</code> 就是标准 <code>Request</code>，返回值就是标准 <code>Response</code>，<code>app.fetch</code> 本身是一个 <code>(request, env, executionCtx)</code> 形状的函数。整个框架不需要 Node 的任何东西，于是任何实现了「传进来一个 Request、拿回一个 Response」的运行时都能直接托管它。</p>
-<p>第一个后果是对象不可变：标准 <code>Request</code> 的 headers 只读，body 是只能消费一次的流，Express 里「往 <code>req</code> 上挂个属性往下传」不成立，要改用 <code>c.set</code> 与 <code>c.get</code>。第二个后果是响应必须一次性构造出来，没有 <code>res.write</code> 写了一半再回头改状态码的空间，流式响应要显式走 <code>hono/streaming</code>。</p>
-<p>顺便纠正一个流传很广的说法：<strong>Hono 并不是在所有运行时上都「自带性能」</strong>。在 Workers、Deno、Bun 上它就是平台期望的那个函数形状，中间没有包装层；而在 Node 上必须由 <code>@hono/node-server</code> 把 <code>IncomingMessage</code> 转成 <code>Request</code>、再把 <code>Response</code> 的 body 写回 <code>ServerResponse</code>，这层转换是净增的成本。体积同理：零依赖、<code>hono/tiny</code> 预设在十几 KB 量级（官方口径约 14kB）对冷启动和打包产物有意义，对一个常驻的 Node 服务几乎没有意义。</p>
+<p>Express 和 Koa 的 <code>req</code> / <code>res</code> 是对 Node 的 <code>IncomingMessage</code> 和 <code>ServerResponse</code> 的包装，框架的 API 面跟 Node 的 HTTP 实现绑在一起。Hono 的处理函数签名是 <code>(c) =&gt; Response</code>：<code>c.req.raw</code> 就是标准 <code>Request</code>，返回值就是标准 <code>Response</code>，<code>app.fetch</code> 本身是一个 <code>(request, env, executionCtx)</code> 形状的函数。</p>
+<p>整个框架不需要 Node 的任何东西，于是任何实现了「传进来一个 Request、拿回一个 Response」的运行时都能直接托管它。</p>
+<p>第一个后果是对象不可变：标准 <code>Request</code> 的 headers 只读，body 是只能消费一次的流，Express 里「往 <code>req</code> 上挂个属性往下传」不成立，要改用 <code>c.set</code> 与 <code>c.get</code>。</p>
+<p>第二个后果是响应必须一次性构造出来，没有 <code>res.write</code> 写了一半再回头改状态码的空间，流式响应要显式走 <code>hono/streaming</code>。</p>
+<p>顺便纠正一个流传很广的说法：<strong>Hono 并不是在所有运行时上都「自带性能」</strong>。在 Workers、Deno、Bun 上它就是平台期望的那个函数形状，中间没有包装层；而在 Node 上必须由 <code>@hono/node-server</code> 把 <code>IncomingMessage</code> 转成 <code>Request</code>、再把 <code>Response</code> 的 body 写回 <code>ServerResponse</code>，这层转换是净增的成本。</p>
+<p>体积同理：零依赖、<code>hono/tiny</code> 预设在十几 KB 量级（官方口径约 14kB）对冷启动和打包产物有意义，对一个常驻的 Node 服务几乎没有意义。</p>
 <div class="mermaid">
 flowchart TB
     subgraph APP["应用代码（可移植的部分）"]
@@ -216,8 +222,10 @@ flowchart TB
 
 <h2>② 原理 · 请求生命周期：Context 与洋葱中间件</h2>
 <p>搞清这一节能解释三类现象：报 Context 未终结、响应头改了不生效、以及 async 异常为什么不需要额外包装就能被捕获。</p>
-<p>Hono 的中间件是 <code>async (c, next) =&gt; { ...; await next(); ... }</code>，跟 Koa 同构的洋葱模型，不是 Express 的线性 <code>next()</code> 回调。这个差别不只是写法：因为框架层用 <code>await</code> 串联整条链，处理函数里 <code>throw</code> 出来的异常（包括 async 函数里的）天然会冒泡到 <code>app.onError</code>，不需要像 Express 4 那样给每个 async handler 套一层捕获包装（Express 4 不自动捕获 async 异常这件事，详见站内 Node.js Web 框架选型篇）。</p>
-<p>几个容易被忽略的生命周期细节：中间件按<strong>注册顺序</strong>入栈，<code>app.use</code> 必须写在对应路由之前才会生效，写在后面不报错也不生效；<code>await next()</code> 之后才能读到 <code>c.res</code>，此时改 <code>c.res.headers</code> 是有效的，改 body 就要整体替换 <code>c.res</code>；忘了 <code>return</code> 一个 Response、或者中间件忘了 <code>await next()</code>，Hono 会直接报 Context 未终结（大意是「你可能忘了返回 Response 或者忘了 await next」），这句报错基本可以当成这两类错误的专用信号。</p>
+<p>Hono 的中间件是 <code>async (c, next) =&gt; { ...; await next(); ... }</code>，跟 Koa 同构的洋葱模型，不是 Express 的线性 <code>next()</code> 回调。</p>
+<p>这个差别不只是写法：因为框架层用 <code>await</code> 串联整条链，处理函数里 <code>throw</code> 出来的异常（包括 async 函数里的）天然会冒泡到 <code>app.onError</code>，不需要像 Express 4 那样给每个 async handler 套一层捕获包装（Express 4 不自动捕获 async 异常这件事，详见站内 Node.js Web 框架选型篇）。</p>
+<p>几个容易被忽略的生命周期细节：中间件按<strong>注册顺序</strong>入栈，<code>app.use</code> 必须写在对应路由之前才会生效，写在后面不报错也不生效；<code>await next()</code> 之后才能读到 <code>c.res</code>，此时改 <code>c.res.headers</code> 是有效的，改 body 就要整体替换 <code>c.res</code>；</p>
+<p>忘了 <code>return</code> 一个 Response、或者中间件忘了 <code>await next()</code>，Hono 会直接报 Context 未终结（大意是「你可能忘了返回 Response 或者忘了 await next」），这句报错基本可以当成这两类错误的专用信号。</p>
 <div class="mermaid">
 stateDiagram-v2
     [*] --> 构造Request
@@ -288,7 +296,8 @@ export type AppType = typeof app
 
 <h2>② 原理 · 多运行时可移植性的边界</h2>
 <p>用法层那张表给的是结论，这一节给的是每一格背后的能力差异——真正决定迁移成败的是这些差异，而不是框架 API。</p>
-<p>「一套代码到处跑」这句话要拆成两半看：<strong>可移植的是你写的框架层代码，不可移植的是运行时能力和依赖</strong>。路由、中间件、Context、校验器、以及标准 Web API（<code>URL</code>、<code>Headers</code>、<code>FormData</code>、Web Crypto、<code>TextEncoder</code>）确实一行不改就能跨运行时。而只要某个 npm 包内部引了 <code>node:net</code> 或 <code>node:fs</code>，整条链路就被钉回 Node —— 真正的移植失败几乎都发生在依赖上，不在你自己的代码里。</p>
+<p>「一套代码到处跑」这句话要拆成两半看：<strong>可移植的是你写的框架层代码，不可移植的是运行时能力和依赖</strong>。路由、中间件、Context、校验器、以及标准 Web API（<code>URL</code>、<code>Headers</code>、<code>FormData</code>、Web Crypto、<code>TextEncoder</code>）确实一行不改就能跨运行时。</p>
+<p>而只要某个 npm 包内部引了 <code>node:net</code> 或 <code>node:fs</code>，整条链路就被钉回 Node —— 真正的移植失败几乎都发生在依赖上，不在你自己的代码里。</p>
 <table>
 <thead><tr><th>能力</th><th>Node（node-server 适配）</th><th>Deno / Bun</th><th>Cloudflare Workers</th><th>可移植写法</th></tr></thead>
 <tbody>
@@ -363,7 +372,8 @@ export function fireAndForget(c: Context, task: Promise&lt;unknown&gt;) {
 <tr><td>大量 Express 专用中间件</td><td>必须换成 Hono 版或自己重写</td><td>对象模型与控制流都不兼容，无法转接</td></tr>
 </tbody>
 </table>
-<p>最后一行是迁移评估里权重最大的一项。Express 的中间件生态是它最硬的资产，而这些中间件直接操作 Node 的响应流，没有任何兼容层能无损搬过来。选型时应该先把依赖列表过一遍：如果一半的中间件都得重写，迁移成本会远超预期收益。</p>
+<p>最后一行是迁移评估里权重最大的一项。Express 的中间件生态是它最硬的资产，而这些中间件直接操作 Node 的响应流，没有任何兼容层能无损搬过来。</p>
+<p>选型时应该先把依赖列表过一遍：如果一半的中间件都得重写，迁移成本会远超预期收益。</p>
 
 <h2>② 原理 · 路由匹配器与三个入口预设</h2>
 <p>这一节回答「换一行 import 为什么会有性能差异」，同时说明为什么不该把它当性能优化手段。</p>
@@ -386,10 +396,12 @@ export function fireAndForget(c: Context, task: Promise&lt;unknown&gt;) {
 <tr><td>hono/tiny</td><td>PatternRouter</td><td>最小，十几 KB 量级</td><td>包体积敏感、路由数量不多的函数</td></tr>
 </tbody>
 </table>
-<p>需要纠正的一个直觉：<strong>路由匹配在真实服务里几乎从来不是瓶颈</strong>。一次请求里的时间绝大部分花在数据库、下游调用和序列化上，路由查找是纳秒到微秒级的事。选预设看的是「实例能不能复用」和「产物多大」这两个工程约束，拿它当性能优化手段基本没有收益。</p>
+<p>需要纠正的一个直觉：<strong>路由匹配在真实服务里几乎从来不是瓶颈</strong>。一次请求里的时间绝大部分花在数据库、下游调用和序列化上，路由查找是纳秒到微秒级的事。</p>
+<p>选预设看的是「实例能不能复用」和「产物多大」这两个工程约束，拿它当性能优化手段基本没有收益。</p>
 
 <h2>② 原理 · 类型驱动路由与 RPC 模式</h2>
-<p>Hono 的类型系统做法是：链式方法每调用一次就把新路由的类型并进返回值的类型里，所以 <code>typeof app</code> 携带了全部路由的方法、路径、输入与输出。客户端 <code>hc&lt;AppType&gt;</code> 拿到这个类型后，调用处的路径拼写、请求体形状、返回值结构全都有编译期检查。</p>
+<p>Hono 的类型系统做法是：链式方法每调用一次就把新路由的类型并进返回值的类型里，所以 <code>typeof app</code> 携带了全部路由的方法、路径、输入与输出。</p>
+<p>客户端 <code>hc&lt;AppType&gt;</code> 拿到这个类型后，调用处的路径拼写、请求体形状、返回值结构全都有编译期检查。</p>
 <p>这里有个硬性写法约束：<strong>路由必须链式连写</strong>。把 <code>app.get(...)</code>、<code>app.post(...)</code> 拆成多条独立语句，类型不会累积，客户端只会看到一个空壳，而且不会报错，只是补全全没了。</p>
 <pre><code class="language-typescript">// routes.ts —— 必须一路 .get().post() 连写，拆成多条语句类型就丢了
 import { Hono } from 'hono'
@@ -424,7 +436,8 @@ export default routes
 // const client = hc&lt;AppType&gt;('https://api.example.com')
 // const res = await client.posts.$post({ json: { title: 'hi' } })
 // if (res.ok) { const data = await res.json() }   // data 的类型来自 handler 的 c.json</code></pre>
-<p>两个要说清的认知问题。第一，<strong>Hono 的 RPC 和 gRPC 没有任何关系</strong>：没有 IDL、不生成代码、不跨语言、传输层就是 HTTP 加 JSON，客户端和服务端必须共享同一套 TypeScript 类型来源。第二，<strong>类型不是运行时保障</strong>：客户端的类型再完整，请求也可能来自 curl 或者旧版本的前端，服务端的校验中间件才是唯一防线。</p>
+<p>两个要说清的认知问题。第一，<strong>Hono 的 RPC 和 gRPC 没有任何关系</strong>：没有 IDL、不生成代码、不跨语言、传输层就是 HTTP 加 JSON，客户端和服务端必须共享同一套 TypeScript 类型来源。</p>
+<p>第二，<strong>类型不是运行时保障</strong>：客户端的类型再完整，请求也可能来自 curl 或者旧版本的前端，服务端的校验中间件才是唯一防线。</p>
 <p>代价也很实在：路由规模上去后，累积类型会明显拖慢编辑器与 <code>tsc</code>，极端情况报类型实例化层级过深。缓解手段是先把 <code>AppType</code> 编译成声明文件再给客户端消费，或按模块拆成子应用分别导出类型；跨包共享类型要开 <code>declaration</code> 与 <code>composite</code>，详见站内 TypeScript 工程化篇。</p>
 
 <h2>③ 场景 · 常见失效场景与修法</h2>
@@ -468,8 +481,10 @@ flowchart TB
 <tr><td>把框架换成 Hono 来解决性能问题</td><td>不适用</td><td>耗时主要在 I/O 与序列化，框架开销占比很小</td><td>先做诊断，详见站内 Node.js 性能诊断篇</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：Hono 解决不了运行时层面的问题。同步阻塞会拖垮任何 Node 框架，与选型无关，见 <a href="../event-loop/">事件循环的六个阶段</a>；接口慢、内存涨、事件循环延迟的定位方法在 <a href="../performance/">性能诊断</a>。需要 DI、模块边界与强制分层的大型多团队单体应该用 <a href="../nestjs/">NestJS</a>；纯吞吐与序列化敏感的场景 Fastify 的 schema 路线更对症，横向对比见 <a href="../framework-compare/">框架选型</a>；<code>app.fetch</code> 能被 Bun 直接托管，但那是另一套生产适用面判断，见 <a href="../bun/">Bun 是什么、快在哪</a>。</p>
-<p>这条路径上，上一篇讲的是约定最强的那一端（NestJS 的 IoC 与分层），本篇讲约定几乎为零、只认 Web 标准的另一端。接下来三篇把本篇里一带而过的三层机制各自展开：<a href="../hono-intro/">路由匹配与上下文对象</a>、<a href="../hono-middleware/">洋葱链与内置中间件边界</a>、<a href="../hono-edge/">各运行时的部署差异</a>。</p>
+<p><strong>不适用边界</strong>：Hono 解决不了运行时层面的问题。同步阻塞会拖垮任何 Node 框架，与选型无关，见 <a href="../event-loop/">事件循环的六个阶段</a>；接口慢、内存涨、事件循环延迟的定位方法在 <a href="../performance/">性能诊断</a>。</p>
+<p>需要 DI、模块边界与强制分层的大型多团队单体应该用 <a href="../nestjs/">NestJS</a>；纯吞吐与序列化敏感的场景 Fastify 的 schema 路线更对症，横向对比见 <a href="../framework-compare/">框架选型</a>；<code>app.fetch</code> 能被 Bun 直接托管，但那是另一套生产适用面判断，见 <a href="../bun/">Bun 是什么、快在哪</a>。</p>
+<p>这条路径上，上一篇讲的是约定最强的那一端（NestJS 的 IoC 与分层），本篇讲约定几乎为零、只认 Web 标准的另一端。</p>
+<p>接下来三篇把本篇里一带而过的三层机制各自展开：<a href="../hono-intro/">路由匹配与上下文对象</a>、<a href="../hono-middleware/">洋葱链与内置中间件边界</a>、<a href="../hono-edge/">各运行时的部署差异</a>。</p>
 
 <div class="callout-title">最容易踩的坑</div>
     <ul>

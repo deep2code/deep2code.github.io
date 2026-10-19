@@ -90,7 +90,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>把 Go 服务当胶水层去调外部命令，是后端绕不开的活：调 git 同步仓库、调 ffmpeg 转码、调内部 CLI 搬数据、调 iptables 改规则。标准库 <code>os/exec</code> 表面只有几个函数，但它的线上事故密度相当高——命令注入、管道死锁、超时杀不干净、退出码判反、环境变量泄漏，追到底几乎都是对同一件事的误解：<strong>它不经过 shell</strong>。而这些事故有一个共同点：<strong>它们全部可以由一份写对一次的封装挡掉</strong>。</p>
+<p>把 Go 服务当胶水层去调外部命令，是后端绕不开的活：调 git 同步仓库、调 ffmpeg 转码、调内部 CLI 搬数据、调 iptables 改规则。</p>
+<p>标准库 <code>os/exec</code> 表面只有几个函数，但它的线上事故密度相当高——命令注入、管道死锁、超时杀不干净、退出码判反、环境变量泄漏，追到底几乎都是对同一件事的误解：<strong>它不经过 shell</strong>。</p>
+<p>而这些事故有一个共同点：<strong>它们全部可以由一份写对一次的封装挡掉</strong>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -390,11 +392,16 @@ flowchart TB
 <li><strong>「加引号就安全了」是错的。</strong> 把变量包进单引号只是把攻击面从分号换成单引号——攻击者输入一个单引号就能闭合它。手写 shell 转义在多层嵌套、换行符、locale 差异下几乎不可能做对。</li>
 <li><strong>「过滤掉分号和竖线就安全了」也是错的。</strong> shell 的元字符集合远不止这两个，换行、反引号、<code>$()</code>、<code>&amp;</code>、<code>&gt;</code>、大括号展开都能达成目的；黑名单永远漏。</li>
 </ul>
-<p>正确的心智模型是：<strong>参数走数组，数据永远不参与命令结构的构造。</strong> 如果实在必须用 <code>sh -c</code>（比如确实需要管道且不想写两个 Cmd），那么脚本文本必须是写死的常量，外部数据只能通过 <strong>环境变量</strong> 或 <strong>位置参数</strong>（<code>sh -c 'cmd "$1"' -- value</code>）传进去，绝不进入脚本文本本身。另外别忘了参数注入：即使不经 shell，用户可控的参数如果以连字符开头，也可能被目标程序当成选项（典型是 <code>--output</code>、<code>--upload-file</code>），所以用户数据前面要加 <code>--</code> 分隔符，或者校验它不以连字符开头。这类「数据被当成结构」的通用模型见 <a href="../../../api/security/">Web 安全总览：威胁建模、SSRF、上传漏洞与纵深防御</a>。</p>
+<p>正确的心智模型是：<strong>参数走数组，数据永远不参与命令结构的构造。</strong></p>
+<p> 如果实在必须用 <code>sh -c</code>（比如确实需要管道且不想写两个 Cmd），那么脚本文本必须是写死的常量，外部数据只能通过 <strong>环境变量</strong> 或 <strong>位置参数</strong>（<code>sh -c 'cmd "$1"' -- value</code>）传进去，绝不进入脚本文本本身。</p>
+<p>另外别忘了参数注入：即使不经 shell，用户可控的参数如果以连字符开头，也可能被目标程序当成选项（典型是 <code>--output</code>、<code>--upload-file</code>），所以用户数据前面要加 <code>--</code> 分隔符，或者校验它不以连字符开头。</p>
+<p>这类「数据被当成结构」的通用模型见 <a href="../../../api/security/">Web 安全总览：威胁建模、SSRF、上传漏洞与纵深防御</a>。</p>
 
 <h2>② 原理 · 死锁的真实位置与大输出的内存账</h2>
 <p>搞清这一节，能解决「命令跑着就卡死、<code>Wait</code> 永不返回」和「输出莫名被截断」这两个现象。</p>
-<p><code>Run</code>、<code>Output</code>、<code>CombinedOutput</code> 的区别不只是「返不返回输出」，关键差异在<strong>谁负责读子进程的管道</strong>。这里先纠正两个很常见的说法。第一，<strong>「用 Output 时 stderr 没人读会把子进程堵死」不成立</strong>：<code>Output</code> 在 <code>Stderr</code> 为 nil 时会替你挂一个只保留首尾、总量 32 KiB 的缓冲，并由独立 goroutine 持续排空管道，这也是 <code>ExitError.Stderr</code> 字段数据的来源——顺带一提，这个字段<strong>只有 <code>Output</code> 才会填</strong>，用 <code>Run</code> 时它永远是空的。第二，<strong>「CombinedOutput 让两个 goroutine 并发写同一个 buffer，会数据竞争」也不成立</strong>：exec 发现 <code>Stderr</code> 与 <code>Stdout</code> 是同一个值时，会让子进程的两个 fd 指向同一个管道，父侧只有一个读者。</p>
+<p><code>Run</code>、<code>Output</code>、<code>CombinedOutput</code> 的区别不只是「返不返回输出」，关键差异在<strong>谁负责读子进程的管道</strong>。这里先纠正两个很常见的说法。</p>
+<p>第一，<strong>「用 Output 时 stderr 没人读会把子进程堵死」不成立</strong>：<code>Output</code> 在 <code>Stderr</code> 为 nil 时会替你挂一个只保留首尾、总量 32 KiB 的缓冲，并由独立 goroutine 持续排空管道，这也是 <code>ExitError.Stderr</code> 字段数据的来源——顺带一提，这个字段<strong>只有 <code>Output</code> 才会填</strong>，用 <code>Run</code> 时它永远是空的。</p>
+<p>第二，<strong>「CombinedOutput 让两个 goroutine 并发写同一个 buffer，会数据竞争」也不成立</strong>：exec 发现 <code>Stderr</code> 与 <code>Stdout</code> 是同一个值时，会让子进程的两个 fd 指向同一个管道，父侧只有一个读者。</p>
 <p>真正的死锁只发生在你接管管道之后。内核管道缓冲是有限的（Linux 默认 64 KiB），先把 stdout 读到 EOF 再去读 stderr，子进程就会在 stderr 的 <code>write</code> 上阻塞，进而不再产出 stdout，双方互等：</p>
 <div class="mermaid">
 sequenceDiagram
@@ -411,7 +418,8 @@ sequenceDiagram
     Note over P: Wait 永不返回，双方互等
 </div>
 <p>另一个同源的错误是<strong>先调 <code>Wait</code> 再读管道</strong>。<code>Wait</code> 会在进程回收后关闭这些管道，你后续读到的只是缓冲里的残余，看起来像「输出被截断」。文档写得很明确：管道必须全部读完之后再 <code>Wait</code>。</p>
-<p>内存这件事要算清楚：<code>Output</code> 和 <code>CombinedOutput</code> 把 stdout <strong>全量</strong>读进 <code>bytes.Buffer</code>，而 <code>bytes.Buffer</code> 扩容是成倍 <code>append</code>，峰值可以达到最终大小的两倍左右。子进程输出量不受你控制（比如 <code>git log</code> 全量、<code>find /</code>）时，用这两个函数就是在赌容器内存上限。要么改流式，要么把 <code>Stdout</code> 直接指向 <code>*os.File</code> 落盘——后者还有一个隐藏收益：writer 是 <code>*os.File</code> 时 exec 会把该 fd 直接给子进程，不创建管道、不起拷贝 goroutine，纯内核层转发。容器内存上限与 OOM 的判读见 <a href="../../../devops/docker/">容器的实现机制与镜像工程</a>。</p>
+<p>内存这件事要算清楚：<code>Output</code> 和 <code>CombinedOutput</code> 把 stdout <strong>全量</strong>读进 <code>bytes.Buffer</code>，而 <code>bytes.Buffer</code> 扩容是成倍 <code>append</code>，峰值可以达到最终大小的两倍左右。子进程输出量不受你控制（比如 <code>git log</code> 全量、<code>find /</code>）时，用这两个函数就是在赌容器内存上限。</p>
+<p>要么改流式，要么把 <code>Stdout</code> 直接指向 <code>*os.File</code> 落盘——后者还有一个隐藏收益：writer 是 <code>*os.File</code> 时 exec 会把该 fd 直接给子进程，不创建管道、不起拷贝 goroutine，纯内核层转发。容器内存上限与 OOM 的判读见 <a href="../../../devops/docker/">容器的实现机制与镜像工程</a>。</p>
 
 <h2>② 原理 · 取消与超时：CommandContext 只杀直接子进程</h2>
 <p>搞清这一节，能解释一个很典型的现象：超时重试时报「端口已被占用」，因为上一轮的孙进程还攥着监听 socket。</p>
@@ -481,10 +489,13 @@ stateDiagram-v2
 <tr><td><code>ExtraFiles</code></td><td>空；传入时子进程里从 fd 3 开始编号</td><td>Windows 不支持；fd 编号错位会让子进程读错文件</td></tr>
 </tbody>
 </table>
-<p>关于 PATH 查找还有两个版本行为要记住。其一，<code>exec.Command</code> 只有在程序名<strong>不含路径分隔符</strong>时才调 <code>LookPath</code>；写成 <code>./tool</code> 就跳过查找，直接交给内核，此时它相对于 <code>Dir</code> 解析。其二，<strong>Go 1.19 起 <code>LookPath</code> 拒绝把程序名解析成当前目录下的相对路径</strong>（返回 <code>exec.ErrDot</code>），这是为了防止在不可信目录里被同名恶意程序劫持。真要执行当前目录下的东西，自己拼 <code>filepath.Abs</code>。</p>
+<p>关于 PATH 查找还有两个版本行为要记住。其一，<code>exec.Command</code> 只有在程序名<strong>不含路径分隔符</strong>时才调 <code>LookPath</code>；写成 <code>./tool</code> 就跳过查找，直接交给内核，此时它相对于 <code>Dir</code> 解析。</p>
+<p>其二，<strong>Go 1.19 起 <code>LookPath</code> 拒绝把程序名解析成当前目录下的相对路径</strong>（返回 <code>exec.ErrDot</code>），这是为了防止在不可信目录里被同名恶意程序劫持。真要执行当前目录下的东西，自己拼 <code>filepath.Abs</code>。</p>
 
 <h2>③ 场景 · 该调还是不该调</h2>
-<p>动手之前先问一句：<strong>这个外部命令真的必须调吗？</strong> 每一次 exec 都是一次 fork（在大堆进程里复制页表并非零成本）、一次 <code>syscall.ForkLock</code> 串行化、一次二进制加载，还给你的部署加了一条隐式契约——目标机必须装有某个版本的某个命令。更麻烦的是你得解析人类可读的输出，而那个格式会随版本和 locale 漂移。</p>
+<p>动手之前先问一句：<strong>这个外部命令真的必须调吗？</strong></p>
+<p> 每一次 exec 都是一次 fork（在大堆进程里复制页表并非零成本）、一次 <code>syscall.ForkLock</code> 串行化、一次二进制加载，还给你的部署加了一条隐式契约——目标机必须装有某个版本的某个命令。</p>
+<p>更麻烦的是你得解析人类可读的输出，而那个格式会随版本和 locale 漂移。</p>
 <table>
 <thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
 <tbody>
@@ -527,7 +538,10 @@ stateDiagram-v2
 <tr><td>环境变量</td><td>区分大小写</td><td>不区分大小写，去重规则也因此不同</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：三种情况下不该走 <code>os/exec</code>。一是标准库或成熟 Go 库能直接完成的事，调命令只是给部署加了一条隐式依赖并把结构化数据降级成待解析的文本；二是每请求都要执行一次的高频路径，fork 加二进制加载的固定成本乘以 QPS 就是实打实的 CPU，该改成常驻子进程或纯 Go 实现；三是命令内容由用户提供的场景——那本质上是「让用户在你的机器上执行代码」，过滤和转义都不是答案，只能用可执行文件白名单加容器或专用账号隔离。此外，用法层那份封装里的 <code>Setpgid</code> 与负 PID 发信号只在类 Unix 上成立，Windows 侧必须单独实现并单独测。</p>
+<p><strong>不适用边界</strong>：三种情况下不该走 <code>os/exec</code>。一是标准库或成熟 Go 库能直接完成的事，调命令只是给部署加了一条隐式依赖并把结构化数据降级成待解析的文本；</p>
+<p>二是每请求都要执行一次的高频路径，fork 加二进制加载的固定成本乘以 QPS 就是实打实的 CPU，该改成常驻子进程或纯 Go 实现；</p>
+<p>三是命令内容由用户提供的场景——那本质上是「让用户在你的机器上执行代码」，过滤和转义都不是答案，只能用可执行文件白名单加容器或专用账号隔离。</p>
+<p>此外，用法层那份封装里的 <code>Setpgid</code> 与负 PID 发信号只在类 Unix 上成立，Windows 侧必须单独实现并单独测。</p>
 <p>回到最上面那句话：<code>os/exec</code> 的事故几乎全部源于「以为它是 <code>system()</code>」。<strong>参数走数组、进程组隔离、超时配收尾宽限期、输出限长、退出码分类</strong>——这五件事写对一次，后面所有调用都受益。</p>
 <p>本篇在簇里的位置：这是标准库与系统交互这条线的最后一站，前面几篇处理的都是进程内部的数据与输出，这一步跨出了进程边界；下一步进入 Web 框架，讨论请求怎么进来。</p>
 

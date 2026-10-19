@@ -82,7 +82,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Chart.js 的定位是「配置驱动的标准图表」：折线、柱状、饼图、雷达这几类需求，它的默认值基本不用改就能看。真正花时间的地方不在画图，而在两个边界——按需注册漏了东西之后有一半的失败是静默的，以及数据量、画布尺寸、动画三者叠加之后成本从哪里来。这篇先给能直接跑的配置和排查顺序，再拆内部分工，最后给配置矩阵与换库判据。</p>
+<p>Chart.js 的定位是「配置驱动的标准图表」：折线、柱状、饼图、雷达这几类需求，它的默认值基本不用改就能看。</p>
+<p>真正花时间的地方不在画图，而在两个边界——按需注册漏了东西之后有一半的失败是静默的，以及数据量、画布尺寸、动画三者叠加之后成本从哪里来。</p>
+<p>这篇先给能直接跑的配置和排查顺序，再拆内部分工，最后给配置矩阵与换库判据。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -147,7 +149,8 @@ chart.update('none');   // 'none' 跳过过渡动画，高频刷新场景必须�
 // 卸载：不 destroy 则尺寸监听、事件监听与画布后备存储都留着
 chart.destroy();</code></pre>
 
-<p>图不对而控制台干净时，按这个顺序查，四步之内基本能定位：<strong>一</strong>、看有没有「未注册」异常，有就补 controller、scale 或 element；<strong>二</strong>、打印一次注册表里的插件与 scale 清单，确认 Filler、Tooltip、Decimation 这类是否真的在册；<strong>三</strong>、检查配置写的位置是不是 v2 的老位置（<code>legend</code>、<code>title</code>、<code>tooltip</code> 是否落在 <code>options.plugins</code> 下，<code>scales</code> 有没有用数组写法）；<strong>四</strong>、打印画布此刻的 <code>clientWidth</code> 与 <code>clientHeight</code>，确认容器不是 0 尺寸。为什么会有这两类不同的失败，见后面的注册那一节。</p>
+<p>图不对而控制台干净时，按这个顺序查，四步之内基本能定位：<strong>一</strong>、看有没有「未注册」异常，有就补 controller、scale 或 element；<strong>二</strong>、打印一次注册表里的插件与 scale 清单，确认 Filler、Tooltip、Decimation 这类是否真的在册；</p>
+<p><strong>三</strong>、检查配置写的位置是不是 v2 的老位置（<code>legend</code>、<code>title</code>、<code>tooltip</code> 是否落在 <code>options.plugins</code> 下，<code>scales</code> 有没有用数组写法）；<strong>四</strong>、打印画布此刻的 <code>clientWidth</code> 与 <code>clientHeight</code>，确认容器不是 0 尺寸。为什么会有这两类不同的失败，见后面的注册那一节。</p>
 
 <table>
 <thead><tr><th>配置项</th><th>作用</th><th>默认值</th><th>什么时候需要改</th></tr></thead>
@@ -168,7 +171,8 @@ chart.destroy();</code></pre>
 
 <h2 id="model">② 原理 · 配置树之下：controller、scale、element 的分工</h2>
 <p>Chart.js 对外只有一个入口，<code>new Chart(canvas, config)</code>，config 里是 data、options、plugins 三棵树。但内部把工作拆给了三类可插拔构件，先看清这个分工，才能判断一个需求「改配置能不能实现」。</p>
-<p><strong>DatasetController</strong> 把 <code>datasets[i].data</code> 解析成一批 element，并决定每个 element 的几何属性：柱子的 x、y、width、base，点的 x、y、radius。<strong>Scale</strong> 把数据域映射到像素，同时参与布局——刻度文本要占多宽，直接决定绘图区剩多少。<strong>Element</strong> 只是几何属性的容器加一个 draw 方法，不含任何数据语义，所以动画才能对它做纯属性插值。外面套一层插件服务分发钩子，最底下是平台层，负责读画布尺寸、绑事件。</p>
+<p><strong>DatasetController</strong> 把 <code>datasets[i].data</code> 解析成一批 element，并决定每个 element 的几何属性：柱子的 x、y、width、base，点的 x、y、radius。<strong>Scale</strong> 把数据域映射到像素，同时参与布局——刻度文本要占多宽，直接决定绘图区剩多少。</p>
+<p><strong>Element</strong> 只是几何属性的容器加一个 draw 方法，不含任何数据语义，所以动画才能对它做纯属性插值。外面套一层插件服务分发钩子，最底下是平台层，负责读画布尺寸、绑事件。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -294,7 +298,8 @@ sequenceDiagram
 </tbody>
 </table>
 <p>注意表里每一行「是否重解析」都是「是」。<strong>mode 只决定元素属性怎么过渡到目标值，省不掉解析和刻度重建</strong>。想压这部分成本，手段是 <code>parsing: false</code> 加 <code>normalized: true</code>，以及只改真正变了的数据集而不是整体替换 data 对象。</p>
-<p>动画的成本模型也很清楚：每帧对每个 element 的每个受动画属性做一次插值，总成本约等于元素数乘属性数乘帧数。所以关动画有三种粒度：<code>animation: false</code> 全关，<code>animations: { colors: false }</code> 按属性关，<code>transitions</code> 按 mode 关。秒级刷新的监控图直接全关并用 <code>update('none')</code>，视觉上不会有任何损失。</p>
+<p>动画的成本模型也很清楚：每帧对每个 element 的每个受动画属性做一次插值，总成本约等于元素数乘属性数乘帧数。所以关动画有三种粒度：<code>animation: false</code> 全关，<code>animations: { colors: false }</code> 按属性关，<code>transitions</code> 按 mode 关。</p>
+<p>秒级刷新的监控图直接全关并用 <code>update('none')</code>，视觉上不会有任何损失。</p>
 
 <h2 id="responsive">② 原理 · 响应式、devicePixelRatio 与画布内存账</h2>
 <p>响应式靠平台层的 ResizeObserver 监听画布父容器。<code>maintainAspectRatio</code> 默认为 true，<code>aspectRatio</code> 默认 2（径向图是 1），所以不显式关掉宽高比时，高度是被宽度算出来的。</p>
@@ -341,7 +346,8 @@ stateDiagram-v2
 <tr><td>多数据集叠加</td><td>元素总数与命中测试</td><td>mousemove 时 CPU 占满</td><td>interaction.mode 用 index，或直接 events 设空数组</td></tr>
 </tbody>
 </table>
-<p>官方 Decimation 插件的前提是硬性的，任一条不满足就静默跳过：只支持折线图；数据必须是 <code>{x, y}</code> 形式的内部格式；<code>parsing</code> 必须为 false；索引轴必须是 x；x 轴必须是线性轴或时间轴。算法有两种，lttb 保留视觉轮廓，min-max 保留极值——监控场景下漏掉毛刺是要出事的，这时选 min-max。还要清楚它<strong>只减少绘制的点，不减少你传进来的数组内存</strong>，真正的降采样应该在查询层做。</p>
+<p>官方 Decimation 插件的前提是硬性的，任一条不满足就静默跳过：只支持折线图；数据必须是 <code>{x, y}</code> 形式的内部格式；<code>parsing</code> 必须为 false；索引轴必须是 x；x 轴必须是线性轴或时间轴。</p>
+<p>算法有两种，lttb 保留视觉轮廓，min-max 保留极值——监控场景下漏掉毛刺是要出事的，这时选 min-max。还要清楚它<strong>只减少绘制的点，不减少你传进来的数组内存</strong>，真正的降采样应该在查询层做。</p>
 <pre><code class="language-javascript">const chart = new Chart(canvas, {
   type: 'line',
   data: {
@@ -454,7 +460,8 @@ flowchart TD
 </table>
 <p>反过来说，Chart.js 在它的舒适区里几乎没有替代品：配置面小、默认值合理、交互开箱可用。「够用就好」不是妥协，是明确的选型判断——当需求确实跨出这条线时再换，比一开始就上重型库省事得多。</p>
 
-<p><strong>不适用边界</strong>：Chart.js 不适合当作可视化平台的底座——只要出现「这种图它没有」的需求，第三方 controller 包依赖的是内部接口而不是公开配置，会把你钉在某个主版本上。它也不解决「该画什么图」的问题，图表类型的选择见 <a href="../../docs/">技术文档里的图</a>。矢量输出、GPU 加速、可被辅助技术读取的节点，这三项它结构上就做不到。</p>
+<p><strong>不适用边界</strong>：Chart.js 不适合当作可视化平台的底座——只要出现「这种图它没有」的需求，第三方 controller 包依赖的是内部接口而不是公开配置，会把你钉在某个主版本上。</p>
+<p>它也不解决「该画什么图」的问题，图表类型的选择见 <a href="../../docs/">技术文档里的图</a>。矢量输出、GPU 加速、可被辅助技术读取的节点，这三项它结构上就做不到。</p>
 
 <p>本篇在这条路径上负责标注「配置驱动的图表库能力到哪为止」。上一步是量更大、类型更全的 ECharts；下一步往相反方向走一格，看不提供任何图表成品的 D3 把什么交回给你。</p>
 

@@ -90,7 +90,10 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>装 Argo CD 本身是一条命令的事：<code>kubectl apply</code> 官方清单，端口转发，用初始密码登进去。真正的工作量在「装完」到「能生产用」之间——默认配置里有一个全权限的 admin 账号、没有 TLS、任何登录者都能对任意应用点 sync、自身配置完全脱离 GitOps 管理。这篇只讲这段距离：对象模型怎么设计、装完立刻要改什么、RBAC 怎么切、哪些字段开错会直接删掉线上资源、以及规模化之后会在哪里撞墙。GitOps 的原理见 <a href="../index.html">GitOps 的模型与纪律</a>，从现有流水线迁过来的路径见 <a href="../intro/index.html">从 CI/CD 迁移到 GitOps</a>。</p>
+<p>装 Argo CD 本身是一条命令的事：<code>kubectl apply</code> 官方清单，端口转发，用初始密码登进去。</p>
+<p>真正的工作量在「装完」到「能生产用」之间——默认配置里有一个全权限的 admin 账号、没有 TLS、任何登录者都能对任意应用点 sync、自身配置完全脱离 GitOps 管理。</p>
+<p>这篇只讲这段距离：对象模型怎么设计、装完立刻要改什么、RBAC 怎么切、哪些字段开错会直接删掉线上资源、以及规模化之后会在哪里撞墙。</p>
+<p>GitOps 的原理见 <a href="../index.html">GitOps 的模型与纪律</a>，从现有流水线迁过来的路径见 <a href="../intro/index.html">从 CI/CD 迁移到 GitOps</a>。</p>
 
 <h2>核心对象模型：三个 CRD 与五个组件</h2>
 
@@ -137,7 +140,8 @@ flowchart TB
     AC --> K8S
 </div>
 
-<p>组件划分里有两处值得注意：<strong>repo-server 是无状态的渲染器</strong>，它不碰目标集群，所有克隆和模板渲染都在这里发生，因此它是大仓库场景下第一个被压垮的组件；<strong>Redis 里全是缓存</strong>，丢了只会导致一次全量重新渲染，不会丢数据，所以它不需要持久化和主从复制的严格保证。</p>
+<p>组件划分里有两处值得注意：<strong>repo-server 是无状态的渲染器</strong>，它不碰目标集群，所有克隆和模板渲染都在这里发生，因此它是大仓库场景下第一个被压垮的组件；</p>
+<p><strong>Redis 里全是缓存</strong>，丢了只会导致一次全量重新渲染，不会丢数据，所以它不需要持久化和主从复制的严格保证。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -242,7 +246,8 @@ spec:
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">Git Directory generator 加通配符是一把快刀</div>
-    <p>它的好处是新增服务目录就自动多一个应用，不用改任何定义。风险是反过来也成立：有人误删或改名了 <code>apps/</code> 下的目录，对应的 Application 就消失了，而 Application 消失会带走它管理的线上资源。生产环境务必配 <code>preserveResourcesOnDeletion</code>，并给 <code>apps/</code> 目录加保护规则。</p>
+    <p>它的好处是新增服务目录就自动多一个应用，不用改任何定义。风险是反过来也成立：有人误删或改名了 <code>apps/</code> 下的目录，对应的 Application 就消失了，而 Application 消失会带走它管理的线上资源。</p>
+<p>生产环境务必配 <code>preserveResourcesOnDeletion</code>，并给 <code>apps/</code> 目录加保护规则。</p>
 </div>
 
 <h2>装完立刻要做的六件事</h2>
@@ -284,7 +289,9 @@ argocd app history payment-prod</code></pre>
 
 <h2>RBAC 设计：sync 权限等于发布权限</h2>
 
-<p>生产化里最该花时间的就是这一块。核心认知是：<strong>sync 不是刷新，sync 是发布。</strong>点一次 sync 就把仓库当前内容推到目标集群，如果仓库里已经合入了还没排期的变更，这一下就带进了生产，且绕过了所有发布窗口。对配了 prune 的应用，误触的 sync 还可能连带删除资源。</p>
+<p>生产化里最该花时间的就是这一块。核心认知是：<strong>sync 不是刷新，sync 是发布。</strong></p>
+<p>点一次 sync 就把仓库当前内容推到目标集群，如果仓库里已经合入了还没排期的变更，这一下就带进了生产，且绕过了所有发布窗口。</p>
+<p>对配了 prune 的应用，误触的 sync 还可能连带删除资源。</p>
 
 <table>
 <thead><tr><th>角色</th><th>能看</th><th>能 sync</th><th>能改 Application 定义</th><th>能进容器执行命令</th><th>适用人群</th></tr></thead>
@@ -338,7 +345,8 @@ data:
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">给了 update 权限等于给了全部权限</div>
-    <p>能改 Application 定义的人，可以把 <code>targetRevision</code> 指向自己的分支、把 <code>path</code> 指向任意目录、把 <code>destination</code> 换成别的命名空间。所以「能 sync 生产」和「能改生产应用定义」必须分开：发布者只拿 sync，定义的变更走配置仓库的 PR。另外 <code>exec</code> 权限意味着能进生产容器执行命令，它绕过了 Git 审计链，默认应当拒绝。</p>
+    <p>能改 Application 定义的人，可以把 <code>targetRevision</code> 指向自己的分支、把 <code>path</code> 指向任意目录、把 <code>destination</code> 换成别的命名空间。所以「能 sync 生产」和「能改生产应用定义」必须分开：发布者只拿 sync，定义的变更走配置仓库的 PR。</p>
+<p>另外 <code>exec</code> 权限意味着能进生产容器执行命令，它绕过了 Git 审计链，默认应当拒绝。</p>
 </div>
 
 <h2>Application 的关键字段与它们的坑</h2>
@@ -401,7 +409,8 @@ spec:
 
 <h2>同步状态与健康状态是两回事</h2>
 
-<p>界面上那两个徽标经常被当成一个东西看，但它们是完全独立的两个维度。<strong>Synced 只说明清单已经成功提交给集群 API Server</strong>，也就是期望状态写进去了；<strong>Healthy 才说明这些资源真的可用</strong>，比如 Deployment 的就绪副本数达到期望值、Service 有可用端点。只看 Synced 就宣布发布成功，是最常见的误判。</p>
+<p>界面上那两个徽标经常被当成一个东西看，但它们是完全独立的两个维度。<strong>Synced 只说明清单已经成功提交给集群 API Server</strong>，也就是期望状态写进去了；</p>
+<p><strong>Healthy 才说明这些资源真的可用</strong>，比如 Deployment 的就绪副本数达到期望值、Service 有可用端点。只看 Synced 就宣布发布成功，是最常见的误判。</p>
 
 <table>
 <thead><tr><th>Sync 状态</th><th>Health 状态</th><th>实际含义</th><th>第一步该查什么</th></tr></thead>
@@ -415,7 +424,8 @@ spec:
 <tr><td>Synced</td><td>Unknown</td><td>自定义资源没有健康判定逻辑，控制器不知道它算不算好</td><td>为该 CRD 写 Lua 健康检查，否则整个应用的健康状态永远是未知</td></tr>
 </tbody></table>
 
-<p>最后一行是接入 Operator 之后必然会遇到的问题。内置健康检查只覆盖常见的内置资源，自定义资源默认返回未知状态，而应用的整体健康是各资源健康的聚合，一个未知就会让整体判定失去意义，通知也就无从触发。解决办法是在 <code>argocd-cm</code> 里为该资源类型注册一段 Lua 脚本。</p>
+<p>最后一行是接入 Operator 之后必然会遇到的问题。内置健康检查只覆盖常见的内置资源，自定义资源默认返回未知状态，而应用的整体健康是各资源健康的聚合。</p>
+<p>一个未知就会让整体判定失去意义，通知也就无从触发。解决办法是在 <code>argocd-cm</code> 里为该资源类型注册一段 Lua 脚本。</p>
 
 <pre><code class="language-yaml"># argocd-cm 片段：给自定义资源补健康判定，否则它永远是 Unknown
 data:
@@ -445,7 +455,9 @@ data:
 
 <h2>同步波次与 hooks：把顺序声明出来</h2>
 
-<p>一次同步默认是并发应用所有资源的，顺序不确定。当资源之间有真实依赖（CRD 必须先于使用它的自定义资源、数据库迁移必须先于新版本代码、配置必须先于消费它的工作负载），就要用 sync-wave 注解显式排序：<strong>波次值从小到大依次应用，前一波全部健康之后才进入下一波</strong>，未标注的默认为 0，允许负数。</p>
+<p>一次同步默认是并发应用所有资源的，顺序不确定。</p>
+<p>当资源之间有真实依赖（CRD 必须先于使用它的自定义资源、数据库迁移必须先于新版本代码、配置必须先于消费它的工作负载），就要用 sync-wave 注解显式排序。</p>
+<p><strong>波次值从小到大依次应用，前一波全部健康之后才进入下一波</strong>，未标注的默认为 0，允许负数。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -475,7 +487,9 @@ stateDiagram-v2
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">把数据库迁移放进 PreSync 之前，先确认三件事</div>
-    <p>一是<strong>幂等性</strong>：hook 会在每次同步时重跑，包括自愈触发的同步，所以迁移必须用版本表记录已执行变更，重复执行是常态而非异常。二是<strong>失败会阻塞整次同步</strong>：新版本代码上不去，而旧版本仍在服务，如果迁移已部分执行，数据库会处于中间状态。三是<strong>必须向后兼容</strong>：从迁移完成到新版本 Pod 全部就绪之间有一个窗口，旧代码还在读写新结构，加字段安全，删字段和改类型必须拆成多次发布。数据库兼容演进的详细做法见站内 <a href="../../cicd/deployment/index.html">部署策略</a> 篇。</p>
+    <p>一是<strong>幂等性</strong>：hook 会在每次同步时重跑，包括自愈触发的同步，所以迁移必须用版本表记录已执行变更，重复执行是常态而非异常。</p>
+<p>二是<strong>失败会阻塞整次同步</strong>：新版本代码上不去，而旧版本仍在服务，如果迁移已部分执行，数据库会处于中间状态。</p>
+<p>三是<strong>必须向后兼容</strong>：从迁移完成到新版本 Pod 全部就绪之间有一个窗口，旧代码还在读写新结构，加字段安全，删字段和改类型必须拆成多次发布。数据库兼容演进的详细做法见站内 <a href="../../cicd/deployment/index.html">部署策略</a> 篇。</p>
 </div>
 
 <h2>规模化之后会在哪里撞墙</h2>
@@ -495,7 +509,9 @@ stateDiagram-v2
 
 <h2>自身的高可用与灾备</h2>
 
-<p>这里有一个相对于传统 CD 工具的结构性优势：<strong>Argo CD 几乎没有自己的持久状态。</strong>Application 定义是集群里的 CRD 对象，期望状态在 Git 里，Redis 里全是可重建的缓存。所以灾备方案可以很简单——备份 CRD 对象（或者干脆把它们也放进 Git，由 bootstrap 定义生成），重装一遍控制器，指向同一个仓库，状态自然恢复。需要单独保管的只有仓库凭证、集群注册信息和 SSO 配置这些无法从 Git 重建的密钥类数据。</p>
+<p>这里有一个相对于传统 CD 工具的结构性优势：<strong>Argo CD 几乎没有自己的持久状态。</strong>Application 定义是集群里的 CRD 对象，期望状态在 Git 里，Redis 里全是可重建的缓存。</p>
+<p>所以灾备方案可以很简单——备份 CRD 对象（或者干脆把它们也放进 Git，由 bootstrap 定义生成），重装一遍控制器，指向同一个仓库，状态自然恢复。</p>
+<p>需要单独保管的只有仓库凭证、集群注册信息和 SSO 配置这些无法从 Git 重建的密钥类数据。</p>
 
 <table>
 <thead><tr><th>关注点</th><th>做法</th><th>为什么</th></tr></thead>

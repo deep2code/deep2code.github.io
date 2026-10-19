@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇的靶子很具体：<strong>IO 相关的线上问题几乎都不是「不会写」，而是标准写法没记牢</strong>——响应体没排空导致连接不复用、<code>Close</code> 的错误被丢掉产出损坏文件、<code>bufio.Scanner</code> 撞上 64KB 行上限静默丢数据。这几类问题都有固定的正确写法，也都能在 code review 里一眼认出来。</p>
+<p>这篇的靶子很具体：<strong>IO 相关的线上问题几乎都不是「不会写」，而是标准写法没记牢</strong>——响应体没排空导致连接不复用、<code>Close</code> 的错误被丢掉产出损坏文件、<code>bufio.Scanner</code> 撞上 64KB 行上限静默丢数据。</p>
+<p>这几类问题都有固定的正确写法，也都能在 code review 里一眼认出来。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -258,16 +259,20 @@ lsof -p "$(pgrep -f myapp)" | grep -c TCP
 # 3) 看客户端指标：Go 1.11 起 http.Transport 的空闲连接数可从 expvar 或自己埋点导出，
 #    更直接的证据是上面 traceReuse 打出的 reused=false
 curl -s localhost:6060/debug/pprof/goroutine?debug=1 | grep -c 'net/http.(*persistConn)'</code></pre>
-<p>三步看下来：<code>reused=false</code> 长期出现、<code>TIME_WAIT</code> 随 QPS 线性上涨、<code>persistConn</code> 的 goroutine 数量剧烈波动，任意两条同时成立就可以直接去代码里找「只 <code>Close</code> 没排空」的调用点了。相关的下游超时与取消传播见 <a href="../context/">Go Context 的传播、取消与误用</a>，延迟毛刺的量化方法在 <a href="../../../observability/">可观测性与性能</a>。</p>
+<p>三步看下来：<code>reused=false</code> 长期出现、<code>TIME_WAIT</code> 随 QPS 线性上涨、<code>persistConn</code> 的 goroutine 数量剧烈波动，任意两条同时成立就可以直接去代码里找「只 <code>Close</code> 没排空」的调用点了。</p>
+<p>相关的下游超时与取消传播见 <a href="../context/">Go Context 的传播、取消与误用</a>，延迟毛刺的量化方法在 <a href="../../../observability/">可观测性与性能</a>。</p>
 
 <h2>② 原理 · 一个方法的接口，为什么是 Go 最成功的抽象</h2>
 <p>搞清这一节，能解释为什么上面那些定式的参数类型全是 <code>io.Reader</code> 和 <code>io.Writer</code>，以及为什么你自己包一层装饰器就可能让性能掉一个档。</p>
-<p><code>io.Reader</code> 只有一个方法，<code>io.Writer</code> 也只有一个方法。这两个接口的价值恰恰来自「小」：<strong>方法越少，能实现它的类型就越多，可组合的空间就越大</strong>。文件、TCP 连接、内存缓冲、字符串、gzip 流、AES 加密流、限速器、进度条、HTTP 请求体，全都满足同一个接口，于是任何接收 <code>io.Reader</code> 的函数天然能处理所有这些来源。</p>
-<p>对比一下就知道这有多难得：在需要显式声明实现关系的语言里，让一个第三方类型去满足你定义的接口通常要写适配器；而 Go 的隐式实现让「凑巧都有一个 Read 方法」就等于可互换。这也是为什么 Go 的 IO 生态里几乎看不到适配层——大家共用同一组接口。</p>
+<p><code>io.Reader</code> 只有一个方法，<code>io.Writer</code> 也只有一个方法。这两个接口的价值恰恰来自「小」：<strong>方法越少，能实现它的类型就越多，可组合的空间就越大</strong>。</p>
+<p>文件、TCP 连接、内存缓冲、字符串、gzip 流、AES 加密流、限速器、进度条、HTTP 请求体，全都满足同一个接口，于是任何接收 <code>io.Reader</code> 的函数天然能处理所有这些来源。</p>
+<p>对比一下就知道这有多难得：在需要显式声明实现关系的语言里，让一个第三方类型去满足你定义的接口通常要写适配器；而 Go 的隐式实现让「凑巧都有一个 Read 方法」就等于可互换。</p>
+<p>这也是为什么 Go 的 IO 生态里几乎看不到适配层——大家共用同一组接口。</p>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">Read 的黄金法则：先处理数据，再判断 error</div>
-    <p><code>Read</code> 的契约允许<strong>同时返回 n 大于 0 和一个非 nil 的 error</strong>（最典型的是最后一次读返回了数据同时带上 <code>io.EOF</code>）。所以正确的写法永远是先处理 <code>p[:n]</code>，再决定要不要因为 err 退出。写成先判 err 后处理数据，就会在读取的最后一块上丢数据，而且只在文件大小恰好落在边界上时复现。</p>
+    <p><code>Read</code> 的契约允许<strong>同时返回 n 大于 0 和一个非 nil 的 error</strong>（最典型的是最后一次读返回了数据同时带上 <code>io.EOF</code>）。所以正确的写法永远是先处理 <code>p[:n]</code>，再决定要不要因为 err 退出。</p>
+<p>写成先判 err 后处理数据，就会在读取的最后一块上丢数据，而且只在文件大小恰好落在边界上时复现。</p>
 </div>
 <table>
 <thead><tr><th>接口</th><th>方法签名要点</th><th>谁实现了它</th><th>为什么值得单独知道</th></tr></thead>
@@ -412,11 +417,13 @@ sequenceDiagram
 <tr><td>src 是 io.LimitedReader 且剩余量小于 32KB</td><td>缓冲按剩余量缩小</td><td>小于 32KB</td><td>只拷一小段</td></tr>
 </tbody>
 </table>
-<p>实践结论：<strong>能用 <code>io.Copy</code> 就不要自己写 <code>for</code> 循环读写</strong>，自己写的版本一定走不到内核零拷贝。反过来，如果你写了一个包装 <code>Writer</code> 的装饰器（比如统计字节数的），它会把 <code>ReaderFrom</code> 快路径挡掉，这时要么在装饰器上也实现 <code>ReadFrom</code> 转发下去，要么接受退化。</p>
+<p>实践结论：<strong>能用 <code>io.Copy</code> 就不要自己写 <code>for</code> 循环读写</strong>，自己写的版本一定走不到内核零拷贝。</p>
+<p>反过来，如果你写了一个包装 <code>Writer</code> 的装饰器（比如统计字节数的），它会把 <code>ReaderFrom</code> 快路径挡掉，这时要么在装饰器上也实现 <code>ReadFrom</code> 转发下去，要么接受退化。</p>
 
 <h2>② 原理 · 缓冲：为什么 bufio 不是可选项</h2>
 <p>搞清这一节，能解决「CPU 不高但吞吐上不去」这类问题：多数情况下时间全花在系统调用的固定开销上。</p>
-<p><strong>没有缓冲的每一次 <code>Read</code> 或 <code>Write</code> 都是一次系统调用。</strong>系统调用的固定开销在几百纳秒到一微秒量级，所以逐字节读一个 1MB 文件意味着一百万次陷入内核，耗时能到秒级；包一层 <code>bufio</code> 之后只有几十次系统调用，耗时是毫秒级。这中间是三到四个数量级的差距，不是「优化」而是「能不能用」的区别。</p>
+<p><strong>没有缓冲的每一次 <code>Read</code> 或 <code>Write</code> 都是一次系统调用。</strong>系统调用的固定开销在几百纳秒到一微秒量级，所以逐字节读一个 1MB 文件意味着一百万次陷入内核，耗时能到秒级；</p>
+<p>包一层 <code>bufio</code> 之后只有几十次系统调用，耗时是毫秒级。这中间是三到四个数量级的差距，不是「优化」而是「能不能用」的区别。</p>
 <table>
 <thead><tr><th>读取 1MB 文件的方式</th><th>系统调用次数量级</th><th>相对耗时量级</th><th>说明</th></tr></thead>
 <tbody>
@@ -431,7 +438,8 @@ sequenceDiagram
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">bufio.Scanner 的 64KB 行上限会让你静默丢数据</div>
-    <p><code>bufio.Scanner</code> 默认单个 token 上限是 <code>bufio.MaxScanTokenSize</code> 即 64KB。遇到更长的一行时，<code>Scan()</code> 直接返回 false，<code>for sc.Scan()</code> 正常退出，<strong>看起来和读完文件完全一样</strong>，实际后面所有内容都没处理。错误藏在 <code>sc.Err()</code> 里（<code>bufio.ErrTooLong</code>），只检查 <code>Scan()</code> 返回值的代码永远发现不了。处理日志、CSV、JSON Lines 这类可能出现超长行的数据时，这个坑几乎必踩。</p>
+    <p><code>bufio.Scanner</code> 默认单个 token 上限是 <code>bufio.MaxScanTokenSize</code> 即 64KB。遇到更长的一行时，<code>Scan()</code> 直接返回 false，<code>for sc.Scan()</code> 正常退出，<strong>看起来和读完文件完全一样</strong>，实际后面所有内容都没处理。错误藏在 <code>sc.Err()</code> 里（<code>bufio.ErrTooLong</code>），只检查 <code>Scan()</code> 返回值的代码永远发现不了。</p>
+<p>处理日志、CSV、JSON Lines 这类可能出现超长行的数据时，这个坑几乎必踩。</p>
 </div>
 <p>定式二给的是「抬高上限」这条路。如果超长行本身就是要防御的输入，就得换成下面这种自己掌控拼接与截断的写法。</p>
 <pre><code class="language-go">// 流式逐行处理超大文件：内存恒定，且能正确处理超长行
@@ -514,7 +522,8 @@ func processLines(path string, fn func(line []byte) error) error {
 <tr><td>上传长时间卡住不报错</td><td>抓 goroutine 栈看阻塞点</td><td>栈停在 io.Pipe 的 Read 上</td><td>写端出错只调了 Close 没传错误</td></tr>
 </tbody>
 </table>
-<p>判读顺序建议是先看 fd 再看系统调用次数再看内存栈。fd 数量是最容易确认也最容易修的；系统调用次数能一眼看出有没有缺缓冲；内存栈用来定位那些「只在特定请求上」打爆内存的 <code>ReadAll</code>。三步走完，绝大多数 IO 问题都能落到具体某一行代码上。</p>
+<p>判读顺序建议是先看 fd 再看系统调用次数再看内存栈。fd 数量是最容易确认也最容易修的；系统调用次数能一眼看出有没有缺缓冲；内存栈用来定位那些「只在特定请求上」打爆内存的 <code>ReadAll</code>。</p>
+<p>三步走完，绝大多数 IO 问题都能落到具体某一行代码上。</p>
 
 <h2>③ 场景 · 按数据来源与规模选定式</h2>
 <p>动手之前先过这张图，它决定了你该用上面哪个定式。</p>
@@ -544,8 +553,11 @@ flowchart TB
 <tr><td>并发读同一文件的不同区间（分片下载、zip 解析）</td><td><code>io.NewSectionReader</code> 配 <code>io.ReaderAt</code></td><td><code>ReadAt</code> 不共享偏移量，可以安全并发调用</td><td><code>net.Conn</code> 不实现 <code>ReaderAt</code>，只能对本地文件或已落盘内容用</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：流式不是万能选项。对象小于几十 KB 且来源可信时，<code>os.ReadFile</code> 一把读完远比搭一条管道清晰；需要随机访问或反复回退时，流式接口帮不上忙，应该先落盘或读进内存再用 <code>bytes.Reader</code>；<code>io.Pipe</code> 引入的 goroutine 在高并发下本身就是成本，能用 <code>bytes.Buffer</code> 解决的小包体不值得上管道。日志的结构化输出不要自己拼 <code>io.Writer</code>，用 <a href="../slog/">结构化日志与 log/slog</a>；缓冲区大小与复用的量级判断见 <a href="../../algorithms/">算法与数据结构在后端工程中的位置</a>；给流式代码写测试时 <code>strings.Reader</code> 与 <code>iotest</code> 的用法在 <a href="../../testing/">测试策略与可测性设计</a>；吞吐与延迟的量化定位在 <a href="../../../observability/">可观测性与性能</a>。</p>
-<p>回到最上面那两条习惯：<strong>函数参数永远声明成 <code>io.Reader</code> 或 <code>io.Writer</code> 而不是具体类型，能流式就绝不 <code>ReadAll</code></strong>。剩下的注意力全部花在三件事上——读的时候先处理数据再判 error；写的时候把 <code>Flush</code> 和 <code>Close</code> 的错误当成业务错误对待；来源不可信的输入一律先套 <code>io.LimitReader</code>。这三件事做到了，IO 相关的线上问题会少掉九成。</p>
+<p><strong>不适用边界</strong>：流式不是万能选项。对象小于几十 KB 且来源可信时，<code>os.ReadFile</code> 一把读完远比搭一条管道清晰；需要随机访问或反复回退时，流式接口帮不上忙，应该先落盘或读进内存再用 <code>bytes.Reader</code>；</p>
+<p><code>io.Pipe</code> 引入的 goroutine 在高并发下本身就是成本，能用 <code>bytes.Buffer</code> 解决的小包体不值得上管道。日志的结构化输出不要自己拼 <code>io.Writer</code>，用 <a href="../slog/">结构化日志与 log/slog</a>；缓冲区大小与复用的量级判断见 <a href="../../algorithms/">算法与数据结构在后端工程中的位置</a>；</p>
+<p>给流式代码写测试时 <code>strings.Reader</code> 与 <code>iotest</code> 的用法在 <a href="../../testing/">测试策略与可测性设计</a>；吞吐与延迟的量化定位在 <a href="../../../observability/">可观测性与性能</a>。</p>
+<p>回到最上面那两条习惯：<strong>函数参数永远声明成 <code>io.Reader</code> 或 <code>io.Writer</code> 而不是具体类型，能流式就绝不 <code>ReadAll</code></strong>。剩下的注意力全部花在三件事上——读的时候先处理数据再判 error；写的时候把 <code>Flush</code> 和 <code>Close</code> 的错误当成业务错误对待；</p>
+<p>来源不可信的输入一律先套 <code>io.LimitReader</code>。这三件事做到了，IO 相关的线上问题会少掉九成。</p>
 <p>本篇是标准库这一层的第一站：语言机制四篇解决的是运行时、并发、取消与类型抽象，从这里开始转向具体能力，下一步是排序与切片操作。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../generics-usage/">← 上一步：Go 泛型该用在哪，以及标准库的变化</a> · <a href="../sort/">下一步：排序与切片操作的现代写法 →</a></p>

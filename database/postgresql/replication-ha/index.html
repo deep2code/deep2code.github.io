@@ -88,7 +88,8 @@
             <span class="meta-item">🏷️ PostgreSQL</span>
         </div>
     </header>
-    <p>PG 的复制只有两种：物理流复制传的是 WAL 字节，从库是主库的<strong>逐字节副本</strong>；逻辑复制传的是解码后的行变更，粒度到表。两者的能力边界、失效模式和运维风险完全不同，而绝大多数「配了高可用反而更不可用」的事故，都出在同步复制的可用性陷阱、复制槽撑爆磁盘、以及切换后旧主库不能直接当从库这三件事上。</p>
+    <p>PG 的复制只有两种：物理流复制传的是 WAL 字节，从库是主库的<strong>逐字节副本</strong>；逻辑复制传的是解码后的行变更，粒度到表。</p>
+<p>两者的能力边界、失效模式和运维风险完全不同，而绝大多数「配了高可用反而更不可用」的事故，都出在同步复制的可用性陷阱、复制槽撑爆磁盘、以及切换后旧主库不能直接当从库这三件事上。</p>
 
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
@@ -184,8 +185,10 @@ SELECT slot_name, active FROM pg_replication_slots;   -- 物理槽不跟随切�
     <p>用法层到此结束。为什么 <code>on</code> 不等于「立刻可读」、为什么同步复制配错会把主库搞挂、为什么旧主不能直接挂回去，下面逐个展开。</p>
 
     <h2>② 原理 · 物理流复制：从库是字节级副本</h2>
-    <p>链路是三个进程接力：主库的 <strong>walsender</strong> 把 WAL 流发出去，从库的 <strong>walreceiver</strong> 收下来写进本地 <code>pg_wal</code>，再由 <strong>startup 进程</strong>（持续处于恢复状态）回放。注意回放是<strong>单进程串行</strong>的，虽然 PG 15 起部分场景能并行预取，但主库多个并发写入会话产生的 WAL，在从库上是一条线回放——这是主从延迟在写入高峰期突然拉大的根本原因，和网络带宽往往无关。</p>
-    <p>因为传的是字节而不是逻辑变更，物理复制有一组无法绕过的硬限制：<strong>从库不能有和主库不同的索引</strong>（索引页也是 WAL 的一部分）、<strong>从库完全不可写</strong>（连临时表都不行，PG 14 之前连 <code>CREATE TEMP TABLE</code> 都会报错）、<strong>不能只复制部分表</strong>、<strong>主从大版本必须完全一致</strong>。想要这些能力就只能用逻辑复制。</p>
+    <p>链路是三个进程接力：主库的 <strong>walsender</strong> 把 WAL 流发出去，从库的 <strong>walreceiver</strong> 收下来写进本地 <code>pg_wal</code>，再由 <strong>startup 进程</strong>（持续处于恢复状态）回放。</p>
+<p>注意回放是<strong>单进程串行</strong>的，虽然 PG 15 起部分场景能并行预取，但主库多个并发写入会话产生的 WAL，在从库上是一条线回放——这是主从延迟在写入高峰期突然拉大的根本原因，和网络带宽往往无关。</p>
+    <p>因为传的是字节而不是逻辑变更，物理复制有一组无法绕过的硬限制：<strong>从库不能有和主库不同的索引</strong>（索引页也是 WAL 的一部分）、<strong>从库完全不可写</strong>（连临时表都不行，PG 14 之前连 <code>CREATE TEMP TABLE</code> 都会报错）。</p>
+<p><strong>不能只复制部分表</strong>、<strong>主从大版本必须完全一致</strong>。想要这些能力就只能用逻辑复制。</p>
     <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -279,12 +282,15 @@ max_standby_streaming_delay = 30s    # 回放被查询挡住时最多等 30 秒�
             </tr>
         </tbody>
     </table>
-    <p>这里有个被反复误解的点：<strong><code>on</code> 只保证 WAL 落到了从库磁盘，不保证从库已经回放</strong>。所以在 <code>synchronous_commit = on</code> 下写完立刻去从库读，照样可能读不到——因为那条 WAL 还排在回放队列里。要「立刻可读」只有 <code>remote_apply</code>，而它会把从库的回放速度变成主库的提交速度上限。</p>
+    <p>这里有个被反复误解的点：<strong><code>on</code> 只保证 WAL 落到了从库磁盘，不保证从库已经回放</strong>。所以在 <code>synchronous_commit = on</code> 下写完立刻去从库读，照样可能读不到——因为那条 WAL 还排在回放队列里。</p>
+<p>要「立刻可读」只有 <code>remote_apply</code>，而它会把从库的回放速度变成主库的提交速度上限。</p>
     <p><code>synchronous_standby_names</code> 有两种语法，选错会直接影响可用性：<code>FIRST 1 (s1, s2)</code> 表示<strong>优先等 s1</strong>，只有 s1 不可用才轮到 s2；<code>ANY 1 (s1, s2)</code> 表示<strong>任意一个确认即可</strong>。生产上除非有明确的机房优先级需求，一律用 <code>ANY</code>，它的可用性明显更好。</p>
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
         <div class="callout-title">同步复制的可用性陷阱：把主库搞挂的经典姿势</div>
-        <p>只配一个同步从库、且没有候补时，<strong>这个从库一挂，主库会挂起所有提交无限期等待</strong>——不是报错，是卡住，连接池在几秒内打满，表现和主库宕机一模一样。这就是「为了更可靠而配了同步复制，结果可用性反而下降」的完整因果。正确配置有三条：候选数要严格大于要求确认数（比如两个从库配 <code>ANY 1</code>）；用 <code>ANY</code> 而不是 <code>FIRST</code>；并且监控里必须有「同步从库数量少于要求数」这一条告警。真的遇到从库挂了主库卡住，应急手段是把 <code>synchronous_standby_names</code> 改成空串再 <code>pg_reload_conf()</code>，这是<strong>秒级生效且不需要重启</strong>的，先救可用性。</p>
+        <p>只配一个同步从库、且没有候补时，<strong>这个从库一挂，主库会挂起所有提交无限期等待</strong>——不是报错，是卡住，连接池在几秒内打满，表现和主库宕机一模一样。</p>
+<p>这就是「为了更可靠而配了同步复制，结果可用性反而下降」的完整因果。正确配置有三条：候选数要严格大于要求确认数（比如两个从库配 <code>ANY 1</code>）；用 <code>ANY</code> 而不是 <code>FIRST</code>；</p>
+<p>并且监控里必须有「同步从库数量少于要求数」这一条告警。真的遇到从库挂了主库卡住，应急手段是把 <code>synchronous_standby_names</code> 改成空串再 <code>pg_reload_conf()</code>，这是<strong>秒级生效且不需要重启</strong>的，先救可用性。</p>
     </div>
 
     <h2>② 原理 · 复制槽：保证不丢 WAL，也能撑爆你的磁盘</h2>
@@ -369,7 +375,8 @@ SELECT current_setting('synchronous_standby_names') AS 配置,
 FROM   pg_stat_replication;</code></pre>
 
     <h2>② 原理 · 热备查询冲突：从库的长查询与 WAL 回放互相为敌</h2>
-    <p>从库既要回放主库传来的 WAL，又要服务只读查询，这两件事会在同一个页上撞车：主库上 VACUUM 清掉了某些死元组，这条 WAL 传到从库要回放，但从库上有个长查询的快照还需要看到那些元组。PG 只能二选一，选择权由 <code>max_standby_streaming_delay</code> 控制。</p>
+    <p>从库既要回放主库传来的 WAL，又要服务只读查询，这两件事会在同一个页上撞车：主库上 VACUUM 清掉了某些死元组，这条 WAL 传到从库要回放，但从库上有个长查询的快照还需要看到那些元组。</p>
+<p>PG 只能二选一，选择权由 <code>max_standby_streaming_delay</code> 控制。</p>
     <table>
         <thead>
             <tr>
@@ -544,7 +551,8 @@ SELECT setval('orders_id_seq', (SELECT max(id) FROM orders) + 1000);</code></pre
 
     <h2>② 原理 · 故障切换：timeline 分叉与 pg_rewind</h2>
     <p><code>pg_ctl promote</code> 把从库提升为主库时，PG 会<strong>递增 timeline ID</strong>（从 1 变成 2），并写一个 <code>.history</code> 文件记录分叉点。timeline 的存在是为了防止两条不同的历史被混起来用——这也直接导致了切换演练里最容易翻车的一步。</p>
-    <p><strong>旧主库恢复后不能直接当新主库的从库。</strong>原因是旧主库在失联前可能已经写入并落盘了一些 WAL，而这些 WAL 从来没传到新主库。它的历史<strong>领先于</strong>新主库，二者在分叉点之后是两条不同的历史。直接挂上去，轻则报 timeline 不匹配拒绝启动，重则数据静默不一致。必须先用 <code>pg_rewind</code> 把旧主库回退到分叉点，或者干脆重做基础备份。</p>
+    <p><strong>旧主库恢复后不能直接当新主库的从库。</strong>原因是旧主库在失联前可能已经写入并落盘了一些 WAL，而这些 WAL 从来没传到新主库。它的历史<strong>领先于</strong>新主库，二者在分叉点之后是两条不同的历史。</p>
+<p>直接挂上去，轻则报 timeline 不匹配拒绝启动，重则数据静默不一致。必须先用 <code>pg_rewind</code> 把旧主库回退到分叉点，或者干脆重做基础备份。</p>
     <div class="mermaid">
 stateDiagram-v2
     [*] --> 主库A_timeline1
@@ -650,7 +658,8 @@ pg_basebackup -h standby1 -U repl -D /var/lib/pgsql/data \
 psql -h standby1 -Atc "SELECT slot_name, active FROM pg_replication_slots"</code></pre>
 
     <h2>② 原理 · 自动切换：为什么不要自己写脚本</h2>
-    <p>自动切换的难点从来不是「检测到主库挂了就 promote」，而是<strong>如何在网络分区下确保只有一个节点认为自己是主库</strong>。这需要一个外部的、有共识能力的仲裁者，以及对旧主的隔离手段。自己写的脚本通常只解决了检测，于是把偶发的网络抖动变成了永久的数据分叉。</p>
+    <p>自动切换的难点从来不是「检测到主库挂了就 promote」，而是<strong>如何在网络分区下确保只有一个节点认为自己是主库</strong>。这需要一个外部的、有共识能力的仲裁者，以及对旧主的隔离手段。</p>
+<p>自己写的脚本通常只解决了检测，于是把偶发的网络抖动变成了永久的数据分叉。</p>
     <div class="mermaid">
 flowchart TB
     subgraph DCS["分布式配置存储 提供共识与 leader 租约"]
@@ -728,7 +737,9 @@ flowchart TB
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">自动切换不是「越快越好」</div>
-        <p>把故障检测阈值调得过于灵敏，结果是一次 GC 停顿、一次网络抖动就触发切换，而每次切换都要付出连接中断、缓存冷启动、其他从库重新指向的代价。成熟做法是把检测窗口设在<strong>十秒量级</strong>，并且区分「主库进程没了」和「主库响应慢」——后者往往不该切。另外 Patroni 的 <code>maximum_lag_on_failover</code> 必须设：它限制候选从库允许落后的字节数，避免为了尽快恢复可用性而选了一个落后很多的从库，把 RPO 悄悄放大。</p>
+        <p>把故障检测阈值调得过于灵敏，结果是一次 GC 停顿、一次网络抖动就触发切换，而每次切换都要付出连接中断、缓存冷启动、其他从库重新指向的代价。</p>
+<p>成熟做法是把检测窗口设在<strong>十秒量级</strong>，并且区分「主库进程没了」和「主库响应慢」——后者往往不该切。</p>
+<p>另外 Patroni 的 <code>maximum_lag_on_failover</code> 必须设：它限制候选从库允许落后的字节数，避免为了尽快恢复可用性而选了一个落后很多的从库，把 RPO 悄悄放大。</p>
     </div>
 
     <h2>③ 场景 · 按 RPO 与 RTO 要求选复制形态</h2>
@@ -749,7 +760,11 @@ flowchart TB
         <tr><td>只想要一个入口 IP 能漂移</td><td>Keepalived 只做流量入口，<strong>不让它决定谁是主库</strong></td><td>VRRP 没有数据层共识，它不知道数据是否一致</td><td>网络分区时两侧都可能持有 VIP；这条路必须配人工切换流程与演练</td></tr>
     </tbody>
     </table>
-    <p><strong>不适用边界</strong>：复制不是备份，也不解决数据逻辑错误。<code>DROP TABLE</code> 和写错的 <code>UPDATE</code> 会被<strong>忠实地复制到所有备库</strong>，这类问题只能靠归档加 PITR，部署形态与归档参数在 <a href="../install/">PostgreSQL 生产部署与必调参数</a>；WAL 本身怎么写、检查点与 fsync 的机制在 <a href="../">PostgreSQL 主干篇</a>；主库上的长事务与 <code>idle in transaction</code> 会同时拖住 VACUUM 与复制水位，排查手段在 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；备库上的查询为什么不走索引、大扫描为什么冲刷缓存在 <a href="../index-optimize/">索引选型与执行计划判读</a>；延迟与槽这些指标怎么采集、阈值怎么定、告警怎么配在 <a href="../../../observability/metrics/">指标与监控</a>，数据库访问侧的性能观测在 <a href="../../../observability/performance/db-access/">数据库访问性能</a>；为什么需要外部共识、Raft 的选举与租约在 <a href="../../../architecture/distributed/consistency/">一致性与共识</a>；跨服务的数据一致性在 <a href="../../../architecture/distributed/transaction/">分布式事务</a>；「问题到底是不是在数据库」这一层在 <a href="../../optimization/">数据库性能优化：瓶颈定位顺序</a>。</p>
+    <p><strong>不适用边界</strong>：复制不是备份，也不解决数据逻辑错误。<code>DROP TABLE</code> 和写错的 <code>UPDATE</code> 会被<strong>忠实地复制到所有备库</strong>，这类问题只能靠归档加 PITR，部署形态与归档参数在 <a href="../install/">PostgreSQL 生产部署与必调参数</a>；</p>
+<p>WAL 本身怎么写、检查点与 fsync 的机制在 <a href="../">PostgreSQL 主干篇</a>；主库上的长事务与 <code>idle in transaction</code> 会同时拖住 VACUUM 与复制水位，排查手段在 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；</p>
+<p>备库上的查询为什么不走索引、大扫描为什么冲刷缓存在 <a href="../index-optimize/">索引选型与执行计划判读</a>；</p>
+<p>延迟与槽这些指标怎么采集、阈值怎么定、告警怎么配在 <a href="../../../observability/metrics/">指标与监控</a>，数据库访问侧的性能观测在 <a href="../../../observability/performance/db-access/">数据库访问性能</a>；为什么需要外部共识、Raft 的选举与租约在 <a href="../../../architecture/distributed/consistency/">一致性与共识</a>；</p>
+<p>跨服务的数据一致性在 <a href="../../../architecture/distributed/transaction/">分布式事务</a>；「问题到底是不是在数据库」这一层在 <a href="../../optimization/">数据库性能优化：瓶颈定位顺序</a>。</p>
     <p>这是 PostgreSQL 这条路径的最后一篇：前面几篇让单实例把类型、索引、并发都做对，本篇负责让它在实例挂掉时还能继续提供服务，并且切换过程是被验证过的而不是纸面上的。</p>
 
     <p class="cluster-nav">同主题路径：<a href="../mvcc-transaction/">← 上一步：PostgreSQL 隔离级别与并发控制：SSI、行锁四档与 DDL 锁队列</a></p>

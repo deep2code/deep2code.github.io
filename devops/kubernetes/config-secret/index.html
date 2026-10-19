@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>配置这件事在 K8s 里之所以反复出问题，不是因为 ConfigMap 难懂，而是因为<strong>四种注入方式的热更新行为完全不同，而清单上看起来差别很小</strong>。本篇的核心就是那张对照表。应用侧的配置热更新范式、配置中心服务端机制分别见 <a href="../../../architecture/governance/config-client/">微服务配置中心篇</a> 与 <a href="../../../architecture/governance/">配置中心系列</a>，本篇只讲集群内的落地方式与密钥安全。</p>
+<p>配置这件事在 K8s 里之所以反复出问题，不是因为 ConfigMap 难懂，而是因为<strong>四种注入方式的热更新行为完全不同，而清单上看起来差别很小</strong>。本篇的核心就是那张对照表。</p>
+<p>应用侧的配置热更新范式、配置中心服务端机制分别见 <a href="../../../architecture/governance/config-client/">微服务配置中心篇</a> 与 <a href="../../../architecture/governance/">配置中心系列</a>，本篇只讲集群内的落地方式与密钥安全。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -300,7 +301,8 @@ spec:
 
 <h2>② 原理 · 为什么卷挂载会更新而 subPath 不会</h2>
 
-<p>把卷挂载的目录 <code>ls -la</code> 一下就明白了：容器里看到的 <code>app.yaml</code> 是一条符号链接，指向 <code>..data/app.yaml</code>，而 <code>..data</code> 本身又是一条指向带时间戳目录的符号链接。kubelet 更新配置时，先写一个全新的时间戳目录，然后<strong>原子地把 <code>..data</code> 这条符号链接指过去</strong>——这样应用永远不会读到写了一半的配置。</p>
+<p>把卷挂载的目录 <code>ls -la</code> 一下就明白了：容器里看到的 <code>app.yaml</code> 是一条符号链接，指向 <code>..data/app.yaml</code>，而 <code>..data</code> 本身又是一条指向带时间戳目录的符号链接。</p>
+<p>kubelet 更新配置时，先写一个全新的时间戳目录，然后<strong>原子地把 <code>..data</code> 这条符号链接指过去</strong>——这样应用永远不会读到写了一半的配置。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -330,7 +332,8 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">监听文件变化要监听目录，不是文件</div>
-    <p>因为更新是通过替换符号链接完成的，<strong>对单个文件下 inotify 只会收到一次 <code>IN_IGNORED</code> 之后再也收不到任何事件</strong>。正确做法是监听整个挂载目录的 <code>IN_CREATE</code> 与 <code>IN_MOVED_TO</code>，或者干脆定时重读文件比较内容哈希。很多配置库在裸机上工作良好、进了 K8s 就不热更新了，原因就在这里。</p>
+    <p>因为更新是通过替换符号链接完成的，<strong>对单个文件下 inotify 只会收到一次 <code>IN_IGNORED</code> 之后再也收不到任何事件</strong>。正确做法是监听整个挂载目录的 <code>IN_CREATE</code> 与 <code>IN_MOVED_TO</code>，或者干脆定时重读文件比较内容哈希。</p>
+<p>很多配置库在裸机上工作良好、进了 K8s 就不热更新了，原因就在这里。</p>
 </div>
 
 
@@ -392,7 +395,8 @@ generatorOptions:
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">base64 不是加密，默认情况下 etcd 里是明文</div>
-    <p><code>data</code> 字段的 base64 只是为了能承载二进制内容，一条 <code>base64 -d</code> 就能还原。<strong>如果没有开启静态加密，Secret 的值在 etcd 的数据文件和每一份备份里都是可以直接 grep 出来的明文</strong>。所以 Secret 这个类型给你的不是保密性，而是三件事：不进镜像、可以按对象名做 RBAC 授权、卷挂载时放在内存文件系统上不落盘。</p>
+    <p><code>data</code> 字段的 base64 只是为了能承载二进制内容，一条 <code>base64 -d</code> 就能还原。<strong>如果没有开启静态加密，Secret 的值在 etcd 的数据文件和每一份备份里都是可以直接 grep 出来的明文</strong>。</p>
+<p>所以 Secret 这个类型给你的不是保密性，而是三件事：不进镜像、可以按对象名做 RBAC 授权、卷挂载时放在内存文件系统上不落盘。</p>
 </div>
 
 <table>
@@ -404,7 +408,8 @@ generatorOptions:
 </tbody>
 </table>
 
-<p>第二行右边那一格是最值得记住的纠正：<strong>create pod 权限本身就等价于该命名空间的 Secret 读权限</strong>。同理，能改 Deployment、能创建 Job、能 exec 的人也都有等效能力。所以「把 get secret 权限收了」并不构成隔离，真正的隔离是按命名空间切分，并且让凭证短期化。</p>
+<p>第二行右边那一格是最值得记住的纠正：<strong>create pod 权限本身就等价于该命名空间的 Secret 读权限</strong>。同理，能改 Deployment、能创建 Job、能 exec 的人也都有等效能力。</p>
+<p>所以「把 get secret 权限收了」并不构成隔离，真正的隔离是按命名空间切分，并且让凭证短期化。</p>
 
 
 <h2>② 原理 · 密钥的正确来源：不要手写进仓库</h2>
@@ -465,7 +470,8 @@ spec:
 
 <h2>② 原理 · ServiceAccount 与云 IAM 的联邦</h2>
 
-<p>上面所有方案解决的都是「密钥怎么安全地送到集群」。但对云平台凭证来说，更好的答案是<strong>根本不要有长期密钥</strong>。IRSA 与 Workload Identity 的做法是：kubelet 往容器里投一个有效期一小时的 ServiceAccount token，云端的 STS 用集群的 OIDC 公钥校验它，然后换给 Pod 一份短期凭证。</p>
+<p>上面所有方案解决的都是「密钥怎么安全地送到集群」。但对云平台凭证来说，更好的答案是<strong>根本不要有长期密钥</strong>。</p>
+<p>IRSA 与 Workload Identity 的做法是：kubelet 往容器里投一个有效期一小时的 ServiceAccount token，云端的 STS 用集群的 OIDC 公钥校验它，然后换给 Pod 一份短期凭证。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -592,11 +598,13 @@ for d in json.load(sys.stdin)["items"]:
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：ConfigMap 不是配置中心，没有灰度、没有版本审批、没有客户端推送；Secret 不是保险箱，能在该命名空间创建 Pod 的人就等于能读它，收口要靠命名空间切分与短期凭证。清单的模板化与多环境覆盖在 <a href="../helm/">Helm</a> 与 <a href="../../gitops/">GitOps 系列</a>；配置变更要不要走流水线审批属于交付流程，见 <a href="../../cicd/">CI 流水线</a>；配置改坏之后的现象定位在 <a href="../ops-troubleshooting/">节点与集群级故障排查</a>。</p>
+<p><strong>不适用边界</strong>：ConfigMap 不是配置中心，没有灰度、没有版本审批、没有客户端推送；Secret 不是保险箱，能在该命名空间创建 Pod 的人就等于能读它，收口要靠命名空间切分与短期凭证。</p>
+<p>清单的模板化与多环境覆盖在 <a href="../helm/">Helm</a> 与 <a href="../../gitops/">GitOps 系列</a>；配置变更要不要走流水线审批属于交付流程，见 <a href="../../cicd/">CI 流水线</a>；配置改坏之后的现象定位在 <a href="../ops-troubleshooting/">节点与集群级故障排查</a>。</p>
 
 <h2>③ 场景 · 多环境差异管理：一句结论</h2>
 
-<p>结论是：<strong>用同一份基线加环境覆盖层，不要给每个环境各写一份完整清单，也不要靠命名前缀在同一个命名空间里区分环境</strong>。具体怎么组织目录、怎么做覆盖层、怎么跟自动同步配合，见 <a href="../../gitops/">GitOps 系列的多环境篇</a>；用 Helm 的 values 做参数化还是用 Kustomize 做覆盖层，取舍见 <a href="../helm/">Helm 篇</a>。</p>
+<p>结论是：<strong>用同一份基线加环境覆盖层，不要给每个环境各写一份完整清单，也不要靠命名前缀在同一个命名空间里区分环境</strong>。</p>
+<p>具体怎么组织目录、怎么做覆盖层、怎么跟自动同步配合，见 <a href="../../gitops/">GitOps 系列的多环境篇</a>；用 Helm 的 values 做参数化还是用 Kustomize 做覆盖层，取舍见 <a href="../helm/">Helm 篇</a>。</p>
 
 
 <h2>③ 场景 · 反模式</h2>

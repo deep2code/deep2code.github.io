@@ -81,7 +81,8 @@
 </div>
 
 <h2>① 用法 · 洋葱中间件的正确骨架与注册顺序</h2>
-<p>中间件写错的形态高度集中，用三条纪律就能挡住绝大部分：<strong>只要 <code>next()</code> 后面还有代码就必须 <code>await</code></strong>；<strong>必须成对的清理动作放 <code>try/finally</code>，不放在 <code>await next()</code> 之后</strong>；<strong>CORS 注册在最外层，鉴权与授权分成两层</strong>。下面这份骨架把三条都体现出来，注释只说明为什么，机制在原理层。</p>
+<p>中间件写错的形态高度集中，用三条纪律就能挡住绝大部分：<strong>只要 <code>next()</code> 后面还有代码就必须 <code>await</code></strong>；<strong>必须成对的清理动作放 <code>try/finally</code>，不放在 <code>await next()</code> 之后</strong>；<strong>CORS 注册在最外层，鉴权与授权分成两层</strong>。</p>
+<p>下面这份骨架把三条都体现出来，注释只说明为什么，机制在原理层。</p>
 <pre><code class="language-typescript">import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { createMiddleware } from 'hono/factory'
@@ -186,7 +187,8 @@ export default app</code></pre>
 <p>用法层到此为止。为什么漏一个 <code>await</code> 会让改响应头静默失效、为什么 <code>await next()</code> 之后的代码在异常路径上不执行、为什么 <code>notFound</code> 不进 <code>onError</code>、为什么给带鉴权的响应挂缓存会串数据——原因全部在下面几节。</p>
 
 <h2>② 原理 · await next() 两侧是两个不同的世界</h2>
-<p>执行顺序本身很简单：先注册的中间件先进入请求阶段、最后离开响应阶段，<code>await next()</code> 就是分界线。真正要记的不是顺序，而是<strong>两侧能接触到的对象完全不同</strong>。请求阶段里 <code>c.res</code> 还不存在，你能改的只有从请求派生出来的状态；响应阶段里路由决策已经完成，<code>c.res</code> 才变得可读可换。</p>
+<p>执行顺序本身很简单：先注册的中间件先进入请求阶段、最后离开响应阶段，<code>await next()</code> 就是分界线。真正要记的不是顺序，而是<strong>两侧能接触到的对象完全不同</strong>。</p>
+<p>请求阶段里 <code>c.res</code> 还不存在，你能改的只有从请求派生出来的状态；响应阶段里路由决策已经完成，<code>c.res</code> 才变得可读可换。</p>
 
 <table>
 <thead>
@@ -201,7 +203,9 @@ export default app</code></pre>
 </tbody>
 </table>
 
-<p>短路这条分支值得单独强调：中间件只要 <code>return</code> 一个响应而不调 <code>next()</code>，整条链就在此终止。鉴权、限流、预检响应都靠这个机制工作，但它同时意味着<strong>任何注册在内层的埋点、审计、指标统计在短路路径上都是空白</strong>。「线上 403 一条日志都查不到」通常就是这么来的——不是日志丢了，是 logger 挂在了鉴权中间件的内层。</p>
+<p>短路这条分支值得单独强调：中间件只要 <code>return</code> 一个响应而不调 <code>next()</code>，整条链就在此终止。</p>
+<p>鉴权、限流、预检响应都靠这个机制工作，但它同时意味着<strong>任何注册在内层的埋点、审计、指标统计在短路路径上都是空白</strong>。</p>
+<p>「线上 403 一条日志都查不到」通常就是这么来的——不是日志丢了，是 logger 挂在了鉴权中间件的内层。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -224,7 +228,8 @@ sequenceDiagram
 </div>
 
 <h2>② 原理 · 忘了 await 的四种症状</h2>
-<p><code>next()</code> 返回的是 Promise，不 <code>await</code> 就等于「把下游整条链丢进微任务队列，自己立刻往下走」。响应阶段的代码于是跑在下游之前，此时 <code>c.res</code> 还没有被赋值。Hono 常见的表现是报 Context 未终结或读 <code>c.res</code> 出错，但相当多的写法是<strong>静默失效</strong>，本地小流量根本发现不了。</p>
+<p><code>next()</code> 返回的是 Promise，不 <code>await</code> 就等于「把下游整条链丢进微任务队列，自己立刻往下走」。响应阶段的代码于是跑在下游之前，此时 <code>c.res</code> 还没有被赋值。</p>
+<p>Hono 常见的表现是报 Context 未终结或读 <code>c.res</code> 出错，但相当多的写法是<strong>静默失效</strong>，本地小流量根本发现不了。</p>
 
 <table>
 <thead>
@@ -241,7 +246,8 @@ sequenceDiagram
 <p>规则可以压缩成一句：<strong>只要 <code>next()</code> 后面还有任何一行代码，就必须 <code>await</code></strong>。不需要响应阶段的中间件，写 <code>return next()</code> 就好。</p>
 
 <h2>② 原理 · 注册顺序与路径写法：鉴权被整段绕过的组合</h2>
-<p>Hono 的中间件不是「全局钩子」，而是按注册顺序压进匹配链的普通 handler。两条硬规则：<strong>中间件必须注册在对应路由之前</strong>，写在后面不报错也不生效；<strong>路径匹配和路由一样精确</strong>，<code>/admin</code> 不包含 <code>/admin/users</code>。这两条加起来就是绝大多数「鉴权中间件明明写了却没生效」的成因。</p>
+<p>Hono 的中间件不是「全局钩子」，而是按注册顺序压进匹配链的普通 handler。两条硬规则：<strong>中间件必须注册在对应路由之前</strong>，写在后面不报错也不生效；<strong>路径匹配和路由一样精确</strong>，<code>/admin</code> 不包含 <code>/admin/users</code>。</p>
+<p>这两条加起来就是绝大多数「鉴权中间件明明写了却没生效」的成因。</p>
 
 <table>
 <thead>
@@ -288,11 +294,13 @@ flowchart TB
     U2 --> R1
 </div>
 
-<p>排查方法很直接：在鉴权中间件第一行打一条带请求路径的日志，然后对可疑路径直接发请求。日志没出现就是作用范围问题，日志出现了但请求仍被放行就是授权逻辑问题——两类原因的修法完全不同，先分清再动手。</p>
+<p>排查方法很直接：在鉴权中间件第一行打一条带请求路径的日志，然后对可疑路径直接发请求。</p>
+<p>日志没出现就是作用范围问题，日志出现了但请求仍被放行就是授权逻辑问题——两类原因的修法完全不同，先分清再动手。</p>
 
 <h2>② 原理 · 错误传播：HTTPException、onError 与不可依赖的响应阶段</h2>
 <p>洋葱链靠 <code>await</code> 串联，异常会沿调用栈向上冒泡，不需要 Express 4 那种给每个 async handler 套捕获包装的写法。冒泡出来的异常交给 <code>app.onError</code>，<code>HTTPException</code> 自带响应对象，<code>err.getResponse()</code> 可以直接返回。</p>
-<p>两条边界必须记住。第一，<strong><code>notFound</code> 不是错误</strong>：没有路由命中时走 <code>app.notFound</code>，不进 <code>onError</code>，想统一响应格式两处都得写。第二，<strong>响应阶段的代码在异常路径下不保证执行</strong>。把释放连接、归还信号量、上报指标写在 <code>await next()</code> 之后，异常路径上就会漏掉，而这正是「压测时连接池慢慢耗尽、但没有任何报错」的常见成因；这类逻辑必须放进 <code>try/finally</code>。</p>
+<p>两条边界必须记住。第一，<strong><code>notFound</code> 不是错误</strong>：没有路由命中时走 <code>app.notFound</code>，不进 <code>onError</code>，想统一响应格式两处都得写。第二，<strong>响应阶段的代码在异常路径下不保证执行</strong>。</p>
+<p>把释放连接、归还信号量、上报指标写在 <code>await next()</code> 之后，异常路径上就会漏掉，而这正是「压测时连接池慢慢耗尽、但没有任何报错」的常见成因；这类逻辑必须放进 <code>try/finally</code>。</p>
 
 <table>
 <thead>
@@ -421,7 +429,8 @@ export default app</code></pre>
 </tbody>
 </table>
 
-<p>JWT 中间件的误用更彻底：<strong>它只做验签、检查时间声明、把 payload 塞进上下文，此外什么都不做</strong>。签发者、受众、作用域、租户归属、撤销状态全要自己校验。把「挂了 jwt 中间件」当成「接口鉴权已完成」，等价于只验证了「这个令牌是我们签发的、还没过期」，而线上越权事故绝大多数发生在拿到合法令牌之后不校验资源归属这一步。</p>
+<p>JWT 中间件的误用更彻底：<strong>它只做验签、检查时间声明、把 payload 塞进上下文，此外什么都不做</strong>。签发者、受众、作用域、租户归属、撤销状态全要自己校验。</p>
+<p>把「挂了 jwt 中间件」当成「接口鉴权已完成」，等价于只验证了「这个令牌是我们签发的、还没过期」，而线上越权事故绝大多数发生在拿到合法令牌之后不校验资源归属这一步。</p>
 
 <pre><code class="language-typescript">import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -472,7 +481,8 @@ app.get('/api/orders/:id', requireScope('orders:read'), async (c) =&gt; {
 })</code></pre>
 
 <h2>② 原理 · 流式响应与读写响应体的中间件互斥</h2>
-<p>普通响应里，响应阶段改头改体都来得及；一旦返回的是 <code>hono/streaming</code> 产出的流式响应，<strong>状态码与响应头在第一个字节写出时就已经定稿</strong>，后面所有中间件的响应阶段修改都无效，而且通常不报错。要区分两类冲突：一类是中间件读写<strong>响应体</strong>（压缩、摘要、自己拼装 body），它们会把流缓冲起来；另一类是中间件读<strong>请求体</strong>（验签、审计），它和上传型接口以及 <code>bodyLimit</code> 的组合要小心内存。</p>
+<p>普通响应里，响应阶段改头改体都来得及；一旦返回的是 <code>hono/streaming</code> 产出的流式响应，<strong>状态码与响应头在第一个字节写出时就已经定稿</strong>，后面所有中间件的响应阶段修改都无效，而且通常不报错。</p>
+<p>要区分两类冲突：一类是中间件读写<strong>响应体</strong>（压缩、摘要、自己拼装 body），它们会把流缓冲起来；另一类是中间件读<strong>请求体</strong>（验签、审计），它和上传型接口以及 <code>bodyLimit</code> 的组合要小心内存。</p>
 
 <table>
 <thead>
@@ -489,8 +499,10 @@ app.get('/api/orders/:id', requireScope('orders:read'), async (c) =&gt; {
 </table>
 
 <h2>② 原理 · 自定义中间件的类型扩展</h2>
-<p>中间件往下传值只有 <code>c.set</code> / <code>c.get</code> 一条路，类型则有两种声明方式，选错会让类型在包边界处直接失效。<strong>泛型 <code>Variables</code> 是有作用域的</strong>：<code>new Hono&lt;Env&gt;()</code> 与 <code>createMiddleware&lt;Env&gt;</code> 必须共享同一个 <code>Env</code>，中间件才能和 app 对上；而 <code>declare module 'hono'</code> 扩展 <code>ContextVariableMap</code> 是全局的，任何 Context 都能取到这个键，代价是丧失作用域约束——适合发布成公共包的中间件，不适合业务内部的临时值。</p>
-<p>两个实践细节：<code>createMiddleware</code> 与 <code>createFactory</code> 的价值不只是省类型标注，它们让中间件在被 <code>app.use</code> 之前就完成类型检查，键名拼错当场报错；另外中间件的 <code>Bindings</code> 与 app 的 <code>Bindings</code> 不一致时，报错行号通常指向 <code>app.use</code> 那一行，真实原因却在中间件的泛型声明里，照着报错行改只会越改越乱。</p>
+<p>中间件往下传值只有 <code>c.set</code> / <code>c.get</code> 一条路，类型则有两种声明方式，选错会让类型在包边界处直接失效。<strong>泛型 <code>Variables</code> 是有作用域的</strong>：<code>new Hono&lt;Env&gt;()</code> 与 <code>createMiddleware&lt;Env&gt;</code> 必须共享同一个 <code>Env</code>，中间件才能和 app 对上；</p>
+<p>而 <code>declare module 'hono'</code> 扩展 <code>ContextVariableMap</code> 是全局的，任何 Context 都能取到这个键，代价是丧失作用域约束——适合发布成公共包的中间件，不适合业务内部的临时值。</p>
+<p>两个实践细节：<code>createMiddleware</code> 与 <code>createFactory</code> 的价值不只是省类型标注，它们让中间件在被 <code>app.use</code> 之前就完成类型检查，键名拼错当场报错；</p>
+<p>另外中间件的 <code>Bindings</code> 与 app 的 <code>Bindings</code> 不一致时，报错行号通常指向 <code>app.use</code> 那一行，真实原因却在中间件的泛型声明里，照着报错行改只会越改越乱。</p>
 
 <pre><code class="language-typescript">import { Hono } from 'hono'
 import { compress } from 'hono/compress'
@@ -571,7 +583,9 @@ flowchart TB
 <tr><td>把中间件发布成公共包</td><td>用 <code>declare module</code> 扩展 <code>ContextVariableMap</code></td><td>拿不到调用方的 <code>Env</code> 时，只有全局声明能让键有类型</td><td>丧失作用域约束，任何 Context 都能取到这个键，业务内部的临时值不该这么写</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：中间件解决不了路由层的问题——路径匹配策略、<code>c.req</code> 的 bodyCache、路径参数的类型推导在 <a href="../hono-intro/">路由与上下文机制</a>；平台能力差异、模块级状态与后台任务的边界在 <a href="../hono-edge/">跨运行时部署</a>；该不该选这个框架在 <a href="../hono/">总览篇</a>。需要把横切关注点做成框架级能力（DI、统一注册、按装饰器声明）的项目，中间件这条路会越走越散，那种形态应该用 <a href="../nestjs/">NestJS</a>。接口本身慢、事件循环被同步计算堵住，和中间件无关，见 <a href="../event-loop/">事件循环的六个阶段</a> 与 <a href="../performance/">性能诊断</a>。</p>
+<p><strong>不适用边界</strong>：中间件解决不了路由层的问题——路径匹配策略、<code>c.req</code> 的 bodyCache、路径参数的类型推导在 <a href="../hono-intro/">路由与上下文机制</a>；平台能力差异、模块级状态与后台任务的边界在 <a href="../hono-edge/">跨运行时部署</a>；</p>
+<p>该不该选这个框架在 <a href="../hono/">总览篇</a>。需要把横切关注点做成框架级能力（DI、统一注册、按装饰器声明）的项目，中间件这条路会越走越散，那种形态应该用 <a href="../nestjs/">NestJS</a>。</p>
+<p>接口本身慢、事件循环被同步计算堵住，和中间件无关，见 <a href="../event-loop/">事件循环的六个阶段</a> 与 <a href="../performance/">性能诊断</a>。</p>
 <p>这条路径上，上一篇讲路由与上下文这两层机制，本篇讲挂在它们之间的那条洋葱链，下一篇把范围扩到进程之外：同一份代码在 Node、Bun、Deno 与 Workers 上各自能用什么。</p>
 
 <div class="callout-title">最容易踩的坑</div>

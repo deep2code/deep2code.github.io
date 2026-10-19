@@ -90,7 +90,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇只做工程落地：<strong>把消息从 send 到业务落库的链路切成六段，一段一段把丢失和重复消灭掉，并且给出怎么验证真的消灭了</strong>。ISR 与 HW 水位的语义、acks 组合的推演、幂等 PID 机制这些原理在 <a href="../">主干篇</a>。</p>
+<p>这篇只做工程落地：<strong>把消息从 send 到业务落库的链路切成六段，逐段消灭丢失和重复，并给出验证方法</strong>。ISR 与 HW 水位、acks 组合、幂等 PID 等原理见 <a href="../">主干篇</a>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -104,7 +104,7 @@
 
 <h2>① 用法 · 六个环节逐个验证的清单</h2>
 
-<p>下表是这一篇的骨干：<strong>左边六行就是全部丢消息的位置，一行也不能跳过</strong>。配置动作照做，验证动作在预发或压测环境实际跑一遍——可靠性只能被验证，不能被声明。</p>
+<p>下表是骨干：<strong>左边六行是全部丢消息的位置，一行也不能跳</strong>。配置照做，验证在预发或压测环境实跑一遍——可靠性只能被验证，不能被声明。</p>
 
 <table>
 <thead><tr><th>丢点</th><th>丢失机制</th><th>怎么防</th><th>怎么验证防住了</th></tr></thead>
@@ -244,13 +244,15 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">「Kafka 写完就落盘了所以不会丢」是错的</div>
-    <p>Kafka 默认把刷盘完全交给操作系统，<code>log.flush.interval.messages</code> 的默认值大到实际等同于不主动 fsync。它的持久化保障来自<strong>多副本</strong>而不是磁盘同步写。反过来，把刷盘间隔调成一条一刷会让吞吐掉一个数量级，还让顺序写退化成频繁 fsync，收益远小于代价。正确的投入方向是副本数、机架分散和 <code>min.insync.replicas</code>。</p>
+    <p>Kafka 默认把刷盘完全交给操作系统，<code>log.flush.interval.messages</code> 的默认值大到实际等同于不主动 fsync。它的持久化保障来自<strong>多副本</strong>而不是磁盘同步写。</p>
+<p>反过来，把刷盘间隔调成一条一刷会让吞吐掉一个数量级，还让顺序写退化成频繁 fsync，收益远小于代价。正确的投入方向是副本数、机架分散和 <code>min.insync.replicas</code>。</p>
 </div>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">三副本加 min.insync.replicas=2 的可用性代价</div>
-    <p>这个组合意味着<strong>最多只能坏一台</strong>。坏两台时 ISR 只剩一个，写入会直接被拒绝，可用性换来了一致性。如果业务无法接受写入被拒，唯一正确的做法是把副本数提到 5、<code>min.insync.replicas</code> 保持 2，而不是偷偷把它降回 1。降回 1 等于把丢消息的概率重新打开，而且这种改动往往发生在半夜的应急操作里，事后没人记得改回来。</p>
+    <p>这个组合意味着<strong>最多只能坏一台</strong>。坏两台时 ISR 只剩一个，写入被直接拒绝，用可用性换一致性。无法接受写入被拒时，唯一正确做法是把副本数提到 5、<code>min.insync.replicas</code> 保持 2，而不是偷偷降回 1。</p>
+<p>降回 1 等于把丢消息的概率重新打开，而且这种改动往往发生在半夜的应急操作里，事后没人记得改回来。</p>
 </div>
 
 <h2>② 原理 · 故障注入的结果怎么判读</h2>
@@ -271,7 +273,8 @@ flowchart TB
 
 <h2>② 原理 · 重复是必然的：消费端幂等的四种实现</h2>
 
-<p>搞清这一节能解决一个方向性错误：花大力气「消除重复」，而不是让重复无害。只要位点提交和业务处理不在一个原子操作里，重复就无法从协议层消除。Rebalance、消费者重启、提交超时都会让同一批消息被再消费一次。所以可靠性工程的下半场不是「避免重复」，而是<strong>让重复不产生副作用</strong>。</p>
+<p>这一节纠正一个方向性错误：不是「消除重复」，而是让重复无害。只要位点提交和业务处理不在同一原子操作里，重复就无法从协议层消除。</p>
+<p>Rebalance、消费者重启、提交超时都会让同一批消息被再消费一次。所以可靠性工程的下半场不是「避免重复」，而是<strong>让重复不产生副作用</strong>。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -301,7 +304,8 @@ flowchart TB
 
 <h2>② 原理 · 位点和业务数据放进同一个本地事务</h2>
 
-<p>搞清这一节能解决丢点六：下游是关系型数据库时，这是实现端到端精确一次的<strong>唯一可靠路径</strong>。Kafka 自带的事务只能保证「读 Kafka、写 Kafka、提交位点」这三件事的原子性，跨到外部数据库它管不了。做法是把位点当作普通业务数据存进业务库，让数据库的事务同时覆盖业务写入和位点推进。</p>
+<p>这一节解决丢点六：下游是关系型数据库时，这是端到端精确一次的<strong>唯一可靠路径</strong>。Kafka 事务只保证「读 Kafka、写 Kafka、提交位点」的原子性，跨到外部数据库它管不了。</p>
+<p>做法是把位点当作普通业务数据存进业务库，让数据库的事务同时覆盖业务写入和位点推进。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -388,12 +392,15 @@ public void run() {
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">这个方案的三个隐含约束</div>
-    <p>第一，位点表和业务表必须在<strong>同一个数据库实例</strong>里，分库了就退化成分布式事务问题。第二，每个分区一个事务，分区多时事务数量上升，要控制 <code>max.poll.records</code> 避免单事务过大导致长事务和锁等待。第三，运维不能再用 kafka-consumer-groups 脚本看 Lag，因为 <code>__consumer_offsets</code> 里根本没有位点，必须自己上报位点与 LEO 的差值到监控。</p>
+    <p>第一，位点表和业务表必须在<strong>同一个数据库实例</strong>里，分库就退化成分布式事务问题。</p>
+<p>第二，每个分区一个事务，分区多时事务数上升，要控制 <code>max.poll.records</code>，避免单事务过大引发长事务和锁等待。</p>
+<p>第三，运维不能再用 kafka-consumer-groups 脚本看 Lag，因为 <code>__consumer_offsets</code> 里根本没有位点，必须自己上报位点与 LEO 的差值到监控。</p>
 </div>
 
 <h2>② 原理 · 为什么不能原地阻塞重试</h2>
 
-<p>一个分区在同一个消费组内只会被一个成员串行消费，这意味着<strong>卡在一条消息上就等于卡住整个分区</strong>。原地睡眠重试三次每次五秒，这条消息后面排队的几万条消息就一起延迟十五秒；如果下游是持续故障，等待时间会迅速突破 <code>max.poll.interval.ms</code>，成员被踢出组、触发 Rebalance、分区转给别人后依然卡在同一条消息上，形成一个自我放大的故障循环。</p>
+<p>一个分区在同一个消费组内只会被一个成员串行消费，<strong>卡在一条消息上就等于卡住整个分区</strong>。原地睡眠重试三次每次五秒，后面排队的几万条消息就一起延迟十五秒；</p>
+<p>如果下游是持续故障，等待时间会迅速突破 <code>max.poll.interval.ms</code>，成员被踢出组、触发 Rebalance、分区转给别人后依然卡在同一条消息上，形成一个自我放大的故障循环。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -430,7 +437,8 @@ stateDiagram-v2
 
 <h2>② 原理 · 顺序性和重试的冲突没有完美解</h2>
 
-<p>这是一对硬矛盾：<strong>跳过失败消息会乱序，阻塞重试会卡分区</strong>。真正需要做的是先问清楚顺序的粒度。业务上几乎从不需要「全局有序」，通常只需要「同一个订单、同一个用户的事件有序」，这个粒度正好对应按 key 哈希到同一分区（见 <a href="../topic-partition/">分区设计</a>）。于是折中方案就有了落点：</p>
+<p>这是一对硬矛盾：<strong>跳过失败消息会乱序，阻塞重试会卡分区</strong>。真正需要做的是先问清楚顺序的粒度。</p>
+<p>业务上几乎不需要「全局有序」，只要「同一个订单、同一个用户的事件有序」，这个粒度正好对应按 key 哈希到同一分区（见 <a href="../topic-partition/">分区设计</a>）。折中方案由此有了落点：</p>
 
 <table>
 <thead><tr><th>方案</th><th>做法</th><th>代价</th><th>什么情况下不成立</th></tr></thead>
@@ -459,11 +467,14 @@ stateDiagram-v2
 </tbody>
 </table>
 
-<p>上面所有手段加起来，能把丢失概率压到很低，但压不到零。跨系统的最终一致只能靠<strong>对账加补偿</strong>兜底，这不是 Kafka 的缺陷，换成任何 MQ 都一样（通用模式见 <a href="../../messaging/reliable/">可靠消息投递</a>）。落地上通常是三件事：生产端在发消息的同一个本地事务里记一张待确认表；定时任务扫出超过阈值仍未被下游确认的记录并重投；每天按业务维度做一次全量或增量比对，差异进人工工单。</p>
+<p>上述手段合计能把丢失概率压到很低，但压不到零。跨系统最终一致只能靠<strong>对账加补偿</strong>兜底，这不是 Kafka 的缺陷，换成任何 MQ 都一样（见 <a href="../../messaging/reliable/">可靠消息投递</a>）。</p>
+<p>落地上通常是三件事：生产端在发消息的同一本地事务里记一张待确认表；定时任务扫出超阈值仍未确认的记录并重投；每天按业务维度做全量或增量比对，差异进人工工单。</p>
 
-<p>再加一个容易被忽略的点：<strong>死信 Topic 必须配告警和重投工具</strong>。只写不读的死信 Topic 等于一个垃圾桶，故障发生一个月后才有人发现里面积了十万条消息，这种事情非常常见。最小可用的工具是一个能按时间范围和错误类型筛选、支持批量重投回原 Topic 的脚本，以及死信条数非零就触发的告警。</p>
+<p>再加一个容易被忽略的点：<strong>死信 Topic 必须配告警和重投工具</strong>。只写不读的死信 Topic 等于垃圾桶，故障一个月后才有人发现里面积了十万条消息，这种事非常常见。</p>
+<p>最小可用的工具是一个能按时间范围和错误类型筛选、支持批量重投回原 Topic 的脚本，以及死信条数非零就触发的告警。</p>
 
-<p><strong>不适用边界</strong>：这一篇解决「不丢不重」，解决不了「不慢」。吞吐上不去、延迟毛刺、瓶颈在哪是下一篇 <a href="../performance/">性能调优与压测</a>；客户端代码怎么写在 <a href="../producer-consumer/">生产者与消费者实战</a>；副本分布与机架感知在 <a href="../topic-partition/">分区设计</a>；集群参数在 <a href="../install/">生产级部署</a>。如果你的需求是延迟消息或单条精细重试，Kafka 这一层给不了，回到 <a href="../intro/">选型边界</a>。</p>
+<p><strong>不适用边界</strong>：这篇解决「不丢不重」，解决不了「不慢」。吞吐上不去、延迟毛刺、瓶颈定位见 <a href="../performance/">性能调优与压测</a>；客户端代码见 <a href="../producer-consumer/">生产者与消费者实战</a>；副本分布与机架感知见 <a href="../topic-partition/">分区设计</a>；</p>
+<p>集群参数在 <a href="../install/">生产级部署</a>。如果你的需求是延迟消息或单条精细重试，Kafka 这一层给不了，回到 <a href="../intro/">选型边界</a>。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../producer-consumer/">← 上一步：Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环</a> · <a href="../performance/">下一步：Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照 →</a></p>
 

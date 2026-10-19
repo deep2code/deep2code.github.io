@@ -91,9 +91,12 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>怎么装 Nginx 看起来是个包管理器的口味问题，其实是被它的模块机制反向决定的。Nginx 的功能几乎全部以模块形式存在，而<strong>传统模块必须在 configure 阶段链接进那唯一一个二进制文件</strong>，运行期没有任何插件机制。这条约束带来一个非常具体的后果：装完上线才发现少了 GeoIP、少了 Brotli、少了主动健康检查，不是装个扩展包就能补上的，而是要重新编译、重新替换二进制、重新走一次发布。所以安装方式的选择，本质上是在赌「以后还会不会需要新模块」。</p>
+<p>怎么装 Nginx 看起来是个包管理器的口味问题，其实是被它的模块机制反向决定的。Nginx 的功能几乎全部以模块形式存在，而<strong>传统模块必须在 configure 阶段链接进那唯一一个二进制文件</strong>，运行期没有任何插件机制。</p>
+<p>这条约束带来一个非常具体的后果：装完上线才发现少了 GeoIP、少了 Brotli、少了主动健康检查，不是装个扩展包就能补上的，而是要重新编译、重新替换二进制、重新走一次发布。</p>
+<p>所以安装方式的选择，本质上是在赌「以后还会不会需要新模块」。</p>
 
-<p>本篇只讲构建期与部署期的事：模块形态、四条安装路线、第三方模块清单、configure 参数、TLS 库选择、不停机换二进制。运行期的 master/worker 进程模型、11 个请求处理阶段与 location 匹配优先级、代理缓冲与超时参数全景，都在 <code>../</code> 主干篇里，这里不重复。</p>
+<p>本篇只讲构建期与部署期的事：模块形态、四条安装路线、第三方模块清单、configure 参数、TLS 库选择、不停机换二进制。</p>
+<p>运行期的 master/worker 进程模型、11 个请求处理阶段与 location 匹配优先级、代理缓冲与超时参数全景，都在 <code>../</code> 主干篇里，这里不重复。</p>
 
 <h2>模块的三种形态决定了改动成本</h2>
 
@@ -141,7 +144,8 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">动态模块不是「通用插件」</div>
-    <p>动态模块只解决了「不必重编主二进制」，没解决二进制兼容。so 必须用<strong>完全相同的 Nginx 版本号和几乎相同的 configure 参数</strong>编译，否则启动直接报 <code>module ... is not binary compatible</code>。这也是为什么升级 Nginx 小版本时，所有第三方动态模块都要跟着重编一遍——发行版把它们打成独立的 <code>nginx-module-*</code> 包并做版本绑定，就是为了自动处理这件事。</p>
+    <p>动态模块只解决了「不必重编主二进制」，没解决二进制兼容。so 必须用<strong>完全相同的 Nginx 版本号和几乎相同的 configure 参数</strong>编译，否则启动直接报 <code>module ... is not binary compatible</code>。</p>
+<p>这也是为什么升级 Nginx 小版本时，所有第三方动态模块都要跟着重编一遍——发行版把它们打成独立的 <code>nginx-module-*</code> 包并做版本绑定，就是为了自动处理这件事。</p>
 </div>
 
 <h2>四种安装路线怎么选</h2>
@@ -157,7 +161,8 @@ flowchart TB
 <tr><td>适用场景</td><td>内网工具站、临时环境</td><td>绝大多数生产环境的默认答案</td><td>需要特定第三方模块或特定 TLS 库</td><td>网关要写业务逻辑</td></tr>
 </tbody></table>
 
-<p>我的默认建议是：<strong>先用官方仓库，需要第三方模块再转自编译</strong>。发行版仓库的问题不只是旧，而是「旧得让你用不上新特性」——比如 1.25.1 才把 HTTP/2 改成独立的 <code>http2 on;</code> 指令，1.25.0 起才有可用的 HTTP/3，Debian 或 CentOS 仓库里的老版本连这些配置都解析不了。</p>
+<p>我的默认建议是：<strong>先用官方仓库，需要第三方模块再转自编译</strong>。</p>
+<p>发行版仓库的问题不只是旧，而是「旧得让你用不上新特性」——比如 1.25.1 才把 HTTP/2 改成独立的 <code>http2 on;</code> 指令，1.25.0 起才有可用的 HTTP/3，Debian 或 CentOS 仓库里的老版本连这些配置都解析不了。</p>
 
 <table>
 <thead><tr><th>分支</th><th>包含内容</th><th>发布节奏</th><th>什么时候选它</th></tr></thead>
@@ -349,7 +354,8 @@ rm -f /usr/sbin/nginx.old
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">用 systemd 管理时的注意点</div>
-    <p>官方包的 unit 文件把 <code>ExecReload</code> 指向 <code>nginx -s reload</code>，但<strong>平滑升级的 USR2 流程会让 systemd 跟踪的主 PID 失效</strong>：新 master 不是 systemd 拉起来的子进程。自建 unit 要么用 <code>Type=forking</code> 加 <code>PIDFile</code> 并接受升级后需要 <code>systemctl daemon-reload</code> 的现实，要么干脆在容器化场景放弃平滑升级——K8s 里正确做法是滚动更新 Pod，而不是在容器内换二进制。</p>
+    <p>官方包的 unit 文件把 <code>ExecReload</code> 指向 <code>nginx -s reload</code>，但<strong>平滑升级的 USR2 流程会让 systemd 跟踪的主 PID 失效</strong>：新 master 不是 systemd 拉起来的子进程。</p>
+<p>自建 unit 要么用 <code>Type=forking</code> 加 <code>PIDFile</code> 并接受升级后需要 <code>systemctl daemon-reload</code> 的现实，要么干脆在容器化场景放弃平滑升级——K8s 里正确做法是滚动更新 Pod，而不是在容器内换二进制。</p>
 </div>
 
 <h2>配置目录规范与三个检查命令</h2>

@@ -200,7 +200,9 @@ async fn main() -&gt; anyhow::Result&lt;()&gt; {
 <p>用法层到此结束。下面的原理层回答这些做法背后的机制：借用检查到底消灭了什么、Send 与 Sync 怎么推导、取消为什么等于 drop、编译时间的成本结构。</p>
 
 <h2>② 原理 · 借用检查消灭的是「内存的时间维度」错误</h2>
-<p>释放后使用、重复释放、悬垂引用、遍历容器时又往里插元素——症状各异，本质是同一件事：<strong>某个引用的可用时间超过了被引用数据的存活时间</strong>。这类 bug 的崩溃现场和真正的错误位置相隔很远，靠 review 查不出来。Rust 把它变成编译期约束：同一时刻要么存在一个可变借用，要么存在多个共享借用；引用不得长于被借用值。2018 edition 引入的非词法生命周期让借用在最后一次使用处结束，早年「借用检查太蠢」的吐槽多半说的是这之前的编译器。</p>
+<p>释放后使用、重复释放、悬垂引用、遍历容器时又往里插元素——症状各异，本质是同一件事：<strong>某个引用的可用时间超过了被引用数据的存活时间</strong>。</p>
+<p>这类 bug 的崩溃现场和真正的错误位置相隔很远，靠 review 查不出来。Rust 把它变成编译期约束：同一时刻要么存在一个可变借用，要么存在多个共享借用；引用不得长于被借用值。</p>
+<p>2018 edition 引入的非词法生命周期让借用在最后一次使用处结束，早年「借用检查太蠢」的吐槽多半说的是这之前的编译器。</p>
 <p>关键是把边界讲清楚，否则很容易得出「编译过了就安全」的错误结论：</p>
 <table>
 <thead><tr><th>问题类别</th><th>编译期能否拦住</th><th>拦不住时靠什么兜</th></tr></thead>
@@ -232,7 +234,8 @@ flowchart TB
 <p>所以它的价值不是「不出 bug」，而是<strong>把一整类无法靠测试稳定复现的错误变成了编译错误</strong>；代价是这些约束必须在动手写的时候就想清楚。</p>
 
 <h2>② 原理 · Send 与 Sync：数据竞争被写进了类型系统</h2>
-<p><code>Send</code> 表示所有权可以移动到另一个线程，<code>Sync</code> 表示共享引用可以被多个线程同时持有。两者都是 auto trait，编译器按字段递归推导，只有 <code>unsafe impl</code> 能手动声明。一个常被讲错的关系：<code>&amp;T</code> 能不能跨线程传取决于 <code>T</code> 是不是 <code>Sync</code>，而不是 <code>Send</code>——这正是 <code>RefCell</code> 可以被移动却不能被共享的原因。</p>
+<p><code>Send</code> 表示所有权可以移动到另一个线程，<code>Sync</code> 表示共享引用可以被多个线程同时持有。两者都是 auto trait，编译器按字段递归推导，只有 <code>unsafe impl</code> 能手动声明。</p>
+<p>一个常被讲错的关系：<code>&amp;T</code> 能不能跨线程传取决于 <code>T</code> 是不是 <code>Sync</code>，而不是 <code>Send</code>——这正是 <code>RefCell</code> 可以被移动却不能被共享的原因。</p>
 <table>
 <thead><tr><th>类型</th><th>Send</th><th>Sync</th><th>你通常在哪撞上</th></tr></thead>
 <tbody>
@@ -243,7 +246,8 @@ flowchart TB
 <tr><td>async 块生成的 future</td><td colspan="2">取决于跨 await 持有的所有值</td><td>报错里出现一长串匿名类型</td></tr>
 </tbody>
 </table>
-<p>选机制的优先顺序是：独占借用 &gt; 消息传递 &gt; 原子类型 &gt; 锁。三个容易忽略的点：<code>RefCell</code> 借用冲突是<strong>运行期 panic</strong> 而不是编译错误；标准库 <code>RwLock</code> 不保证公平，读多时可能写饥饿；<code>thread_local!</code> 在异步里不可靠，任务被 work-stealing 迁到另一个 worker 后数据就「消失」，要改用运行时提供的 task local。</p>
+<p>选机制的优先顺序是：独占借用 &gt; 消息传递 &gt; 原子类型 &gt; 锁。三个容易忽略的点：<code>RefCell</code> 借用冲突是<strong>运行期 panic</strong> 而不是编译错误；标准库 <code>RwLock</code> 不保证公平，读多时可能写饥饿；</p>
+<p><code>thread_local!</code> 在异步里不可靠，任务被 work-stealing 迁到另一个 worker 后数据就「消失」，要改用运行时提供的 task local。</p>
 <pre><code class="language-rust">use std::sync::Arc;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -276,7 +280,10 @@ async fn persist(v: u64) { let _ = v; }
 </code></pre>
 
 <h2>② 原理 · 异步 Rust 的复杂度来自四个地方</h2>
-<p><strong>一、Future 是惰性的。</strong>调用 <code>async fn</code> 只构造出一个状态机，没人 poll 就一行业务代码都不跑；忘写 <code>.await</code> 不是编译错误，只有一条 <code>unused_must_use</code> 警告。<strong>二、运行时不在标准库。</strong>标准库只给 <code>Future</code>、<code>Waker</code>、<code>Context</code> 这套接口，执行器、定时器、异步 IO 全在第三方运行时里，生态因此按运行时分裂。<strong>三、<code>Pin</code> 是为自引用服务的，不是性能优化。</strong>跨 <code>.await</code> 持有的局部变量会成为状态机的字段，指向它们的引用让状态机指向自己，一旦移动内部指针就失效。<strong>四、取消等于 drop。</strong>超时或 <code>select!</code> 落败会把 future 在它停住的那个 await 点直接丢掉，已产生的副作用不回滚，只有 <code>Drop</code> 会执行。</p>
+<p><strong>一、Future 是惰性的。</strong>调用 <code>async fn</code> 只构造出一个状态机，没人 poll 就一行业务代码都不跑；忘写 <code>.await</code> 不是编译错误，只有一条 <code>unused_must_use</code> 警告。<strong>二、运行时不在标准库。</strong></p>
+<p>标准库只给 <code>Future</code>、<code>Waker</code>、<code>Context</code> 这套接口，执行器、定时器、异步 IO 全在第三方运行时里，生态因此按运行时分裂。<strong>三、<code>Pin</code> 是为自引用服务的，不是性能优化。</strong></p>
+<p>跨 <code>.await</code> 持有的局部变量会成为状态机的字段，指向它们的引用让状态机指向自己，一旦移动内部指针就失效。<strong>四、取消等于 drop。</strong></p>
+<p>超时或 <code>select!</code> 落败会把 future 在它停住的那个 await 点直接丢掉，已产生的副作用不回滚，只有 <code>Drop</code> 会执行。</p>
 <div class="mermaid">
 stateDiagram-v2
     state "已构造：惰性，一行没跑" as Built
@@ -304,7 +311,8 @@ stateDiagram-v2
 </div>
 
 <h2>② 原理 · 阻塞调用为什么会让 p99 突刺</h2>
-<p>多线程执行器的 worker 数默认等于 CPU 核数。一个 worker 上只要有任务在同步读盘、同步压缩，或者长时间占着标准库的锁，它就没法去 poll 排在同一队列里的其他任务。线上现象很有欺骗性：<strong>CPU 没跑满，p99 却飙升</strong>——瓶颈是可运行的 worker 数，不是算力。</p>
+<p>多线程执行器的 worker 数默认等于 CPU 核数。一个 worker 上只要有任务在同步读盘、同步压缩，或者长时间占着标准库的锁，它就没法去 poll 排在同一队列里的其他任务。</p>
+<p>线上现象很有欺骗性：<strong>CPU 没跑满，p99 却飙升</strong>——瓶颈是可运行的 worker 数，不是算力。</p>
 <div class="mermaid">
 sequenceDiagram
     participant W as worker-0
@@ -358,7 +366,9 @@ async fn do_transfer(_f: u64, _t: u64, _a: i64) -&gt; anyhow::Result&lt;()&gt; {
 </code></pre>
 
 <h2>② 原理 · 错误处理：问号运算符的便利与它的边界</h2>
-<p><code>Result</code> 只是普通枚举，<code>?</code> 做的事情是「是 Err 就提前 return，顺手用 <code>From</code> 转一次类型」。便利的代价是<strong>错误类型的层次要你自己设计</strong>。原则很简单但违反的人很多：库返回能被穷尽匹配的具体枚举，应用才用擦除了类型的动态错误。库里图省事对外抛 <code>anyhow::Error</code>，下游就只能 downcast 或者匹配错误字符串来决定要不要重试。另外 <code>?</code> 会吃掉上下文，跨层传递要显式补 <code>context</code>；<code>panic = "abort"</code> 会关掉栈展开，此时 <code>catch_unwind</code> 兜不住任何东西。</p>
+<p><code>Result</code> 只是普通枚举，<code>?</code> 做的事情是「是 Err 就提前 return，顺手用 <code>From</code> 转一次类型」。便利的代价是<strong>错误类型的层次要你自己设计</strong>。</p>
+<p>原则很简单但违反的人很多：库返回能被穷尽匹配的具体枚举，应用才用擦除了类型的动态错误。库里图省事对外抛 <code>anyhow::Error</code>，下游就只能 downcast 或者匹配错误字符串来决定要不要重试。</p>
+<p>另外 <code>?</code> 会吃掉上下文，跨层传递要显式补 <code>context</code>；<code>panic = "abort"</code> 会关掉栈展开，此时 <code>catch_unwind</code> 兜不住任何东西。</p>
 <table>
 <thead><tr><th>方案</th><th>调用方能否分支处理</th><th>上下文与回溯</th><th>该用在哪</th></tr></thead>
 <tbody>
@@ -371,7 +381,9 @@ async fn do_transfer(_f: u64, _t: u64, _a: i64) -&gt; anyhow::Result&lt;()&gt; {
 </table>
 
 <h2>② 原理 · 编译时间与依赖树是要计入工期的成本</h2>
-<p>编译单元是 <strong>crate 而不是文件</strong>：一个塞了几万行的巨型 crate，改一行注释也要整体重编加重新链接。它影响的不是「流水线慢几分钟」，而是<strong>一天能做多少次改-跑-看的循环</strong>。排查顺序是固定的：<code>cargo build --timings</code> 找耗时最长的单元，<code>cargo llvm-lines</code> 找单态化最狠的函数，<code>cargo tree -d</code> 找被同时编译的多版本依赖；然后按依赖方向拆 workspace、冷路径改 <code>dyn Trait</code>、削减过程宏面积、换链接器。日常只做类型检查时用 <code>cargo check</code>，能省掉代码生成和链接两步。</p>
+<p>编译单元是 <strong>crate 而不是文件</strong>：一个塞了几万行的巨型 crate，改一行注释也要整体重编加重新链接。它影响的不是「流水线慢几分钟」，而是<strong>一天能做多少次改-跑-看的循环</strong>。</p>
+<p>排查顺序是固定的：<code>cargo build --timings</code> 找耗时最长的单元，<code>cargo llvm-lines</code> 找单态化最狠的函数，<code>cargo tree -d</code> 找被同时编译的多版本依赖；然后按依赖方向拆 workspace、冷路径改 <code>dyn Trait</code>、削减过程宏面积、换链接器。</p>
+<p>日常只做类型检查时用 <code>cargo check</code>，能省掉代码生成和链接两步。</p>
 <pre><code class="language-properties"># Cargo.toml —— 开发档以「改一行到看到结果」的速度为优先
 [profile.dev]
 debug = "line-tables-only"    # 只留行号，去掉完整调试信息，链接明显变快
@@ -391,7 +403,9 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 </code></pre>
 
 <h2>② 原理 · FFI 与渐进式改造：只把热点换掉</h2>
-<p>「用 Rust 重写」在多数团队都是错误决策——要重写的不只是代码，还有几年积累的补丁、边界处理和对接过的第三方 SDK。务实路线是压测定位热点，再把编解码、压缩、加解密、规则匹配、向量计算这类<strong>计算密集且接口面很窄</strong>的部分做成库：Go 走 cgo，Java 走 JNI 或 JDK 22 起正式的 FFM，Python 走 PyO3。边界有五条硬规则：只传 POD 与「指针加长度」，不要把 <code>String</code>、<code>Vec</code> 本身跨出去；谁分配谁释放，导出函数必须成对；跨界结构体加 <code>#[repr(C)]</code>；panic 不许越界；<strong>接口必须批量化</strong>，否则跨语言调用的固定开销会把计算收益全吃掉。</p>
+<p>「用 Rust 重写」在多数团队都是错误决策——要重写的不只是代码，还有几年积累的补丁、边界处理和对接过的第三方 SDK。</p>
+<p>务实路线是压测定位热点，再把编解码、压缩、加解密、规则匹配、向量计算这类<strong>计算密集且接口面很窄</strong>的部分做成库：Go 走 cgo，Java 走 JNI 或 JDK 22 起正式的 FFM，Python 走 PyO3。边界有五条硬规则：只传 POD 与「指针加长度」，不要把 <code>String</code>、<code>Vec</code> 本身跨出去；</p>
+<p>谁分配谁释放，导出函数必须成对；跨界结构体加 <code>#[repr(C)]</code>；panic 不许越界；<strong>接口必须批量化</strong>，否则跨语言调用的固定开销会把计算收益全吃掉。</p>
 <pre><code class="language-rust">// Cargo.toml: [lib] crate-type = ["cdylib", "staticlib"]
 use std::os::raw::c_int;
 use std::panic::catch_unwind;
@@ -459,7 +473,10 @@ flowchart TB
 <tr><td>团队里没人能 review <code>unsafe</code> 与取消安全</td><td>先解决人的问题：限制 unsafe 面积、引入 Miri 与 code review 门槛，再谈上量</td><td>这两类问题的故障形态是随机崩溃与静默数据错乱，靠测试兜不住</td><td>推进变慢，但这是唯一能持续的路径</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：Rust 解决的是内存安全、可预测的资源占用与尾延迟，它解决不了分布式层面的问题——超时与重试的编排、幂等、一致性仍然要自己设计，见 <a href="../../architecture/distributed/">分布式专题</a>；换语言之前先确认瓶颈到底在哪，判断方法见 <a href="../../observability/">可观测系列</a>。如果你要对比的是 Go 的并发模型与取消语义，见 <a href="../go/concurrency/">Go 并发原语与常见并发 bug</a>；如果当前痛点是 GC 停顿与堆参数，先读 <a href="../java/jvm-tuning/">JVM 调优</a>，多数场景调参的性价比高于重写。另外，Rust 不会让业务逻辑变正确：状态机写错、边界条件漏判、可测性差，这些问题换语言后原样存在，仍然要靠 <a href="../testing/">测试策略与可测性设计</a>。</p>
+<p><strong>不适用边界</strong>：Rust 解决的是内存安全、可预测的资源占用与尾延迟，它解决不了分布式层面的问题——超时与重试的编排、幂等、一致性仍然要自己设计，见 <a href="../../architecture/distributed/">分布式专题</a>；</p>
+<p>换语言之前先确认瓶颈到底在哪，判断方法见 <a href="../../observability/">可观测系列</a>。如果你要对比的是 Go 的并发模型与取消语义，见 <a href="../go/concurrency/">Go 并发原语与常见并发 bug</a>；</p>
+<p>如果当前痛点是 GC 停顿与堆参数，先读 <a href="../java/jvm-tuning/">JVM 调优</a>，多数场景调参的性价比高于重写。</p>
+<p>另外，Rust 不会让业务逻辑变正确：状态机写错、边界条件漏判、可测性差，这些问题换语言后原样存在，仍然要靠 <a href="../testing/">测试策略与可测性设计</a>。</p>
 
 <h2>最容易踩的坑</h2>
 

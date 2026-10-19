@@ -67,7 +67,8 @@
                         <h1 class="article-title">Bun 工具链上手：install、run、test、build 的机制与边界</h1>
                     </header>
                     <div class="article-content">
-<p>Bun 最值得先用起来的不是运行时，而是工具链：<strong>它能在不改一行业务代码的前提下把 CI 的依赖安装和测试时间压掉一大截，而且随时能退回去。</strong>这篇只讲工具链——装依赖、跑脚本、跑测试、打包，以及每一项的真实边界。它是什么、能不能上生产见 <a href="../bun/">Bun 总览</a>，引擎与 Node 兼容层见 <a href="../bun-runtime/">Bun 运行时特性</a>，整体迁移路径见 <a href="../bun-migration/">从 Node.js 迁移</a>。</p>
+<p>Bun 最值得先用起来的不是运行时，而是工具链：<strong>它能在不改一行业务代码的前提下把 CI 的依赖安装和测试时间压掉一大截，而且随时能退回去。</strong></p>
+<p>这篇只讲工具链——装依赖、跑脚本、跑测试、打包，以及每一项的真实边界。它是什么、能不能上生产见 <a href="../bun/">Bun 总览</a>，引擎与 Node 兼容层见 <a href="../bun-runtime/">Bun 运行时特性</a>，整体迁移路径见 <a href="../bun-migration/">从 Node.js 迁移</a>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -220,7 +221,8 @@ sequenceDiagram
         <tr><td>缓存命中</td><td>有 <code>~/.npm/_cacache</code>，但仍需解压与拷贝</td><td>缓存内已是解压态，直接链接</td><td>CI 里把全局缓存目录纳入缓存后，二次构建几乎瞬间完成</td></tr>
     </tbody>
 </table>
-<p>注意 <code>trustedDependencies</code> 这一条：<strong>Bun 默认不跑非信任包的 <code>postinstall</code></strong>，这在安全上是好事，但会让某些需要下载二进制或生成代码的包（Prisma、Puppeteer、esbuild 之类）安装后行为异常。表现通常是「装完了但运行时报找不到某个二进制」，这时要把包名加进 <code>package.json</code> 的 <code>trustedDependencies</code> 数组。</p>
+<p>注意 <code>trustedDependencies</code> 这一条：<strong>Bun 默认不跑非信任包的 <code>postinstall</code></strong>，这在安全上是好事，但会让某些需要下载二进制或生成代码的包（Prisma、Puppeteer、esbuild 之类）安装后行为异常。</p>
+<p>表现通常是「装完了但运行时报找不到某个二进制」，这时要把包名加进 <code>package.json</code> 的 <code>trustedDependencies</code> 数组。</p>
 <table>
     <thead>
         <tr><th>锁文件</th><th>格式</th><th>Bun 版本</th><th>可评审性</th><th>怎么迁移</th></tr>
@@ -249,7 +251,8 @@ stateDiagram-v2
 </div>
 
 <h2>② 原理 · bun run 与 bun x：省掉的是 Node 的启动开销</h2>
-<p>搞清这一节能解释一个现象：为什么有人把 <code>npm run</code> 换成 <code>bun run</code> 之后感觉「快了一点」，另一些人却完全没感觉。<code>npm run</code> 本身就是一个 Node 进程——先启动 Node、加载 npm 自己那堆 JS、解析 <code>package.json</code>，然后才 spawn 你的脚本，这层固定开销通常在一两百毫秒。<code>bun run</code> 是原生二进制直接读 scripts 执行，几乎为零。省掉的是<strong>固定开销</strong>，所以脚本本身跑得越久、这个差别越不明显；反复执行的短脚本（watch、pre-commit 钩子、批量任务）收益最直观。</p>
+<p>搞清这一节能解释一个现象：为什么有人把 <code>npm run</code> 换成 <code>bun run</code> 之后感觉「快了一点」，另一些人却完全没感觉。<code>npm run</code> 本身就是一个 Node 进程——先启动 Node、加载 npm 自己那堆 JS、解析 <code>package.json</code>，然后才 spawn 你的脚本，这层固定开销通常在一两百毫秒。</p>
+<p><code>bun run</code> 是原生二进制直接读 scripts 执行，几乎为零。省掉的是<strong>固定开销</strong>，所以脚本本身跑得越久、这个差别越不明显；反复执行的短脚本（watch、pre-commit 钩子、批量任务）收益最直观。</p>
 <table>
     <thead>
         <tr><th>原来的命令</th><th>Bun 等价命令</th><th>差异与注意点</th></tr>
@@ -268,11 +271,13 @@ stateDiagram-v2
 </table>
 
 <h2>② 原理 · 原生 TypeScript：只转译，不检查</h2>
-<p>搞清这一节能避免一类最贵的事故：类型错误一路进生产。<strong>Bun 对 TypeScript 做的是类型擦除式转译，把类型标注删掉直接执行，完全不做类型检查。</strong>也就是说下面这些在 Bun 下能正常跑：把 <code>string</code> 赋给 <code>number</code> 的参数、调用不存在的方法（只要运行时刚好没走到）、类型不匹配的解构，一律不报错。</p>
+<p>搞清这一节能避免一类最贵的事故：类型错误一路进生产。<strong>Bun 对 TypeScript 做的是类型擦除式转译，把类型标注删掉直接执行，完全不做类型检查。</strong></p>
+<p>也就是说下面这些在 Bun 下能正常跑：把 <code>string</code> 赋给 <code>number</code> 的参数、调用不存在的方法（只要运行时刚好没走到）、类型不匹配的解构，一律不报错。</p>
 <p>所以结论很硬：<strong><code>tsc --noEmit</code> 必须继续留在 CI 和提交前钩子里</strong>，它是类型正确性的唯一保证。这一点对 SWC、esbuild 同样成立，它们都是只转译不检查。另外几个 <code>tsconfig.json</code> 相关的实际差异也要知道：Bun 会读 <code>paths</code> 别名（所以路径映射基本可用），但 <code>target</code>、<code>module</code> 这类输出相关选项对它没有意义（它按自己的策略转译），<code>emitDecoratorMetadata</code> 需要显式开启且历史上支持度有过变化——重度依赖装饰器元数据的框架（如 NestJS）在 Bun 下要专门验证，具体见 <a href="../nestjs/">NestJS 架构模型与取舍</a> 里关于编译链的那张表。工程上怎么组织 tsconfig 与类型边界，见 <a href="../typescript/">Node.js 项目里的 TypeScript 工程化</a>。</p>
 
 <h2>② 原理 · bun test：速度收益明显，边界要先确认</h2>
-<p>搞清这一节能预估迁移测试的工作量，而不是迁一半才发现 mock 全要重写。<code>bun test</code> 提供 Jest 风格的 <code>describe</code> / <code>test</code> / <code>expect</code> 与生命周期钩子，多数断言可以直接跑。速度收益来自两点：启动快、转译快，而测试进程本来就是大量短生命周期进程，所以大型套件常能快好几倍。要注意的是能力边界。</p>
+<p>搞清这一节能预估迁移测试的工作量，而不是迁一半才发现 mock 全要重写。<code>bun test</code> 提供 Jest 风格的 <code>describe</code> / <code>test</code> / <code>expect</code> 与生命周期钩子，多数断言可以直接跑。</p>
+<p>速度收益来自两点：启动快、转译快，而测试进程本来就是大量短生命周期进程，所以大型套件常能快好几倍。要注意的是能力边界。</p>
 <table>
     <thead>
         <tr><th>能力</th><th>状态</th><th>迁移时要做什么</th></tr>
@@ -289,7 +294,8 @@ stateDiagram-v2
 </table>
 
 <h2>② 原理 · bun build 与单文件可执行程序</h2>
-<p>搞清这一节能避免两种典型误用：拿 <code>--target=bun</code> 的产物去 Node 上跑，以及拿 <code>--compile</code> 的产物做服务端镜像。打包能力的核心场景有两个：一是服务端代码打成单个 JS 便于部署，二是 <code>--compile</code> 把运行时一起打进一个可执行文件。<strong>后者对 CLI 分发很有价值</strong>——用户不需要装 Node，也不会遇到版本不匹配，代价是产物几十 MB 到 100MB 量级（里面内嵌了整个 Bun 运行时）。</p>
+<p>搞清这一节能避免两种典型误用：拿 <code>--target=bun</code> 的产物去 Node 上跑，以及拿 <code>--compile</code> 的产物做服务端镜像。打包能力的核心场景有两个：一是服务端代码打成单个 JS 便于部署，二是 <code>--compile</code> 把运行时一起打进一个可执行文件。</p>
+<p><strong>后者对 CLI 分发很有价值</strong>——用户不需要装 Node，也不会遇到版本不匹配，代价是产物几十 MB 到 100MB 量级（里面内嵌了整个 Bun 运行时）。</p>
 <table>
     <thead>
         <tr><th>参数</th><th>作用</th><th>什么时候用</th></tr>
@@ -414,7 +420,8 @@ flowchart TB
     Q3 -->|"没有"| A4["生产仍用 node<br/>build 时 target 选 node"]
     Q3 -->|"验证过"| A5["可按阶段切 Bun 运行时<br/>详见站内迁移篇"]
 </div>
-<p><strong>不适用边界</strong>：工具链换完之后 CI 还是慢，问题大概率在测试设计或镜像构建，不在包管理器。运行时相关的一切——引擎差异、<code>node:*</code> 兼容层缺口、可观测性短板——不属于这篇，在 <a href="../bun-runtime/">Bun 运行时机制</a>；真正要把生产切过去的分阶段路径与回退预案在 <a href="../bun-migration/">从 Node.js 迁移到 Bun</a>；该不该引入 Bun 这个前置判断在 <a href="../bun/">Bun 是什么、快在哪、能不能上生产</a>。</p>
+<p><strong>不适用边界</strong>：工具链换完之后 CI 还是慢，问题大概率在测试设计或镜像构建，不在包管理器。运行时相关的一切——引擎差异、<code>node:*</code> 兼容层缺口、可观测性短板——不属于这篇，在 <a href="../bun-runtime/">Bun 运行时机制</a>；</p>
+<p>真正要把生产切过去的分阶段路径与回退预案在 <a href="../bun-migration/">从 Node.js 迁移到 Bun</a>；该不该引入 Bun 这个前置判断在 <a href="../bun/">Bun 是什么、快在哪、能不能上生产</a>。</p>
 <p>在这条路径上，上一篇回答「值不值得引入」，本篇把工具链用起来（风险最低的那一半收益），下一篇进到引擎与兼容层——那是运行时风险的来源。</p>
 
 <h2>③ 场景 · 反模式与正确做法对照</h2>

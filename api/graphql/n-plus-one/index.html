@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>N+1 是 GraphQL 上线后一定会遇到的问题，不是「如果代码写得不好才会遇到」。它源自执行模型本身：resolver 按字段独立取数，父层返回多少条记录，子字段的 resolver 就被调用多少次。理解这一点很重要，因为它决定了治理方式——你没法靠 code review 可靠地消灭它，只能靠架构上的批量化机制，加上限流兜底。</p>
+<p>N+1 是 GraphQL 上线后一定会遇到的问题，不是「如果代码写得不好才会遇到」。它源自执行模型本身：resolver 按字段独立取数，父层返回多少条记录，子字段的 resolver 就被调用多少次。</p>
+<p>理解这一点很重要，因为它决定了治理方式——你没法靠 code review 可靠地消灭它，只能靠架构上的批量化机制，加上限流兜底。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -104,7 +105,9 @@
 
 <h2>① 用法 · DataLoader 的正确写法与怎么测出 N+1</h2>
 
-<p>先记两条硬约束，它们是 DataLoader 全部 bug 的来源：<strong>实例必须每请求创建一次</strong>（它自带按 key 的缓存，做成模块级单例等于跨请求串数据，是越权而不只是脏读）；<strong>批函数的返回值必须与传入的 keys 等长且同序</strong>（少一个元素，后面所有位置整体错位，静默把 A 的数据给 B）。下面这份 loaders 覆盖了四种常见形态，可以直接抄。为什么攒批能生效、什么情况下攒不上，见下面的原理层。</p>
+<p>先记两条硬约束，它们是 DataLoader 全部 bug 的来源：<strong>实例必须每请求创建一次</strong>（它自带按 key 的缓存，做成模块级单例等于跨请求串数据，是越权而不只是脏读）；</p>
+<p><strong>批函数的返回值必须与传入的 keys 等长且同序</strong>（少一个元素，后面所有位置整体错位，静默把 A 的数据给 B）。下面这份 loaders 覆盖了四种常见形态，可以直接抄。</p>
+<p>为什么攒批能生效、什么情况下攒不上，见下面的原理层。</p>
 
 <pre><code class="language-javascript">// loaders.js —— 每个请求创建一次，绝不能提到模块顶层做成单例
 import DataLoader from 'dataloader';
@@ -263,7 +266,8 @@ export const context = async ({ req }) =&gt; ({
 </tbody>
 </table>
 
-<p>N+1 的隐蔽之处在于它<strong>在小数据量下完全不显形</strong>。开发环境十条测试数据，1+10 次查询也就几毫秒，接口看起来挺快；上线后列表页一页 50 条、每条带三层关联，同一段代码就变成几百次查询。所以不能靠「感觉慢了再查」，要主动测。最有效的方法只有一条：<strong>同一个查询跑两遍，一遍取 10 条一遍取 50 条，断言两次的数据层调用次数完全相等。</strong></p>
+<p>N+1 的隐蔽之处在于它<strong>在小数据量下完全不显形</strong>。开发环境十条测试数据，1+10 次查询也就几毫秒，接口看起来挺快；上线后列表页一页 50 条、每条带三层关联，同一段代码就变成几百次查询。</p>
+<p>所以不能靠「感觉慢了再查」，要主动测。最有效的方法只有一条：<strong>同一个查询跑两遍，一遍取 10 条一遍取 50 条，断言两次的数据层调用次数完全相等。</strong></p>
 
 <pre><code class="language-javascript">// n-plus-one.test.js —— 把 N+1 挡在 CI 里，比任何 code review 都可靠
 import { test, expect, beforeEach } from 'vitest';
@@ -313,14 +317,15 @@ test('订单列表的数据层调用次数与返回条数无关', async () =&gt;
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">把查询计数写进测试是性价比最高的一步</div>
-    <p>在测试里给数据源包一层计数器，对关键查询断言「次数与条数无关」加「不超过层数」。这条断言会在有人新加一个没走 loader 的关联字段时立刻失败，比任何 code review 都可靠。注意每次执行前要重建 context，否则请求级 loader 缓存会让第二次的计数偏小。</p>
+    <p>在测试里给数据源包一层计数器，对关键查询断言「次数与条数无关」加「不超过层数」。这条断言会在有人新加一个没走 loader 的关联字段时立刻失败，比任何 code review 都可靠。</p>
+<p>注意每次执行前要重建 context，否则请求级 loader 缓存会让第二次的计数偏小。</p>
 </div>
 
 <h2>② 原理 · 为什么 N+1 是结构性的</h2>
 
 <p>搞清这一节能解决「明明每条 SQL 都很快，为什么接口要三秒」。</p>
 
-<p>看一个最普通的查询：取 10 个订单，每个订单要用户昵称。执行器先跑 <code>Query.orders</code> 拿到 10 条记录，然后<strong>对每一条记录分别调用一次 <code>Order.user</code> 的 resolver</strong>。这个 resolver 不知道自己正在被批量调用，它只看到一个 parent，于是老老实实发一次查询。1 次列表查询加 10 次用户查询，这就是 1+N。</p>
+<p>看一个最普通的查询：取 10 个订单，每个订单要用户昵称。执行器先跑 <code>Query.orders</code> 拿到 10 条记录，然后<strong>对每条记录分别调用一次 <code>Order.user</code> 的 resolver</strong>。它不知道自己在被批量调用，只看到 parent，就发一次查询。1 次列表加 10 次用户查询，就是 1+N。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -343,7 +348,8 @@ sequenceDiagram
     E-->>E: 组装结果树
 </div>
 
-<p>真正致命的是<strong>嵌套时的乘性放大</strong>：查询每加一层，查询数就乘以那一层的扇出。「20 个订单、每单 10 条明细、每条明细带商品和商家」这种再正常不过的页面需求，算式是 1 + 20 + 20 乘 10 + 200 乘 2 = 621 次查询。而这个查询在 Schema 上完全合法，客户端写起来只有十几行。</p>
+<p>真正致命的是<strong>嵌套时的乘性放大</strong>：查询每加一层，查询数就乘以那一层的扇出。「20 个订单、每单 10 条明细、每条明细带商品和商家」这种再正常不过的页面需求，算式是 1 + 20 + 20 乘 10 + 200 乘 2 = 621 次查询。</p>
+<p>而这个查询在 Schema 上完全合法，客户端写起来只有十几行。</p>
 
 <table>
 <thead><tr><th>查询形状</th><th>查询次数算式</th><th>单条 1ms 时总耗时</th><th>单条 5ms 时总耗时</th></tr></thead>
@@ -356,15 +362,17 @@ sequenceDiagram
 <tr><td>全部用 DataLoader 批量化</td><td>1 + 1 + 1 + 1 + 2</td><td>6ms</td><td>30ms</td></tr>
 </tbody></table>
 
-<p>注意最后一行：批量化之后查询次数只和<strong>查询的层数</strong>有关，和数据条数无关。这是从线性增长变成常数级的差别，也是为什么 DataLoader 不是优化手段而是基础设施——也正是用法层那条「次数必须与条数无关」断言的依据。</p>
+<p>注意最后一行：批量化之后查询次数只和<strong>查询的层数</strong>有关，和数据条数无关。</p>
+<p>这是从线性增长变成常数级的差别，也是为什么 DataLoader 不是优化手段而是基础设施——也正是用法层那条「次数必须与条数无关」断言的依据。</p>
 
 <h2>② 原理 · DataLoader 的攒批与分发</h2>
 
 <p>搞清这一节能解决「装了 DataLoader 但查询次数没降」，原因几乎总是攒批窗口被打断了。</p>
 
-<p>DataLoader 的机制出人意料地简单：<code>load(key)</code> 不立刻执行，而是把 key 推进待处理队列并返回一个 Promise；<strong>在当前事件循环 tick 结束时</strong>（Node 里是微任务队列排空的那个点），把攒到的所有 key 合成数组，调用一次你提供的 <code>batchLoad(keys)</code>；拿到结果后按下标把值分发回各个 Promise。</p>
+<p>DataLoader 的机制出人意料地简单：<code>load(key)</code> 不立刻执行，而是把 key 推进待处理队列并返回一个 Promise；<strong>在当前事件循环 tick 结束时</strong>（Node 里是微任务队列排空的那个点），把攒到的 key 合成数组，调用一次 <code>batchLoad(keys)</code>；拿到结果后按下标分发回各个 Promise。</p>
 
-<p>它能生效的前提正好和 GraphQL 的执行模型吻合：同一层字段是并行发起的，10 个 <code>Order.user</code> resolver 在同一个 tick 内都调了 <code>load</code>，所以能攒进同一批。这也解释了一个常见困惑——<strong>如果你在 resolver 里先 await 了别的异步操作再调 load，就可能错过攒批窗口</strong>，一批会被拆成好几批。</p>
+<p>它能生效的前提正好和 GraphQL 的执行模型吻合：同一层字段是并行发起的，10 个 <code>Order.user</code> resolver 在同一个 tick 内都调了 <code>load</code>，所以能攒进同一批。</p>
+<p>这也解释了一个常见困惑——<strong>如果你在 resolver 里先 await 了别的异步操作再调 load，就可能错过攒批窗口</strong>，一批会被拆成好几批。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -401,7 +409,8 @@ sequenceDiagram
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">等长同序这条约束值得单独强调</div>
-    <p>它是唯一一类<strong>不报错、不崩溃、监控也看不出来，但会把数据串到别人身上</strong>的 bug。测试环境里数据齐全时永远正常，一旦线上有一条记录被软删除或权限过滤掉，返回数组就少一个元素，后面所有位置整体错位。写 batchLoad 时的固定动作就是：先把结果装进 Map，再 <code>keys.map</code> 逐个取，取不到填 null。Java 侧优先用 MappedBatchLoader，返回 Map 就从机制上避免了这个问题。</p>
+    <p>它是唯一一类<strong>不报错、不崩溃、监控也看不出来，但会把数据串到别人身上</strong>的 bug。测试环境数据齐全时正常，线上一条记录被软删除或权限过滤掉，返回数组就少一个元素，后面位置整体错位。</p>
+<p>写 batchLoad 的固定动作：先把结果装进 Map，再 <code>keys.map</code> 逐个取，取不到填 null。Java 侧优先用 MappedBatchLoader，返回 Map 就从机制上避免了这个问题。</p>
 </div>
 
 <p>Java 侧的对应实现，以及跨服务场景下把攒批窗口调大的做法：</p>
@@ -450,7 +459,7 @@ public CompletableFuture&lt;User&gt; user(Order order, DataFetchingEnvironment e
 
 <p>搞清这一节能解决「所有字段都走了 loader，为什么还是慢」——有些形状天生攒不成一批。</p>
 
-<p>DataLoader 的能力边界很明确：它只能把「一堆同形状的按 key 取数」合成一次调用。一旦每个父对象需要的不是「一个对象」而是「一段结果集」，攒批就失效了。这四类场景必须单独设计，硬套 DataLoader 只会写出一个假批量。</p>
+<p>DataLoader 的能力边界很明确：只能把「一堆同形状的按 key 取数」合成一次调用。一旦每个父对象要的不是「一个对象」而是「一段结果集」，攒批就失效了。这四类场景必须单独设计，硬套 DataLoader 只会写出假批量。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -523,13 +532,16 @@ UNION ALL
 <tr><td>字段级超时与降级</td><td>给每个外部调用设独立超时，超时返回 null</td><td>一个慢下游不会拖死整个查询</td><td>要求该字段是可空的，否则错误冒泡把父对象打成 null</td></tr>
 </tbody></table>
 
-<p>投影下推这条要特别说一句：它经常被当成 GraphQL 的标配收益宣传，实际落地成本很高。<code>info</code> 里的字段节点要处理内联片段、命名片段、别名、以及接口和联合的多态分支，还要维护字段到列的映射表。<strong>更稳妥的做法是只对确实很宽的表做下推，其他表把列写死在 service 层</strong>。想彻底解决就上支持投影的查询层，但那又引入了另一套复杂度。缓存分层与失效策略见<a href="../../../database/cache/">缓存设计</a>。</p>
+<p>投影下推要特别说一句：它常被当成 GraphQL 的标配收益宣传，实际落地成本很高。<code>info</code> 里的字段节点要处理内联片段、命名片段、别名、以及接口和联合的多态分支，还要维护字段到列的映射表。</p>
+<p><strong>更稳妥的做法是只对确实很宽的表做下推，其他表把列写死在 service 层</strong>。想彻底解决就上支持投影的查询层，但那又引入了另一套复杂度。缓存分层与失效策略见<a href="../../../database/cache/">缓存设计</a>。</p>
 
 <h2>② 原理 · 深度与复杂度限制是必需品</h2>
 
 <p>搞清这一节能解决「WAF 和网关限流都在，为什么还能被一个 POST 打满连接池」。</p>
 
-<p>只要你的 GraphQL 端点对外可达，就必须假定有人会构造恶意查询。GraphQL 的特性使得<strong>一个几十字节的查询能让后端产生指数级的工作量</strong>：任意两个互相引用的类型（用户有好友，好友也是用户）就能让攻击者写出无限深的嵌套；即使没有循环引用，深度嵌套加上大 first 参数也足以打满数据库连接池。</p>
+<p>只要你的 GraphQL 端点对外可达，就必须假定有人会构造恶意查询。</p>
+<p>GraphQL 的特性使得<strong>一个几十字节的查询能让后端产生指数级的工作量</strong>：任意两个互相引用的类型（用户有好友，好友也是用户）就能让攻击者写出无限深的嵌套；</p>
+<p>即使没有循环引用，深度嵌套加上大 first 参数也足以打满数据库连接池。</p>
 
 <p>更要紧的是，这类请求在 HTTP 层面看完全正常：一个 POST、一个 200、一个正常大小的请求体，WAF 和网关限流都不会拦它。<strong>只按 QPS 限流对 GraphQL 是无效的</strong>，因为一个请求的成本可以是另一个请求的一万倍。</p>
 

@@ -90,7 +90,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>集群网络出问题时最贵的动作是「随机试」：改一个注解、重启一个 Pod、换一次 CNI，然后祈祷。真正能收敛问题的办法是认清层次——把一个服务暴露出去只需要两个对象，而包从 Pod A 走到 Pod B 却要穿过五层。这篇先给能直接 apply 的最小暴露清单与一条从里往外的排查序列，再往下拆 CNI、DNS、Ingress 与 NetworkPolicy 的机制，最后回答「该用哪种暴露方式」。Service 的虚拟 IP 机制、kube-proxy 的 iptables 与 IPVS 实现对照、Service 四种类型的实现细节，主干篇 <a href="../">Kubernetes 架构与核心机制</a> 已经写透，这里不重复。</p>
+<p>集群网络出问题时最贵的动作是「随机试」：改一个注解、重启一个 Pod、换一次 CNI，然后祈祷。真正能收敛问题的办法是认清层次——把一个服务暴露出去只需要两个对象，而包从 Pod A 走到 Pod B 却要穿过五层。</p>
+<p>这篇先给能直接 apply 的最小暴露清单与一条从里往外的排查序列，再往下拆 CNI、DNS、Ingress 与 NetworkPolicy 的机制，最后回答「该用哪种暴露方式」。</p>
+<p>Service 的虚拟 IP 机制、kube-proxy 的 iptables 与 IPVS 实现对照、Service 四种类型的实现细节，主干篇 <a href="../">Kubernetes 架构与核心机制</a> 已经写透，这里不重复。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -193,7 +195,8 @@ curl -sv -o /dev/null -H 'Host: api.example.com' https://INGRESS_IP/ 2&gt;&amp;1
 kubectl -n prod get netpol
 </code></pre>
 
-<p>命令里的默认值与字段随集群版本变化，端口范围、探针默认值这类数字以 <code>kubectl explain service.spec</code> 与你集群的 apiserver 启动参数为准。<strong>为什么跨节点会因为 MTU 挂掉、为什么解析一个外部域名要发十个包、为什么策略会静默失效，都在下面几节。</strong></p>
+<p>命令里的默认值与字段随集群版本变化，端口范围、探针默认值这类数字以 <code>kubectl explain service.spec</code> 与你集群的 apiserver 启动参数为准。</p>
+<p><strong>为什么跨节点会因为 MTU 挂掉、为什么解析一个外部域名要发十个包、为什么策略会静默失效，都在下面几节。</strong></p>
 
 <h2>② 原理 · 网络模型的三条硬要求</h2>
 <p>搞清这三条能解释两个高频现象：<code>kubeadm init</code> 之后节点一直 NotReady，以及为什么换 CNI 的代价接近重建集群。Kubernetes 对网络的规定短得惊人，只有三条：</p>
@@ -202,7 +205,8 @@ kubectl -n prod get netpol
 <li>任意两个 Pod 之间可以用这个 IP <strong>直接互通，中间不做 NAT</strong>——即 A 看到的源地址就是 B 的真实 Pod IP；</li>
 <li>节点上的进程（含 kubelet、DaemonSet）能直接访问本节点与其他节点的 Pod。</li>
 </ol>
-<p>注意：<strong>Kubernetes 自己一行代码都不实现这三条</strong>。它只定义 CNI 接口，分 IP、建虚拟设备、跨节点转发全部由插件完成。这解释了上面那两个现象：kubelet 在等 CNI 就绪才报 Ready，而 Pod 网段、封装方式、策略能力全是插件的私有决策。下面这张图是「包是怎么从一个 Pod 真正走到另一个节点的 Pod 的」：</p>
+<p>注意：<strong>Kubernetes 自己一行代码都不实现这三条</strong>。它只定义 CNI 接口，分 IP、建虚拟设备、跨节点转发全部由插件完成。这解释了上面那两个现象：kubelet 在等 CNI 就绪才报 Ready，而 Pod 网段、封装方式、策略能力全是插件的私有决策。</p>
+<p>下面这张图是「包是怎么从一个 Pod 真正走到另一个节点的 Pod 的」：</p>
 
 <div class="mermaid">
 flowchart TB
@@ -250,12 +254,14 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">MTU 配错：小包全通、大包全挂</div>
-    <p>Overlay 封装要吃掉有效载荷：VXLAN 占 50 字节、IPIP 占 20 字节、再叠 WireGuard 还要更多。若物理链路 MTU 是 1500 而 Pod 网卡仍是 1500，封装后超限，需要分片或依赖「需要分片」的 ICMP 做路径 MTU 发现，<strong>而云环境和防火墙经常把这类 ICMP 丢掉</strong>。结果是：ping 通、TCP 握手通、小接口正常，一旦返回大 JSON、上传文件、或 TLS 证书链偏大，连接就永久挂住不返回。</p>
+    <p>Overlay 封装要吃掉有效载荷：VXLAN 占 50 字节、IPIP 占 20 字节、再叠 WireGuard 还要更多。若物理链路 MTU 是 1500 而 Pod 网卡仍是 1500，封装后超限，需要分片或依赖「需要分片」的 ICMP 做路径 MTU 发现，<strong>而云环境和防火墙经常把这类 ICMP 丢掉</strong>。</p>
+<p>结果是：ping 通、TCP 握手通、小接口正常，一旦返回大 JSON、上传文件、或 TLS 证书链偏大，连接就永久挂住不返回。</p>
     <p>对照关系：物理 1500 时，VXLAN 下 Pod MTU 取 1450、IPIP 下取 1480、VXLAN 叠 WireGuard 取 1370 左右；若底层支持巨帧 9000，则相应放大。定位命令是禁止分片的定长 ping 做二分：<code>ping -M do -s 1422 对端PodIP</code>（1422 加 28 字节头等于 1450），能通说明 1450 以内没问题，换成 1472 不通就确认是 MTU 问题。</p>
 </div>
 
 <h2>② 原理 · Cilium 与 eBPF 为什么成了趋势</h2>
-<p>搞清这一节能解释一个规模化之后才出现的现象：Service 数量涨到几千之后，kube-proxy 同步延迟能到几十秒，新 Pod 起来了流量却半分钟才切过去。传统数据平面把规则写进 iptables，Service 与策略数量一多，规则链呈线性增长，变更时要整表替换。eBPF 的做法是把转发与策略逻辑作为程序挂在内核钩子上，用哈希表查目标，<strong>查找复杂度与 Service 数量基本无关</strong>。</p>
+<p>搞清这一节能解释一个规模化之后才出现的现象：Service 数量涨到几千之后，kube-proxy 同步延迟能到几十秒，新 Pod 起来了流量却半分钟才切过去。</p>
+<p>传统数据平面把规则写进 iptables，Service 与策略数量一多，规则链呈线性增长，变更时要整表替换。eBPF 的做法是把转发与策略逻辑作为程序挂在内核钩子上，用哈希表查目标，<strong>查找复杂度与 Service 数量基本无关</strong>。</p>
 <table>
 <thead><tr><th>能力</th><th>iptables 系数据平面</th><th>eBPF（Cilium）</th></tr></thead>
 <tbody>
@@ -363,8 +369,11 @@ data:
 </code></pre>
 
 <h2>② 原理 · Ingress 的本质与 Gateway API</h2>
-<p>搞清这一节能解决「Ingress 创建成功但访问不通」以及「换控制器等于重写路由」这两件事。必须先说清楚：<strong>Ingress 对象本身什么也不做</strong>，它是一份声明式的路由规则表，真正干活的是 Ingress Controller——一个跑在集群里的 Pod（或云侧 LB），它 watch Ingress 对象，把规则翻译成自己的配置。所以「Ingress 创建成功但访问不通」的第一反应应该是「有没有控制器、<code>ingressClassName</code> 是否匹配」，而不是检查 YAML 语法。</p>
-<p>Ingress 的标准字段只覆盖 host 与 path。<strong>其余一切能力都靠注解</strong>：重写、限流、超时、灰度、认证、CORS、body 大小。而注解是各控制器私有的，ingress-nginx 的注解在 Traefik 上完全无效。这就是 Ingress 可移植性差的根因，也是 Gateway API 诞生的理由。ingress-nginx 背后那层 Nginx 自身的缓冲、超时与上游长连接参数在 <a href="../../nginx/">Nginx 深度原理</a>，网关的容量规划与流量治理在 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>。</p>
+<p>搞清这一节能解决「Ingress 创建成功但访问不通」以及「换控制器等于重写路由」这两件事。</p>
+<p>必须先说清楚：<strong>Ingress 对象本身什么也不做</strong>，它是一份声明式的路由规则表，真正干活的是 Ingress Controller——一个跑在集群里的 Pod（或云侧 LB），它 watch Ingress 对象，把规则翻译成自己的配置。</p>
+<p>所以「Ingress 创建成功但访问不通」的第一反应应该是「有没有控制器、<code>ingressClassName</code> 是否匹配」，而不是检查 YAML 语法。</p>
+<p>Ingress 的标准字段只覆盖 host 与 path。<strong>其余一切能力都靠注解</strong>：重写、限流、超时、灰度、认证、CORS、body 大小。而注解是各控制器私有的，ingress-nginx 的注解在 Traefik 上完全无效。这就是 Ingress 可移植性差的根因，也是 Gateway API 诞生的理由。</p>
+<p>ingress-nginx 背后那层 Nginx 自身的缓冲、超时与上游长连接参数在 <a href="../../nginx/">Nginx 深度原理</a>，网关的容量规划与流量治理在 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -567,7 +576,9 @@ hubble observe --namespace prod --verdict DROPPED --last 50
 </code></pre>
 
 <h2>② 原理 · 东西向与南北向的加密</h2>
-<p>搞清这一节能避免一个常见的错觉：以为配了 NetworkPolicy 就等于链路安全。只讲要点：NetworkPolicy 管的是「谁能连谁」，不管「链路上的数据有没有被看到」。要做传输加密有三条路——CNI 层透明加密（Cilium 或 Calico 的 WireGuard，对应用零侵入，但只加密节点间流量）、服务网格 mTLS（sidecar 或 ambient 模式，附带身份、细粒度授权与可观测性，代价是延迟与运维复杂度）、应用自己做 TLS（控制力最强、改造量最大）。南北向的 TLS 终止位置与证书自动化（cert-manager）属于网关职责，网关选型与容量规划见 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>，TLS 握手与证书信任链见 <a href="../../../api/auth/">认证授权与加密基础</a>。</p>
+<p>搞清这一节能避免一个常见的错觉：以为配了 NetworkPolicy 就等于链路安全。只讲要点：NetworkPolicy 管的是「谁能连谁」，不管「链路上的数据有没有被看到」。</p>
+<p>要做传输加密有三条路——CNI 层透明加密（Cilium 或 Calico 的 WireGuard，对应用零侵入，但只加密节点间流量）、服务网格 mTLS（sidecar 或 ambient 模式，附带身份、细粒度授权与可观测性，代价是延迟与运维复杂度）、应用自己做 TLS（控制力最强、改造量最大）。</p>
+<p>南北向的 TLS 终止位置与证书自动化（cert-manager）属于网关职责，网关选型与容量规划见 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>，TLS 握手与证书信任链见 <a href="../../../api/auth/">认证授权与加密基础</a>。</p>
 
 <h2>③ 场景 · 暴露方式与 CNI 的场景决策</h2>
 <p>用法层那张表按「要做什么」查，这张表按「你处在什么处境」查——同一个需求在不同集群形态下答案不一样，而代价那一列才是真正决定选择的东西。</p>
@@ -586,7 +597,8 @@ hubble observe --namespace prod --verdict DROPPED --last 50
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：这篇不回答 Service 的虚拟 IP 是怎么实现的、kube-proxy 的 iptables 与 IPVS 差异、<code>externalTrafficPolicy</code> 的取舍，这些在 <a href="../">主干篇</a>；ingress-nginx 背后的 Nginx 参数全景（缓冲、超时、长连接、限流）在 <a href="../../nginx/">Nginx 深度原理</a>；网关的鉴权、限流与多租户治理在 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>；DNS 与入口的指标该怎么采、告警怎么定在 <a href="../../../observability/">可观测性系列</a>；容器自身的网络命名空间与端口发布机制在 <a href="../../docker/">Docker</a>；Ingress 与证书的多环境版本化交付在 <a href="../../gitops/">GitOps 系列</a>。</p>
+<p><strong>不适用边界</strong>：这篇不回答 Service 的虚拟 IP 是怎么实现的、kube-proxy 的 iptables 与 IPVS 差异、<code>externalTrafficPolicy</code> 的取舍，这些在 <a href="../">主干篇</a>；ingress-nginx 背后的 Nginx 参数全景（缓冲、超时、长连接、限流）在 <a href="../../nginx/">Nginx 深度原理</a>；网关的鉴权、限流与多租户治理在 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>；</p>
+<p>DNS 与入口的指标该怎么采、告警怎么定在 <a href="../../../observability/">可观测性系列</a>；容器自身的网络命名空间与端口发布机制在 <a href="../../docker/">Docker</a>；Ingress 与证书的多环境版本化交付在 <a href="../../gitops/">GitOps 系列</a>。</p>
 
 <h2>③ 场景 · 网络不通时的分层定位</h2>
 <p>用法层那条六步序列是精简版，这里是完整版：每一层不通时指向哪一类根因，以及输出该怎么判读。</p>
@@ -638,7 +650,9 @@ flowchart TB
 </tbody>
 </table>
 
-<p>集群网络的层次很清晰：<strong>CNI 保证三条硬要求成立</strong>，Service 与 kube-proxy 在它上面做虚拟 IP 与负载均衡（详见 <a href="../">主干篇</a>），DNS 让这些虚拟 IP 变成可读的名字，Ingress 或 Gateway 负责南北向入口，NetworkPolicy 负责东西向边界。落地时最该先做的三件事：确认 CNI 支不支持策略并下默认拒绝、把 MTU 与 ndots 这两个默认值核对一遍、给 CoreDNS 做容量规划。本篇在这条路径上负责把流量送到对的 Pod；流量通了之后，下一步的问题是这几十份清单怎么复用和版本化。</p>
+<p>集群网络的层次很清晰：<strong>CNI 保证三条硬要求成立</strong>，Service 与 kube-proxy 在它上面做虚拟 IP 与负载均衡（详见 <a href="../">主干篇</a>），DNS 让这些虚拟 IP 变成可读的名字，Ingress 或 Gateway 负责南北向入口，NetworkPolicy 负责东西向边界。</p>
+<p>落地时最该先做的三件事：确认 CNI 支不支持策略并下默认拒绝、把 MTU 与 ndots 这两个默认值核对一遍、给 CoreDNS 做容量规划。本篇在这条路径上负责把流量送到对的 Pod；</p>
+<p>流量通了之后，下一步的问题是这几十份清单怎么复用和版本化。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../storage/">← 上一步：Kubernetes 存储抽象与有状态服务的现实</a> · <a href="../helm/">下一步：Helm 的模板机制与它的适用边界 →</a></p>
 

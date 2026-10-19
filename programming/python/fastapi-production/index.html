@@ -66,7 +66,9 @@
                         <h1 class="article-title">Python 服务上生产：进程模型、优雅关闭与可观测性</h1>
                     </header>
                     <div class="article-content">
-<p>这篇假设代码写完了、依赖也锁好了，只回答一个问题：<strong>这个服务上生产还缺什么</strong>。缺的通常不是功能，而是五件事——探针怎么配、怎么关得干净、日志与指标从哪里接出去、哪些配置能不重启就改、以及出事之后能不能回滚。进程模型本身（WSGI 与 ASGI 的契约差异、gunicorn 的 worker 类型、进程数与容器 CPU 配额的关系）不在这里重复，见站内<a href="../web/">《Python Web 服务的部署形态：WSGI、ASGI 与进程模型》</a>；本文只保留与「上线」直接相关的那部分结论。</p>
+<p>这篇假设代码写完了、依赖也锁好了，只回答一个问题：<strong>这个服务上生产还缺什么</strong>。</p>
+<p>缺的通常不是功能，而是五件事——探针怎么配、怎么关得干净、日志与指标从哪里接出去、哪些配置能不重启就改、以及出事之后能不能回滚。</p>
+<p>进程模型本身（WSGI 与 ASGI 的契约差异、gunicorn 的 worker 类型、进程数与容器 CPU 配额的关系）不在这里重复，见站内<a href="../web/">《Python Web 服务的部署形态：WSGI、ASGI 与进程模型》</a>；本文只保留与「上线」直接相关的那部分结论。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -296,7 +298,8 @@ stateDiagram-v2
 </div>
 
 <h2>② 原理 · 优雅关闭：四个超时必须对齐</h2>
-<p>搞清这一节能解决的现象是：每次发布都有一小波 502 或超时，而代码里明明处理了关闭。原因几乎总是同一个：<strong>进程收到 SIGTERM 与上游停止转发流量之间存在时间差</strong>。端点摘除是异步生效的，等你开始拒绝新连接时，可能还有请求正在路上。</p>
+<p>搞清这一节能解决的现象是：每次发布都有一小波 502 或超时，而代码里明明处理了关闭。原因几乎总是同一个：<strong>进程收到 SIGTERM 与上游停止转发流量之间存在时间差</strong>。</p>
+<p>端点摘除是异步生效的，等你开始拒绝新连接时，可能还有请求正在路上。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -333,7 +336,8 @@ sequenceDiagram
 
 <h2>② 原理 · 日志、指标与追踪的接入点</h2>
 <p>搞清这一节能解决的现象是：故障时日志只到崩溃前几秒就断了、多 worker 下计数器会倒退、以及有日志但没法按请求串起来。可观测性的方法论不在这里展开，这一节只解决「接口在哪、接错了会怎样」。</p>
-<p>日志侧有两个硬性前提：<strong>统一写 stdout</strong>（容器里不要自己切割文件），以及 <code>PYTHONUNBUFFERED=1</code>。不设第二项时 stdout 是块缓冲，进程被 kill 时缓冲区内容直接丢失——恰好丢的就是最需要的那几行。日志格式与 request_id 的注入点在<a href="../fastapi-intro/">工程骨架篇</a>，采集与检索在站内<a href="../../../observability/logging/">日志专题</a>。</p>
+<p>日志侧有两个硬性前提：<strong>统一写 stdout</strong>（容器里不要自己切割文件），以及 <code>PYTHONUNBUFFERED=1</code>。不设第二项时 stdout 是块缓冲，进程被 kill 时缓冲区内容直接丢失——恰好丢的就是最需要的那几行。</p>
+<p>日志格式与 request_id 的注入点在<a href="../fastapi-intro/">工程骨架篇</a>，采集与检索在站内<a href="../../../observability/logging/">日志专题</a>。</p>
 <p>指标侧最大的坑是多进程。默认的客户端把指标存在进程内存里，多 worker 下请求被随机分到某个进程，每次抓取只拿到其中一个的数据，<strong>计数器会跳变甚至倒退</strong>：</p>
 
 <pre><code class="language-python">import os
@@ -392,7 +396,8 @@ def metrics() -&gt; Response:
 </table>
 
 <h2>② 原理 · 配置热更新的边界</h2>
-<p>搞清这一节能解决的现象是：改了配置中心的值，一半副本生效一半没生效；或者挂载的配置文件明明更新了，进程却读不到。<strong>能不能热更新，取决于这个值在进程里被谁持有</strong>：每次请求都重新读的值可以热更，启动时构造进对象的值不能。</p>
+<p>搞清这一节能解决的现象是：改了配置中心的值，一半副本生效一半没生效；或者挂载的配置文件明明更新了，进程却读不到。</p>
+<p><strong>能不能热更新，取决于这个值在进程里被谁持有</strong>：每次请求都重新读的值可以热更，启动时构造进对象的值不能。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -422,7 +427,8 @@ flowchart TB
 </tbody>
 </table>
 
-<p>把配置类做成不可变（<code>frozen=True</code>）与热更新并不矛盾：不可变保证的是「没人偷偷改字段」，热更新的正确形态是<strong>构造一个新实例整份替换引用</strong>，而不是原地修改。<code>Settings</code> 类怎么写在<a href="../fastapi-intro/">工程骨架篇</a>，值从哪来、密钥怎么注入在<a href="../fastapi-dependencies/">依赖与环境管理</a>。</p>
+<p>把配置类做成不可变（<code>frozen=True</code>）与热更新并不矛盾：不可变保证的是「没人偷偷改字段」，热更新的正确形态是<strong>构造一个新实例整份替换引用</strong>，而不是原地修改。</p>
+<p><code>Settings</code> 类怎么写在<a href="../fastapi-intro/">工程骨架篇</a>，值从哪来、密钥怎么注入在<a href="../fastapi-dependencies/">依赖与环境管理</a>。</p>
 
 <h2>② 原理 · 发布与回滚：哪些变更回滚兜不住</h2>
 <p>搞清这一节能解决的现象是：回滚了代码，故障却没有恢复。回滚只能撤销「进程里的代码与依赖」，凡是已经写出去、发出去、或者被别人读过的东西都撤不回来。</p>
@@ -441,10 +447,12 @@ flowchart TB
 </tbody>
 </table>
 
-<p>推论有两条。第一，<strong>发布顺序由兼容方向决定</strong>：加法先行、减法最后，中间至少隔一个可观察的周期。第二，<strong>回滚要能复现</strong>，所以镜像必须用摘要或不可变 tag，锁文件与这个 tag 一一对应——不然回滚回去的是一个没人测过的新组合。灰度、流量切分与多服务之间的发布次序见站内<a href="../../../architecture/microservices/">微服务与服务治理专题</a>。</p>
+<p>推论有两条。第一，<strong>发布顺序由兼容方向决定</strong>：加法先行、减法最后，中间至少隔一个可观察的周期。</p>
+<p>第二，<strong>回滚要能复现</strong>，所以镜像必须用摘要或不可变 tag，锁文件与这个 tag 一一对应——不然回滚回去的是一个没人测过的新组合。灰度、流量切分与多服务之间的发布次序见站内<a href="../../../architecture/microservices/">微服务与服务治理专题</a>。</p>
 
 <h2>② 原理 · 内存：只涨不降通常不是泄漏</h2>
-<p>搞清这一节能解决的现象是：上线第一天就有人报「内存在涨」，然后花两天查了个不存在的泄漏。CPython 的小对象走自带的分配器，按池和区管理，<strong>一个区只有在完全空闲时才可能还给操作系统</strong>。实际运行中总有零散的长命对象散落在各个区里，于是 RSS 停在历史峰值附近不再下降。这是分配器行为，不是泄漏。</p>
+<p>搞清这一节能解决的现象是：上线第一天就有人报「内存在涨」，然后花两天查了个不存在的泄漏。CPython 的小对象走自带的分配器，按池和区管理，<strong>一个区只有在完全空闲时才可能还给操作系统</strong>。</p>
+<p>实际运行中总有零散的长命对象散落在各个区里，于是 RSS 停在历史峰值附近不再下降。这是分配器行为，不是泄漏。</p>
 <p>判断标准是<strong>趋势而不是绝对值</strong>：流量平稳后曲线走平，就是正常水位；持续单调上涨、没有平台期、重启后又从低位开始重复同样的上涨，才按泄漏查。</p>
 
 <div class="mermaid">
@@ -581,7 +589,9 @@ sequenceDiagram
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：进程数与线程数怎么算、WSGI 与 ASGI 的契约差异、gunicorn 各类 worker 的语义、反向代理与应用服务器的超时怎么成对设，全部在<a href="../web/">《Python Web 服务的部署形态：WSGI、ASGI 与进程模型》</a>；探针机制、滚动更新与调度在站内<a href="../../../devops/kubernetes/">Kubernetes 专题</a>；协程被阻塞、取消语义、事件循环延迟在<a href="../fastapi-async/">《asyncio 的性能陷阱》</a>；配置类与日志格式怎么写在<a href="../fastapi-intro/">《Python 后端项目的工程骨架》</a>；镜像怎么构建、密钥怎么注入在<a href="../fastapi-dependencies/">《依赖与环境管理》</a>；对象开销与 <code>gc.freeze</code> 的收益在<a href="../core/">《Python 运行时机制》</a>；采集、看板与告警的方法论在站内<a href="../../../observability/">可观测系列</a>与<a href="../../../observability/performance/">后端性能优化专题</a>；灰度与多服务发布次序在<a href="../../../architecture/microservices/">微服务与服务治理专题</a>。</p>
+<p><strong>不适用边界</strong>：进程数与线程数怎么算、WSGI 与 ASGI 的契约差异、gunicorn 各类 worker 的语义、反向代理与应用服务器的超时怎么成对设，全部在<a href="../web/">《Python Web 服务的部署形态：WSGI、ASGI 与进程模型》</a>；探针机制、滚动更新与调度在站内<a href="../../../devops/kubernetes/">Kubernetes 专题</a>；</p>
+<p>协程被阻塞、取消语义、事件循环延迟在<a href="../fastapi-async/">《asyncio 的性能陷阱》</a>；配置类与日志格式怎么写在<a href="../fastapi-intro/">《Python 后端项目的工程骨架》</a>；镜像怎么构建、密钥怎么注入在<a href="../fastapi-dependencies/">《依赖与环境管理》</a>；对象开销与 <code>gc.freeze</code> 的收益在<a href="../core/">《Python 运行时机制》</a>；</p>
+<p>采集、看板与告警的方法论在站内<a href="../../../observability/">可观测系列</a>与<a href="../../../observability/performance/">后端性能优化专题</a>；灰度与多服务发布次序在<a href="../../../architecture/microservices/">微服务与服务治理专题</a>。</p>
 <p>这条路径上，前面四篇分别解决了框架机制、项目骨架、依赖与环境、运行期并发，本篇是最后一环：把这个服务交付到生产环境，并且在出事的时候能关得干净、看得清楚、退得回去。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../fastapi-async/">← 上一步：asyncio 的性能陷阱</a></p>

@@ -90,7 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>PostgreSQL 的默认配置是为「能在任何机器上启动」优化的，不是为你的生产机优化的：<code>shared_buffers</code> 默认 128 MB，<code>random_page_cost</code> 默认 4.0（按机械盘假设），<code>data-checksums</code> 默认关闭。更要命的是，有几个选项<strong>在 initdb 那一刻就定死，之后只能重建数据目录</strong>。这篇先给一份可以直接抄的最小生产配置与验收命令，再展开不可逆决策、参数矩阵、认证与连接池这些「为什么」，最后按部署形态收拢取舍。</p>
+<p>PostgreSQL 的默认配置是为「能在任何机器上启动」优化的，不是为你的生产机优化的：<code>shared_buffers</code> 默认 128 MB，<code>random_page_cost</code> 默认 4.0（按机械盘假设），<code>data-checksums</code> 默认关闭。更要命的是，有几个选项<strong>在 initdb 那一刻就定死，之后只能重建数据目录</strong>。</p>
+<p>这篇先给一份可以直接抄的最小生产配置与验收命令，再展开不可逆决策、参数矩阵、认证与连接池这些「为什么」，最后按部署形态收拢取舍。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -104,7 +105,8 @@
 
 <h2>① 用法 · 一份可抄的最小生产配置与验收命令</h2>
 
-<p>顺序是：先抄配置，再学怎么按自己的机器把这些数算出来，最后用验收命令确认它真的生效了。<strong>配置里每一行都有「不写会怎样」的理由</strong>，没有理由的行不要往生产配置里塞——参数越多，出事时越难归因。下面这份基线对应 64 GB 内存、16 核、NVMe 的 OLTP 实例。</p>
+<p>顺序是：先抄配置，再学怎么按自己的机器把这些数算出来，最后用验收命令确认它真的生效了。</p>
+<p><strong>配置里每一行都有「不写会怎样」的理由</strong>，没有理由的行不要往生产配置里塞——参数越多，出事时越难归因。下面这份基线对应 64 GB 内存、16 核、NVMe 的 OLTP 实例。</p>
 
 <pre><code class="language-properties"># /data/pgdata/postgresql.conf —— 64 GB 内存 / 16 核 / NVMe 的 OLTP 基线
 # 改完带 (restart) 标记的项需要重启，其余 pg_ctl reload 即可
@@ -229,7 +231,8 @@ pgbench -c 32 -j 8 -T 300 -P 10 -S appdb       # -S 只读，用来分离 WAL �
 
 <h2>② 原理 · 安装方式取舍：别用发行版自带的那个版本</h2>
 
-<p>最常见的开局错误是 <code>apt install postgresql</code> 就完事。Debian 12 自带的是 PG 15，Ubuntu 22.04 自带 PG 14，CentOS 7 的 AppStream 里甚至还有 PG 10。用发行版仓库意味着你的大版本被操作系统的生命周期锁死，想升级 PG 就得先升级操作系统，而 PG 每个大版本的性能与可观测性改进都很实在（PG 14 起连接与索引空间优化、PG 15 起统计信息进共享内存、PG 16 起并行与逻辑复制增强）。正确做法是加 PGDG 官方仓库，自己选大版本，小版本跟着安全更新走。</p>
+<p>最常见的开局错误是 <code>apt install postgresql</code> 就完事。Debian 12 自带的是 PG 15，Ubuntu 22.04 自带 PG 14，CentOS 7 的 AppStream 里甚至还有 PG 10。用发行版仓库意味着大版本被操作系统的生命周期锁死，想升级 PG 就得先升级操作系统。</p>
+<p>而 PG 每个大版本的性能与可观测性改进都很实在（PG 14 起连接与索引空间优化、PG 15 起统计信息进共享内存、PG 16 起并行与逻辑复制增强）。正确做法是加 PGDG 官方仓库，自己选大版本，小版本跟着安全更新走。</p>
 
 <table>
 <thead><tr><th>安装方式</th><th>版本新鲜度</th><th>可控性</th><th>适合</th><th>主要坑</th></tr></thead>
@@ -273,7 +276,9 @@ flowchart TB
     K2 --> R
 </div>
 
-<p>排序规则这件事值得单独展开，因为它有一个非常著名的坑：<strong>glibc 的排序规则数据会随版本变化</strong>。glibc 2.28（RHEL 8、Debian 10 那一代）对大量语言的排序规则做了调整，结果是「操作系统升级后，已有的文本 B-tree 索引里的键顺序和当前排序规则不一致」。索引不会报错，只会开始返回错误结果——查得到的行查不到、唯一约束也可能漏判。PG 会在日志里提示 collation version mismatch，正确处置是对相关索引全部 REINDEX。</p>
+<p>排序规则这件事值得单独展开，因为它有一个非常著名的坑：<strong>glibc 的排序规则数据会随版本变化</strong>。</p>
+<p>glibc 2.28（RHEL 8、Debian 10 那一代）对大量语言的排序规则做了调整，结果是「操作系统升级后，已有的文本 B-tree 索引里的键顺序和当前排序规则不一致」。</p>
+<p>索引不会报错，只会开始返回错误结果——查得到的行查不到、唯一约束也可能漏判。PG 会在日志里提示 collation version mismatch，正确处置是对相关索引全部 REINDEX。</p>
 
 <table>
 <thead><tr><th>排序规则</th><th>ORDER BY 行为</th><th>LIKE 前缀能否走普通 B-tree</th><th>性能</th><th>glibc 升级风险</th></tr></thead>
@@ -287,7 +292,8 @@ flowchart TB
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">实用折中：集群用 C 或 ICU，需要语言排序的列单独指定</div>
-    <p>集群级 collate 用 <code>C</code> 可以拿到最快的字符串比较和可直接用于 LIKE 前缀匹配的索引，需要按拼音或忽略大小写排序的地方在列或查询上单独写 <code>COLLATE "zh-x-icu"</code>。列级和查询级的 collation 是可以事后修改的，集群级不行——把不可逆的决定留在最保守的那一档。</p>
+    <p>集群级 collate 用 <code>C</code> 可以拿到最快的字符串比较和可直接用于 LIKE 前缀匹配的索引，需要按拼音或忽略大小写排序的地方在列或查询上单独写 <code>COLLATE "zh-x-icu"</code>。</p>
+<p>列级和查询级的 collation 是可以事后修改的，集群级不行——把不可逆的决定留在最保守的那一档。</p>
 </div>
 
 <pre><code class="language-bash"># Debian / Ubuntu：用 PGDG 官方仓库装指定大版本（这里以 16 为例）
@@ -317,7 +323,8 @@ sudo -u postgres /usr/lib/postgresql/16/bin/pg_controldata /data/pgdata \
 
 <h2>② 原理 · 目录布局：哪些东西该分盘</h2>
 
-<p><code>PGDATA</code> 里不是所有目录都同等重要。<code>pg_wal</code> 是纯顺序写、每次提交都要 fsync，和数据文件的随机读写抢同一块盘会互相拖累；临时文件（大排序溢出）是突发的大量写，也适合隔离。表空间（tablespace）则用来把冷热数据分到不同介质。</p>
+<p><code>PGDATA</code> 里不是所有目录都同等重要。<code>pg_wal</code> 是纯顺序写、每次提交都要 fsync，和数据文件的随机读写抢同一块盘会互相拖累；</p>
+<p>临时文件（大排序溢出）是突发的大量写，也适合隔离。表空间（tablespace）则用来把冷热数据分到不同介质。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -348,7 +355,8 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">表空间不能拿来做「跨机器扩容」</div>
-    <p>表空间只是数据目录之外的一个符号链接目标，它属于这个集群，不能被另一个实例挂载，也不能单独备份恢复。更重要的是：<strong>把表空间放在非持久化存储上会让整个集群无法恢复</strong>，因为 WAL 里包含对这些文件的引用。云上用临时盘放表空间是典型的踩雷方式。</p>
+    <p>表空间只是数据目录之外的一个符号链接目标，它属于这个集群，不能被另一个实例挂载，也不能单独备份恢复。</p>
+<p>更重要的是：<strong>把表空间放在非持久化存储上会让整个集群无法恢复</strong>，因为 WAL 里包含对这些文件的引用。云上用临时盘放表空间是典型的踩雷方式。</p>
 </div>
 
 <h2>② 原理 · 内存参数矩阵：work_mem 是最容易配错的那个</h2>
@@ -373,7 +381,8 @@ flowchart TB
 
 <h2>② 原理 · WAL、检查点与优化器代价参数</h2>
 
-<p>IO 出现周期性尖刺、每隔几分钟延迟抖一下，八成是检查点。检查点要把上一轮以来的脏页全部刷盘，<code>checkpoint_completion_target</code> 控制把这些写摊平到整个周期的比例（PG 9.5 到 13 默认 0.5，PG 14 起默认 0.9）。<code>max_wal_size</code> 太小会导致检查点被 WAL 量触发而不是被时间触发，日志里会出现 checkpoints are occurring too frequently 的提示。</p>
+<p>IO 出现周期性尖刺、每隔几分钟延迟抖一下，八成是检查点。检查点要把上一轮以来的脏页全部刷盘，<code>checkpoint_completion_target</code> 控制把这些写摊平到整个周期的比例（PG 9.5 到 13 默认 0.5，PG 14 起默认 0.9）。</p>
+<p><code>max_wal_size</code> 太小会导致检查点被 WAL 量触发而不是被时间触发，日志里会出现 checkpoints are occurring too frequently 的提示。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -421,7 +430,8 @@ stateDiagram-v2
 
 <h2>② 原理 · autovacuum：只能调，不能关</h2>
 
-<p>PG 的 UPDATE 不是原地改，而是插入新版本、把旧版本标记过期，旧版本留在堆表里。<code>VACUUM</code> 负责三件事：回收死元组空间、更新可见性映射（让索引-only 扫描生效）、推进事务 ID 冻结以防回卷。关掉 autovacuum 换来的写入提速，代价是表膨胀、统计信息过期导致执行计划突变、以及事务 ID 年龄逼近 20 亿时<strong>整个实例进入只读保护</strong>。</p>
+<p>PG 的 UPDATE 不是原地改，而是插入新版本、把旧版本标记过期，旧版本留在堆表里。<code>VACUUM</code> 负责三件事：回收死元组空间、更新可见性映射（让索引-only 扫描生效）、推进事务 ID 冻结以防回卷。</p>
+<p>关掉 autovacuum 换来的写入提速，代价是表膨胀、统计信息过期导致执行计划突变、以及事务 ID 年龄逼近 20 亿时<strong>整个实例进入只读保护</strong>。</p>
 
 <table>
 <thead><tr><th>参数</th><th>默认值</th><th>调整方向</th><th>什么信号说明该调了</th></tr></thead>
@@ -438,12 +448,14 @@ stateDiagram-v2
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">autovacuum 能跑，不等于能回收</div>
-    <p>只要存在一个更老的快照，VACUUM 就无法回收它之后产生的死元组，任凭你怎么调参都没用。三个典型的「持有者」是：长事务与 idle in transaction 会话、未消费的逻辑复制槽、以及开了 <code>hot_standby_feedback</code> 的备库上的长查询。排查顺序是先看 <code>pg_stat_activity</code> 里最老的 xact_start，再看 <code>pg_replication_slots</code> 的 xmin，最后才是调 autovacuum 参数。</p>
+    <p>只要存在一个更老的快照，VACUUM 就无法回收它之后产生的死元组，任凭你怎么调参都没用。三个典型的「持有者」是：长事务与 idle in transaction 会话、未消费的逻辑复制槽、以及开了 <code>hot_standby_feedback</code> 的备库上的长查询。</p>
+<p>排查顺序是先看 <code>pg_stat_activity</code> 里最老的 xact_start，再看 <code>pg_replication_slots</code> 的 xmin，最后才是调 autovacuum 参数。</p>
 </div>
 
 <h2>② 原理 · 认证：pg_hba.conf 的匹配顺序决定一切</h2>
 
-<p><code>pg_hba.conf</code> 是<strong>自上而下取第一条匹配，匹配上就不再往下看，即使认证失败也不会回退到后面的规则</strong>。这条规则解释了绝大多数「我明明加了规则却连不上」的问题：前面有一条更宽泛的记录先匹配走了。四元组的匹配维度是：连接类型（local / host / hostssl / hostnossl）、数据库、用户、来源地址。</p>
+<p><code>pg_hba.conf</code> 是<strong>自上而下取第一条匹配，匹配上就不再往下看，即使认证失败也不会回退到后面的规则</strong>。这条规则解释了绝大多数「我明明加了规则却连不上」的问题：前面有一条更宽泛的记录先匹配走了。</p>
+<p>四元组的匹配维度是：连接类型（local / host / hostssl / hostnossl）、数据库、用户、来源地址。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -523,7 +535,8 @@ sequenceDiagram
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">连接池不是「连接数随便开」的许可</div>
-    <p>PgBouncer 的 <code>default_pool_size</code> 决定每个「数据库加用户」组合占用的真实后端连接数，它乘以组合数量才是 PG 实际承担的连接。常见配置是 <code>max_client_conn = 5000</code> 配 <code>default_pool_size = 25</code>。另外 PgBouncer 是<strong>单进程单线程</strong>的，单实例上限大概在几万 QPS 和一两万连接，再往上要起多个实例（<code>so_reuseport</code>）或换 pgcat 这类多线程实现。</p>
+    <p>PgBouncer 的 <code>default_pool_size</code> 决定每个「数据库加用户」组合占用的真实后端连接数，它乘以组合数量才是 PG 实际承担的连接。常见配置是 <code>max_client_conn = 5000</code> 配 <code>default_pool_size = 25</code>。</p>
+<p>另外 PgBouncer 是<strong>单进程单线程</strong>的，单实例上限大概在几万 QPS 和一两万连接，再往上要起多个实例（<code>so_reuseport</code>）或换 pgcat 这类多线程实现。</p>
 </div>
 
 <h2>③ 场景 · 按部署形态取舍，以及升级路径</h2>
@@ -544,7 +557,8 @@ sequenceDiagram
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：这篇只管「装出一台能上生产的实例」。参数为什么这么设背后的存储机制（堆表、MVCC、VACUUM、WAL）见 <a href="../">PostgreSQL 深度原理</a>；进程模型与 MySQL 的架构差异见 <a href="../intro/">PG 与 MySQL 架构差异与选型</a>；建表时的类型选择见 <a href="../datatypes/">数据类型选择与代价</a>；索引怎么建、执行计划怎么读见 <a href="../index-optimize/">索引选型与执行计划判读</a>；隔离级别与锁见 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；同步级别、复制槽、<code>pg_rewind</code> 与自动切换见 <a href="../replication-ha/">复制与故障切换</a>。</p>
+<p><strong>不适用边界</strong>：这篇只管「装出一台能上生产的实例」。参数为什么这么设背后的存储机制（堆表、MVCC、VACUUM、WAL）见 <a href="../">PostgreSQL 深度原理</a>；进程模型与 MySQL 的架构差异见 <a href="../intro/">PG 与 MySQL 架构差异与选型</a>；建表时的类型选择见 <a href="../datatypes/">数据类型选择与代价</a>；</p>
+<p>索引怎么建、执行计划怎么读见 <a href="../index-optimize/">索引选型与执行计划判读</a>；隔离级别与锁见 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；同步级别、复制槽、<code>pg_rewind</code> 与自动切换见 <a href="../replication-ha/">复制与故障切换</a>。</p>
 
 <p>这条路径上，上一篇讲清了 PG 和 MySQL 在架构上差在哪，本篇把实例装好并调到可上线，下一篇开始设计表：字段类型选错的代价，多数要重写全表才能修。</p>
 

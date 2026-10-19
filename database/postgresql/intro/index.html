@@ -90,7 +90,9 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>选 PostgreSQL 还是 MySQL，决定成败的不是「谁的功能列表更长」，而是两条硬差异：<strong>进程模型</strong>决定了你的连接架构长什么样，<strong>类型与索引能力</strong>决定了一堆业务逻辑是写在 SQL 里还是堆在应用层。这篇讲清这两条差异、PG 真实的短板，以及场景化的选型判断。涉及 InnoDB 内部细节（B+ 树树高推演、聚簇索引回表、Buffer Pool 分段 LRU、redo 与 binlog 两阶段提交）时只做对比不展开，详见站内 MySQL 深度原理一篇。MVCC 的可见性判定细节留给本组的 MVCC 事务隔离篇，这里只需要记住一句话：<strong>PG 把旧版本留在堆表里，MySQL 放进 undo log，所以 PG 需要 VACUUM 回收，MySQL 需要 purge 清理</strong>。</p>
+<p>选 PostgreSQL 还是 MySQL，决定成败的不是「谁的功能列表更长」，而是两条硬差异：<strong>进程模型</strong>决定了你的连接架构长什么样，<strong>类型与索引能力</strong>决定了一堆业务逻辑是写在 SQL 里还是堆在应用层。</p>
+<p>这篇讲清这两条差异、PG 真实的短板，以及场景化的选型判断。涉及 InnoDB 内部细节（B+ 树树高推演、聚簇索引回表、Buffer Pool 分段 LRU、redo 与 binlog 两阶段提交）时只做对比不展开，详见站内 MySQL 深度原理一篇。</p>
+<p>MVCC 的可见性判定细节留给本组的 MVCC 事务隔离篇，这里只需要记住一句话：<strong>PG 把旧版本留在堆表里，MySQL 放进 undo log，所以 PG 需要 VACUUM 回收，MySQL 需要 purge 清理</strong>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -104,7 +106,8 @@
 
 <h2>① 用法 · 从 MySQL 过来，先改这些习惯</h2>
 
-<p>迁到 PG 之后出的问题分两类：<strong>一类当场报错，改完就好；一类不报错，只是语义悄悄变了</strong>。后者才是真正会造成事故的。下面这张表按「改哪一条」组织，第三列写的是不改的后果——报错的那些可以放到最后处理，不报错的必须优先改。</p>
+<p>迁到 PG 之后出的问题分两类：<strong>一类当场报错，改完就好；一类不报错，只是语义悄悄变了</strong>。后者才是真正会造成事故的。</p>
+<p>下面这张表按「改哪一条」组织，第三列写的是不改的后果——报错的那些可以放到最后处理，不报错的必须优先改。</p>
 
 <table>
 <thead><tr><th>MySQL 习惯</th><th>PG 里改成什么</th><th>不改会出什么问题</th></tr></thead>
@@ -191,7 +194,8 @@ COMMIT;                                   -- 中途失败整体回滚，不留�
 
 <p>PostgreSQL 是<strong>多进程架构</strong>。监听 5432 的 postmaster 收到连接请求后 fork 出一个独立的 backend 进程，这个连接此后所有的解析、优化、执行都在这个进程里完成。MySQL 是<strong>多线程架构</strong>，一个 mysqld 进程内为每个连接分配一个线程，还有线程缓存可以复用。</p>
 
-<p>这个选择在 POSTGRES 年代是合理的：进程隔离让一个连接踩坏内存不会直接污染其他连接的数据结构。代价是<strong>连接成本高一个数量级</strong>。fork 本身是毫秒级的，真正贵的是每个 backend 要建自己的 catalog cache（系统表缓存）、relcache（关系描述缓存）和各类临时缓冲区，稳定跑一阵之后常驻 5 到 10 MB，执行过大查询的 backend 会更高，而且释放的内存不一定还给操作系统。</p>
+<p>这个选择在 POSTGRES 年代是合理的：进程隔离让一个连接踩坏内存不会直接污染其他连接的数据结构。代价是<strong>连接成本高一个数量级</strong>。</p>
+<p>fork 本身是毫秒级的，真正贵的是每个 backend 要建自己的 catalog cache（系统表缓存）、relcache（关系描述缓存）和各类临时缓冲区，稳定跑一阵之后常驻 5 到 10 MB，执行过大查询的 backend 会更高，而且释放的内存不一定还给操作系统。</p>
 
 <table>
 <thead><tr><th>维度</th><th>PostgreSQL</th><th>MySQL / InnoDB</th><th>对架构的实际影响</th></tr></thead>
@@ -209,7 +213,8 @@ COMMIT;                                   -- 中途失败整体回滚，不留�
     <div class="callout-icon">❌</div>
     <div class="callout-title">流传很广的错误说法：把 max_connections 开大就能扛更多并发</div>
 
-    <p>连接数从 500 涨到 3000，PG 的吞吐通常是<strong>下降</strong>的。原因有三：每个进程都要被操作系统调度，上下文切换和 TLB 失效成本随进程数上升；获取事务快照要扫 ProcArray，数组长度正比于连接数；轻量锁（LWLock）和缓冲区映射表的争抢也随之加剧。正确做法是把 max_connections 压在 CPU 核数的 3 到 5 倍，用连接池承接应用侧并发。</p>
+    <p>连接数从 500 涨到 3000，PG 的吞吐通常是<strong>下降</strong>的。原因有三：每个进程都要被操作系统调度，上下文切换和 TLB 失效成本随进程数上升；获取事务快照要扫 ProcArray，数组长度正比于连接数；</p>
+<p>轻量锁（LWLock）和缓冲区映射表的争抢也随之加剧。正确做法是把 max_connections 压在 CPU 核数的 3 到 5 倍，用连接池承接应用侧并发。</p>
 </div>
 
 <h2>② 原理 · PG 的进程结构：谁在后台干什么</h2>
@@ -322,7 +327,8 @@ sequenceDiagram
     Note over App,PB: 几千应用连接收敛成几十个真实后端连接<br/>transaction 模式下会话级特性会失效
 </div>
 
-<p>PgBouncer 的三种 pool_mode 各自破坏什么会话级特性、以及部署参数怎么配，放在本组的<strong>安装与初始化</strong>篇里细讲。这里只强调一个结论：<strong>PG 上「应用直连数据库、每个实例 200 连接、20 个实例」这种拓扑是错的</strong>，它等于要求数据库常驻 4000 个进程。</p>
+<p>PgBouncer 的三种 pool_mode 各自破坏什么会话级特性、以及部署参数怎么配，放在本组的<strong>安装与初始化</strong>篇里细讲。</p>
+<p>这里只强调一个结论：<strong>PG 上「应用直连数据库、每个实例 200 连接、20 个实例」这种拓扑是错的</strong>，它等于要求数据库常驻 4000 个进程。</p>
 
 <h2>② 原理 · 能力差异矩阵：哪些差异在什么场景才重要</h2>
 
@@ -346,7 +352,8 @@ sequenceDiagram
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">BRIN 索引值得单独记一笔</div>
-    <p>对按时间近似有序写入的大表（日志、指标、订单流水），BRIN 只为每个块区间记录最小最大值，索引体积常常是 B-tree 的百分之一量级，一张 TB 级表的 BRIN 索引可能只有几十 MB。代价是只对物理有序的列有效，数据顺序被打乱后过滤效果急剧下降。索引类型的选择细节见本组的索引原理篇。</p>
+    <p>对按时间近似有序写入的大表（日志、指标、订单流水），BRIN 只为每个块区间记录最小最大值，索引体积常常是 B-tree 的百分之一量级，一张 TB 级表的 BRIN 索引可能只有几十 MB。</p>
+<p>代价是只对物理有序的列有效，数据顺序被打乱后过滤效果急剧下降。索引类型的选择细节见本组的索引原理篇。</p>
 </div>
 
 <h2>② 原理 · 事务 DDL：迁移脚本可回滚这件事被严重低估</h2>
@@ -375,7 +382,8 @@ CREATE INDEX CONCURRENTLY idx_orders_settle_at ON orders (settle_at);
 
 <h2>② 原理 · 扩展生态：PG 真正的护城河</h2>
 
-<p>PG 的内核暴露了大量扩展点：可以注册新类型、新操作符、新索引访问方法（Index AM）、新的执行器钩子。结果是垂直领域的能力可以<strong>原地长在同一个库里</strong>，不需要为地理数据引一套 PostGIS 之外的系统，也不需要为向量检索单独运维一个 Milvus。</p>
+<p>PG 的内核暴露了大量扩展点：可以注册新类型、新操作符、新索引访问方法（Index AM）、新的执行器钩子。</p>
+<p>结果是垂直领域的能力可以<strong>原地长在同一个库里</strong>，不需要为地理数据引一套 PostGIS 之外的系统，也不需要为向量检索单独运维一个 Milvus。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -431,7 +439,8 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">别拿「PG 写入比 MySQL 慢」当结论</div>
-    <p>单行主键点查和小事务高并发写，MySQL 通常确实更快，这来自更轻的连接模型和聚簇索引的顺序写入特性。但把 shared_buffers、checkpoint、random_page_cost 调好之后，PG 在多表复杂查询、批量分析、并行聚合上往往反超几倍。跑基准测试时如果一边是调过参的 MySQL、一边是默认配置的 PG，结论没有参考价值。</p>
+    <p>单行主键点查和小事务高并发写，MySQL 通常确实更快，这来自更轻的连接模型和聚簇索引的顺序写入特性。但把 shared_buffers、checkpoint、random_page_cost 调好之后，PG 在多表复杂查询、批量分析、并行聚合上往往反超几倍。</p>
+<p>跑基准测试时如果一边是调过参的 MySQL、一边是默认配置的 PG，结论没有参考价值。</p>
 </div>
 
 <h2>③ 场景 · 选型决策：按业务形态而不是按功能列表</h2>
@@ -469,7 +478,9 @@ flowchart TB
 
 <div class="echart-container" id="pg-vs-mysql-compare"></div>
 
-<p><strong>不适用边界</strong>：这篇只做架构差异与选型判断。PG 的存储层主线（堆表、MVCC、VACUUM、WAL）见 <a href="../">PostgreSQL 深度原理</a>；参数怎么按机器算、哪些决定在 initdb 时就不可逆、PgBouncer 三种 <code>pool_mode</code> 各破坏什么见 <a href="../install/">生产部署与必调参数</a>；字段类型选择与改类型的代价见 <a href="../datatypes/">数据类型选择与代价</a>；索引选型与执行计划判读见 <a href="../index-optimize/">索引选型与执行计划判读</a>；隔离级别语义与锁见 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；复制与切换见 <a href="../replication-ha/">复制与故障切换</a>；InnoDB 内部细节见 <a href="../../mysql/">MySQL 深度原理</a>；如果连「要不要用关系库」都还没定，回到 <a href="../../">数据库选型的第一性判断</a>。</p>
+<p><strong>不适用边界</strong>：这篇只做架构差异与选型判断。PG 的存储层主线（堆表、MVCC、VACUUM、WAL）见 <a href="../">PostgreSQL 深度原理</a>；参数怎么按机器算、哪些决定在 initdb 时就不可逆、PgBouncer 三种 <code>pool_mode</code> 各破坏什么见 <a href="../install/">生产部署与必调参数</a>；</p>
+<p>字段类型选择与改类型的代价见 <a href="../datatypes/">数据类型选择与代价</a>；索引选型与执行计划判读见 <a href="../index-optimize/">索引选型与执行计划判读</a>；隔离级别语义与锁见 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；复制与切换见 <a href="../replication-ha/">复制与故障切换</a>；</p>
+<p>InnoDB 内部细节见 <a href="../../mysql/">MySQL 深度原理</a>；如果连「要不要用关系库」都还没定，回到 <a href="../../">数据库选型的第一性判断</a>。</p>
 
 <p>这条路径上，上一篇讲的是 PG 存储层为什么是这个样子，本篇把它换算成「和 MySQL 比，日常写法与架构要改什么」，下一篇开始动手部署：哪些参数必须调、哪些决定一旦做下就改不回来。</p>
 

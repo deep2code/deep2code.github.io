@@ -91,7 +91,8 @@
                     </header>
                     <div class="article-content">
 
-<p>同一行命令，敲在交互终端里和写进脚本里，行为可能完全不同；同一段重定向，把两个方向调换位置，结果正好相反；同一个 <code>kill</code>，在裸机上能停掉服务，在容器里却只是把连接硬断。这些都不是零散的语法细节，而是同一件事的不同侧面：<strong>Shell 本质上是一个进程编排器</strong>，它做的全部工作就是把 <code>fork</code>、<code>execve</code>、<code>dup2</code>、<code>pipe</code>、<code>wait</code>、<code>kill</code> 这几个系统调用按你写的顺序组合起来。</p>
+<p>同一行命令，敲在交互终端里和写进脚本里，行为可能完全不同；同一段重定向，把两个方向调换位置，结果正好相反；同一个 <code>kill</code>，在裸机上能停掉服务，在容器里却只是把连接硬断。</p>
+<p>这些都不是零散的语法细节，而是同一件事的不同侧面：<strong>Shell 本质上是一个进程编排器</strong>，它做的全部工作就是把 <code>fork</code>、<code>execve</code>、<code>dup2</code>、<code>pipe</code>、<code>wait</code>、<code>kill</code> 这几个系统调用按你写的顺序组合起来。</p>
 <p>理解这层机制的直接收益是：你能预测命令的行为，而不是靠试。本篇只讲执行机制。语法层面的参数展开、数组、<code>[[</code> 与 <code>((</code>、函数作用域在 <code>../core/</code>；严格模式、<code>trap</code> 做清理、幂等与原子替换在 <code>../</code>，这里涉及时只给结论并指路。</p>
 
 <h2>一条命令是怎么跑起来的</h2>
@@ -116,7 +117,8 @@ flowchart TB
     A1 --> A2 --> A3 --> A4 --> B1 --> B2 --> C1
     C1 --> C2 --> C3
 </div>
-<p>这个顺序解释了几个常见现象。脚本里 <code>alias</code> 默认不展开，所以文档里写 <code>ll</code> 别人照抄进脚本一定报错；函数优先于内建，所以有人定义了 <code>cd()</code> 做日志，后面所有 <code>cd</code> 都会走那个函数；而哈希表位于 <code>PATH</code> 之前，就是「我明明改了 PATH，怎么还在跑旧版本」的全部真相。</p>
+<p>这个顺序解释了几个常见现象。脚本里 <code>alias</code> 默认不展开，所以文档里写 <code>ll</code> 别人照抄进脚本一定报错；函数优先于内建，所以有人定义了 <code>cd()</code> 做日志，后面所有 <code>cd</code> 都会走那个函数；</p>
+<p>而哈希表位于 <code>PATH</code> 之前，就是「我明明改了 PATH，怎么还在跑旧版本」的全部真相。</p>
 <table>
 <thead><tr><th>维度</th><th>内建命令</th><th>外部命令</th></tr></thead>
 <tbody>
@@ -149,7 +151,8 @@ command ls          # 忽略 alias 与函数，按正常查找顺序找
 enable -n echo      # 临时禁用内建 echo，让它落到 /usr/bin/echo（测跨平台行为时有用）</code></pre>
 
 <h2>重定向的本质是文件描述符复制</h2>
-<p>每个进程都有一张文件描述符表，0、1、2 分别约定为标准输入、标准输出、标准错误。重定向做的事只有一件：<strong>在 <code>execve</code> 之前，把表里某个槽位改指向别处</strong>，底层就是 <code>dup2</code>。程序自己完全不知道这件事发生过，它照样往 1 号描述符写。</p>
+<p>每个进程都有一张文件描述符表，0、1、2 分别约定为标准输入、标准输出、标准错误。重定向做的事只有一件：<strong>在 <code>execve</code> 之前，把表里某个槽位改指向别处</strong>，底层就是 <code>dup2</code>。</p>
+<p>程序自己完全不知道这件事发生过，它照样往 1 号描述符写。</p>
 <p>由此得到一条必须记住的规则：<strong>重定向从左到右依次生效，每一步复制的是「执行到这一步时」的指向，而不是最终指向</strong>。这就是 <code>cmd &gt;file 2&gt;&amp;1</code> 和 <code>cmd 2&gt;&amp;1 &gt;file</code> 天差地别的原因。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -194,7 +197,8 @@ cmd 2&gt;/dev/null           # 只丢报错，保留正常输出
 # 一个高频误解：下面两条不等价
 sudo echo x &gt; /root/f     # 错：重定向由当前 shell 完成，普通用户仍无权限写，sudo 白加了
 echo x | sudo tee /root/f &gt;/dev/null   # 对：写文件的动作交给以 root 运行的 tee</code></pre>
-<p>把这些能力组合起来，就有了两个工程上很实用的模式：<strong>用 <code>exec</code> 一次性接管整个脚本的输出</strong>，以及<strong>用进程替换给只接受文件名参数的命令喂流</strong>。后者是进程替换相对管道的核心优势——<code>diff</code>、<code>comm</code>、<code>join</code> 需要两个输入，而管道只能给一个。</p>
+<p>把这些能力组合起来，就有了两个工程上很实用的模式：<strong>用 <code>exec</code> 一次性接管整个脚本的输出</strong>，以及<strong>用进程替换给只接受文件名参数的命令喂流</strong>。</p>
+<p>后者是进程替换相对管道的核心优势——<code>diff</code>、<code>comm</code>、<code>join</code> 需要两个输入，而管道只能给一个。</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -254,7 +258,8 @@ flowchart TB
 <tr><td>压根不用 shell 变量</td><td>把统计整个交给 <code>awk</code> 或 <code>grep -c</code></td><td>无</td><td>最快也最可靠，能这样就这样</td></tr>
 </tbody>
 </table>
-<p>第二个高频困惑是<strong>加了管道就看不到实时输出</strong>。这不是 Shell 的问题，是 C 标准库的行为：程序检测到 stdout 不是终端时，会从行缓冲切成 4KB 全缓冲，攒满才吐。解决办法是让上游改回行缓冲：<code>grep --line-buffered</code>、<code>sed -u</code>、<code>awk</code> 里调 <code>fflush()</code>，或者通用地套 <code>stdbuf -oL</code>。注意 <code>stdbuf</code> 靠 <code>LD_PRELOAD</code> 改 libc，对自己管缓冲的程序（比如 Go 写的工具）无效，这时只能用 <code>unbuffer</code> 伪造一个伪终端。</p>
+<p>第二个高频困惑是<strong>加了管道就看不到实时输出</strong>。这不是 Shell 的问题，是 C 标准库的行为：程序检测到 stdout 不是终端时，会从行缓冲切成 4KB 全缓冲，攒满才吐。解决办法是让上游改回行缓冲：<code>grep --line-buffered</code>、<code>sed -u</code>、<code>awk</code> 里调 <code>fflush()</code>，或者通用地套 <code>stdbuf -oL</code>。</p>
+<p>注意 <code>stdbuf</code> 靠 <code>LD_PRELOAD</code> 改 libc，对自己管缓冲的程序（比如 Go 写的工具）无效，这时只能用 <code>unbuffer</code> 伪造一个伪终端。</p>
 <p>管道的退出码默认只取最后一段，这也是 <code>set -e</code> 失效的经典场景之一；要取各段退出码用 <code>PIPESTATUS</code> 数组，而 <code>set -o pipefail</code> 的精确语义与其他五种 <code>set -e</code> 例外在 <code>../</code> 有完整推演，这里不重复。</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
 set -Eeuo pipefail
@@ -306,7 +311,8 @@ stdbuf -oL -eL myapp | tee run.log                # 通用做法：强制上游�
 <tr><td><code>exec cmd</code></td><td>否，替换当前进程映像</td><td>不再返回</td><td>—</td><td>entrypoint 末尾把 PID 交给应用</td></tr>
 </tbody>
 </table>
-<p>两个容易忽略的细节。第一，<code>source</code> 的隔离性为零：被 source 的脚本里一个 <code>exit</code> 会把你当前的 shell 一起关掉，一个 <code>set -e</code> 会改变你后续所有命令的行为，所以函数库文件里不要写 <code>set</code> 和 <code>exit</code>。第二，<strong>环境变量的继承是单向的一次性快照</strong>：子进程拿到的是父进程 <code>export</code> 过的变量的副本，之后双方各改各的，互不影响；没 <code>export</code> 的普通 shell 变量根本不会进这份副本。</p>
+<p>两个容易忽略的细节。第一，<code>source</code> 的隔离性为零：被 source 的脚本里一个 <code>exit</code> 会把你当前的 shell 一起关掉，一个 <code>set -e</code> 会改变你后续所有命令的行为，所以函数库文件里不要写 <code>set</code> 和 <code>exit</code>。</p>
+<p>第二，<strong>环境变量的继承是单向的一次性快照</strong>：子进程拿到的是父进程 <code>export</code> 过的变量的副本，之后双方各改各的，互不影响；没 <code>export</code> 的普通 shell 变量根本不会进这份副本。</p>
 <p>还有一条：<code>trap ... EXIT</code> 不会被 <code>( ... )</code> 子 shell 继承，子 shell 内创建的临时文件不会被外层清理逻辑带走。</p>
 
 <h2>信号、进程组与 trap 的边界</h2>
@@ -322,7 +328,8 @@ stdbuf -oL -eL myapp | tee run.log                # 通用做法：强制上游�
 <tr><td><code>SIGSTOP</code></td><td>19</td><td>暂停</td><td><strong>不能</strong></td><td>作业控制</td><td>进程停在 T 状态，占着资源不释放</td></tr>
 </tbody>
 </table>
-<p>关于 <code>trap</code>，有一条限制必须知道：<strong>Bash 只在两条命令的间隙检查待处理信号</strong>。脚本正阻塞在一个外部命令上时收到 <code>SIGTERM</code>，handler 不会立刻执行，Bash 要等那个外部命令自己结束。所以「<code>kill</code> 了半分钟没反应」通常不是 trap 写错，而是它在等一个 <code>rsync</code>。可靠做法有两条：长阻塞命令一律套 <code>timeout</code>；需要能被中断的地方，让命令后台跑再 <code>wait</code>，因为 <code>wait</code> 是可被信号打断的内建命令。</p>
+<p>关于 <code>trap</code>，有一条限制必须知道：<strong>Bash 只在两条命令的间隙检查待处理信号</strong>。脚本正阻塞在一个外部命令上时收到 <code>SIGTERM</code>，handler 不会立刻执行，Bash 要等那个外部命令自己结束。</p>
+<p>所以「<code>kill</code> 了半分钟没反应」通常不是 trap 写错，而是它在等一个 <code>rsync</code>。可靠做法有两条：长阻塞命令一律套 <code>timeout</code>；需要能被中断的地方，让命令后台跑再 <code>wait</code>，因为 <code>wait</code> 是可被信号打断的内建命令。</p>
 <p>另一个更隐蔽的坑是<strong>进程组</strong>。<code>kill $pid</code> 只发给那一个进程，它 fork 出的孙子进程会变成孤儿继续跑——这就是「脚本杀掉了但 java 进程还在占端口」的成因。要收掉一整棵树，得对<strong>进程组</strong>发信号，也就是 <code>kill -TERM -- -$pgid</code> 里那个负号；配合 <code>setsid</code> 让子进程自成进程组，这条路才走得通。</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
 set -Eeuo pipefail
@@ -384,7 +391,8 @@ flowchart TB
 <p>一个实践建议：用 <code>nohup</code> 时别指望 <code>nohup.out</code>，它会落在当前目录、没有轮转、也没有时间戳。正确写法是自己指明去向，把标准输出与标准错误一起追加到带时间戳的日志文件里，并把日志路径打到终端上。</p>
 
 <h2>容器里的 PID 1：优雅关闭为什么从来没生效</h2>
-<p>这是执行机制在真实生产里最值钱的一条推论。容器里的第一个进程拿到 PID 1，它有两项特殊职责：<strong>接收编排器发来的停机信号</strong>，以及<strong>回收孤儿进程</strong>。而 <code>CMD node server.js</code> 这种 shell 形式的写法，实际执行的是 <code>/bin/sh -c "node server.js"</code>——PID 1 是 <code>sh</code>，应用只是它的子进程。</p>
+<p>这是执行机制在真实生产里最值钱的一条推论。容器里的第一个进程拿到 PID 1，它有两项特殊职责：<strong>接收编排器发来的停机信号</strong>，以及<strong>回收孤儿进程</strong>。</p>
+<p>而 <code>CMD node server.js</code> 这种 shell 形式的写法，实际执行的是 <code>/bin/sh -c "node server.js"</code>——PID 1 是 <code>sh</code>，应用只是它的子进程。</p>
 <div class="mermaid">
 sequenceDiagram
     participant K as 编排器
@@ -399,7 +407,8 @@ sequenceDiagram
     K->>APP: SIGTERM 直达应用
     APP-->>K: 停止接新请求 排空在途请求后正常退出
 </div>
-<p>后果很具体：滚动更新时每批实例都会产生一批 5xx 或连接重置，而监控上看不出任何「进程崩溃」，因为退出码看起来正常。修法只有一句话——<strong>让应用成为 PID 1</strong>：用 exec 形式写启动命令，或者在 entrypoint 脚本的最后一行用 <code>exec "$@"</code> 把进程映像交给应用。</p>
+<p>后果很具体：滚动更新时每批实例都会产生一批 5xx 或连接重置，而监控上看不出任何「进程崩溃」，因为退出码看起来正常。</p>
+<p>修法只有一句话——<strong>让应用成为 PID 1</strong>：用 exec 形式写启动命令，或者在 entrypoint 脚本的最后一行用 <code>exec "$@"</code> 把进程映像交给应用。</p>
 <pre><code class="language-dockerfile"># ---- 反例：shell 形式的 CMD ----
 # 实际执行 /bin/sh -c "node server.js"，sh 是 PID 1，node 是它的子进程。
 # 编排器把 SIGTERM 发给 PID 1，sh 不处理也不转发，node 永远等不到停机信号。
@@ -427,7 +436,9 @@ envsubst &lt; /etc/app/config.tmpl &gt; /etc/app/config.yaml
 # 于是应用继承 PID 1，编排器发的 SIGTERM 直达应用本身。
 # 漏掉 exec 的话 shell 会留在 PID 1 上 wait，信号被吞，优雅关闭彻底失效。
 exec "$@"</code></pre>
-<p>第二项职责是僵尸回收。子进程退出后要由父进程 <code>wait</code> 才能释放内核里的进程表项，而孤儿进程会被托孤给 PID 1。真正的 init 会不断回收它们，但你的应用进程通常不实现这个循环，于是<strong>僵尸进程会在多进程模型下持续堆积，最终耗尽 pid 上限</strong>，表现是「跑几天以后就 fork 失败」。判断方法是进容器看进程状态里有没有大量 Z 状态。解决办法是加一层极小 init：<code>docker run --init</code> 会注入 tini，Kubernetes 里没有这个开关，需要自己把 tini 打进镜像当 ENTRYPOINT。</p>
+<p>第二项职责是僵尸回收。子进程退出后要由父进程 <code>wait</code> 才能释放内核里的进程表项，而孤儿进程会被托孤给 PID 1。</p>
+<p>真正的 init 会不断回收它们，但你的应用进程通常不实现这个循环，于是<strong>僵尸进程会在多进程模型下持续堆积，最终耗尽 pid 上限</strong>，表现是「跑几天以后就 fork 失败」。</p>
+<p>判断方法是进容器看进程状态里有没有大量 Z 状态。解决办法是加一层极小 init：<code>docker run --init</code> 会注入 tini，Kubernetes 里没有这个开关，需要自己把 tini 打进镜像当 ENTRYPOINT。</p>
 <p>再往上一层，宽限期设置、<code>preStop</code> 钩子与就绪探针摘流量的先后顺序属于编排器语义，本站 <code>devops/kubernetes/</code> 有专篇推演，这里不展开；精简镜像里缺少排障命令该怎么办，见 <code>../modern-unix/</code>。</p>
 
 <h2>反模式清单</h2>

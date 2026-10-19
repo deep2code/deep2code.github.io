@@ -67,7 +67,8 @@
                         <h1 class="article-title">asyncio 的性能陷阱</h1>
                     </header>
                     <div class="article-content">
-<p>asyncio 的坑有一个共同特征：<strong>不报错</strong>。代码能跑、测试能过、单请求延迟正常，只有并发一上来才暴露，而现象又是最容易误判的「CPU 不高但延迟很高」。这篇先给一套能动手跑的判定流程——怎么证明事件循环真的被阻塞了、阻塞在哪一行、挪出去之后怎么确认有效——再把这些陷阱按机制串起来。框架层面的 async 与 sync handler 分派见<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
+<p>asyncio 的坑有一个共同特征：<strong>不报错</strong>。代码能跑、测试能过、单请求延迟正常，只有并发一上来才暴露，而现象又是最容易误判的「CPU 不高但延迟很高」。</p>
+<p>这篇先给一套能动手跑的判定流程——怎么证明事件循环真的被阻塞了、阻塞在哪一行、挪出去之后怎么确认有效——再把这些陷阱按机制串起来。框架层面的 async 与 sync handler 分派见<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
 
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
@@ -254,7 +255,9 @@ async def tune_threadpool() -&gt; None:
 <p>为什么一次阻塞会放大到全部请求、为什么线程池对 CPU 密集没用、为什么超时对纯计算无效——都在下面几节。</p>
 
 <h2>② 原理 · 协作式调度：只有 await 才让出控制权</h2>
-<p>搞清这一节能解决的现象是：QPS 上不去、延迟随并发线性恶化、CPU 使用率却只有百分之二十，于是被误判成「机器不够」。asyncio 是<strong>单线程事件循环加协程协作式调度</strong>。循环从就绪队列取一个协程跑，跑到 <code>await</code> 且确实需要等待时，协程交回控制权，循环再取下一个。关键推论：<strong>不 await 的代码，事件循环无法中断它</strong>。一段纯计算、一次同步 socket 调用、一个 <code>time.sleep</code>，期间整个循环停转，所有已就绪的协程一个都推进不了。</p>
+<p>搞清这一节能解决的现象是：QPS 上不去、延迟随并发线性恶化、CPU 使用率却只有百分之二十，于是被误判成「机器不够」。asyncio 是<strong>单线程事件循环加协程协作式调度</strong>。</p>
+<p>循环从就绪队列取一个协程跑，跑到 <code>await</code> 且确实需要等待时，协程交回控制权，循环再取下一个。关键推论：<strong>不 await 的代码，事件循环无法中断它</strong>。</p>
+<p>一段纯计算、一次同步 socket 调用、一个 <code>time.sleep</code>，期间整个循环停转，所有已就绪的协程一个都推进不了。</p>
 <p>CPU 不高是因为大家都在等一个被阻塞的线程，而不是在算东西——这正是上面第 4 步压测对照能把它认出来的原因。</p>
 
 <div class="mermaid">
@@ -413,7 +416,8 @@ async def gather_semantics():
 </table>
 
 <h2>② 原理 · 超时与取消：只能在 await 点生效</h2>
-<p>搞清这一节能解决的现象是：「设了 3 秒超时为什么还是卡了 30 秒」，以及优雅关闭时连接池里的连接一直没被归还。取消的实现方式是<strong>在协程下一次到达 <code>await</code> 时抛出 <code>CancelledError</code></strong>。所以一段不含 await 的纯计算、或者卡在同步阻塞里的代码，<strong>无法被取消</strong>——超时时间到了也只能等它自己跑完。</p>
+<p>搞清这一节能解决的现象是：「设了 3 秒超时为什么还是卡了 30 秒」，以及优雅关闭时连接池里的连接一直没被归还。取消的实现方式是<strong>在协程下一次到达 <code>await</code> 时抛出 <code>CancelledError</code></strong>。</p>
+<p>所以一段不含 await 的纯计算、或者卡在同步阻塞里的代码，<strong>无法被取消</strong>——超时时间到了也只能等它自己跑完。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -576,7 +580,9 @@ def spawn(coro) -&gt; asyncio.Task:
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：接口慢但事件循环延迟正常，说明瓶颈在下游或 SQL，属于数据库与链路问题，见站内<a href="../../../observability/performance/">后端性能优化专题</a>；worker 数、进程模型、WSGI 与 ASGI 契约在<a href="../web/">《Python Web 服务的部署形态》</a>；线程、进程、协程三条路线的取舍与 GIL 的确切约束在<a href="../concurrency/">《Python 并发的三条路线与选择》</a>；内存只涨不降、指标多进程串号、优雅关闭的完整链路在<a href="../fastapi-production/">《Python 服务上生产》</a>；对象开销与热路径的单操作成本在<a href="../core/">《Python 运行时机制》</a>；框架怎么分派 async 与 sync handler、依赖注入的执行时机在<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
+<p><strong>不适用边界</strong>：接口慢但事件循环延迟正常，说明瓶颈在下游或 SQL，属于数据库与链路问题，见站内<a href="../../../observability/performance/">后端性能优化专题</a>；worker 数、进程模型、WSGI 与 ASGI 契约在<a href="../web/">《Python Web 服务的部署形态》</a>；</p>
+<p>线程、进程、协程三条路线的取舍与 GIL 的确切约束在<a href="../concurrency/">《Python 并发的三条路线与选择》</a>；内存只涨不降、指标多进程串号、优雅关闭的完整链路在<a href="../fastapi-production/">《Python 服务上生产》</a>；对象开销与热路径的单操作成本在<a href="../core/">《Python 运行时机制》</a>；</p>
+<p>框架怎么分派 async 与 sync handler、依赖注入的执行时机在<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
 <p>这条路径上，上一篇解决的是「三套环境装出同一套依赖」，本篇进入运行期的并发正确性与延迟，下一篇再把视角挪到进程之外：探针、优雅关闭、日志与发布。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../fastapi-dependencies/">← 上一步：依赖与环境管理：从 pip 到 uv</a> · <a href="../fastapi-production/">下一步：Python 服务上生产：进程模型、优雅关闭与可观测性 →</a></p>
