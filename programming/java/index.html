@@ -324,7 +324,8 @@ stateDiagram-v2
             <tr><td>空间不足晋升</td><td>Survivor 装不下本次存活对象，直接放老年代</td><td>Survivor 比例、新生代大小</td><td>新生代或 Survivor 太小会让晋升速率飙升，老年代被短命对象填满</td></tr>
         </tbody>
     </table>
-    <p>看懂这张图，就能解释一类很常见的现象：<strong>老年代增长速度异常</strong>，往往不是老年代自己的问题，而是新生代太小或 Survivor 太小，本该在新生代死掉的对象被挤进了老年代。这个指标叫晋升速率，它比 Full GC 次数更早暴露问题。</p>
+    <p>看懂这张图，就能解释一类很常见的现象：<strong>老年代增长速度异常</strong>，往往不是老年代自己的问题，而是新生代太小或 Survivor 太小，本该在新生代死掉的对象被挤进了老年代。</p>
+<p>这个指标叫晋升速率，它比 Full GC 次数更早暴露问题。</p>
 
 <div class="echart-container" id="java-version-support"></div>
 
@@ -438,7 +439,8 @@ sequenceDiagram
             <tr><td>初始化</td><td>执行 <code>&lt;clinit&gt;</code>：静态代码块与静态赋值，JVM 保证线程安全且只执行一次</td><td>静态内部类的懒加载单例就是靠这条保证</td><td><code>ExceptionInInitializerError</code>，常由静态块里读配置失败引起</td></tr>
         </tbody>
     </table>
-    <p><strong>双亲委派</strong>的规则是：收到加载请求先交给父加载器，父加载不了自己才加载。它保证了核心类库不会被应用代码替换掉——你写一个 <code>java.lang.String</code> 放进 classpath 也没用，请求会一路委派到 Bootstrap 拿到真正的 String。但这条规则在三类场景下必须被打破。</p>
+    <p><strong>双亲委派</strong>的规则是：收到加载请求先交给父加载器，父加载不了自己才加载。它保证了核心类库不会被应用代码替换掉——你写一个 <code>java.lang.String</code> 放进 classpath 也没用，请求会一路委派到 Bootstrap 拿到真正的 String。</p>
+<p>但这条规则在三类场景下必须被打破。</p>
     <div class="mermaid">
 flowchart TB
     subgraph L["双亲委派 · 向上委派 向下加载"]
@@ -459,11 +461,15 @@ flowchart TB
     APP -.-> MOD
     APP -.-> HOT
 </div>
-    <p>第三种场景直接关联前面说的元空间泄漏：热部署每次新建加载器，只要旧加载器被任何一个 GC Root 间接持有（最常见的是线程池里的线程、注册了但没注销的监听器、第三方库的静态缓存），它加载的全部类就都卸载不掉，元空间单向上涨。这也是「本地开发反复热部署一会儿就卡死」的真正原因。</p>
+    <p>第三种场景直接关联前面说的元空间泄漏：热部署每次新建加载器，只要旧加载器被任何一个 GC Root 间接持有，它加载的全部类就都卸载不掉，元空间单向上涨。</p>
+<p>（最常见的是线程池里的线程、注册了但没注销的监听器、第三方库的静态缓存）。这也是「本地开发反复热部署一会儿就卡死」的真正原因。</p>
 
     <h2>② 原理 · JIT 编译与预热：为什么刚发布的实例不能满流量</h2>
     <p>搞清这一节能解决一个每次发布都出现、但监控上什么都看不出来的问题：新实例上线那几十秒的超时尖刺。</p>
-    <p>Java 代码先解释执行，同时统计方法调用次数和循环回边次数。达到阈值的方法被 C1 快速编译成机器码，更热的方法进 C2 做深度优化。这套<strong>分层编译</strong>的取舍是：C1 编译快、优化浅，让代码尽早脱离解释执行；C2 编译慢、优化深，只投给真正的热点。C2 的关键优化有两个——<strong>方法内联</strong>把被调方法体直接嵌进调用方，消掉调用开销并为后续优化打开视野（这也是为什么方法体过大会失去内联资格，它有字节码大小限制）；<strong>逃逸分析</strong>判定一个对象是否只在方法内部使用，如果不逃逸就可以做标量替换、把字段拆成局部变量放在栈上，对象根本不会在堆里出现，也就不产生任何 GC 压力。</p>
+    <p>Java 代码先解释执行，同时统计方法调用次数和循环回边次数。达到阈值的方法被 C1 快速编译成机器码，更热的方法进 C2 做深度优化。</p>
+<p>这套<strong>分层编译</strong>的取舍是：C1 编译快、优化浅，让代码尽早脱离解释执行；C2 编译慢、优化深，只投给真正的热点。</p>
+<p>C2 的关键优化有两个——<strong>方法内联</strong>把被调方法体直接嵌进调用方，消掉调用开销并为后续优化打开视野（这也是为什么方法体过大会失去内联资格，它有字节码大小限制）。</p>
+<p><strong>逃逸分析</strong>判定一个对象是否只在方法内部使用，如果不逃逸就可以做标量替换、把字段拆成局部变量放在栈上，对象根本不会在堆里出现，也就不产生任何 GC 压力。</p>
     <pre><code class="language-bash"># 观察预热过程：看类加载与编译到底花在哪
 # 1) 打印每个类由哪个加载器从哪个来源加载，排查 jar 冲突与重复加载
 java -Xlog:class+load=info:file=/tmp/classload.log -jar app.jar
@@ -519,7 +525,10 @@ jcmd &lt;pid&gt; Compiler.codecache</code></pre>
             <tr><td>认为「JVM 内存模型」就是内存分区</td><td>JMM 讨论的是多线程可见性与重排序，与运行时数据区是两件事</td><td>说清是哪一个，避免沟通时互相误解</td></tr>
         </tbody>
     </table>
-    <p><strong>不适用边界</strong>：这篇只讲机制与现场取证。<strong>具体该选哪个收集器、生产参数模板怎么组织、OOM 三类怎么逐步收敛</strong>在 <a href="jvm-tuning/">JVM 调优实战</a>；对象为什么被框架长期持有（单例 bean 持有请求级数据、代理对象链、事务未提交撑大会话）在 <a href="spring-core/">Spring 核心机制</a>；一次查询把百万行捞进内存是堆 OOM 最常见的业务成因，属于持久化层的问题，见 <a href="orm/">JPA 持久化上下文与 MyBatis 选型</a>；容器内存 limit、<code>OOMKilled</code> 与驱逐的现场判定在 <a href="../../devops/kubernetes/ops-troubleshooting/">Kubernetes 运维排障</a>；GC 与内存指标怎么采集、告警怎么配在 <a href="../../observability/metrics/">指标与监控</a>；<code>volatile</code> 与 happens-before 属于 JMM，不在本篇范围。</p>
+    <p><strong>不适用边界</strong>：这篇只讲机制与现场取证。<strong>具体该选哪个收集器、生产参数模板怎么组织、OOM 三类怎么逐步收敛</strong>在 <a href="jvm-tuning/">JVM 调优实战</a>；</p>
+<p>对象为什么被框架长期持有（单例 bean 持有请求级数据、代理对象链、事务未提交撑大会话）在 <a href="spring-core/">Spring 核心机制</a>；</p>
+<p>一次查询把百万行捞进内存是堆 OOM 最常见的业务成因，属于持久化层的问题，见 <a href="orm/">JPA 持久化上下文与 MyBatis 选型</a>；</p>
+<p>容器内存 limit、<code>OOMKilled</code> 与驱逐的现场判定在 <a href="../../devops/kubernetes/ops-troubleshooting/">Kubernetes 运维排障</a>；GC 与内存指标怎么采集、告警怎么配在 <a href="../../observability/metrics/">指标与监控</a>；<code>volatile</code> 与 happens-before 属于 JMM，不在本篇范围。</p>
     <p>这篇是 Java 簇的第一篇，它提供的是后面所有篇目共用的词汇表：没有「区域、晋升、安全点、加载器」这几个概念，下一篇的参数就只能靠背。</p>
 
     <p class="cluster-nav">同主题路径：<a href="jvm-tuning/">下一步：JVM 调优实战：GC 选型、参数配置与 OOM 排查 →</a></p>
