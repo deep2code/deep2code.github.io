@@ -89,7 +89,10 @@
             <span class="meta-item">🏷️ Node.js</span>
         </div>
     </header>
-    <p>Node.js 在后端的位置其实很清楚：它把「高并发 IO」做到了极致，同时把「CPU 密集」彻底交了出去。所以真正值得花时间搞明白的不是它为什么快，而是它的硬约束在哪、什么业务碰上去会出事。事件循环六个阶段的调度细节请看 <a href="event-loop/">Node.js 事件循环</a>，这篇只留一句结论：<strong>整个进程里只有一个线程在执行你的 JavaScript，事件循环是一个不断取出就绪 IO 事件并执行回调的循环，任何在回调里长时间不返回的代码都会让这个循环停摆。</strong>本文接下来的阻塞清单、进程模型、内存上限、错误处理、可观测性指标，全部是从这一句话推导出来的工程后果。</p>
+    <p>Node.js 在后端的位置其实很清楚：它把「高并发 IO」做到了极致，同时把「CPU 密集」彻底交了出去。所以真正值得花时间搞明白的不是它为什么快，而是它的硬约束在哪、什么业务碰上去会出事。</p>
+<p>事件循环六个阶段的调度细节请看 <a href="event-loop/">Node.js 事件循环</a>，这篇只留一句结论。</p>
+<p><strong>整个进程里只有一个线程在执行你的 JavaScript，事件循环是一个不断取出就绪 IO 事件并执行回调的循环，任何在回调里长时间不返回的代码都会让这个循环停摆。</strong></p>
+<p>本文接下来的阻塞清单、进程模型、内存上限、错误处理、可观测性指标，全部是从这一句话推导出来的工程后果。</p>
 
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
@@ -239,7 +242,8 @@ sequenceDiagram
     EL-->>C1: 报表请求自己反而成功返回
     Note over C1,C2: 诊断特征是错误率飙升 但整机 CPU 只有单核跑满<br/>8 核机器上整机使用率仅约 12% 看着非常闲
     </div>
-    <p>请记住这个特征组合：<strong>错误率飙升、整机 CPU 使用率很低、单核 100%、慢日志里只有一两条慢请求但所有请求延迟都涨。</strong>只看 CPU 使用率和 QPS 的监控面板对这类故障是瞎的，必须看事件循环延迟（后面给采集代码）。三种拆解方式的取舍如下：</p>
+    <p>请记住这个特征组合：<strong>错误率飙升、整机 CPU 使用率很低、单核 100%、慢日志里只有一两条慢请求但所有请求延迟都涨。</strong></p>
+<p>只看 CPU 使用率和 QPS 的监控面板对这类故障是瞎的，必须看事件循环延迟（后面给采集代码）。三种拆解方式的取舍如下：</p>
     <table>
         <thead>
             <tr><th>方案</th><th>做法</th><th>适用的计算量级</th><th>代价与失效点</th></tr>
@@ -279,7 +283,8 @@ sequenceDiagram
     <p>搞清这一节能解决那个最讨厌的现象：容器被杀了，退出码 137，但应用日志里一行异常都没有。</p>
     <p>V8 的老生代堆有硬上限。Node 12 之前 64 位下默认约 1.5GB；Node 12 之后改成按可用内存推算，但<strong>在容器里它读到的是宿主机内存，不是 cgroup limit</strong>，所以生产环境必须显式指定 <code>--max-old-space-size</code>（单位 MB）。</p>
 <p>这和 JVM 早年不感知容器内存是一模一样的坑，后果也一样：被 OOMKilled，退出码 137，日志里连一条 <code>JavaScript heap out of memory</code> 都没有。</p>
-    <p>关键是别把堆上限设成等于 limit。<strong>RSS 等于老生代堆 加 新生代两个 semi-space 加 代码与元数据 加 堆外内存（Buffer、原生模块、TLS 会话、zlib 缓冲）。</strong>Buffer 完全不在老生代里，一个大量转发文件的服务堆外可能比堆还大。经验配比是堆上限取 limit 的 65%-75%：limit 512Mi 配 320、1Gi 配 700、2Gi 配 1400、4Gi 配 2800。</p>
+    <p>关键是别把堆上限设成等于 limit。<strong>RSS 等于老生代堆 加 新生代两个 semi-space 加 代码与元数据 加 堆外内存（Buffer、原生模块、TLS 会话、zlib 缓冲）。</strong></p>
+<p>Buffer 完全不在老生代里，一个大量转发文件的服务堆外可能比堆还大。经验配比是堆上限取 limit 的 65%-75%：limit 512Mi 配 320、1Gi 配 700、2Gi 配 1400、4Gi 配 2800。</p>
     <pre><code class="language-bash"># 容器 limit 为 2Gi 时的典型启动参数
 node --max-old-space-size=1400 \
      --max-semi-space-size=32 \
@@ -382,11 +387,13 @@ server.listen(8080, function () { ready = true; });</code></pre>
             <tr><td>包入口声明不全</td><td>某些打包器解析到错误入口或直接找不到子路径</td><td><code>package.json</code> 里同时写 <code>exports</code> 条件导出与 <code>main</code> 兜底</td><td>只写 exports 会断掉老打包器；只写 main 无法区分 import 与 require</td></tr>
         </tbody>
     </table>
-    <p>选型上的实际影响：<strong>如果项目还在 CJS 且 Node 版本低于 22.12，引入一个纯 ESM 库的成本可能是整条构建链改造</strong>，评估依赖时先看它的 <code>exports</code> 字段再决定。新项目直接上 ESM 加 Node 22 LTS，除非你要用重装饰器的框架。模块格式与编译产物的配合方式见 <a href="typescript/">TypeScript 工程化</a>。</p>
+    <p>选型上的实际影响：<strong>如果项目还在 CJS 且 Node 版本低于 22.12，引入一个纯 ESM 库的成本可能是整条构建链改造</strong>，评估依赖时先看它的 <code>exports</code> 字段再决定。</p>
+<p>新项目直接上 ESM 加 Node 22 LTS，除非你要用重装饰器的框架。模块格式与编译产物的配合方式见 <a href="typescript/">TypeScript 工程化</a>。</p>
 
     <h2>② 原理 · 可观测性：事件循环延迟才是核心健康指标</h2>
     <p>搞清这一节能解决那个致命的盲区：面板全绿、CPU 很闲，用户却在报超时。</p>
-    <p>如果一个 Node 服务只允许加一个指标，那就是事件循环延迟。理由前面已经给了：单线程跑满一个核，在 8 核机器上整机 CPU 使用率只有 12%，任何基于 CPU 使用率的告警都不会响，而此时所有请求已经在排队。<code>perf_hooks</code> 的 <code>monitorEventLoopDelay</code> 基于 libuv 定时器采样，开销极低，可以常开。</p>
+    <p>如果一个 Node 服务只允许加一个指标，那就是事件循环延迟。理由前面已经给了：单线程跑满一个核，在 8 核机器上整机 CPU 使用率只有 12%，任何基于 CPU 使用率的告警都不会响，而此时所有请求已经在排队。</p>
+<p><code>perf_hooks</code> 的 <code>monitorEventLoopDelay</code> 基于 libuv 定时器采样，开销极低，可以常开。</p>
     <pre><code class="language-javascript">// 事件循环延迟加内存的最小可用采集，接到你的 metrics 上报即可
 const { monitorEventLoopDelay } = require('node:perf_hooks');
 
@@ -430,7 +437,9 @@ stateDiagram-v2
 
     <h2>③ 场景 · 什么场景 Node 是最优解，什么场景根本不该选</h2>
     <p>前面几节是逐条约束，这里收拢成按业务形态的判断：给方案、给理由、也给代价。</p>
-    <p><strong>Node 最优的场景</strong>都有同一个特征：请求耗时的绝大部分花在等下游，业务自身几乎不算东西。典型是 API 网关与聚合层（一个请求扇出 10 个下游再拼装，全程并发等待，线程模型在这里反而笨重）、BFF（同时还吃「前后端同栈、类型定义共享」的红利）、实时推送（几万长连接每连接内存开销极小）、SSR 与中小项目全栈开发（招人与迭代速度都占优）、以及 Serverless（启动在 50-200ms 量级，比 JVM 冷启动有量级优势）。</p>
+    <p><strong>Node 最优的场景</strong>都有同一个特征：请求耗时的绝大部分花在等下游，业务自身几乎不算东西。</p>
+<p>典型是 API 网关与聚合层（一个请求扇出 10 个下游再拼装，全程并发等待，线程模型在这里反而笨重）、BFF（同时还吃「前后端同栈、类型定义共享」的红利）。</p>
+<p>实时推送（几万长连接每连接内存开销极小）、SSR 与中小项目全栈开发（招人与迭代速度都占优）、以及 Serverless（启动在 50-200ms 量级，比 JVM 冷启动有量级优势）。</p>
     <p><strong>不该选的场景</strong>同样清楚：CPU 密集型处理（图像视频、批量加解密、复杂报表、模型推理）；</p>
 <p>需要强类型与成熟并发原语的核心领域逻辑（TypeScript 只在编译期存在，运行时拿到的仍是任意 JSON，跨进程边界必须自己做运行时校验，见 <a href="typescript/">TypeScript 工程化</a>）；</p>
 <p>重度依赖 JVM 或 Go 生态中间件的系统（客户端 SDK 成熟度差距是真实存在的）；以及团队没有 JS 工程能力——最后这条比前三条都致命，技术栈很少是瓶颈，人才是。</p>
