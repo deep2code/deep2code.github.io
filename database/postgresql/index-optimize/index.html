@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="索引三段式：先给拿到一条慢 SQL 之后的判读顺序，EXPLAIN 加 ANALYZE 与 BUFFERS 只看三处（rows 与 actual rows 的比值、loops、Buffers 与 temp），再给「查询形态 → 索引类型」对照表和影响索引选择的参数速查；然后展开 B-tree、GIN、GiST、BRIN 各自的操作符类与失效条件、部分索引与表达式索引与 INCLUDE 的前提、四种扫描方式与 Bitmap 的两步结构、三种 join 与 work_mem 的分配单位、优化器不走索引的九种成因与修法、索引运维巡检 SQL；最后给按业务形态选索引组合的代价矩阵与不适用边界。">
+        <meta name="description" content="PG 索引选型与执行计划判读：B-tree/GIN/BRIN/Hash/GiST 的适用形态、部分索引、EXPLAIN ANALYZE BUFFERS 读法。">
     <meta name="keywords" content="索引原理,PostgreSQL,关系数据库,PostgreSQL">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/postgresql/index-optimize/">
     <!-- Open Graph -->
     <meta property="og:title" content="PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN - 资深码农">
-    <meta property="og:description" content="索引三段式：先给拿到一条慢 SQL 之后的判读顺序，EXPLAIN 加 ANALYZE 与 BUFFERS 只看三处（rows 与 actual rows 的比值、loops、Buffers 与 temp），再给「查询形态 → 索引类型」对照表和影响索引选择的参数速查；然后展开 B-tree、GIN、GiST、BRIN 各自的操作符类与失效条件、部分索引与表达式索引与 INCLUDE 的前提、四种扫描方式与 Bitmap 的两步结构、三种 join 与 work_mem 的分配单位、优化器不走索引的九种成因与修法、索引运维巡检 SQL；最后给按业务形态选索引组合的代价矩阵与不适用边界。">
+    <meta property="og:description" content="PG 索引选型与执行计划判读：B-tree/GIN/BRIN/Hash/GiST 的适用形态、部分索引、EXPLAIN ANALYZE BUFFERS 读法。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/postgresql/index-optimize/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN - 资深码农">
-    <meta name="twitter:description" content="索引三段式：先给拿到一条慢 SQL 之后的判读顺序，EXPLAIN 加 ANALYZE 与 BUFFERS 只看三处（rows 与 actual rows 的比值、loops、Buffers 与 temp），再给「查询形态 → 索引类型」对照表和影响索引选择的参数速查；然后展开 B-tree、GIN、GiST、BRIN 各自的操作符类与失效条件、部分索引与表达式索引与 INCLUDE 的前提、四种扫描方式与 Bitmap 的两步结构、三种 join 与 work_mem 的分配单位、优化器不走索引的九种成因与修法、索引运维巡检 SQL；最后给按业务形态选索引组合的代价矩阵与不适用边界。">
+    <meta name="twitter:description" content="PG 索引选型与执行计划判读：B-tree/GIN/BRIN/Hash/GiST 的适用形态、部分索引、EXPLAIN ANALYZE BUFFERS 读法。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="PostgreSQL,关系数据库">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"索引三段式：先给拿到一条慢 SQL 之后的判读顺序，EXPLAIN 加 ANALYZE 与 BUFFERS 只看三处（rows 与 actual rows 的比值、loops、Buffers 与 temp），再给「查询形态 → 索引类型」对照表和影响索引选择的参数速查；然后展开 B-tree、GIN、GiST、BRIN 各自的操作符类与失效条件、部分索引与表达式索引与 INCLUDE 的前提、四种扫描方式与 Bitmap 的两步结构、三种 join 与 work_mem 的分配单位、优化器不走索引的九种成因与修法、索引运维巡检 SQL；最后给按业务形态选索引组合的代价矩阵与不适用边界。","url":"https://www.yijunjun.asia/database/postgresql/index-optimize/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/index-optimize/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"PG 索引选型与执行计划判读：B-tree/GIN/BRIN/Hash/GiST 的适用形态、部分索引、EXPLAIN ANALYZE BUFFERS 读法。","url":"https://www.yijunjun.asia/database/postgresql/index-optimize/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/index-optimize/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "索引原理", "item": "https://www.yijunjun.asia/database/postgresql/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

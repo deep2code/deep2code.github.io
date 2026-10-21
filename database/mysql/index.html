@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="MySQL 三段式：先给慢查询与锁等待两条排查路径的命令序列（EXPLAIN ANALYZE 逐行判读、performance_schema 看谁在等谁、死锁现场从哪捞）、现象到判定依据的对照表与必调参数速查（每行写不调的现象），再讲 InnoDB 三层结构、B+树树高推演、聚簇索引与回表、Buffer Pool 分段 LRU、redo/undo/binlog 两阶段提交、MVCC 可见性判定、Next-Key 加锁范围与死锁复盘、EXPLAIN 与索引失效矩阵，最后给深分页两种改法与按场景的旋钮与代价。">
+        <meta name="description" content="InnoDB 磁盘页布局、聚簇索引与回表、Change Buffer、MVCC 与 Read View、Next-Key Lock 与死锁推演。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/mysql/">
     <!-- Open Graph -->
     <meta property="og:title" content="MySQL 深度原理：B+树、MVCC、加锁范围 - 资深码农">
-    <meta property="og:description" content="MySQL 三段式：先给慢查询与锁等待两条排查路径的命令序列（EXPLAIN ANALYZE 逐行判读、performance_schema 看谁在等谁、死锁现场从哪捞）、现象到判定依据的对照表与必调参数速查（每行写不调的现象），再讲 InnoDB 三层结构、B+树树高推演、聚簇索引与回表、Buffer Pool 分段 LRU、redo/undo/binlog 两阶段提交、MVCC 可见性判定、Next-Key 加锁范围与死锁复盘、EXPLAIN 与索引失效矩阵，最后给深分页两种改法与按场景的旋钮与代价。">
+    <meta property="og:description" content="InnoDB 磁盘页布局、聚簇索引与回表、Change Buffer、MVCC 与 Read View、Next-Key Lock 与死锁推演。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/mysql/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="MySQL 深度原理：B+树、MVCC、加锁范围">
-    <meta name="twitter:description" content="MySQL 三段式：先给慢查询与锁等待两条排查路径的命令序列（EXPLAIN ANALYZE 逐行判读、performance_schema 看谁在等谁、死锁现场从哪捞）、现象到判定依据的对照表与必调参数速查（每行写不调的现象），再讲 InnoDB 三层结构、B+树树高推演、聚簇索引与回表、Buffer Pool 分段 LRU、redo/undo/binlog 两阶段提交、MVCC 可见性判定、Next-Key 加锁范围与死锁复盘、EXPLAIN 与索引失效矩阵，最后给深分页两种改法与按场景的旋钮与代价。">
+    <meta name="twitter:description" content="InnoDB 磁盘页布局、聚簇索引与回表、Change Buffer、MVCC 与 Read View、Next-Key Lock 与死锁推演。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="数据库与缓存">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"MySQL 深度原理：B+树、事务、MVCC","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"MySQL 三段式：先给慢查询与锁等待两条排查路径的命令序列（EXPLAIN ANALYZE 逐行判读、performance_schema 看谁在等谁、死锁现场从哪捞）、现象到判定依据的对照表与必调参数速查（每行写不调的现象），再讲 InnoDB 三层结构、B+树树高推演、聚簇索引与回表、Buffer Pool 分段 LRU、redo/undo/binlog 两阶段提交、MVCC 可见性判定、Next-Key 加锁范围与死锁复盘、EXPLAIN 与索引失效矩阵，最后给深分页两种改法与按场景的旋钮与代价。","url":"https://www.yijunjun.asia/database/mysql/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/mysql/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"MySQL 深度原理：B+树、事务、MVCC","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"InnoDB 磁盘页布局、聚簇索引与回表、Change Buffer、MVCC 与 Read View、Next-Key Lock 与死锁推演。","url":"https://www.yijunjun.asia/database/mysql/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/mysql/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "MySQL", "item": "https://www.yijunjun.asia/database/mysql/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">

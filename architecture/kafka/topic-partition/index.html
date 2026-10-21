@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Kafka 分区设计三段式：先给定分区数的四步（含实测单分区吞吐的命令）、选分区键的三问判断图、验证倾斜的三条命令与 topic 级配置速查；再讲分区数决定的四件事与句柄、生产端批次缓冲、选举耗时三重上限，扩分区为什么当场打断 key 顺序，粘性分区器在 2.4 的变化与热点 key 加盐的 Partitioner 写法，倾斜的五个判定信号、顺序性四个层级的代价、RF 与 min.insync.replicas 的组合约束、机架感知、compact 与墓碑语义；最后给从需求反推分区参数的决策矩阵与存量主题扩分区、重分配的代价对照。">
+        <meta name="description" content="Kafka 分区设计：分区数与分区键怎么定、上限从哪来、扩分区为何打断顺序，以及 compact 与 delete 的语义差异。">
     <meta name="keywords" content="Kafka分区,副本机制,ISR,Leader选举,日志段,HW,LEO">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/topic-partition/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kafka 分区设计：分区数、分区键与顺序性代价 - 资深码农">
-    <meta property="og:description" content="Kafka 分区设计三段式：先给定分区数的四步（含实测单分区吞吐的命令）、选分区键的三问判断图、验证倾斜的三条命令与 topic 级配置速查；再讲分区数决定的四件事与句柄、生产端批次缓冲、选举耗时三重上限，扩分区为什么当场打断 key 顺序，粘性分区器在 2.4 的变化与热点 key 加盐的 Partitioner 写法，倾斜的五个判定信号、顺序性四个层级的代价、RF 与 min.insync.replicas 的组合约束、机架感知、compact 与墓碑语义；最后给从需求反推分区参数的决策矩阵与存量主题扩分区、重分配的代价对照。">
+    <meta property="og:description" content="Kafka 分区设计：分区数与分区键怎么定、上限从哪来、扩分区为何打断顺序，以及 compact 与 delete 的语义差异。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/topic-partition/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kafka 分区设计：分区数、分区键与顺序性代价 - 资深码农">
-    <meta name="twitter:description" content="Kafka 分区设计三段式：先给定分区数的四步（含实测单分区吞吐的命令）、选分区键的三问判断图、验证倾斜的三条命令与 topic 级配置速查；再讲分区数决定的四件事与句柄、生产端批次缓冲、选举耗时三重上限，扩分区为什么当场打断 key 顺序，粘性分区器在 2.4 的变化与热点 key 加盐的 Partitioner 写法，倾斜的五个判定信号、顺序性四个层级的代价、RF 与 min.insync.replicas 的组合约束、机架感知、compact 与墓碑语义；最后给从需求反推分区参数的决策矩阵与存量主题扩分区、重分配的代价对照。">
+    <meta name="twitter:description" content="Kafka 分区设计：分区数与分区键怎么定、上限从哪来、扩分区为何打断顺序，以及 compact 与 delete 的语义差异。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="架构与分布式">
     <meta property="article:tag" content="Kafka,分区,副本,存储引擎">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 分区设计：分区数、分区键与顺序性代价","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 分区设计三段式：先给定分区数的四步（含实测单分区吞吐的命令）、选分区键的三问判断图、验证倾斜的三条命令与 topic 级配置速查；再讲分区数决定的四件事与句柄、生产端批次缓冲、选举耗时三重上限，扩分区为什么当场打断 key 顺序，粘性分区器在 2.4 的变化与热点 key 加盐的 Partitioner 写法，倾斜的五个判定信号、顺序性四个层级的代价、RF 与 min.insync.replicas 的组合约束、机架感知、compact 与墓碑语义；最后给从需求反推分区参数的决策矩阵与存量主题扩分区、重分配的代价对照。","url":"https://www.yijunjun.asia/architecture/kafka/topic-partition/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/topic-partition/"},"articleSection":"后端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 分区设计：分区数、分区键与顺序性代价","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 分区设计：分区数与分区键怎么定、上限从哪来、扩分区为何打断顺序，以及 compact 与 delete 的语义差异。","url":"https://www.yijunjun.asia/architecture/kafka/topic-partition/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/topic-partition/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "Kafka 分区与副本", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

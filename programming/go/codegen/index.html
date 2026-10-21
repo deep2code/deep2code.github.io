@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 不给宏，于是给了 go generate 这个统一入口。本文按用法、原理、场景三段组织：先给落地定式——go:generate 指令的三条硬规则、用 go.mod 的 tool 指令锁死生成器版本、一份在 CI 里重跑生成并检查 git diff 为空的脚本，外加常见生成器用途对照表与 go generate 旗标速查；再讲 stringer 生成的代码里那个空函数为什么是编译期断言、它抓得到什么抓不到什么、四种元编程手段各自的边界、工程规范背后的机制、go:embed 与生成器的分工；最后给「什么时候生成、什么时候别生成」的决策矩阵。">
+        <meta name="description" content="Go 代码生成：语言为何需要生成器、sqlc 的可预测性、stringer 与 JSON 的不对称、工具版本锁定与 go:embed。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/codegen/">
     <!-- Open Graph -->
     <meta property="og:title" content="代码生成与 go:generate 工程实践 - 资深码农">
-    <meta property="og:description" content="Go 不给宏，于是给了 go generate 这个统一入口。本文按用法、原理、场景三段组织：先给落地定式——go:generate 指令的三条硬规则、用 go.mod 的 tool 指令锁死生成器版本、一份在 CI 里重跑生成并检查 git diff 为空的脚本，外加常见生成器用途对照表与 go generate 旗标速查；再讲 stringer 生成的代码里那个空函数为什么是编译期断言、它抓得到什么抓不到什么、四种元编程手段各自的边界、工程规范背后的机制、go:embed 与生成器的分工；最后给「什么时候生成、什么时候别生成」的决策矩阵。">
+    <meta property="og:description" content="Go 代码生成：语言为何需要生成器、sqlc 的可预测性、stringer 与 JSON 的不对称、工具版本锁定与 go:embed。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/codegen/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="代码生成与 go:generate 工程实践 - 资深码农">
-    <meta name="twitter:description" content="Go 不给宏，于是给了 go generate 这个统一入口。本文按用法、原理、场景三段组织：先给落地定式——go:generate 指令的三条硬规则、用 go.mod 的 tool 指令锁死生成器版本、一份在 CI 里重跑生成并检查 git diff 为空的脚本，外加常见生成器用途对照表与 go generate 旗标速查；再讲 stringer 生成的代码里那个空函数为什么是编译期断言、它抓得到什么抓不到什么、四种元编程手段各自的边界、工程规范背后的机制、go:embed 与生成器的分工；最后给「什么时候生成、什么时候别生成」的决策矩阵。">
+    <meta name="twitter:description" content="Go 代码生成：语言为何需要生成器、sqlc 的可预测性、stringer 与 JSON 的不对称、工具版本锁定与 go:embed。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "代码生成与 go:generate 工程实践", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 不给宏，于是给了 go generate 这个统一入口。本文按用法、原理、场景三段组织：先给落地定式——go:generate 指令的三条硬规则、用 go.mod 的 tool 指令锁死生成器版本、一份在 CI 里重跑生成并检查 git diff 为空的脚本，外加常见生成器用途对照表与 go generate 旗标速查；再讲 stringer 生成的代码里那个空函数为什么是编译期断言、它抓得到什么抓不到什么、四种元编程手段各自的边界、工程规范背后的机制、go:embed 与生成器的分工；最后给「什么时候生成、什么时候别生成」的决策矩阵。", "url": "https://www.yijunjun.asia/programming/go/codegen/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/codegen/"}, "articleSection": "后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "代码生成与 go:generate 工程实践", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 代码生成：语言为何需要生成器、sqlc 的可预测性、stringer 与 JSON 的不对称、工具版本锁定与 go:embed。", "url": "https://www.yijunjun.asia/programming/go/codegen/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/codegen/"}, "articleSection": "后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go Stringer", "item": "https://www.yijunjun.asia/programming/go/codegen/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

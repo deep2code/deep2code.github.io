@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Redis 三段式：先给出问题时的动手顺序（INFO 只看哪五段、SLOWLOG 阈值先降到多少、--bigkeys 与 MEMORY USAGE 怎么带限速、淘汰与阻塞看哪几个字段），配一张现象到判读标准的对照表和必调配置速查（每行写不调会出现什么现象）；再讲单线程事件循环与 io-threads 边界、底层编码转换阈值、过期删除与近似 LRU 和 LFU 淘汰、RDB fork 停顿与 AOF 丢数据窗口、PSYNC 复制与 backlog 覆盖与脑裂、Cluster 槽位重定向、缓存一致性与分布式锁的正确写法、大 key 与热 key 的判定与治法；最后给部署形态与持久化档位的决策矩阵，以及哪些需求不该交给 Redis。">
+        <meta name="description" content="Redis 机制与排障：单线程与 IO 多线程、编码阈值与内存开销、淘汰与过期、持久化、复制集群、缓存一致性。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/redis/">
     <!-- Open Graph -->
     <meta property="og:title" content="Redis 深度原理：线程模型、淘汰策略、复制与集群 - 资深码农">
-    <meta property="og:description" content="Redis 三段式：先给出问题时的动手顺序（INFO 只看哪五段、SLOWLOG 阈值先降到多少、--bigkeys 与 MEMORY USAGE 怎么带限速、淘汰与阻塞看哪几个字段），配一张现象到判读标准的对照表和必调配置速查（每行写不调会出现什么现象）；再讲单线程事件循环与 io-threads 边界、底层编码转换阈值、过期删除与近似 LRU 和 LFU 淘汰、RDB fork 停顿与 AOF 丢数据窗口、PSYNC 复制与 backlog 覆盖与脑裂、Cluster 槽位重定向、缓存一致性与分布式锁的正确写法、大 key 与热 key 的判定与治法；最后给部署形态与持久化档位的决策矩阵，以及哪些需求不该交给 Redis。">
+    <meta property="og:description" content="Redis 机制与排障：单线程与 IO 多线程、编码阈值与内存开销、淘汰与过期、持久化、复制集群、缓存一致性。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/redis/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Redis 深度原理：线程模型、淘汰策略、复制与集群">
-    <meta name="twitter:description" content="Redis 三段式：先给出问题时的动手顺序（INFO 只看哪五段、SLOWLOG 阈值先降到多少、--bigkeys 与 MEMORY USAGE 怎么带限速、淘汰与阻塞看哪几个字段），配一张现象到判读标准的对照表和必调配置速查（每行写不调会出现什么现象）；再讲单线程事件循环与 io-threads 边界、底层编码转换阈值、过期删除与近似 LRU 和 LFU 淘汰、RDB fork 停顿与 AOF 丢数据窗口、PSYNC 复制与 backlog 覆盖与脑裂、Cluster 槽位重定向、缓存一致性与分布式锁的正确写法、大 key 与热 key 的判定与治法；最后给部署形态与持久化档位的决策矩阵，以及哪些需求不该交给 Redis。">
+    <meta name="twitter:description" content="Redis 机制与排障：单线程与 IO 多线程、编码阈值与内存开销、淘汰与过期、持久化、复制集群、缓存一致性。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="数据库与缓存">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Redis 深度原理：为什么它这么快？","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Redis 三段式：先给出问题时的动手顺序（INFO 只看哪五段、SLOWLOG 阈值先降到多少、--bigkeys 与 MEMORY USAGE 怎么带限速、淘汰与阻塞看哪几个字段），配一张现象到判读标准的对照表和必调配置速查（每行写不调会出现什么现象）；再讲单线程事件循环与 io-threads 边界、底层编码转换阈值、过期删除与近似 LRU 和 LFU 淘汰、RDB fork 停顿与 AOF 丢数据窗口、PSYNC 复制与 backlog 覆盖与脑裂、Cluster 槽位重定向、缓存一致性与分布式锁的正确写法、大 key 与热 key 的判定与治法；最后给部署形态与持久化档位的决策矩阵，以及哪些需求不该交给 Redis。","url":"https://www.yijunjun.asia/database/redis/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/redis/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Redis 深度原理：为什么它这么快？","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Redis 机制与排障：单线程与 IO 多线程、编码阈值与内存开销、淘汰与过期、持久化、复制集群、缓存一致性。","url":"https://www.yijunjun.asia/database/redis/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/redis/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "Redis", "item": "https://www.yijunjun.asia/database/redis/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">

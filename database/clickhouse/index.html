@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="ClickHouse 原理三段式：先给接手一套集群必须先看的几件事——system.parts 看分区与 part 数、system.query_log 找慢查询、EXPLAIN indexes 与 trace 日志看扫了多少 granule，配一张现象到系统表的映射表；再讲列存少读两个数量级、向量化的 block 执行、MergeTree 的 part 一生、稀疏主键索引 8192 行读放大、ORDER BY 与 PARTITION BY 分工、跳数索引边界；最后给需求到方案的决策矩阵与它不该承接的场景。">
+        <meta name="description" content="ClickHouse 深度原理：列存三重收益、向量化执行、MergeTree 与 part 生命周期、稀疏索引、分区与跳数索引。">
     <meta name="keywords" content="ClickHouse,OLAP,列式存储,数据库,数据仓库,日志分析,Kafka,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/clickhouse/">
     <!-- Open Graph -->
     <meta property="og:title" content="ClickHouse 深度原理：列存、向量化与 MergeTree - 资深码农">
-    <meta property="og:description" content="ClickHouse 原理三段式：先给接手一套集群必须先看的几件事——system.parts 看分区与 part 数、system.query_log 找慢查询、EXPLAIN indexes 与 trace 日志看扫了多少 granule，配一张现象到系统表的映射表；再讲列存少读两个数量级、向量化的 block 执行、MergeTree 的 part 一生、稀疏主键索引 8192 行读放大、ORDER BY 与 PARTITION BY 分工、跳数索引边界；最后给需求到方案的决策矩阵与它不该承接的场景。">
+    <meta property="og:description" content="ClickHouse 深度原理：列存三重收益、向量化执行、MergeTree 与 part 生命周期、稀疏索引、分区与跳数索引。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/clickhouse/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="ClickHouse 深度原理：列存、向量化与 MergeTree - 资深码农">
-    <meta name="twitter:description" content="ClickHouse 原理三段式：先给接手一套集群必须先看的几件事——system.parts 看分区与 part 数、system.query_log 找慢查询、EXPLAIN indexes 与 trace 日志看扫了多少 granule，配一张现象到系统表的映射表；再讲列存少读两个数量级、向量化的 block 执行、MergeTree 的 part 一生、稀疏主键索引 8192 行读放大、ORDER BY 与 PARTITION BY 分工、跳数索引边界；最后给需求到方案的决策矩阵与它不该承接的场景。">
+    <meta name="twitter:description" content="ClickHouse 深度原理：列存三重收益、向量化执行、MergeTree 与 part 生命周期、稀疏索引、分区与跳数索引。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="article:author" content="资深码农">
     <meta name="article:section" content="数据库与缓存">
     <meta name="article:tag" content="ClickHouse,OLAP,列式存储">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 深度原理：列存、向量化与 MergeTree","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"ClickHouse 原理三段式：先给接手一套集群必须先看的几件事——system.parts 看分区与 part 数、system.query_log 找慢查询、EXPLAIN indexes 与 trace 日志看扫了多少 granule，配一张现象到系统表的映射表；再讲列存少读两个数量级、向量化的 block 执行、MergeTree 的 part 一生、稀疏主键索引 8192 行读放大、ORDER BY 与 PARTITION BY 分工、跳数索引边界；最后给需求到方案的决策矩阵与它不该承接的场景。","url":"https://www.yijunjun.asia/database/clickhouse/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 深度原理：列存、向量化与 MergeTree","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"ClickHouse 深度原理：列存三重收益、向量化执行、MergeTree 与 part 生命周期、稀疏索引、分区与跳数索引。","url":"https://www.yijunjun.asia/database/clickhouse/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "ClickHouse 总览", "item": "https://www.yijunjun.asia/database/clickhouse/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">

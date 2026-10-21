@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 1.21 的 slices 包用泛型重写了排序与切片操作，比基于反射的 sort.Slice 更快也更简洁。本文讲清两套 API 的取舍、不稳定排序对多级排序与分页的影响、比较函数不满足严格弱序会让结果未定义、slices 各函数是否修改原切片，以及共享底层数组导致 append 覆盖原数据与三索引切法这类真实事故。">
+        <meta name="description" content="Go 排序：slices 与 sort 的反射差异、cmp 函数迁移、严格弱序与不稳定排序、原地操作与切片共享。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/sort/">
     <!-- Open Graph -->
     <meta property="og:title" content="排序与切片操作的现代写法 - 资深码农">
-    <meta property="og:description" content="Go 1.21 的 slices 包用泛型重写了排序与切片操作，比基于反射的 sort.Slice 更快也更简洁。本文讲清两套 API 的取舍、不稳定排序对多级排序与分页的影响、比较函数不满足严格弱序会让结果未定义、slices 各函数是否修改原切片，以及共享底层数组导致 append 覆盖原数据与三索引切法这类真实事故。">
+    <meta property="og:description" content="Go 排序：slices 与 sort 的反射差异、cmp 函数迁移、严格弱序与不稳定排序、原地操作与切片共享。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/sort/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="排序与切片操作的现代写法 - 资深码农">
-    <meta name="twitter:description" content="Go 1.21 的 slices 包用泛型重写了排序与切片操作，比基于反射的 sort.Slice 更快也更简洁。本文讲清两套 API 的取舍、不稳定排序对多级排序与分页的影响、比较函数不满足严格弱序会让结果未定义、slices 各函数是否修改原切片，以及共享底层数组导致 append 覆盖原数据与三索引切法这类真实事故。">
+    <meta name="twitter:description" content="Go 排序：slices 与 sort 的反射差异、cmp 函数迁移、严格弱序与不稳定排序、原地操作与切片共享。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "排序与切片操作的现代写法", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 1.21 的 slices 包用泛型重写了排序与切片操作，比基于反射的 sort.Slice 更快也更简洁。本文讲清两套 API 的取舍、不稳定排序对多级排序与分页的影响、比较函数不满足严格弱序会让结果未定义、slices 各函数是否修改原切片，以及共享底层数组导致 append 覆盖原数据与三索引切法这类真实事故。", "url": "https://www.yijunjun.asia/programming/go/sort/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/sort/"}, "articleSection": "后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "排序与切片操作的现代写法", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 排序：slices 与 sort 的反射差异、cmp 函数迁移、严格弱序与不稳定排序、原地操作与切片共享。", "url": "https://www.yijunjun.asia/programming/go/sort/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/sort/"}, "articleSection": "后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go sort 包", "item": "https://www.yijunjun.asia/programming/go/sort/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

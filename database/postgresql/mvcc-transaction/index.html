@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="并发控制三段式：先给事务的标准动作，显式指定隔离级别、设 lock_timeout 与 statement_timeout、捕获 40001 重试，配一张「要做什么 → 用哪档锁」对照表、一条查当前阻塞链的 SQL 与并发相关参数速查；再讲四个隔离级别实际只有三种行为、PG 的 REPEATABLE READ 为什么报 40001 而不是等锁、SSI 的代价是回滚率而非锁等待、八种表锁的冲突关系、行锁四档与 SKIP LOCKED、一个等锁的 DDL 如何堵死整张表、长事务的四重危害；最后给隔离级别与锁策略的选型矩阵。">
+        <meta name="description" content="PG 并发控制：四档隔离级别的语义差异、SSI 的回滚代价、行锁与 SKIP LOCKED、FIFO 锁队列导致的 DDL 阻塞。">
     <meta name="keywords" content="MVCC 事务隔离,PostgreSQL,关系数据库,PostgreSQL">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/postgresql/mvcc-transaction/">
     <!-- Open Graph -->
     <meta property="og:title" content="PostgreSQL 隔离级别与并发控制：SSI、行锁四档与 DDL 锁队列 - 资深码农">
-    <meta property="og:description" content="并发控制三段式：先给事务的标准动作，显式指定隔离级别、设 lock_timeout 与 statement_timeout、捕获 40001 重试，配一张「要做什么 → 用哪档锁」对照表、一条查当前阻塞链的 SQL 与并发相关参数速查；再讲四个隔离级别实际只有三种行为、PG 的 REPEATABLE READ 为什么报 40001 而不是等锁、SSI 的代价是回滚率而非锁等待、八种表锁的冲突关系、行锁四档与 SKIP LOCKED、一个等锁的 DDL 如何堵死整张表、长事务的四重危害；最后给隔离级别与锁策略的选型矩阵。">
+    <meta property="og:description" content="PG 并发控制：四档隔离级别的语义差异、SSI 的回滚代价、行锁与 SKIP LOCKED、FIFO 锁队列导致的 DDL 阻塞。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/postgresql/mvcc-transaction/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PostgreSQL 隔离级别与并发控制：SSI、行锁四档与 DDL 锁队列 - 资深码农">
-    <meta name="twitter:description" content="并发控制三段式：先给事务的标准动作，显式指定隔离级别、设 lock_timeout 与 statement_timeout、捕获 40001 重试，配一张「要做什么 → 用哪档锁」对照表、一条查当前阻塞链的 SQL 与并发相关参数速查；再讲四个隔离级别实际只有三种行为、PG 的 REPEATABLE READ 为什么报 40001 而不是等锁、SSI 的代价是回滚率而非锁等待、八种表锁的冲突关系、行锁四档与 SKIP LOCKED、一个等锁的 DDL 如何堵死整张表、长事务的四重危害；最后给隔离级别与锁策略的选型矩阵。">
+    <meta name="twitter:description" content="PG 并发控制：四档隔离级别的语义差异、SSI 的回滚代价、行锁与 SKIP LOCKED、FIFO 锁队列导致的 DDL 阻塞。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="PostgreSQL,关系数据库">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 隔离级别与并发控制：SSI、行锁四档与 DDL 锁队列","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"并发控制三段式：先给事务的标准动作，显式指定隔离级别、设 lock_timeout 与 statement_timeout、捕获 40001 重试，配一张「要做什么 → 用哪档锁」对照表、一条查当前阻塞链的 SQL 与并发相关参数速查；再讲四个隔离级别实际只有三种行为、PG 的 REPEATABLE READ 为什么报 40001 而不是等锁、SSI 的代价是回滚率而非锁等待、八种表锁的冲突关系、行锁四档与 SKIP LOCKED、一个等锁的 DDL 如何堵死整张表、长事务的四重危害；最后给隔离级别与锁策略的选型矩阵。","url":"https://www.yijunjun.asia/database/postgresql/mvcc-transaction/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/mvcc-transaction/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 隔离级别与并发控制：SSI、行锁四档与 DDL 锁队列","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"PG 并发控制：四档隔离级别的语义差异、SSI 的回滚代价、行锁与 SKIP LOCKED、FIFO 锁队列导致的 DDL 阻塞。","url":"https://www.yijunjun.asia/database/postgresql/mvcc-transaction/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/mvcc-transaction/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "MVCC 事务隔离", "item": "https://www.yijunjun.asia/database/postgresql/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

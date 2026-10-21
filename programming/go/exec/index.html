@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="os/exec 三段式：先给安全调用外部命令的定式（参数走数组绝不拼字符串、用户参数放到 -- 之后并拒绝连字符开头、Setpgid 加自定义 Cancel 按进程组先 TERM 再 KILL、WaitDelay 收尾宽限期、Env 白名单、输出限长、启动时用 LookPath 预检、退出码与超时的分类函数）与取输出的五种方式对照；再讲它不经过 shell 的执行模型、注入是被主动引入的、管道死锁的真实位置、CommandContext 只杀直接子进程、exec.Error 与 ExitError 的区别、Env 与 PATH 的零值语义；最后给该不该调外部命令的决策矩阵、纯 Go 替代对照与 Windows 差异。">
+        <meta name="description" content="os/exec 正确姿势：不经过 shell 的 argv 语义、参数注入、管道与 Wait 的顺序、超时与 WaitDelay、进程组与输出限长。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/exec/">
     <!-- Open Graph -->
     <meta property="og:title" content="Go 中执行外部命令的正确姿势 - 资深码农">
-    <meta property="og:description" content="os/exec 三段式：先给安全调用外部命令的定式（参数走数组绝不拼字符串、用户参数放到 -- 之后并拒绝连字符开头、Setpgid 加自定义 Cancel 按进程组先 TERM 再 KILL、WaitDelay 收尾宽限期、Env 白名单、输出限长、启动时用 LookPath 预检、退出码与超时的分类函数）与取输出的五种方式对照；再讲它不经过 shell 的执行模型、注入是被主动引入的、管道死锁的真实位置、CommandContext 只杀直接子进程、exec.Error 与 ExitError 的区别、Env 与 PATH 的零值语义；最后给该不该调外部命令的决策矩阵、纯 Go 替代对照与 Windows 差异。">
+    <meta property="og:description" content="os/exec 正确姿势：不经过 shell 的 argv 语义、参数注入、管道与 Wait 的顺序、超时与 WaitDelay、进程组与输出限长。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/exec/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Go 中执行外部命令的正确姿势 - 资深码农">
-    <meta name="twitter:description" content="os/exec 三段式：先给安全调用外部命令的定式（参数走数组绝不拼字符串、用户参数放到 -- 之后并拒绝连字符开头、Setpgid 加自定义 Cancel 按进程组先 TERM 再 KILL、WaitDelay 收尾宽限期、Env 白名单、输出限长、启动时用 LookPath 预检、退出码与超时的分类函数）与取输出的五种方式对照；再讲它不经过 shell 的执行模型、注入是被主动引入的、管道死锁的真实位置、CommandContext 只杀直接子进程、exec.Error 与 ExitError 的区别、Env 与 PATH 的零值语义；最后给该不该调外部命令的决策矩阵、纯 Go 替代对照与 Windows 差异。">
+    <meta name="twitter:description" content="os/exec 正确姿势：不经过 shell 的 argv 语义、参数注入、管道与 Wait 的顺序、超时与 WaitDelay、进程组与输出限长。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 中执行外部命令的正确姿势","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"os/exec 不经过 shell，参数以数组原样交付内核，所以没有通配符展开、管道与重定向语义，这既是它的安全属性也是困惑的根源。本文讲清 Run、Output、CombinedOutput、Start 加 Wait 与 Pipe 五种方式的取舍和真正的死锁位置，CommandContext 只杀直接子进程时如何用 Setpgid、Cancel 与 WaitDelay 收拾进程组，ExitError 与 exec.Error 的退出码判读，Env 与 Dir 的继承语义，PATH 查找与 ErrDot，stdin 流式喂数据、大输出的内存控制，以及 Windows 与类 Unix 的执行模型差异。","url":"https://www.yijunjun.asia/programming/go/exec/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/exec/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 中执行外部命令的正确姿势","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"os/exec 正确姿势：不经过 shell 的 argv 语义、参数注入、管道与 Wait 的顺序、超时与 WaitDelay、进程组与输出限长。","url":"https://www.yijunjun.asia/programming/go/exec/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/exec/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go os/exec", "item": "https://www.yijunjun.asia/programming/go/exec/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

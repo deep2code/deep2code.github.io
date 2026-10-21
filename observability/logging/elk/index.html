@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="日志平台的架构取舍与容量规划：ELK、EFK、ELK 加 Kafka 三种形态的适用规模，为什么中间要加 Kafka（削峰、解耦、Logstash 重启不丢日志）；Filebeat 与 Logstash 的分工，以及用 ES Ingest Pipeline 替代 Logstash 的边界；索引设计才是核心——按天分索引、index template、ILM 的 hot-warm-cold-delete 各阶段、单分片 20 到 50GB 的经验值与分片数创建后不可改这个硬约束；动态映射导致字段爆炸、text 与 keyword 的取舍；查询反模式与容量估算公式；结构化日志、trace_id、脱敏与日志注入风险。">
+        <meta name="description" content="日志平台架构与容量规划：Filebeat 与 Logstash 的分工、按时间分索引、mapping 与 ILM、成本抓手、日志注入与容量估算。">
     <meta name="keywords" content="ELK 日志栈,监控,可观测性,Prometheus,Grafana,监控与可观测性">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/observability/logging/elk/">
     <!-- Open Graph -->
     <meta property="og:title" content="日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM - 资深码农">
-    <meta property="og:description" content="日志平台的架构取舍与容量规划：ELK、EFK、ELK 加 Kafka 三种形态的适用规模，为什么中间要加 Kafka（削峰、解耦、Logstash 重启不丢日志）；Filebeat 与 Logstash 的分工，以及用 ES Ingest Pipeline 替代 Logstash 的边界；索引设计才是核心——按天分索引、index template、ILM 的 hot-warm-cold-delete 各阶段、单分片 20 到 50GB 的经验值与分片数创建后不可改这个硬约束；动态映射导致字段爆炸、text 与 keyword 的取舍；查询反模式与容量估算公式；结构化日志、trace_id、脱敏与日志注入风险。">
+    <meta property="og:description" content="日志平台架构与容量规划：Filebeat 与 Logstash 的分工、按时间分索引、mapping 与 ILM、成本抓手、日志注入与容量估算。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/observability/logging/elk/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM">
-    <meta name="twitter:description" content="日志平台的架构取舍与容量规划：ELK、EFK、ELK 加 Kafka 三种形态的适用规模，为什么中间要加 Kafka（削峰、解耦、Logstash 重启不丢日志）；Filebeat 与 Logstash 的分工，以及用 ES Ingest Pipeline 替代 Logstash 的边界；索引设计才是核心——按天分索引、index template、ILM 的 hot-warm-cold-delete 各阶段、单分片 20 到 50GB 的经验值与分片数创建后不可改这个硬约束；动态映射导致字段爆炸、text 与 keyword 的取舍；查询反模式与容量估算公式；结构化日志、trace_id、脱敏与日志注入风险。">
+    <meta name="twitter:description" content="日志平台架构与容量规划：Filebeat 与 Logstash 的分工、按时间分索引、mapping 与 ILM、成本抓手、日志注入与容量估算。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="可观测性与性能">
     <meta property="article:tag" content="监控,可观测性,Prometheus,Grafana">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"日志平台的架构取舍与容量规划：ELK、EFK、ELK 加 Kafka 三种形态的适用规模，为什么中间要加 Kafka（削峰、解耦、Logstash 重启不丢日志）；Filebeat 与 Logstash 的分工，以及用 ES Ingest Pipeline 替代 Logstash 的边界；索引设计才是核心——按天分索引、index template、ILM 的 hot-warm-cold-delete 各阶段、单分片 20 到 50GB 的经验值与分片数创建后不可改这个硬约束；动态映射导致字段爆炸、text 与 keyword 的取舍；查询反模式与容量估算公式；结构化日志、trace_id、脱敏与日志注入风险。","url":"https://www.yijunjun.asia/observability/logging/elk/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/observability/logging/elk/"},"articleSection":"运维与云原生"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"日志平台架构与容量规划：Filebeat 与 Logstash 的分工、按时间分索引、mapping 与 ILM、成本抓手、日志注入与容量估算。","url":"https://www.yijunjun.asia/observability/logging/elk/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/observability/logging/elk/"},"articleSection":"运维与云原生"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "可观测性与性能", "item": "https://www.yijunjun.asia/observability/"}, {"position": 3, "name": "ELK 日志栈", "item": "https://www.yijunjun.asia/observability/logging/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

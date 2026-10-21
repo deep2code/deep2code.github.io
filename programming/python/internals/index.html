@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="CPython 执行机制三段式：先给量一段代码真实开销的动手顺序（先分清是等 IO 还是烧 CPU、cProfile 与 py-spy 定位函数、dis 带 adaptive 读字节码、timeit 的三处误用与 GC 被关掉的影响、-X importtime 看启动、sys.monitoring 的取舍与工具速查表），再讲 pyc 与 -O 都不是优化、3.11 起自适应专门化的工作方式与去优化条件、属性协议与绑定方法为什么贵、dict 紧凑布局与 list 头部 pop 的隐形二次复杂度、字符串不可变导致的拼接代价与 f-string 的编译期展开、numpy 快在哪三件事，最后给七条加速路线的取舍、free-threaded 构建的真实现状与反模式速查。">
+        <meta name="description" content="CPython 执行机制：字节码与 pyc、自适应专门化、属性查找协议、dict 实现、常见的隐形二次复杂度与 numpy 的边界。">
     <meta name="keywords" content="CPython,字节码,GIL,垃圾回收,引用计数,分代GC,cProfile,py-spy,Numba,Cython">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/python/internals/">
     <!-- Open Graph -->
     <meta property="og:title" content="CPython 实现细节：字节码、解释器与性能特征 - 资深码农">
-    <meta property="og:description" content="CPython 执行机制三段式：先给量一段代码真实开销的动手顺序（先分清是等 IO 还是烧 CPU、cProfile 与 py-spy 定位函数、dis 带 adaptive 读字节码、timeit 的三处误用与 GC 被关掉的影响、-X importtime 看启动、sys.monitoring 的取舍与工具速查表），再讲 pyc 与 -O 都不是优化、3.11 起自适应专门化的工作方式与去优化条件、属性协议与绑定方法为什么贵、dict 紧凑布局与 list 头部 pop 的隐形二次复杂度、字符串不可变导致的拼接代价与 f-string 的编译期展开、numpy 快在哪三件事，最后给七条加速路线的取舍、free-threaded 构建的真实现状与反模式速查。">
+    <meta property="og:description" content="CPython 执行机制：字节码与 pyc、自适应专门化、属性查找协议、dict 实现、常见的隐形二次复杂度与 numpy 的边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/python/internals/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="CPython 实现细节：字节码、解释器与性能特征 - 资深码农">
-    <meta name="twitter:description" content="CPython 执行机制三段式：先给量一段代码真实开销的动手顺序（先分清是等 IO 还是烧 CPU、cProfile 与 py-spy 定位函数、dis 带 adaptive 读字节码、timeit 的三处误用与 GC 被关掉的影响、-X importtime 看启动、sys.monitoring 的取舍与工具速查表），再讲 pyc 与 -O 都不是优化、3.11 起自适应专门化的工作方式与去优化条件、属性协议与绑定方法为什么贵、dict 紧凑布局与 list 头部 pop 的隐形二次复杂度、字符串不可变导致的拼接代价与 f-string 的编译期展开、numpy 快在哪三件事，最后给七条加速路线的取舍、free-threaded 构建的真实现状与反模式速查。">
+    <meta name="twitter:description" content="CPython 执行机制：字节码与 pyc、自适应专门化、属性查找协议、dict 实现、常见的隐形二次复杂度与 numpy 的边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="Python">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"CPython 实现细节：字节码、解释器与性能特征","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"CPython 执行机制三段式：先给量一段代码真实开销的动手顺序（先分清是等 IO 还是烧 CPU、cProfile 与 py-spy 定位函数、dis 带 adaptive 读字节码、timeit 的三处误用与 GC 被关掉的影响、-X importtime 看启动、sys.monitoring 的取舍与工具速查表），再讲 pyc 与 -O 都不是优化、3.11 起自适应专门化的工作方式与去优化条件、属性协议与绑定方法为什么贵、dict 紧凑布局与 list 头部 pop 的隐形二次复杂度、字符串不可变导致的拼接代价与 f-string 的编译期展开、numpy 快在哪三件事，最后给七条加速路线的取舍、free-threaded 构建的真实现状与反模式速查。","url":"https://www.yijunjun.asia/programming/python/internals/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/python/internals/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"CPython 实现细节：字节码、解释器与性能特征","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"CPython 执行机制：字节码与 pyc、自适应专门化、属性查找协议、dict 实现、常见的隐形二次复杂度与 numpy 的边界。","url":"https://www.yijunjun.asia/programming/python/internals/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/python/internals/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "CPython 内部原理与性能优化", "item": "https://www.yijunjun.asia/programming/python/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="查询优化三段式：先给拿到一条慢查询后的判读顺序，先看扫了多少 part 与 granule、再看是否走了主键前缀、再看 PREWHERE 与 JOIN 顺序，配症状到改法的对照表与会话级开关速查；接着讲五级裁剪各砍掉什么、EXPLAIN 与 query_log 判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 没有自动调序、聚合去重的内存账、物化视图与 PROJECTION 的差异；最后给什么时候该停止调 SQL 转而改建模。">
+        <meta name="description" content="ClickHouse 查询优化：以少读 granule 为原则，按判读顺序排查分区裁剪、主键前缀、跳数索引、PREWHERE、JOIN 左右表顺序、GROUP BY 与去重内存账、物化视图与 PROJECTION 预计算，以及何时该停止调 SQL。">
     <meta name="keywords" content="ClickHouse,查询优化,跳数索引,物化视图,Projection,分区裁剪,慢查询,技术博客">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/clickhouse/query-optimization/">
     <!-- Open Graph -->
     <meta property="og:title" content="ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合 - 资深码农">
-    <meta property="og:description" content="查询优化三段式：先给拿到一条慢查询后的判读顺序，先看扫了多少 part 与 granule、再看是否走了主键前缀、再看 PREWHERE 与 JOIN 顺序，配症状到改法的对照表与会话级开关速查；接着讲五级裁剪各砍掉什么、EXPLAIN 与 query_log 判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 没有自动调序、聚合去重的内存账、物化视图与 PROJECTION 的差异；最后给什么时候该停止调 SQL 转而改建模。">
+    <meta property="og:description" content="ClickHouse 查询优化：以少读 granule 为原则，按判读顺序排查分区裁剪、主键前缀、跳数索引、PREWHERE、JOIN 左右表顺序、GROUP BY 与去重内存账、物化视图与 PROJECTION 预计算，以及何时该停止调 SQL。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/clickhouse/query-optimization/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合 - 资深码农">
-    <meta name="twitter:description" content="查询优化三段式：先给拿到一条慢查询后的判读顺序，先看扫了多少 part 与 granule、再看是否走了主键前缀、再看 PREWHERE 与 JOIN 顺序，配症状到改法的对照表与会话级开关速查；接着讲五级裁剪各砍掉什么、EXPLAIN 与 query_log 判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 没有自动调序、聚合去重的内存账、物化视图与 PROJECTION 的差异；最后给什么时候该停止调 SQL 转而改建模。">
+    <meta name="twitter:description" content="ClickHouse 查询优化：以少读 granule 为原则，按判读顺序排查分区裁剪、主键前缀、跳数索引、PREWHERE、JOIN 左右表顺序、GROUP BY 与去重内存账、物化视图与 PROJECTION 预计算，以及何时该停止调 SQL。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="article:author" content="资深码农">
     <meta name="article:section" content="数据库与缓存">
     <meta name="article:tag" content="ClickHouse,查询优化,索引">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"查询优化三段式：先给拿到一条慢查询后的判读顺序，先看扫了多少 part 与 granule、再看是否走了主键前缀、再看 PREWHERE 与 JOIN 顺序，配症状到改法的对照表与会话级开关速查；接着讲五级裁剪各砍掉什么、EXPLAIN 与 query_log 判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 没有自动调序、聚合去重的内存账、物化视图与 PROJECTION 的差异；最后给什么时候该停止调 SQL 转而改建模。","url":"https://www.yijunjun.asia/database/clickhouse/query-optimization/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/query-optimization/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 查询优化：granule 裁剪、PREWHERE、JOIN 与预聚合","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"ClickHouse 查询优化：以少读 granule 为原则，按判读顺序排查分区裁剪、主键前缀、跳数索引、PREWHERE、JOIN 左右表顺序、GROUP BY 与去重内存账、物化视图与 PROJECTION 预计算，以及何时该停止调 SQL。","url":"https://www.yijunjun.asia/database/clickhouse/query-optimization/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/query-optimization/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "ClickHouse 总览", "item": "https://www.yijunjun.asia/database/clickhouse/"}, {"position": 4, "name": "查询优化与分区", "item": "https://www.yijunjun.asia/database/clickhouse/query-optimization/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

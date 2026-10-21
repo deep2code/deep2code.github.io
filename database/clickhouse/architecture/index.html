@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="集群架构三段式：先给搭一套两分片两副本的六步与每步验收，拓扑怎么核、写入走本地表查询走分布式表、副本延迟怎么量、节点挂掉分别会看到什么现象；接着讲分片与副本两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表两阶段聚合什么时候退化、异步转发队列的代价、分布式 join 的三种执行方式、Keeper 与冷热分层；最后给该不该上集群的信号与运维盲区。">
+        <meta name="description" content="ClickHouse 集群架构：分片与副本拓扑、复制队列、Distributed 表的异步转发、join 建模与存算分离的代价。">
     <meta name="keywords" content="ClickHouse,列式存储,向量化执行,MergeTree,OLAP,架构,技术博客">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/clickhouse/architecture/">
     <!-- Open Graph -->
     <meta property="og:title" content="ClickHouse 集群架构：分片、副本与 Distributed 表 - 资深码农">
-    <meta property="og:description" content="集群架构三段式：先给搭一套两分片两副本的六步与每步验收，拓扑怎么核、写入走本地表查询走分布式表、副本延迟怎么量、节点挂掉分别会看到什么现象；接着讲分片与副本两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表两阶段聚合什么时候退化、异步转发队列的代价、分布式 join 的三种执行方式、Keeper 与冷热分层；最后给该不该上集群的信号与运维盲区。">
+    <meta property="og:description" content="ClickHouse 集群架构：分片与副本拓扑、复制队列、Distributed 表的异步转发、join 建模与存算分离的代价。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/clickhouse/architecture/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="ClickHouse 集群架构：分片、副本与 Distributed 表 - 资深码农">
-    <meta name="twitter:description" content="集群架构三段式：先给搭一套两分片两副本的六步与每步验收，拓扑怎么核、写入走本地表查询走分布式表、副本延迟怎么量、节点挂掉分别会看到什么现象；接着讲分片与副本两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表两阶段聚合什么时候退化、异步转发队列的代价、分布式 join 的三种执行方式、Keeper 与冷热分层；最后给该不该上集群的信号与运维盲区。">
+    <meta name="twitter:description" content="ClickHouse 集群架构：分片与副本拓扑、复制队列、Distributed 表的异步转发、join 建模与存算分离的代价。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="article:author" content="资深码农">
     <meta name="article:section" content="数据库与缓存">
     <meta name="article:tag" content="ClickHouse,OLAP,列式存储">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 集群架构：分片、副本与 Distributed 表","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"集群架构三段式：先给搭一套两分片两副本的六步与每步验收，拓扑怎么核、写入走本地表查询走分布式表、副本延迟怎么量、节点挂掉分别会看到什么现象；接着讲分片与副本两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表两阶段聚合什么时候退化、异步转发队列的代价、分布式 join 的三种执行方式、Keeper 与冷热分层；最后给该不该上集群的信号与运维盲区。","url":"https://www.yijunjun.asia/database/clickhouse/architecture/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/architecture/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 集群架构：分片、副本与 Distributed 表","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"ClickHouse 集群架构：分片与副本拓扑、复制队列、Distributed 表的异步转发、join 建模与存算分离的代价。","url":"https://www.yijunjun.asia/database/clickhouse/architecture/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/architecture/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "ClickHouse 总览", "item": "https://www.yijunjun.asia/database/clickhouse/"}, {"position": 4, "name": "ClickHouse 架构与核心特性", "item": "https://www.yijunjun.asia/database/clickhouse/architecture/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

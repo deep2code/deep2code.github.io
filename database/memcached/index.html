@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Memcached 三段式：先给「该用 Memcached 还是 Redis」的七问自查、不该用默认值的启动参数清单，以及 stats 与 stats slabs 与 stats items 三条命令各看哪些字段、怎么判读命中率与钙化；再从 page 与 slab class 与 chunk 与 item 四层讲透内存模型，说清 chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」、1.5 之后的分段 LRU 与 lru_crawler 做了什么、多线程与 Redis 单线程的后果差异、客户端分片在扩缩容时打掉多少命中率、CAS 与 add 的原子性边界、value 上限与 extstore；最后给选型矩阵与「哪些数据放进来就是埋事故」的对照。">
+        <meta name="description" content="Memcached 内存模型：slab 分配与钙化、LRU 分层、惰性过期、CAS、分片拓扑与 auto-eject 的取舍。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/memcached/">
     <!-- Open Graph -->
     <meta property="og:title" content="Memcached 的内存模型与适用边界 - 资深码农">
-    <meta property="og:description" content="Memcached 三段式：先给「该用 Memcached 还是 Redis」的七问自查、不该用默认值的启动参数清单，以及 stats 与 stats slabs 与 stats items 三条命令各看哪些字段、怎么判读命中率与钙化；再从 page 与 slab class 与 chunk 与 item 四层讲透内存模型，说清 chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」、1.5 之后的分段 LRU 与 lru_crawler 做了什么、多线程与 Redis 单线程的后果差异、客户端分片在扩缩容时打掉多少命中率、CAS 与 add 的原子性边界、value 上限与 extstore；最后给选型矩阵与「哪些数据放进来就是埋事故」的对照。">
+    <meta property="og:description" content="Memcached 内存模型：slab 分配与钙化、LRU 分层、惰性过期、CAS、分片拓扑与 auto-eject 的取舍。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/memcached/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Memcached 的内存模型与适用边界 - 资深码农">
-    <meta name="twitter:description" content="Memcached 三段式：先给「该用 Memcached 还是 Redis」的七问自查、不该用默认值的启动参数清单，以及 stats 与 stats slabs 与 stats items 三条命令各看哪些字段、怎么判读命中率与钙化；再从 page 与 slab class 与 chunk 与 item 四层讲透内存模型，说清 chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」、1.5 之后的分段 LRU 与 lru_crawler 做了什么、多线程与 Redis 单线程的后果差异、客户端分片在扩缩容时打掉多少命中率、CAS 与 add 的原子性边界、value 上限与 extstore；最后给选型矩阵与「哪些数据放进来就是埋事故」的对照。">
+    <meta name="twitter:description" content="Memcached 内存模型：slab 分配与钙化、LRU 分层、惰性过期、CAS、分片拓扑与 auto-eject 的取舍。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
     <meta property="article:tag" content="数据库与缓存">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Memcached 的内存模型与适用边界","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Memcached 三段式：先给「该用 Memcached 还是 Redis」的七问自查、不该用默认值的启动参数清单，以及 stats 与 stats slabs 与 stats items 三条命令各看哪些字段、怎么判读命中率与钙化；再从 page 与 slab class 与 chunk 与 item 四层讲透内存模型，说清 chunk 取整浪费与 slab 钙化如何造成「内存没满却在驱逐」、1.5 之后的分段 LRU 与 lru_crawler 做了什么、多线程与 Redis 单线程的后果差异、客户端分片在扩缩容时打掉多少命中率、CAS 与 add 的原子性边界、value 上限与 extstore；最后给选型矩阵与「哪些数据放进来就是埋事故」的对照。","url":"https://www.yijunjun.asia/database/memcached/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/memcached/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Memcached 的内存模型与适用边界","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Memcached 内存模型：slab 分配与钙化、LRU 分层、惰性过期、CAS、分片拓扑与 auto-eject 的取舍。","url":"https://www.yijunjun.asia/database/memcached/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/memcached/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "Memcached", "item": "https://www.yijunjun.asia/database/memcached/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">

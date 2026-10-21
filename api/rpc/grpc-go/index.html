@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 中 gRPC 服务的工程实践按用法、原理、场景三段组织：先给一套最小可用骨架——两个插件的生成命令、一元与流式两条拦截器链都挂 recover、优雅停机的四步顺序、客户端用 status.FromError 判错、bufconn 进程内测试，每项都给验证方法；再讲清 protoc-gen-go 与 protoc-gen-go-grpc 的分工、一次调用穿过的层、ctx 取消的传递边界与 WithoutCancel、error 转 status 的必要性、NewClient 的惰性与 dns 解析器变更、流泄漏排查、GracefulStop 的一直等语义；最后按项目形态给该配到哪一步。">
+        <meta name="description" content="grpc-go 的落地细节：拦截器链、context 取消传播、错误转换、惰性连接与 service config、流式泄漏与 GracefulStop 停机。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/api/rpc/grpc-go/">
     <!-- Open Graph -->
     <meta property="og:title" content="Go 中 gRPC 服务的工程实践 - 资深码农">
-    <meta property="og:description" content="Go 中 gRPC 服务的工程实践按用法、原理、场景三段组织：先给一套最小可用骨架——两个插件的生成命令、一元与流式两条拦截器链都挂 recover、优雅停机的四步顺序、客户端用 status.FromError 判错、bufconn 进程内测试，每项都给验证方法；再讲清 protoc-gen-go 与 protoc-gen-go-grpc 的分工、一次调用穿过的层、ctx 取消的传递边界与 WithoutCancel、error 转 status 的必要性、NewClient 的惰性与 dns 解析器变更、流泄漏排查、GracefulStop 的一直等语义；最后按项目形态给该配到哪一步。">
+    <meta property="og:description" content="grpc-go 的落地细节：拦截器链、context 取消传播、错误转换、惰性连接与 service config、流式泄漏与 GracefulStop 停机。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/rpc/grpc-go/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Go 中 gRPC 服务的工程实践 - 资深码农">
-    <meta name="twitter:description" content="Go 中 gRPC 服务的工程实践按用法、原理、场景三段组织：先给一套最小可用骨架——两个插件的生成命令、一元与流式两条拦截器链都挂 recover、优雅停机的四步顺序、客户端用 status.FromError 判错、bufconn 进程内测试，每项都给验证方法；再讲清 protoc-gen-go 与 protoc-gen-go-grpc 的分工、一次调用穿过的层、ctx 取消的传递边界与 WithoutCancel、error 转 status 的必要性、NewClient 的惰性与 dns 解析器变更、流泄漏排查、GracefulStop 的一直等语义；最后按项目形态给该配到哪一步。">
+    <meta name="twitter:description" content="grpc-go 的落地细节：拦截器链、context 取消传播、错误转换、惰性连接与 service config、流式泄漏与 GracefulStop 停机。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="接口、协议与安全">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 中 gRPC 服务的工程实践","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Go 中 gRPC 服务的工程实践按用法、原理、场景三段组织：先给一套最小可用骨架——两个插件的生成命令、一元与流式两条拦截器链都挂 recover、优雅停机的四步顺序、客户端用 status.FromError 判错、bufconn 进程内测试，每项都给验证方法；再讲清 protoc-gen-go 与 protoc-gen-go-grpc 的分工、一次调用穿过的层、ctx 取消的传递边界与 WithoutCancel、error 转 status 的必要性、NewClient 的惰性与 dns 解析器变更、流泄漏排查、GracefulStop 的一直等语义；最后按项目形态给该配到哪一步。","url":"https://www.yijunjun.asia/api/rpc/grpc-go/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/api/rpc/grpc-go/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 中 gRPC 服务的工程实践","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"grpc-go 的落地细节：拦截器链、context 取消传播、错误转换、惰性连接与 service config、流式泄漏与 GracefulStop 停机。","url":"https://www.yijunjun.asia/api/rpc/grpc-go/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/api/rpc/grpc-go/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "接口、协议与安全", "item": "https://www.yijunjun.asia/api/"}, {"position": 3, "name": "gRPC 2026", "item": "https://www.yijunjun.asia/api/rpc/"}, {"position": 4, "name": "Go gRPC 示例", "item": "https://www.yijunjun.asia/api/rpc/grpc-go/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">

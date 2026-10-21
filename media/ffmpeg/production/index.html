@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="把 ffmpeg 放进服务之后，难点从参数写法变成资源与故障治理。本文讲容量为何按并发数而不是 QPS 规划、-threads 与进程并发的分工、容器里 ffmpeg 看不到 cgroup 配额而被限流、同步转码接口为何是设计错误、从 -progress 拿进度并区分卡住与慢、父进程退出后 ffmpeg 不会自动死的孤儿回收、不可信上传文件的防御性收敛、失败重试的分类、幂等产物 key 的构成，以及成本权衡与该埋的指标。">
+        <meta name="description" content="FFmpeg 服务端转码工程化：并发硬限、任务队列与分片转码条件、进度与超时、孤儿进程、不可信输入隔离、幂等与指标。">
     <meta name="keywords" content="音视频,FFmpeg,编解码,流媒体,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/media/ffmpeg/production/">
     <!-- Open Graph -->
     <meta property="og:title" content="FFmpeg 服务端转码的工程化 - 资深码农">
-    <meta property="og:description" content="把 ffmpeg 放进服务之后，难点从参数写法变成资源与故障治理。本文讲容量为何按并发数而不是 QPS 规划、-threads 与进程并发的分工、容器里 ffmpeg 看不到 cgroup 配额而被限流、同步转码接口为何是设计错误、从 -progress 拿进度并区分卡住与慢、父进程退出后 ffmpeg 不会自动死的孤儿回收、不可信上传文件的防御性收敛、失败重试的分类、幂等产物 key 的构成，以及成本权衡与该埋的指标。">
+    <meta property="og:description" content="FFmpeg 服务端转码工程化：并发硬限、任务队列与分片转码条件、进度与超时、孤儿进程、不可信输入隔离、幂等与指标。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/media/ffmpeg/production/">
     <meta property="og:site_name" content="资深码农">
@@ -39,7 +39,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="FFmpeg 服务端转码的工程化 - 资深码农">
-    <meta name="twitter:description" content="把 ffmpeg 放进服务之后，难点从参数写法变成资源与故障治理。本文讲容量为何按并发数而不是 QPS 规划、-threads 与进程并发的分工、容器里 ffmpeg 看不到 cgroup 配额而被限流、同步转码接口为何是设计错误、从 -progress 拿进度并区分卡住与慢、父进程退出后 ffmpeg 不会自动死的孤儿回收、不可信上传文件的防御性收敛、失败重试的分类、幂等产物 key 的构成，以及成本权衡与该埋的指标。">
+    <meta name="twitter:description" content="FFmpeg 服务端转码工程化：并发硬限、任务队列与分片转码条件、进度与超时、孤儿进程、不可信输入隔离、幂等与指标。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="音视频">
@@ -47,7 +47,7 @@
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "FFmpeg 服务端转码的工程化", "datePublished": "2026-09-19", "dateModified": "2026-09-19", "description": "把 ffmpeg 放进服务之后，难点从参数写法变成资源与故障治理。本文讲容量为何按并发数而不是 QPS 规划、-threads 与进程并发的分工、容器里 ffmpeg 看不到 cgroup 配额而被限流、同步转码接口为何是设计错误、从 -progress 拿进度并区分卡住与慢、父进程退出后 ffmpeg 不会自动死的孤儿回收、不可信上传文件的防御性收敛、失败重试的分类、幂等产物 key 的构成，以及成本权衡与该埋的指标。", "url": "https://www.yijunjun.asia/media/ffmpeg/production/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/media/ffmpeg/production/"}, "articleSection": "音视频"}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "FFmpeg 服务端转码的工程化", "datePublished": "2026-09-19", "dateModified": "2026-09-19", "description": "FFmpeg 服务端转码工程化：并发硬限、任务队列与分片转码条件、进度与超时、孤儿进程、不可信输入隔离、幂等与指标。", "url": "https://www.yijunjun.asia/media/ffmpeg/production/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/media/ffmpeg/production/"}, "articleSection": "音视频"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "音视频", "item": "https://www.yijunjun.asia/media/"}, {"position": 3, "name": "FFmpeg 的命令行模型", "item": "https://www.yijunjun.asia/media/ffmpeg/"}, {"position": 4, "name": "FFmpeg 服务端转码的工程化", "item": "https://www.yijunjun.asia/media/ffmpeg/production/"}]}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "一台机器上同时跑几个 ffmpeg 合适，-threads 要不要显式写？", "acceptedAnswer": {"@type": "Answer", "text": "先定总量再分配：同时运行的进程数乘以每个进程的线程数，应当约等于可用核数。两边都放开是最常见的配置错误，几十个线程抢十几个核，总吞吐反而下降，而且所有任务的完成时间一起被拖长。优化单任务时延就少并发多线程，优化批量吞吐就多并发少线程，因为编码的多线程加速比是次线性的，而多进程之间几乎不互相争抢。-threads 在容器里必须显式写。"}}, {"@type": "Question", "name": "容器只给了两核，为什么 ffmpeg 又慢又不稳定？", "acceptedAnswer": {"@type": "Answer", "text": "因为 ffmpeg 和它依赖的编码库不感知 cgroup 配额，它们通过系统接口看到的是宿主机的核数，于是在一个两核的容器里按几十核去开线程。线程数远超配额，每个调度周期很快用光份额然后被限流，表现就是实时倍速剧烈波动、任务耗时方差很大，而监控上的 CPU 使用率看起来还没到上限。解法是显式把 -threads 以及滤镜线程数设成与配额匹配的值。"}}, {"@type": "Question", "name": "worker 都已经退出了，为什么 ffmpeg 进程还在跑？", "acceptedAnswer": {"@type": "Answer", "text": "ffmpeg 不监控父进程是否存活，父进程退出不会让它死，输出写向文件时更不会自己结束。滚动更新、worker 崩溃、容器主进程退出都可能留下一批继续吃满 CPU 并往存储写垃圾产物的孤儿进程。正确做法是每个任务独立成进程组，清理时对整个进程组发信号；不要用 shell 包一层启动，否则拿到的进程号是 shell 的，杀它根本杀不到 ffmpeg。worker 启动时还要扫一遍残留并清掉。"}}, {"@type": "Question", "name": "怎么区分转码任务是卡住了还是只是慢？", "acceptedAnswer": {"@type": "Answer", "text": "看进度是否推进，而不是看实时倍速高低。倍速很低但已输出时长仍在往前走，是慢，原因通常是分辨率高、预设慢或者 CPU 被限流，杀掉它等于白烧掉已完成的部分。已输出时长在一段时间内完全不变，才是卡住，常见于等网络输入、写目标存储阻塞或解码陷入异常。所以超时要做两个维度：无进展看护超时负责识别卡住，总耗时硬超时只做兜底。"}}, {"@type": "Question", "name": "用户上传的媒体文件要做哪些防御？", "acceptedAnswer": {"@type": "Answer", "text": "把每次转码当成在沙箱里解析不可信数据。入口侧只接受白名单容器格式并显式指定输入格式、限制大小时长分辨率与流条数；能力侧用协议白名单把可达协议收敛掉，镜像里只保留业务需要的解码器；进程侧加地址空间、CPU 时间、输出大小与进程数上限；环境侧根文件系统只读、只挂任务专属临时目录、非 root 运行、出网默认拒绝。内容里带路径或地址的清单类输入风险最高，最好不接受用户提供。"}}, {"@type": "Question", "name": "转码失败该不该重试，怎么判断？", "acceptedAnswer": {"@type": "Answer", "text": "一次重试等于再烧一遍整段 CPU，所以必须先分类。外部瞬时因素可以重试，比如取源超时、连接重置、对象存储的服务端错误与限流、节点被驱逐。确定性失败不要重试，比如输入无法解析、文件截断、编码不支持该输入特性、参数组合非法，重试三次只是把损失乘三。另有一类要走人工复核：产物生成了但体积比或时长明显偏离预期。同时用输入内容摘要加规范化参数摘要做产物 key，重复提交直接复用已有产物。"}}]}</script>
 </head>
