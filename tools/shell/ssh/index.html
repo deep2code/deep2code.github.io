@@ -93,7 +93,8 @@
 <h2 id="layers">SSH 是三层协议，报错落在哪一层决定了排查方向</h2>
 <p>SSH-2 不是一个协议，而是三层叠起来的：<strong>传输层</strong>（RFC 4253）负责算法协商、密钥交换、加密与完整性校验，以及最关键的主机身份验证；<strong>认证层</strong>（RFC 4252）负责证明「你是你」；</p>
 <p><strong>连接层</strong>（RFC 4254）把这一条加密连接切成多路复用的 channel，shell、exec、端口转发、agent 转发都是 channel。</p>
-<p>大部分排查困难来自把三层混着看。<code>no matching host key type found</code> 是传输层的事，去改 <code>authorized_keys</code> 一点用都没有；<code>Permission denied (publickey)</code> 是认证层的事，和加密算法无关；<code>administratively prohibited: open failed</code> 是连接层的事，说明认证早就成功了，是服务端不允许开这个转发 channel。先判层，再动配置，能省掉一大半时间。</p>
+<p>大部分排查困难来自把三层混着看。<code>no matching host key type found</code> 是传输层的事，去改 <code>authorized_keys</code> 一点用都没有；<code>Permission denied (publickey)</code> 是认证层的事，和加密算法无关。</p>
+<p><code>administratively prohibited: open failed</code> 是连接层的事，说明认证早就成功了，是服务端不允许开这个转发 channel。先判层，再动配置，能省掉一大半时间。</p>
 <div class="mermaid">
 flowchart TB
     subgraph T["传输层 RFC 4253"]
@@ -143,7 +144,9 @@ flowchart TB
 <p>密钥交换的产物有两个：会话密钥，以及一个把双方版本串、算法列表、DH 公开值都摘进去的<strong>交换哈希</strong>。</p>
 <p>服务端用自己的主机私钥对这个哈希签名，客户端用服务端出示的主机公钥验签——这一步只能证明「对面持有那把主机私钥」，<strong>不能证明那把主机私钥是你想连的那台机器的</strong>。</p>
 <p>把公钥和主机名绑起来的，只有 <code>known_hosts</code> 这个首次信任（TOFU）数据库，或者 SSH 证书里的 <code>@cert-authority</code> 条目。</p>
-<p>所以 <code>StrictHostKeyChecking no</code> 放弃的不是「一点提示」，而是 SSH 里<strong>唯一的身份锚点</strong>。剩下的只有「对被动监听保密」，对主动中间人完全裸奔：攻击者接管这条会话，你敲的每条命令、看到的每个文件内容、<code>-L</code> 隧道里的数据库流量、以及 <code>-A</code> 转发进去的签名能力，全归它；如果你还在用密码认证，密码直接送到它手上。</p>
+<p>所以 <code>StrictHostKeyChecking no</code> 放弃的不是「一点提示」，而是 SSH 里<strong>唯一的身份锚点</strong>。</p>
+<p>剩下的只有「对被动监听保密」，对主动中间人完全裸奔：攻击者接管这条会话，你敲的每条命令、看到的每个文件内容、<code>-L</code> 隧道里的数据库流量、以及 <code>-A</code> 转发进去的签名能力，全归它。</p>
+<p>如果你还在用密码认证，密码直接送到它手上。</p>
 <p>要纠正一个很常见的说法：「我用的是公钥认证，私钥不外传，所以指纹无所谓」。</p>
 <p>前半句对——私钥确实不离开本地，而且签名内容里绑定了 session id，中间人拿到这个签名<strong>没法转发去骗真正的服务器</strong>，这是 SSH 设计上的一个正确决策。</p>
 <p>但指纹校验保护的是<strong>会话</strong>而不是<strong>私钥</strong>：中间人无法冒充你登录真机，却可以让你登进一台假机器，看假数据、把生产配置敲进它的 shell。这两件事的危害完全不在一个量级上被抵消。</p>
@@ -156,8 +159,10 @@ flowchart TB
 <tr><td><code>no</code> / <code>off</code></td><td>静默接受</td><td>仍然放行，只打印告警</td><td>写入</td><td>没有安全要求的一次性实验环境</td></tr>
 </tbody>
 </table>
-<p><code>no</code> 这一档还有个容易被忽略的细节：当主机密钥确实变了而检查被关掉时，OpenSSH 会保留连接，但同时禁掉一批依赖「服务端可信」的功能（密码与键盘交互认证、agent 转发、X11 与端口转发），于是你会看到一个「能连上但什么都不好使」的诡异状态。这不是 bug，是它在替你兜底。</p>
-<p>正确的工程化做法有三条路：<strong>预置</strong>（用 <code>ssh-keyscan</code> 抓指纹，和服务器上 <code>ssh-keygen -lf</code> 的输出带外核对后，把 <code>known_hosts</code> 当配置文件下发）、<strong>证书化</strong>（服务端配 <code>HostCertificate</code>，客户端 <code>known_hosts</code> 里只放一行 <code>@cert-authority *.example.com</code>，此后扩容再多机器都不需要改客户端）、<strong>只在真正一次性的环境用 <code>accept-new</code></strong>。三条路都不需要 <code>no</code>。</p>
+<p><code>no</code> 这一档还有个容易被忽略的细节：当主机密钥确实变了而检查被关掉时，OpenSSH 会保留连接，但同时禁掉一批依赖「服务端可信」的功能（密码与键盘交互认证、agent 转发、X11 与端口转发）。</p>
+<p>于是你会看到一个「能连上但什么都不好使」的诡异状态。这不是 bug，是它在替你兜底。</p>
+<p>正确的工程化做法有三条路：<strong>预置</strong>（用 <code>ssh-keyscan</code> 抓指纹，和服务器上 <code>ssh-keygen -lf</code> 的输出带外核对后，把 <code>known_hosts</code> 当配置文件下发）、<strong>证书化</strong>（服务端配 <code>HostCertificate</code>，客户端 <code>known_hosts</code> 里只放一行 <code>@cert-authority *.example.com</code>，此后扩容再多机器都不需要改客户端）。</p>
+<p><strong>只在真正一次性的环境用 <code>accept-new</code></strong>。三条路都不需要 <code>no</code>。</p>
 
 <h2 id="pubkey">公钥认证的完整流程：服务端只做验签</h2>
 <p><code>authorized_keys</code> 里放的是公钥，服务端从头到尾不需要、也拿不到你的私钥。流程是两阶段的：客户端先发一个<strong>不带签名</strong>的 publickey 请求，只有算法名和公钥 blob，问「这把钥匙你认不认」；服务端在 <code>authorized_keys</code> 里查到才回 <code>PK_OK</code>；</p>
@@ -338,7 +343,9 @@ UseDNS no                          # 6.8 起默认就是 no；老系统上仍可
 </code></pre>
 
 <h2 id="agent">agent forwarding 的攻击面与更安全的替代</h2>
-<p><code>ForwardAgent yes</code>（<code>-A</code>）会在远端机器上创建一个 unix socket，并把 <code>SSH_AUTH_SOCK</code> 指过去。远端进程通过它请求签名，请求被送回你本地的 agent 完成——私钥确实没有离开本地。问题在于：<strong>「使用私钥的能力」被交出去了</strong>。在连接存续期间，任何能读到这个 socket 的主体（远端 root、同 uid 的其他进程、被入侵的进程）都能让你的 agent 对任意挑战签名，等于临时借走你的身份，横向登录所有信任这把公钥的机器。私钥不泄漏，但横向移动照样成立。</p>
+<p><code>ForwardAgent yes</code>（<code>-A</code>）会在远端机器上创建一个 unix socket，并把 <code>SSH_AUTH_SOCK</code> 指过去。远端进程通过它请求签名，请求被送回你本地的 agent 完成——私钥确实没有离开本地。</p>
+<p>问题在于：<strong>「使用私钥的能力」被交出去了</strong>。在连接存续期间，任何能读到这个 socket 的主体（远端 root、同 uid 的其他进程、被入侵的进程）都能让你的 agent 对任意挑战签名。</p>
+<p>等于临时借走你的身份，横向登录所有信任这把公钥的机器。私钥不泄漏，但横向移动照样成立。</p>
 <p>更要紧的是，绝大多数「我需要 <code>-A</code>」的场景其实不需要它：过跳板机去 <code>git clone</code>、过跳板机连内网机器，用 <code>ProxyJump</code> 就够了，因为认证全在本地完成，跳板机上根本不落 socket。</p>
 <table>
 <thead><tr><th>方案</th><th>远端是否暴露签名能力</th><th>版本要求</th><th>适用场景</th><th>残余风险</th></tr></thead>
