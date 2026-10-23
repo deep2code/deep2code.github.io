@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Drizzle 查询构建：四类查询写法、join 的返回形状、query API 与 N+1、sql 模板与注入防护。">
+    <meta name="description" content="Drizzle 查询实操：链式调用与 SQL 映射、条件构造器组合、join 返回扁平元组、db.query 嵌套、sql 模板注入面与游标分页。">
     <meta name="keywords" content="Drizzle ORM,查询与操作,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/drizzle/queries/">
     <meta property="og:title" content="查询构建：关系查询、join 与事务 - Drizzle ORM - 资深码农">
-    <meta property="og:description" content="Drizzle 查询构建：四类查询写法、join 的返回形状、query API 与 N+1、sql 模板与注入防护。">
+    <meta property="og:description" content="Drizzle 查询实操：链式调用与 SQL 映射、条件构造器组合、join 返回扁平元组、db.query 嵌套、sql 模板注入面与游标分页。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/drizzle/queries/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="查询构建：关系查询、join 与事务 - Drizzle ORM">
-    <meta name="twitter:description" content="Drizzle 查询构建：四类查询写法、join 的返回形状、query API 与 N+1、sql 模板与注入防护。">
+    <meta name="twitter:description" content="Drizzle 查询实操：链式调用与 SQL 映射、条件构造器组合、join 返回扁平元组、db.query 嵌套、sql 模板注入面与游标分页。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,18 +73,7 @@
                     <div class="article-content">
 <p>Drizzle 的查询构建器几乎是 SQL 的逐词映射。好处是你不用在脑子里维护「ORM 语法 → SQL」的翻译表；陷阱是<strong>join 的返回形状是 SQL 的形状，不是 ORM 的形状</strong>。</p>
 <p>这篇把查询构建、关系查询、原生片段、事务四块讲清。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：四类查询的标准写法——带可选筛选的列表查询、要嵌套形状的关系查询、要聚合统计的 join、要写多张表的事务；再给 <code>where</code> 能表达到哪一步、越过边界时该怎么用 <code>sql</code> 模板，以及先用 <code>toSQL()</code> 确认生成了什么的习惯。</li>
-        <li><strong>② 原理</strong>：链式方法与 SQL 关键字的逐词映射、条件构造器的九个陷阱、四种 join 的返回形状为什么是扁平元组、<code>db.query</code> 如何用一条 SQL 拿到嵌套结果、<code>sql</code> 模板的参数化边界与 <code>sql.raw</code> 的注入面、offset 与游标分页的差异、事务与 savepoint 的语义、prepared statement 与连接池的冲突。</li>
-        <li><strong>③ 场景</strong>：按需求选查询方式的取舍矩阵、什么时候该放弃构建器直接写 SQL，以及不适用边界。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 四类查询的标准写法</h2>
+<h2>四类查询的标准写法</h2>
 
 <p>日常查询几乎都能归到下面四类。<strong>先按类型选形态，再抠细节</strong>：要嵌套对象就别用 join，要聚合统计就别用 <code>db.query</code>，要写多表就一定进事务。每种写法背后的机制见原理层。</p>
 
@@ -168,7 +157,7 @@ const created = await db.transaction(async (tx) =&gt; {
   return order;
 });</code></pre>
 
-<h2>① 用法 · where 能表达到哪一步，越界了怎么写</h2>
+<h2>where 能表达到哪一步，越界了怎么写</h2>
 
 <p>构建器不是万能的，判断标准很简单：<strong>值能参数化的，用构建器；结构性的东西（列名、函数、窗口、CTE），用 <code>sql</code> 模板</strong>。下表是这条线的具体位置。</p>
 
@@ -211,9 +200,9 @@ function orderByField(field: string) {
 }
 // 绝对不要写 sql.raw(`order by ${field}`)：它完全绕过参数化</code></pre>
 
-<h2>② 原理 · select 链与 SQL 的一对一映射</h2>
+<h2>select 链与 SQL 的一对一映射</h2>
 
-<p>搞清这一节能解决「这段链式调用最终跑的是哪条 SQL」。</p>
+<p>这段链式调用最终跑的是哪条 SQL，方法名与顺序照着 SQL 摆。</p>
 
 <p>Drizzle 的链式方法名和调用顺序几乎就是 SQL 关键字的顺序。理解这个映射之后，写 Drizzle 查询等于写 SQL。</p>
 
@@ -276,9 +265,9 @@ const perRole = await db
   .groupBy(users.role)
   .having(gt(count(users.id), 5));</code></pre>
 
-<h2>② 原理 · 条件构造器全表</h2>
+<h2>条件构造器全表</h2>
 
-<p>搞清这一节能解决「条件写了但没起作用」和「查出来的结果莫名少了一批行」。</p>
+<p>条件写了没起作用、结果少了一批行，多出在构造器没拼进去。</p>
 
 <p>条件构造器是纯函数，返回一个 SQL 片段对象。它们可以自由组合、提取成变量、放进数组，这让复杂筛选逻辑很容易拆分。</p>
 
@@ -297,9 +286,9 @@ const perRole = await db
 </tbody>
 </table>
 
-<h2>② 原理 · join 的四种形态与返回形状</h2>
+<h2>join 的四种形态与返回形状</h2>
 
-<p>搞清这一节能解决「明明只有 20 个用户，为什么返回了 60 行」。</p>
+<p>20 个用户却返回 60 行，因为 join 的结果是扁平的。</p>
 
 <p>这是从其他 ORM 转过来最容易踩的坑。<strong>Drizzle 的 join 返回扁平的元组结构，不是嵌套对象</strong>。</p>
 
@@ -376,9 +365,9 @@ const detail = await db
   .leftJoin(posts, eq(orders.postId, posts.id))
   .where(gte(orders.createdAt, new Date('2026-09-01')));</code></pre>
 
-<h2>② 原理 · query API：嵌套结果但没有 N+1</h2>
+<h2>query API：嵌套结果但没有 N+1</h2>
 
-<p>搞清这一节能解决「要嵌套 JSON 又不想在循环里查子表」。</p>
+<p>要嵌套 JSON 又不在循环里查子表，是 db.query 的定位。</p>
 
 <p><code>db.query</code> 是 Drizzle 的关系查询 API，它需要初始化时传入 <code>schema</code> 且表定义了 <code>relations()</code>。它的价值在于：<strong>返回嵌套的对象结构，但生成的是单条带 json 聚合的 SQL，不是 N+1</strong>。</p>
 
@@ -430,9 +419,9 @@ const one = await db.query.users.findFirst({
 // 注意：with 里的 limit 是「每个父记录的子记录数」
 // 而外层 limit 是父记录数。两者语义不同，容易混淆</code></pre>
 
-<h2>② 原理 · sql 模板：原生片段与注入防护</h2>
+<h2>sql 模板：原生片段与注入防护</h2>
 
-<p>搞清这一节能解决「哪种写法是参数化的、哪种直接把注入面暴露出去」。</p>
+<p>哪种写法是参数化的、哪种把注入面暴露出去，分界在模板插值。</p>
 
 <p>查询构建器覆盖不了的场景（窗口函数、数据库特有函数、复杂表达式）用 <code>sql</code> 模板。<strong>模板插值 <code>${}</code> 会转成占位符参数，是安全的</strong>；但 <code>sql.raw()</code> 完全绕过参数化，绝不能传用户输入。</p>
 
@@ -492,9 +481,9 @@ await db
     setWhere: sql`${users.displayName} is distinct from '张三'`,
   });</code></pre>
 
-<h2>② 原理 · 分页：offset 与游标</h2>
+<h2>分页：offset 与游标</h2>
 
-<p>搞清这一节能解决「翻到后面越来越慢」和「翻页时有的行看两遍、有的行没见过」。</p>
+<p>翻到后面越来越慢，有的行看两遍、有的没见过，都出自 offset 分页。</p>
 
 <p><code>limit + offset</code> 在大 offset 下会坍塌——数据库必须扫过并丢弃前 N 行，而且这部分工作不会因为有索引而消失。游标分页（keyset pagination）用 <code>WHERE sort_col &lt; last_value</code> 代替 offset，每页都只定位一次，延迟与页码无关。</p>
 
@@ -540,9 +529,9 @@ async function cursorPage(cursor?: { createdAt: Date; id: string }) {
 // 需要 (created_at DESC, id DESC) 的复合索引才能走索引扫描
 // 游标的对外编码方式（base64 opaque cursor）详见站内 API 设计篇</code></pre>
 
-<h2>② 原理 · 事务、savepoint 与 prepared statement</h2>
+<h2>事务、savepoint 与 prepared statement</h2>
 
-<p>搞清这一节能解决「事务里明明抛了异常，数据却还在」这个最隐蔽的一类 bug。</p>
+<p>事务里抛了异常数据却还在，是回调里用了 db 而不是 tx。</p>
 
 <p><code>db.transaction(cb)</code> 的回调收到一个 <code>tx</code> 对象。<strong>回调里必须用 <code>tx</code> 而不是外层的 <code>db</code></strong>——用 <code>db</code> 的语句会从连接池取另一条连接，完全不在这个事务里。这是最隐蔽的事务 bug。</p>
 
@@ -624,7 +613,7 @@ const u2 = await findByEmail.execute({ email: 'c@d.com' });  // 复用计划
 // 注意：连接池里不同连接的 prepared statement 不共享
 // 用 PgBouncer 的 transaction pooling 模式会让 prepared statement 失效</code></pre>
 
-<h2>③ 场景 · 查询方式怎么选</h2>
+<h2>查询方式怎么选</h2>
 
 <p>同一份数据有好几种取法，区别不在「能不能取到」，而在<strong>往返次数、结果形状、SQL 可控性</strong>三者的权衡。下表按真实需求排开。</p>
 

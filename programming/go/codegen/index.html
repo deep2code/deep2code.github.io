@@ -93,18 +93,7 @@
 <p>Go 刻意不提供宏，也没有运行时反射之外的元编程能力。这让语言保持了简单，代价是有一类需求在语言内无解：<strong>需要读取标识符名字、遍历方法签名、或者从另一种语言的定义推导出 Go 代码</strong>。</p>
 <p>所以「构建之前先跑一个程序把代码写出来」在 Go 生态里不是权宜之计，而是一等公民：<code>go generate</code>、<code>stringer</code>、<code>protoc-gen-go</code>、<code>sqlc</code>、<code>wire</code> 都建立在这个模式上。</p>
 <p>这篇先给可以直接抄进项目的落地定式，再解释生成物里那些看不懂的细节，最后收拢「什么时候不该生成」。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：<code>go:generate</code> 指令的三条硬规则与两个可抄的例子、用 <code>go.mod</code> 的 <code>tool</code> 指令锁死生成器版本、一份在 CI 里重跑生成并检查 <code>git diff</code> 为空的脚本，外加常见生成器用途对照表与 <code>go generate</code> 旗标速查。</li>
-        <li><strong>② 原理</strong>：四种元编程手段各自的能力边界；<code>stringer</code> 生成物里那个空函数为什么是编译期断言、它能抓到「改值」却抓不到「追加值」；四条工程规范分别防住什么；<code>go:embed</code> 与生成器的分工。</li>
-        <li><strong>③ 场景</strong>：按需求形态给出该用生成器、该用泛型、该用 <code>go:embed</code> 还是该用反射，以及每种选择的代价。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · go:generate 的落地定式</h2>
+<h2>go:generate 的落地定式</h2>
 <p><strong>第一步：把指令写对。</strong>三条规则违反任何一条都会让指令静默失效，而不是报错：</p>
 <pre><code class="language-go">// 规则一：双斜杠后面不能有空格。写成 "// go:generate" 就只是一条普通注释，
 //        不会执行，也不会有任何提示。
@@ -200,7 +189,7 @@ go build ./... &amp;&amp; go vet ./... &amp;&amp; go test ./...</code></pre>
 </table>
 <p>指令为什么必须紧贴、为什么 CI 的 <code>git diff</code> 检查不可替代、生成物里那个空函数是干什么的——都在下面几节。</p>
 
-<h2>② 原理 · 四种手段的边界：为什么这类需求只能靠生成</h2>
+<h2>四种手段的边界：为什么这类需求只能靠生成</h2>
 <p>搞清这张表能避免最常见的两种误用：该用泛型的地方上了生成器，或者指望反射拿到它拿不到的东西。</p>
 <table>
 <thead><tr><th>手段</th><th>能做什么</th><th>做不到什么</th><th>代价</th></tr></thead>
@@ -230,7 +219,7 @@ flowchart TB
 <p>关于 <strong>sqlc 为什么比 ORM 更受推崇</strong>，值得单独说一句：它让你写真实的 SQL，因此数据库的全部能力都能用，执行计划完全可预测，不存在「一个方法调用背后生成出意料之外的查询」这种问题；</p>
 <p>同时它解析 SQL 和表结构生成带具体类型的参数与返回结构体，字段名写错或类型不匹配在编译期就报错。这正好是 Go 社区偏好的组合：<strong>显式、可预测、错误尽早暴露</strong>。</p>
 
-<h2>② 原理 · stringer 生成了什么，那个空函数为什么重要</h2>
+<h2>stringer 生成了什么，那个空函数为什么重要</h2>
 <p>这一节解释一个具体现象：日志里为什么会出现 <code>OrderStatus(5)</code> 这种输出，以及什么时候编译器会替你拦下来。</p>
 <p><code>stringer</code> 解决两个很具体的问题。第一，<strong>枚举打日志时是数字</strong>：日志里写着 <code>status=3</code>，排查时得回头翻常量定义。第二，<strong>新增枚举值时手写的 switch 忘了加 case</strong>，编译器不会提示，表现是那个新状态显示成空串。</p>
 <p>跑一次 <code>go generate ./...</code> 得到下面这个文件，<strong>注意里面那个空函数 <code>_()</code></strong>：</p>
@@ -303,7 +292,7 @@ sequenceDiagram
     <p>实现了 <code>String()</code> 之后，<code>fmt</code> 和 <code>slog</code> 会输出可读名字，但 <strong><code>encoding/json</code> 不看 <code>Stringer</code> 接口</strong>，序列化出来的仍然是数字。接口响应里要返回名字必须自己实现 <code>MarshalJSON</code>，而且别忘了配套的 <code>UnmarshalJSON</code>——只做单向会导致「返回的是名字，但接收时只认数字」这种不对称。</p>
 </div>
 
-<h2>② 原理 · 四条工程规范分别防住什么</h2>
+<h2>四条工程规范分别防住什么</h2>
 <p>规范不是洁癖，每一条都对应一种真实故障。整条链路长这样：</p>
 <div class="mermaid">
 flowchart TB
@@ -350,7 +339,7 @@ flowchart TB
 <p>工具版本锁定这一条在 Go 1.24 之前只能靠在 README 里写「请先 go install 某个工具」加一份版本说明，实际上约束不住任何人。</p>
 <p><code>go.mod</code> 的 <code>tool</code> 指令把它变成了依赖管理的一部分，版本随 <code>go.sum</code> 一起校验，规则见 <a href="../modules/">模块、包组织与依赖管理</a>。CI 侧的钩子怎么挂、缓存怎么配见 <a href="../../../devops/cicd/">CI 与 CD</a>。</p>
 
-<h2>② 原理 · go:embed：不需要生成器的那一档</h2>
+<h2>go:embed：不需要生成器的那一档</h2>
 <p>把静态文件变成 Go 代码曾经是生成器的经典用途：读文件、转义、写成一个巨大的字符串常量。<code>go:embed</code>（Go 1.16 起）让编译器直接做这件事，静态文件在仓库里保持原样，可以正常编辑、diff、被编辑器高亮。</p>
 <p><strong>模板、前端资源、迁移脚本、默认配置这些场景一律用它，不要再写生成器。</strong></p>
 <table>
@@ -393,7 +382,7 @@ var tmpl = template.Must(template.ParseFS(templateFS, "templates/*.tmpl"))
 // 路径规则：相对当前包目录，不能用两个点跳出包外，也不能是绝对路径。
 // 想嵌上层目录的文件只能在那个目录里另建一个包，或者构建前拷进来</code></pre>
 
-<h2>③ 场景 · 什么时候生成，什么时候别生成</h2>
+<h2>什么时候生成，什么时候别生成</h2>
 <p>把前面的判断收成一张表。左列是你面对的需求，重点看最后一列——代价决定了值不值得：</p>
 <table>
 <thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>

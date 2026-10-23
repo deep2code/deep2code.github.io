@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Kafka 生产者与消费者实战：send 入队与批处理、参数矩阵、poll 循环、异常分类与关闭丢消息窗口、消费线程模型与背压。">
+        <meta name="description" content="Kafka 客户端实操：send 只入队、Producer 参数矩阵与调错后果、异常分类与关闭丢消息窗口、poll 内部步骤、消费线程模型与背压。">
     <meta name="keywords" content="Kafka生产者,Kafka消费者,sarama,confluent-kafka,Go,Python">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/producer-consumer/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环 - 资深码农">
-    <meta property="og:description" content="Kafka 生产者与消费者实战：send 入队与批处理、参数矩阵、poll 循环、异常分类与关闭丢消息窗口、消费线程模型与背压。">
+    <meta property="og:description" content="Kafka 客户端实操：send 只入队、Producer 参数矩阵与调错后果、异常分类与关闭丢消息窗口、poll 内部步骤、消费线程模型与背压。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/producer-consumer/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环">
-    <meta name="twitter:description" content="Kafka 生产者与消费者实战：send 入队与批处理、参数矩阵、poll 循环、异常分类与关闭丢消息窗口、消费线程模型与背压。">
+    <meta name="twitter:description" content="Kafka 客户端实操：send 只入队、Producer 参数矩阵与调错后果、异常分类与关闭丢消息窗口、poll 内部步骤、消费线程模型与背压。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="架构与分布式">
     <meta property="article:tag" content="Kafka,Go,Python,消息队列">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 生产者与消费者实战：send 入队与批处理、参数矩阵、poll 循环、异常分类与关闭丢消息窗口、消费线程模型与背压。","url":"https://www.yijunjun.asia/architecture/kafka/producer-consumer/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/producer-consumer/"},"articleSection":"后端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 客户端实操：send 只入队、Producer 参数矩阵与调错后果、异常分类与关闭丢消息窗口、poll 内部步骤、消费线程模型与背压。","url":"https://www.yijunjun.asia/architecture/kafka/producer-consumer/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/producer-consumer/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "生产者与消费者", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,18 +91,7 @@
                     </header>
                     <div class="article-content">
 <p>这一篇只解决一件事：<strong>客户端代码怎么写、参数怎么配才不出事</strong>。参数名统一用 Java 客户端的官方命名，Go 的 sarama 与 confluent-kafka-go 只是换了个壳，语义一一对应，文中标出映射关系。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份能直接抄的生产者与消费者最小可用代码，每个参数都注明为什么这么设；poll 循环的正确写法与提交时机（位点为什么要加 1、为什么用 pause 而不是 sleep），以及一张「要做什么 → 怎么写」对照表和最小必配参数速查。</li>
-        <li><strong>② 原理</strong>：<code>send()</code> 只是入队而不是发送、Callback 跑在哪个线程上、Producer 参数矩阵与调错后果、可重试与不可重试异常的分界、close 的五种关法各自丢不丢、一次 poll 内部做了什么、<code>auto.offset.reset</code> 只在两个时刻生效、三种消费线程模型的代价。</li>
-        <li><strong>③ 场景</strong>：按处境选参数组合与线程模型，以及哪些需求不该在客户端层解决。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 最小可用的生产者与消费者</h2>
+<h2>最小可用的生产者与消费者</h2>
 
 <p>先查表定位你要做的事，再抄下面两份代码。注释只写「为什么要这行」，机制在原理层展开。</p>
 
@@ -247,7 +236,7 @@ public void stop() {
 </tbody>
 </table>
 
-<h2>② 原理 · send() 不是「发送」，只是「入队」</h2>
+<h2>send() 不是「发送」，只是「入队」</h2>
 
 <p>线上丢消息的故障，一大半的根子在对这一行的误解：<code>producer.send(record)</code> 返回的那一刻，消息极可能还在本进程的堆内存里，一个字节都没出网卡。</p>
 <p>真实链路是业务线程走完拦截器、序列化、分区器，把消息<strong>追加到 RecordAccumulator 中该分区的 batch 双端队列</strong>然后立刻返回；真正的 ProduceRequest 由一个独立的 Sender 线程发出。</p>
@@ -299,9 +288,9 @@ flowchart TB
 <p>同样的 acks 配置下，异步加回调能攒出几百条一批，吞吐差出一到两个数量级。</p>
 </div>
 
-<h2>② 原理 · Producer 参数矩阵：默认值与调错后果</h2>
+<h2>Producer 参数矩阵：默认值与调错后果</h2>
 
-<p>搞清这张表能解决「业务线程集体卡在 send 上」这类看起来像死锁的现象。</p>
+<p>参数调错的典型表现是「业务线程集体卡在 send 上」，看着像死锁。</p>
 
 <table>
 <thead><tr><th>参数</th><th>常见默认值</th><th>生产建议</th><th>调错后果</th></tr></thead>
@@ -319,7 +308,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · 异常分类与关闭时的丢消息窗口</h2>
+<h2>异常分类与关闭时的丢消息窗口</h2>
 
 <p>搞清这一节能解决两类事故：把不可重试异常一直重试刷满日志，以及滚动发布时每次都丢几百条。</p>
 
@@ -433,9 +422,9 @@ func shutdown(p sarama.AsyncProducer) {
 }
 </code></pre>
 
-<h2>② 原理 · 一次 poll 内部究竟做了什么</h2>
+<h2>一次 poll 内部究竟做了什么</h2>
 
-<p>搞清这张图能解决「心跳正常却被踢出组」以及「提交位点报错 CommitFailed」。</p>
+<p>心跳一直在发，成员照样会被踢出组，提交位点随之报 CommitFailed。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -477,7 +466,7 @@ sequenceDiagram
 </tbody>
 </table>
 
-<h2>② 原理 · auto.offset.reset 只在两个时刻生效</h2>
+<h2>auto.offset.reset 只在两个时刻生效</h2>
 
 <p>搞清这一条能同时避免两个反向事故：历史消息洪水和静默跳位。</p>
 
@@ -510,7 +499,7 @@ kafka-consumer-groups.sh --bootstrap-server kafka-1:9092 \
   --reset-offsets --by-duration PT0H30M --dry-run
 </code></pre>
 
-<h2>② 原理 · 三种消费线程模型与线程池方案的真实代价</h2>
+<h2>三种消费线程模型与线程池方案的真实代价</h2>
 
 <p>搞清这一节能避免一个很贵的决定：为了提速上线程池，同时悄悄丢掉了顺序性和位点的正确性。</p>
 
@@ -605,14 +594,14 @@ func consume(ctx context.Context, brokers []string) error {
 }
 </code></pre>
 
-<h2>② 原理 · 为什么背压必须用 pause、重放必须在回调里 seek</h2>
+<h2>为什么背压必须用 pause、重放必须在回调里 seek</h2>
 
 <p><code>close()</code> 在另一个线程里调用是不安全的，KafkaConsumer 不是线程安全类。唯一允许跨线程调用的方法是 <code>wakeup()</code>，它会让阻塞在 poll 上的线程抛出 WakeupException，从而跳出循环走收尾逻辑。</p>
 <p>背压用 <code>pause()</code> 而不是 sleep：sleep 会让你逼近 <code>max.poll.interval.ms</code> 触发 Rebalance，而 pause 之后仍然可以正常 poll 维持组成员身份，只是不再返回被暂停分区的数据。</p>
 
 <p>重放靠 <code>seek()</code>：按位点用 <code>seek(tp, offset)</code>，按时间用 <code>offsetsForTimes()</code> 先把时间戳换成位点再 seek。注意 seek 只对<strong>已经分配给当前成员的分区</strong>生效，刚 subscribe 之后立刻 seek 会抛 IllegalStateException，正确位置是在 <code>onPartitionsAssigned</code> 回调里，或者先 poll 一次拿到分配结果再 seek。</p>
 
-<h2>③ 场景 · 按处境选参数组合与线程模型</h2>
+<h2>按处境选参数组合与线程模型</h2>
 
 <p>前面把每个机制拆开讲了，落地时需要的是反向映射。下表每一行是一个完整组合，代价列是选了它必须一起接受的东西。</p>
 

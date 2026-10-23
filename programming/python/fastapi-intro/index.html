@@ -70,18 +70,7 @@
 <p>Python 项目的技术债大多不在业务逻辑里，而在骨架上：目录怎么分、配置从哪来、日志谁初始化、异常在哪转成 HTTP、类型注解要不要管。</p>
 <p>这几件事在前两周定下来成本接近零，等代码长到几万行再改就得动全局。这篇先给一份可以直接照抄的目录树与最小可运行入口，再解释每个选择挡住了哪类事故。</p>
 <p>框架自身的机制在<a href="../fastapi/">《FastAPI 的机制与生产化》</a>，依赖与环境怎么组织在<a href="../fastapi-dependencies/">下一篇</a>。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份可直接照抄的 src 布局目录树、只做装配的最小可运行入口（<code>lifespan</code> 建资源、工厂函数建 app、异常处理器注册），建环境与自检的四条命令，外加「常见任务 → 怎么做 → 注意什么」和骨架关键约定两张速查表。</li>
-        <li><strong>② 原理</strong>：依赖方向为什么必须单向、src 布局到底挡住了哪类漏检、<code>pyproject.toml</code> 相比 <code>setup.py</code> 换来了什么、为什么配置错误必须在启动那一刻就崩、<code>dictConfig</code> 与 <code>contextvars</code> 的正确初始化位置、领域异常怎么在边界统一转成响应体、类型注解运行时不生效这件事的全部推论。</li>
-        <li><strong>③ 场景</strong>：从一次性脚本到多人协作的对外服务，骨架各要做到哪一步、代价是什么，以及哪些问题不该在骨架层解决。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 一份可直接照抄的目录树与最小可运行入口</h2>
+<h2>一份可直接照抄的目录树与最小可运行入口</h2>
 <p>先把形状定下来。下面这棵树和两段代码合起来就是一个能跑、能测、能装进镜像的最小服务，每个目录的职责在注释里，为什么这么分在原理层。</p>
 
 <pre><code class="language-bash"># ---------- 1. 目录树：照抄即可，src 布局是其中唯一不能省的决定 ----------
@@ -193,7 +182,7 @@ app = create_app()                     # uvicorn 指向这个对象：myapp.main
 
 <p>上面这些形状为什么长这样——为什么测试必须导入已安装的包、为什么配置错误要让进程直接退出、为什么日志只能在入口配一次、为什么 <code>service</code> 里不能抛 <code>HTTPException</code>——都在下面几节。</p>
 
-<h2>② 原理 · 分层与依赖方向</h2>
+<h2>分层与依赖方向</h2>
 <p>搞清这一节能解决的现象是：想给某个用例加一个消息队列入口，结果发现 <code>service</code> 里到处是 <code>Request</code>，只能把整个 HTTP 框架一起拖进来。</p>
 <p>骨架的第一条规则是<strong>依赖只能单向</strong>：接口层依赖服务层，服务层依赖仓储层，反过来不行。判断有没有做对只看一件事——<code>service</code> 里能不能出现 <code>Request</code>、<code>HTTPException</code> 这类框架类型。</p>
 <p>出现了就说明 HTTP 细节漏进了业务层，换协议或写单测时会立刻付出代价。</p>
@@ -238,7 +227,7 @@ flowchart TB
 
 <p>配套的安装方式是可编辑模式（<code>pip install -e .</code> 或 <code>uv pip install -e .</code>）：包的元数据被注册，导入走的是真实安装路径，改代码又不需要重装。</p>
 
-<h2>② 原理 · pyproject.toml：一个文件管住构建与工具</h2>
+<h2>pyproject.toml：一个文件管住构建与工具</h2>
 <p>搞清这一节能解决的现象是：装包之前必须先执行别人的 Python 代码，以及同一个项目里 lint、类型检查、测试各有一个配置文件、规则互相打架。<code>setup.py</code> 是可执行代码，装包前要先跑它，既不安全也无法静态解析依赖。</p>
 <p><code>pyproject.toml</code>（PEP 517/518/621）是声明式的，构建后端、元数据、依赖、以及 ruff / mypy / pytest 的配置全放一处。</p>
 
@@ -297,7 +286,7 @@ testpaths = ["tests"]
 
 <p>依赖怎么分组、锁文件怎么落地、镜像里怎么装，是<a href="../fastapi-dependencies/">下一篇</a>的内容，这里只给元数据的形状。</p>
 
-<h2>② 原理 · 配置：错就错在启动那一刻</h2>
+<h2>配置：错就错在启动那一刻</h2>
 <p>搞清这一节能解决的现象是：服务看起来正常，但连到了错误的数据库、把测试密钥用在了生产、或者某个低频分支上线两周后才报 <code>KeyError</code>。最该坚持的一条原则：<strong>配置错误必须让进程起不来</strong>。</p>
 <p>散落在各处的 <code>os.environ.get("X", "default")</code> 的真正问题不是丑，而是把「配置缺失」推迟到某个低频分支被触发时才暴露，而且往往表现为静默的错误行为。</p>
 
@@ -367,7 +356,7 @@ def get_settings() -&gt; Settings:
 </tbody>
 </table>
 
-<h2>② 原理 · 日志：入口配置一次，模块只管打</h2>
+<h2>日志：入口配置一次，模块只管打</h2>
 <p>搞清这一节能解决的现象是：同一条日志被打了两遍、格式对不上、asyncio 下 request_id 串号、以及进程被杀时最后几秒的日志全部丢失。两条硬规则。第一，<strong>只有应用入口能配 handler 与 level</strong>，库和业务模块只做 <code>logger = logging.getLogger(__name__)</code>；</p>
 <p>库里加 handler 会造成重复输出，调用方还没法统一管控。第二，<strong>不要用 <code>print</code></strong>：它绕开级别控制与结构化字段，在容器里还受 stdout 缓冲影响，日志可能根本没落下来。</p>
 
@@ -418,7 +407,7 @@ def setup_logging(level: str = "INFO") -&gt; None:
 
 <p>request_id 的生成、透传到下游、与 trace 关联的完整做法见站内 <a href="../../../observability/logging/">日志与可观测性专题</a>，日志在容器里怎么被采集、以及 <code>PYTHONUNBUFFERED</code> 这类必设项见<a href="../fastapi-production/">《Python 服务上生产》</a>，这里只给注入点。</p>
 
-<h2>② 原理 · 错误处理：异常在边界统一转成响应</h2>
+<h2>错误处理：异常在边界统一转成响应</h2>
 <p>搞清这一节能解决的现象是：同一个服务返回了五种不同结构的错误体，客户端只能靠状态码猜；以及接口返回 200 空数据、监控一片绿、排查时完全没有线索。业务代码里不应该出现 <code>HTTPException</code>。</p>
 <p>正确形态是：service 抛领域异常，框架边界有一个处理器把领域异常映射成统一的错误响应体。这样换协议、写单测、复用 service 都不受影响，错误结构也天然一致。</p>
 
@@ -498,7 +487,7 @@ def register_handlers(app: FastAPI) -&gt; None:
 </tbody>
 </table>
 
-<h2>② 原理 · 类型注解与工具链：注解不是校验</h2>
+<h2>类型注解与工具链：注解不是校验</h2>
 <p>搞清这一节能解决的现象是：接口签名写了类型，脏数据照样进了数据库；以及 CI 里堆了五个检查工具、跑得慢还互相报同一个问题。必须先说清楚：<strong>类型注解在运行时不生效</strong>。</p>
 <p><code>def f(x: int)</code> 传字符串照样执行，注解只是存在 <code>__annotations__</code> 里的元数据。它的价值在静态检查与工具链（mypy、IDE、FastAPI 的签名推导）。推论很实际：<strong>所有外部输入必须另外做运行时校验</strong>，这件事交给 pydantic，别指望注解。</p>
 
@@ -528,7 +517,7 @@ def register_handlers(app: FastAPI) -&gt; None:
 </tbody>
 </table>
 
-<h2>③ 场景 · 不同项目形态下骨架要做到哪一步</h2>
+<h2>不同项目形态下骨架要做到哪一步</h2>
 <p>骨架不是越全越好，它的成本是样板代码，收益要看这段代码会活多久、有几个人改。下表按真实形态给结论，也给代价。</p>
 
 <table>

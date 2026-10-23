@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Shell 执行机制：命令查找顺序、内建命令为何必须内建、重定向与 dup2、管道与缓冲、source 与环境继承、进程组。">
+        <meta name="description" content="Shell 执行机制：fork、execve、dup2、pipe、wait、kill 的编排顺序，交互与脚本差异、重定向方向、信号处理的坑。">
     <meta name="keywords" content="Shell原理,fork,exec,pipe,dup2,内置命令,子shell,性能优化,xargs并行">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/tools/shell/internals/">
     <!-- Open Graph -->
     <meta property="og:title" content="Shell 的执行机制：进程、重定向与信号 - 资深码农">
-    <meta property="og:description" content="Shell 执行机制：命令查找顺序、内建命令为何必须内建、重定向与 dup2、管道与缓冲、source 与环境继承、进程组。">
+    <meta property="og:description" content="Shell 执行机制：fork、execve、dup2、pipe、wait、kill 的编排顺序，交互与脚本差异、重定向方向、信号处理的坑。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/tools/shell/internals/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Shell 的执行机制：进程、重定向与信号 - 资深码农">
-    <meta name="twitter:description" content="Shell 执行机制：命令查找顺序、内建命令为何必须内建、重定向与 dup2、管道与缓冲、source 与环境继承、进程组。">
+    <meta name="twitter:description" content="Shell 执行机制：fork、execve、dup2、pipe、wait、kill 的编排顺序，交互与脚本差异、重定向方向、信号处理的坑。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="开发工具与工程效率">
     <meta property="article:tag" content="Shell原理,性能优化">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Shell 的执行机制：进程、重定向与信号","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Shell 执行机制：命令查找顺序、内建命令为何必须内建、重定向与 dup2、管道与缓冲、source 与环境继承、进程组。","url":"https://www.yijunjun.asia/tools/shell/internals/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/shell/internals/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Shell 的执行机制：进程、重定向与信号","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Shell 执行机制：fork、execve、dup2、pipe、wait、kill 的编排顺序，交互与脚本差异、重定向方向、信号处理的坑。","url":"https://www.yijunjun.asia/tools/shell/internals/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/shell/internals/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "开发工具与工程效率", "item": "https://www.yijunjun.asia/tools/"}, {"position": 3, "name": "Shell 底层原理", "item": "https://www.yijunjun.asia/tools/shell/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,7 +92,7 @@
                     <div class="article-content">
 
 <p>同一行命令，敲在交互终端里和写进脚本里，行为可能完全不同；同一段重定向，把两个方向调换位置，结果正好相反；同一个 <code>kill</code>，在裸机上能停掉服务，在容器里却只是把连接硬断。</p>
-<p>这些都不是零散的语法细节，而是同一件事的不同侧面：<strong>Shell 本质上是一个进程编排器</strong>，它做的全部工作就是把 <code>fork</code>、<code>execve</code>、<code>dup2</code>、<code>pipe</code>、<code>wait</code>、<code>kill</code> 这几个系统调用按你写的顺序组合起来。</p>
+<p>同一件事的不同侧面：<strong>Shell 是一个进程编排器</strong>，把 <code>fork</code>、<code>execve</code>、<code>dup2</code>、<code>pipe</code>、<code>wait</code>、<code>kill</code> 这几个系统调用按脚本顺序组合起来。</p>
 <p>理解这层机制的直接收益是：你能预测命令的行为，而不是靠试。本篇只讲执行机制。语法层面的参数展开、数组、<code>[[</code> 与 <code>((</code>、函数作用域在 <code>../core/</code>；严格模式、<code>trap</code> 做清理、幂等与原子替换在 <code>../</code>，这里涉及时只给结论并指路。</p>
 
 <h2>一条命令是怎么跑起来的</h2>

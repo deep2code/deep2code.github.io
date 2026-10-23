@@ -75,18 +75,7 @@
     </header>
     <p>K8s 的概念多到让人放弃，但只有<strong>一个</strong>核心思想：你描述期望状态，一堆控制器不停把现实拉向它。抓住这条主线，Pod、Service、探针、QoS、滚动更新全是它的推论。</p>
 <p>这篇按「控制循环 → 一次 apply 的完整链路 → 调度 → 生命周期与探针 → 资源与 QoS → Service 的真实实现 → 滚动更新与排障」展开。</p>
-
-    <div class="callout callout-info">
-        <div class="callout-icon">💡</div>
-        <div class="callout-title">这篇怎么读</div>
-        <ul>
-            <li><strong>① 用法</strong>：一个服务上集群最少要写哪几个对象、常见任务查哪个命令、出问题第一条命令敲什么。</li>
-            <li><strong>② 原理</strong>：控制循环与水平触发、apply 到容器启动的完整链路、调度两阶段、探针与优雅退出、QoS 与 CFS 限流、ClusterIP 的真实实现、滚动更新语义。</li>
-            <li><strong>③ 场景</strong>：什么规模该上 K8s、上到什么程度、哪些东西不该塞进集群。</li>
-        </ul>
-    </div>
-
-    <h2>① 用法 · 一个服务上 K8s 最少要写哪几个对象</h2>
+<h2>一个服务上 K8s 最少要写哪几个对象</h2>
     <p>一个无状态 HTTP 服务上集群，最少只要两个对象：<code>Deployment</code> 描述「跑几份、跑什么镜像」，<code>Service</code> 给它一个稳定的集群内地址。集群外访问再加 <code>Ingress</code>，配置从镜像里拿出来再加 <code>ConfigMap</code>。</p>
 <p>下面这份是能直接 <code>kubectl apply -f</code> 的最小完整清单，注释只说明「为什么要这行」。</p>
 
@@ -299,7 +288,7 @@ kubectl rollout history deploy/NAME
 kubectl rollout undo deploy/NAME --to-revision=3</code></pre>
 
 
-    <h2>② 原理 · 集群组件的职责边界：谁挂了会发生什么</h2>
+    <h2>集群组件的职责边界：谁挂了会发生什么</h2>
     <p>搞清这一层，就能在故障时判断「现在还能不能操作集群、已有流量会不会断」，而不是一看到组件红了就全量重启。</p>
 
     <div class="mermaid">
@@ -364,7 +353,7 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>② 原理 · 控制循环：为什么删掉的 Pod 会自己回来</h2>
+    <h2>控制循环：为什么删掉的 Pod 会自己回来</h2>
     <p>每个控制器都在跑同一个死循环：<strong>读期望状态 → 读实际状态 → 算差异 → 采取行动</strong>。这就是 <code>kubectl delete pod</code> 后 Pod 又出现的原因：你删的是实际状态，期望状态（Deployment 的 replicas=3）没变，ReplicaSet 控制器发现少了一个就立刻补一个。</p>
 
     <div class="mermaid">
@@ -427,7 +416,7 @@ flowchart LR
         「apiserver 短暂不可用，集群却没崩」——水平触发让所有控制器在恢复后自动补齐，不依赖事件不丢。</p>
     </div>
 
-    <h2>② 原理 · 一次 kubectl apply 到容器起来，中间发生了什么</h2>
+    <h2>一次 kubectl apply 到容器起来，中间发生了什么</h2>
 
     <div class="mermaid">
 sequenceDiagram
@@ -509,7 +498,7 @@ sequenceDiagram
         </tbody>
     </table>
 
-    <h2>② 原理 · 调度器的两阶段决策</h2>
+    <h2>调度器的两阶段决策</h2>
     <p>调度器的工作可以精确概括为一句话：<strong>给 Pod 的 <code>spec.nodeName</code> 填一个值</strong>。填值的过程分两阶段：先把不能用的节点排除（Filter），再给剩下的打分排序（Score）。</p>
 
     <div class="mermaid">
@@ -595,7 +584,7 @@ flowchart TB
         <p>所以 <code>requests</code> 必须填真实的日常水位，它是调度和容量规划的唯一依据；<code>Allocatable = Capacity − kube-reserved − system-reserved − eviction-threshold</code>，永远小于机器标称配置。</p>
     </div>
 
-    <h2>② 原理 · 生命周期、三种探针与优雅退出</h2>
+    <h2>生命周期、三种探针与优雅退出</h2>
 
     <div class="mermaid">
 stateDiagram-v2
@@ -681,7 +670,7 @@ stateDiagram-v2
 <p>另外要确保 <code>terminationGracePeriodSeconds</code> 大于 preStop 时间加上应用处理完存量请求的时间，否则会被 SIGKILL 直接砍断。</p>
     </div>
 
-    <h2>② 原理 · QoS 与 CPU 限流的隐形代价</h2>
+    <h2>QoS 与 CPU 限流的隐形代价</h2>
     <p><code>requests</code> 和 <code>limits</code> 的组合决定了 Pod 的 QoS 等级，而 QoS 等级决定了<strong>节点资源紧张时谁先被驱逐</strong>。</p>
 
     <table>
@@ -761,7 +750,7 @@ kubectl exec -it POD -- cat /sys/fs/cgroup/cpu.stat
         <p>对延迟敏感的服务，常见做法是<strong>只设 requests 不设 cpu limits</strong>（靠 requests 保下限，允许突发占用空闲 CPU），或把 limit 设到远高于日常水位。内存相反：<strong>limits 必须设</strong>，否则一个内存泄漏的 Pod 能把整个节点拖垮。</p>
     </div>
 
-    <h2>② 原理 · Service 的 ClusterIP 其实不存在</h2>
+    <h2>Service 的 ClusterIP 其实不存在</h2>
     <p>这是最反直觉的一点：<code>ClusterIP</code> 是<strong>纯虚拟的地址，没有任何进程监听它，也不属于任何网卡</strong>。它能通，是因为每个节点上都有 kube-proxy 写好的 DNAT 规则，数据包离开时把目标改写成某个真实 Pod IP。</p>
 
     <div class="mermaid">
@@ -858,7 +847,7 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>② 原理 · 滚动更新与可用性保障</h2>
+    <h2>滚动更新与可用性保障</h2>
     <p>滚动更新的本质是「新建一个 ReplicaSet，然后一边给它加副本一边给老的减副本」。两个参数控制这个节奏：</p>
 
     <table>
@@ -917,7 +906,7 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>③ 场景 · 什么规模该上、上到什么程度</h2>
+    <h2>什么规模该上、上到什么程度</h2>
     <p>K8s 不是「用不用」的二元选择，而是「用到哪一层」。控制平面本身就是一套要有人维护的分布式系统，成本是固定支出，收益却和服务数量、发布频率、弹性需求成正比。下表按规模给出落点。</p>
 
     <table>

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 结构化日志：log/slog 的 Handler 与级别、运行时可调级别、log.Fatal 的代价、每层记录错误与输出流向。">
+        <meta name="description" content="Go 结构化日志：级别约定比工具重要、脱敏手段的可靠性差距、log.Fatal 的退出代价、与 zap 和 zerolog 的对照。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/slog/">
     <!-- Open Graph -->
     <meta property="og:title" content="结构化日志与 log/slog - 资深码农">
-    <meta property="og:description" content="Go 结构化日志：log/slog 的 Handler 与级别、运行时可调级别、log.Fatal 的代价、每层记录错误与输出流向。">
+    <meta property="og:description" content="Go 结构化日志：级别约定比工具重要、脱敏手段的可靠性差距、log.Fatal 的退出代价、与 zap 和 zerolog 的对照。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/slog/">
     <meta property="og:site_name" content="资深码农">
@@ -38,7 +38,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="结构化日志与 log/slog - 资深码农">
-    <meta name="twitter:description" content="Go 结构化日志：log/slog 的 Handler 与级别、运行时可调级别、log.Fatal 的代价、每层记录错误与输出流向。">
+    <meta name="twitter:description" content="Go 结构化日志：级别约定比工具重要、脱敏手段的可靠性差距、log.Fatal 的退出代价、与 zap 和 zerolog 的对照。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>这篇的靶子是：<strong>日志出问题的时候，缺的从来不是日志库，而是当初没定下来的那几条约定</strong>——trace_id 靠不靠得住、手机号会不会落盘、线上想开 debug 要不要重启、错误在哪一层记录。</p>
 <p>这些决定几乎全部集中在进程启动那几十行装配代码里，写对一次就长期有效；写漏了，事后只能靠 code review 逐个调用点去追。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份可以直接抄的落地骨架（Handler 按环境选、<code>LevelVar</code> 加内网调级端点、<code>ReplaceAttr</code> 统一时间与裁剪 source、<code>contextHandler</code> 自动注入 trace_id、进程级 <code>With</code> 挂服务名与版本），加上字段命名规范表、Handler 速查表与类型级脱敏定式。</li>
-        <li><strong>② 原理</strong>：<code>slog.Handler</code> 作为标准接口带来的生态效应、一条日志从 <code>Enabled</code> 到编码写出的完整链路、三种脱敏方式为什么可靠性差距巨大、级别约定与 <code>log.Fatal</code> 为什么不能进库代码、和 zap 与 zerolog 的逐维度对照。</li>
-        <li><strong>③ 场景</strong>：选库与输出目的地的判断图与决策矩阵、十条上线检查项，以及什么情况下 slog 不是答案。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 结构化日志的落地骨架</h2>
+<h2>结构化日志的落地骨架</h2>
 <p>下面这段是进程启动时装配日志的完整代码，六个决定（Handler、级别可变、时间格式、source 裁剪、兜底屏蔽、固定字段）全在这里做完。注释只写「为什么必须这么写」，机制原因在原理层展开。</p>
 <pre><code class="language-go">// ---- 全局装配：进程启动时一次配好 ----
 // LevelVar 的零值是 LevelInfo，内部用原子操作，可以在运行时安全地改
@@ -218,7 +207,7 @@ func TraceMiddleware(next http.Handler) http.Handler {
 </tbody>
 </table>
 
-<h2>① 用法 · 字段规范与类型级脱敏</h2>
+<h2>字段规范与类型级脱敏</h2>
 <p>字段名一旦在日志平台上被检索、被做成看板，改名的成本就很高。下面这张表是团队里该统一下来的最小集合，第三列是不遵守时的具体后果。</p>
 <table>
 <thead><tr><th>字段</th><th>怎么写</th><th>什么时候带</th><th>不这么写的后果</th></tr></thead>
@@ -305,7 +294,7 @@ func handleOrder(ctx context.Context, l *slog.Logger, u User, orderID int64) err
 <p>记什么、不记什么、每请求记几条这类更上层的判断属于日志工程本身，见 <a href="../../../observability/logging/">应用侧日志工程：记什么、分级判据与性能开销</a>；</p>
 <p>trace_id 之上的 span 传播与采样见 <a href="../../../observability/tracing/">链路追踪落地：四类排查场景、依赖拓扑反推与关键路径分析</a>；<code>context</code> 自身的取消传播与 value 使用边界见 <a href="../context/">Go Context 的传播、取消与误用</a>。</p>
 
-<h2>② 原理 · slog 进标准库改变了什么</h2>
+<h2>slog 进标准库改变了什么</h2>
 <p>搞清这一节，能解释为什么值得为了 slog 去改已有代码的日志门面：变的不是性能，是第三方库的日志能不能被你统一管住。</p>
 <p>Go 1.21 把 <code>log/slog</code> 收进标准库，这件事的意义不在于「官方也有一个日志库了」，而在于<strong>结构化日志终于有了全生态共用的接口</strong>。以前每个库各写各的日志：有的用 <code>log</code> 打到 stderr，有的引 logrus，有的干脆自己造。</p>
 <p>你的服务要统一日志格式，就得给每个库单独接适配器，经常接不上。</p>
@@ -339,7 +328,7 @@ flowchart TB
     handler --> outp
 </div>
 
-<h2>② 原理 · 一条日志的完整处理链路</h2>
+<h2>一条日志的完整处理链路</h2>
 <p>理解这个顺序能解释很多性能和脱敏方面的疑问：级别判定在最前，所以关掉的级别几乎零开销；<code>LogValuer</code> 的解析和 <code>ReplaceAttr</code> 的改写都在 Handler 里，所以它们能拦住任何调用点写进来的值。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -366,7 +355,7 @@ sequenceDiagram
 <p>这个能力的成本是五行代码，收益是排查窗口从「等下次复现」变成「现在」。</p>
 </div>
 
-<h2>② 原理 · 三种脱敏方式的可靠性差距</h2>
+<h2>三种脱敏方式的可靠性差距</h2>
 <p>搞清这一节，能解释用法层为什么把 <code>LogValuer</code> 当主防线、<code>ReplaceAttr</code> 只当兜底：这两者在链路上的位置不同，失效条件也完全不同。</p>
 <table>
 <thead><tr><th>脱敏方式</th><th>规则写在哪</th><th>什么情况下会失效</th><th>可靠性</th></tr></thead>
@@ -381,8 +370,8 @@ sequenceDiagram
 <p><code>LogValuer</code> 还有一个常被忽略的用途：<strong>延迟求值</strong>。<code>LogValue()</code> 只在这条日志真的要被输出时才调用，所以把昂贵的统计放进 <code>LogValue</code> 里，Debug 关闭时这笔开销完全不产生。</p>
 <p>反过来，直接把 <code>expensive()</code> 的调用写在 <code>Debug(...)</code> 的参数里是没用的——参数在进入 <code>Debug</code> 之前就已经求值完毕，级别判定发生在那之后。</p>
 
-<h2>② 原理 · 日志级别：约定比工具重要</h2>
-<p>搞清这一节，能解决「告警全是噪音」和「同一个失败在日志里出现三次」这两个现象。</p>
+<h2>日志级别：约定比工具重要</h2>
+<p>「告警全是噪音」「同一个失败在日志里出现三次」，都是级别没定对。</p>
 <table>
 <thead><tr><th>级别</th><th>什么该用它</th><th>什么不该用它</th><th>线上默认是否输出</th></tr></thead>
 <tbody>
@@ -402,7 +391,7 @@ sequenceDiagram
 <p>级别约定还要配一条「谁记录」的约定：<strong>错误只在最终处理它的那一层记录一次</strong>，中间层只做 <code>fmt.Errorf</code> 包装并返回。</p>
 <p>否则一次失败会在日志里出现三四条 Error，排查的人会误判成多次失败，告警条数也随调用深度翻倍。什么阈值该接告警见 <a href="../../../observability/metrics/">监控体系落地：黑盒白盒分工、分层清单与告警阈值</a>。</p>
 
-<h2>② 原理 · 与 zap、zerolog 的对照</h2>
+<h2>与 zap、zerolog 的对照</h2>
 <p>搞清这一节，能在「要不要把现有日志库换成 slog」这个问题上给出有依据的答案，而不是跟风。</p>
 <table>
 <thead><tr><th>维度</th><th>slog</th><th>zap</th><th>zerolog</th><th>logrus</th></tr></thead>
@@ -418,7 +407,7 @@ sequenceDiagram
 </tbody>
 </table>
 
-<h2>③ 场景 · 选库与输出去哪里</h2>
+<h2>选库与输出去哪里</h2>
 <p>先过这张图定库，再看下面那张表定输出目的地。</p>
 <div class="mermaid">
 flowchart TB
@@ -450,7 +439,7 @@ flowchart TB
 <p>容器环境的默认答案是第一条：写 stdout，轮转和采集交给平台。但有一个细节值得注意——<strong><code>os.Stdout</code> 的写入是同步的</strong>，当采集侧读得慢、管道缓冲被填满时，写日志这行代码会阻塞，进而阻塞业务 goroutine。</p>
 <p>日志量很大的服务应该在 Handler 前加一层有界队列，队列满时按级别丢弃（先丢 Debug 和 Info，永不丢 Error），并在进程退出前把队列排空。</p>
 
-<h2>③ 场景 · 上线检查清单与不适用边界</h2>
+<h2>上线检查清单与不适用边界</h2>
 <p>下面十条是我在上线评审里逐条问的，每一条漏掉都有过对应的真实事故。</p>
 <table>
 <thead><tr><th>上线检查项</th><th>建议配置</th><th>漏掉的后果</th></tr></thead>

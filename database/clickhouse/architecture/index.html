@@ -91,18 +91,7 @@
                     <div class="article-content">
 <p>关于 ClickHouse 集群，最常见的错误不是配错了参数，而是<strong>太早上集群</strong>。单机 ClickHouse 能处理的数据量远超多数人的预期，而集群会把三个新问题一次性塞给你：数据分布、跨节点查询、副本一致性。</p>
 <p>这篇讲清分片与副本的关系、ReplicatedMergeTree 到底复制什么、Distributed 表的两阶段聚合为什么会突然变慢，以及扩容时那些不会自动帮你做的事。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：搭一套两分片两副本的完整步骤与每一步的验收命令——写入该走哪张表、查询该走哪张表、副本延迟怎么量、某个节点挂掉会看到什么现象。</li>
-        <li><strong>② 原理</strong>：分片与副本为什么是两个正交维度、ReplicatedMergeTree 复制的是 part 与 merge 任务而不是 SQL、Distributed 表的两阶段聚合什么时候会退化、写 Distributed 表的异步转发队列意味着什么、分布式 join 的三种执行方式、Keeper 与冷热分层。</li>
-        <li><strong>③ 场景</strong>：什么信号才真的说明该上集群、哪些事 ClickHouse 不会替你做（扩分片不搬数据、分片级没有自动兜底），以及日常要盯的监控项。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 搭一套两分片两副本并验证</h2>
+<h2>搭一套两分片两副本并验证</h2>
 
 <p>前提：你已经确认单机真的到顶了（判断信号见本篇场景层，不确定就先别动）。下面六步每一步都有验收命令，<strong>没通过不要进下一步</strong>——集群的问题几乎都是配置阶段埋下的，上线后才暴露。</p>
 <p>配置文件与建表语句的完整版在下面原理层，这里只讲顺序和怎么验。</p>
@@ -171,7 +160,7 @@ WHERE num_tries &gt; 3 ORDER BY num_tries DESC LIMIT 20;
 
 <p>这几步为什么是这个顺序、每个参数背后的机制是什么，下面原理层逐个展开。</p>
 
-<h2>② 原理 · 分片与副本是两个正交维度</h2>
+<h2>分片与副本是两个正交维度</h2>
 
 <p>这两个概念经常被混着说，但它们解决的是完全不同的问题：<strong>分片决定容量和单查询并行度，副本决定可用性和读吞吐</strong>。</p>
 <p>4 台机器可以是「4 分片无副本」（容量最大，任一台挂掉就有 1/4 数据查不到）、「2 分片 2 副本」（生产最常见）、「1 分片 4 副本」（数据量小但要求高可用和高读并发）。集群拓扑写在配置文件的 remote_servers 里，ClickHouse 不会替你决定。</p>
@@ -253,7 +242,7 @@ macros:
   replica: ck-1        # 每台唯一，通常用主机名
 </code></pre>
 
-<h2>② 原理 · ReplicatedMergeTree 复制的是 part 与 merge 任务，不是 SQL</h2>
+<h2>ReplicatedMergeTree 复制的是 part 与 merge 任务，不是 SQL</h2>
 
 <p>这是最值得纠正的一个认知：ClickHouse 的复制<strong>不是把 INSERT 语句发给其他副本重放</strong>，也不是 binlog 那种逻辑日志。</p>
 <p>它的流程是：某个副本收到写入后，先在本地生成 part，然后把「这里多了一个名为 all_1_1_0 的 part，校验和是多少」这条信息写进 Keeper 的复制队列；其他副本监听到队列有新任务，主动通过 HTTP 从源副本把这个 part 的文件拉过来。</p>
@@ -286,7 +275,7 @@ stateDiagram-v2
     Detached --> Recovering: 确认后 ATTACH 或丢弃并重新同步
 </div>
 
-<h2>② 原理 · Distributed 表：一个不存数据的视图，和它的两阶段聚合</h2>
+<h2>Distributed 表：一个不存数据的视图，和它的两阶段聚合</h2>
 
 <p>Distributed 表引擎本身不存一个字节的数据，它只记录「集群名、库名、本地表名、分片键」，作用是把查询改写成对各分片本地表的子查询，下发、等结果、再汇总。</p>
 <p>理解它的性能只需要抓住一个问题：<strong>回传到汇总节点的是聚合中间状态，还是明细数据？</strong>前者数据量约等于分组基数，几乎不占网络；</p>
@@ -323,7 +312,7 @@ sequenceDiagram
 <tr><td>两张 Distributed 表 join</td><td>默认不能，右表要全量拉到每个节点</td><td>右表全量</td><td>见下一节：字典、GLOBAL JOIN 或共置分片</td></tr>
 </tbody></table>
 
-<h2>② 原理 · 写入路径：写 Distributed 表还是直连本地表</h2>
+<h2>写入路径：写 Distributed 表还是直连本地表</h2>
 
 <p>写 Distributed 表最省事：客户端只连一个地址，分片路由由服务端按分片键算。但它有一个容易吃亏的机制——异步转发。数据先落在发起节点的本地目录里排队，再由后台线程转发给目标分片。</p>
 <p>如果目标分片长时间不可用，队列会一直堆在发起节点的磁盘上；如果这台发起节点本身坏了，队列里还没转发出去的数据就丢了。</p>
@@ -363,7 +352,7 @@ ENGINE = Distributed(ck_2s2r, default, events_local, cityHash64(user_id));
 --   2. 与高频 join / 去重的键对齐，这样同一个 user_id 只落一个分片，才能做本地 join 和精确去重
 </code></pre>
 
-<h2>② 原理 · 分布式 join 为什么要尽量避免</h2>
+<h2>分布式 join 为什么要尽量避免</h2>
 
 <p>ClickHouse 的 join 实现是「右表构建 hash 表放内存，左表流式探测」，这个前提在分布式下会被放大三次。三种执行方式：</p>
 
@@ -379,7 +368,7 @@ ENGINE = Distributed(ck_2s2r, default, events_local, cityHash64(user_id));
 <p>所以在 ClickHouse 里，join 不是查询写法问题而是建模问题：优先把维度打平成宽表（用物化视图在写入时完成），其次把维表做成字典用 <code>dictGet</code>，再不行才考虑 GLOBAL JOIN。</p>
 <p>并且一定要给它加 <code>max_bytes_in_join</code> 之类的内存上限，否则一条 SQL 能把整个节点打 OOM。</p>
 
-<h2>② 原理 · ClickHouse Keeper、存算分离与冷热分层</h2>
+<h2>ClickHouse Keeper、存算分离与冷热分层</h2>
 
 <p>早期版本必须依赖 ZooKeeper，而 ZooKeeper 在 ClickHouse 这种「高频小写入 + 大量 watch」的负载下很容易成为集群瓶颈：JVM GC 停顿、znode 数量膨胀、内存吃紧。</p>
 <p>ClickHouse Keeper 是官方用 C++ 重写的替代品，协议兼容（客户端无感）、基于 Raft、资源占用显著更低，还支持通过 <code>clickhouse-keeper-converter</code> 从 ZooKeeper 快照迁移。新集群没有理由再用 ZooKeeper。</p>
@@ -443,7 +432,7 @@ SELECT event, value FROM system.events
 WHERE event LIKE 'ZooKeeper%' AND value &gt; 0;
 </code></pre>
 
-<h2>③ 场景 · 什么时候才真的该上集群</h2>
+<h2>什么时候才真的该上集群</h2>
 
 <p>一台 32 核 128 GB 内存、几 TB NVMe 的机器，跑压缩后 1~2 TB 的数据、单表几百亿行是很正常的事——列存的压缩比通常在 8~15 倍，原始 20 TB 的日志压完可能只有 1.5 TB。</p>
 <p>而集群化会立刻带来额外成本：查询要跨网络汇总，Keeper 成了新的单点风险，扩分片时数据不会自动搬迁。所以正确顺序是：先调 codec 和排序键、先做冷热分层、先把单机的 IO 和 CPU 跑满，确认真的到顶了再上集群。</p>
@@ -471,7 +460,7 @@ flowchart TB
     C2 --> E1["加分片时必须同时配副本<br/>否则一个分片挂掉 这部分数据就查不到"]
 </div>
 
-<h2>③ 场景 · 集群运维与故障切换：哪些事 ClickHouse 不会替你做</h2>
+<h2>集群运维与故障切换：哪些事 ClickHouse 不会替你做</h2>
 
 <p>副本层面的故障切换是自动的：Distributed 查询会跳过不可用副本（<code>load_balancing</code> 决定挑哪个），副本恢复后自己从队列追数据。</p>
 <p>但<strong>分片层面没有任何自动兜底</strong>：一个分片的所有副本都挂了，这个分片的数据就查不到，默认行为是整条查询报错；</p>

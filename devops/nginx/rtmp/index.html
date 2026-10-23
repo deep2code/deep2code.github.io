@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Nginx 除了七层 HTTP，还能做四层代理和流媒体，这两块常被忽略。本文讲清 stream 模块与七层代理的根本差异（不解析应用协议、不能改头、不能按路径路由，但能代理任何 TCP 与 UDP），用 ssl_preread 不解密就按 SNI 分流，RTMP 模块的推流接收、转推、录制与 HLS 切片生成，一份带注释的 rtmp 加 hls 配置，直播延迟的分段量级与为什么 HLS 天生做不到秒级延迟，LL-HLS 与 WebRTC 及 SRT 的定位差异，on_publish 推流鉴权与 secure_link 播放防盗链，以及转码必须独立部署、什么时候自建什么时候用云直播的判断。">
+        <meta name="description" content="自建 RTMP 直播的推流鉴权、HLS 延迟构成、录制转码与带宽成本，以及何时该用云服务替代自建。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/nginx/rtmp/">
     <!-- Open Graph -->
     <meta property="og:title" content="Nginx 流媒体与四层代理：RTMP、HLS 与 stream 模块 - 资深码农">
-    <meta property="og:description" content="Nginx 除了七层 HTTP，还能做四层代理和流媒体，这两块常被忽略。本文讲清 stream 模块与七层代理的根本差异（不解析应用协议、不能改头、不能按路径路由，但能代理任何 TCP 与 UDP），用 ssl_preread 不解密就按 SNI 分流，RTMP 模块的推流接收、转推、录制与 HLS 切片生成，一份带注释的 rtmp 加 hls 配置，直播延迟的分段量级与为什么 HLS 天生做不到秒级延迟，LL-HLS 与 WebRTC 及 SRT 的定位差异，on_publish 推流鉴权与 secure_link 播放防盗链，以及转码必须独立部署、什么时候自建什么时候用云直播的判断。">
+    <meta property="og:description" content="自建 RTMP 直播的推流鉴权、HLS 延迟构成、录制转码与带宽成本，以及何时该用云服务替代自建。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/nginx/rtmp/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Nginx 流媒体与四层代理：RTMP、HLS 与 stream 模块">
-    <meta name="twitter:description" content="Nginx 除了七层 HTTP，还能做四层代理和流媒体，这两块常被忽略。本文讲清 stream 模块与七层代理的根本差异（不解析应用协议、不能改头、不能按路径路由，但能代理任何 TCP 与 UDP），用 ssl_preread 不解密就按 SNI 分流，RTMP 模块的推流接收、转推、录制与 HLS 切片生成，一份带注释的 rtmp 加 hls 配置，直播延迟的分段量级与为什么 HLS 天生做不到秒级延迟，LL-HLS 与 WebRTC 及 SRT 的定位差异，on_publish 推流鉴权与 secure_link 播放防盗链，以及转码必须独立部署、什么时候自建什么时候用云直播的判断。">
+    <meta name="twitter:description" content="自建 RTMP 直播的推流鉴权、HLS 延迟构成、录制转码与带宽成本，以及何时该用云服务替代自建。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
     <meta property="article:tag" content="服务端与云">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 流媒体与四层代理：RTMP、HLS 与 stream 模块","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Nginx 除了七层 HTTP，还能做四层代理和流媒体，这两块常被忽略。本文讲清 stream 模块与七层代理的根本差异（不解析应用协议、不能改头、不能按路径路由，但能代理任何 TCP 与 UDP），用 ssl_preread 不解密就按 SNI 分流，RTMP 模块的推流接收、转推、录制与 HLS 切片生成，一份带注释的 rtmp 加 hls 配置，直播延迟的分段量级与为什么 HLS 天生做不到秒级延迟，LL-HLS 与 WebRTC 及 SRT 的定位差异，on_publish 推流鉴权与 secure_link 播放防盗链，以及转码必须独立部署、什么时候自建什么时候用云直播的判断。","url":"https://www.yijunjun.asia/devops/nginx/rtmp/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/rtmp/"},"articleSection":"服务端与云"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 流媒体与四层代理：RTMP、HLS 与 stream 模块","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"自建 RTMP 直播的推流鉴权、HLS 延迟构成、录制转码与带宽成本，以及何时该用云服务替代自建。","url":"https://www.yijunjun.asia/devops/nginx/rtmp/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/rtmp/"},"articleSection":"服务端与云"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "Nginx 概述", "item": "https://www.yijunjun.asia/devops/nginx/"}, {"position": 4, "name": "RTMP 模块", "item": "https://www.yijunjun.asia/devops/nginx/rtmp/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -357,7 +357,8 @@ http {
 <tr><td>端到端合计</td><td>HLS 切片 4s 时约 15 到 25s</td><td>切片 1s 时约 4 到 6s</td><td>再往下就只能换协议</td></tr>
 </tbody></table>
 
-<p>结论很直接：<strong>HLS 的延迟被切片时长乘以播放器缓冲片数锁死了</strong>，调参数只能在这个框里挪。切片压到 1 秒是常见的下限，再小则文件数与请求数成倍增长，CDN 回源压力、m3u8 刷新频率和卡顿率一起恶化。要真正进入秒级以内必须换协议。</p>
+<p>HLS 延迟被切片时长乘缓冲片数锁死，调参只能在这个框里挪。</p>
+<p>切片压到 1 秒是下限，再小则文件数与请求数成倍增长，CDN 回源压力、m3u8 刷新频率、卡顿率都恶化；进秒级只能换协议。</p>
 
 <table>
 <thead><tr><th>方案</th><th>典型延迟</th><th>兼容性</th><th>适用</th></tr></thead>
@@ -445,7 +446,9 @@ flowchart TB
     SELF2 --> COST
 </div>
 
-<p>自建的账很容易算错，因为机器成本只是小头。<strong>真正的大头是带宽</strong>：一路 3Mbps 的码率，一万人同时看就是 30Gbps 的出口需求，这个量级自己拉专线的单价通常高于云厂商的阶梯价。第二块是转码算力，多码率意味着每路流乘以档位数的 CPU。第三块是运维：断流告警、区域调度、录制转存、鉴权系统、播放质量监控，每一项都要人做。并发小、流数少、或者合规上必须自有机房时自建合理；反之用云服务几乎总是更便宜。</p>
+<p>机器成本是小头，<strong>真正的大头是带宽</strong>：一路 3Mbps 的码率，一万人同时看就是 30Gbps 的出口，专线单价通常高于云厂商阶梯价。</p>
+<p>转码算力：多码率时每路流的 CPU 乘以档位数。运维也要人：断流告警、区域调度、录制转存、鉴权系统、播放质量监控。</p>
+<p>并发小、流数少或合规上必须自有机房时自建合理，反之用云服务几乎总是更便宜。</p>
 
 <h2>反模式对照</h2>
 

@@ -91,18 +91,7 @@
                     </header>
                     <div class="article-content">
 <p>这篇不讲语法，只回答两个工程问题：<strong>Rust 用什么代价换来了什么保证</strong>，以及<strong>你手上这个后端组件值不值得付这个代价</strong>。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份「这个模块该不该用 Rust」的七问自查、用 FFI 把热点换成 Rust 的最小步骤（含 Go 侧调用代码）、异步服务的最小骨架，以及阻塞陷阱速查表。</li>
-        <li><strong>② 原理</strong>：借用检查消灭的是哪一类错误、编译通过之后还剩什么、Send 与 Sync 的推导规则、异步复杂度的四个来源、阻塞调用为什么让 p99 突刺、问号运算符的边界、编译时间与依赖树的成本结构。</li>
-        <li><strong>③ 场景</strong>：按组件形态选语言的决策矩阵、与 Go 和 Java 的逐维对照，以及什么情况下换语言等于白干。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 先做七问自查，再决定动不动手</h2>
+<h2>先做七问自查，再决定动不动手</h2>
 <p>「要不要用 Rust」不是技术品味问题，是七个可以查证的问题。答案全部来自火焰图、压测数据和团队现状，不来自感觉。任意一问落在右列，就先别上。</p>
 <table>
 <thead><tr><th>要判断什么</th><th>怎么取到答案</th><th>可以上的答案</th><th>先别上的答案</th></tr></thead>
@@ -199,7 +188,7 @@ async fn main() -&gt; anyhow::Result&lt;()&gt; {
 </table>
 <p>用法层到此结束。下面的原理层回答这些做法背后的机制：借用检查到底消灭了什么、Send 与 Sync 怎么推导、取消为什么等于 drop、编译时间的成本结构。</p>
 
-<h2>② 原理 · 借用检查消灭的是「内存的时间维度」错误</h2>
+<h2>借用检查消灭的是「内存的时间维度」错误</h2>
 <p>释放后使用、重复释放、悬垂引用、遍历容器时又往里插元素——症状各异，本质是同一件事：<strong>某个引用的可用时间超过了被引用数据的存活时间</strong>。</p>
 <p>这类 bug 的崩溃现场和真正的错误位置相隔很远，靠 review 查不出来。Rust 把它变成编译期约束：同一时刻要么存在一个可变借用，要么存在多个共享借用；引用不得长于被借用值。</p>
 <p>2018 edition 引入的非词法生命周期让借用在最后一次使用处结束，早年「借用检查太蠢」的吐槽多半说的是这之前的编译器。</p>
@@ -233,7 +222,7 @@ flowchart TB
 </div>
 <p>所以它的价值不是「不出 bug」，而是<strong>把一整类无法靠测试稳定复现的错误变成了编译错误</strong>；代价是这些约束必须在动手写的时候就想清楚。</p>
 
-<h2>② 原理 · Send 与 Sync：数据竞争被写进了类型系统</h2>
+<h2>Send 与 Sync：数据竞争被写进了类型系统</h2>
 <p><code>Send</code> 表示所有权可以移动到另一个线程，<code>Sync</code> 表示共享引用可以被多个线程同时持有。两者都是 auto trait，编译器按字段递归推导，只有 <code>unsafe impl</code> 能手动声明。</p>
 <p>一个常被讲错的关系：<code>&amp;T</code> 能不能跨线程传取决于 <code>T</code> 是不是 <code>Sync</code>，而不是 <code>Send</code>——这正是 <code>RefCell</code> 可以被移动却不能被共享的原因。</p>
 <table>
@@ -279,7 +268,7 @@ impl Counter {
 async fn persist(v: u64) { let _ = v; }
 </code></pre>
 
-<h2>② 原理 · 异步 Rust 的复杂度来自四个地方</h2>
+<h2>异步 Rust 的复杂度来自四个地方</h2>
 <p><strong>一、Future 是惰性的。</strong>调用 <code>async fn</code> 只构造出一个状态机，没人 poll 就一行业务代码都不跑；忘写 <code>.await</code> 不是编译错误，只有一条 <code>unused_must_use</code> 警告。<strong>二、运行时不在标准库。</strong></p>
 <p>标准库只给 <code>Future</code>、<code>Waker</code>、<code>Context</code> 这套接口，执行器、定时器、异步 IO 全在第三方运行时里，生态因此按运行时分裂。<strong>三、<code>Pin</code> 是为自引用服务的，不是性能优化。</strong></p>
 <p>跨 <code>.await</code> 持有的局部变量会成为状态机的字段，指向它们的引用让状态机指向自己，一旦移动内部指针就失效。<strong>四、取消等于 drop。</strong></p>
@@ -310,7 +299,7 @@ stateDiagram-v2
     end note
 </div>
 
-<h2>② 原理 · 阻塞调用为什么会让 p99 突刺</h2>
+<h2>阻塞调用为什么会让 p99 突刺</h2>
 <p>多线程执行器的 worker 数默认等于 CPU 核数。一个 worker 上只要有任务在同步读盘、同步压缩，或者长时间占着标准库的锁，它就没法去 poll 排在同一队列里的其他任务。</p>
 <p>线上现象很有欺骗性：<strong>CPU 没跑满，p99 却飙升</strong>——瓶颈是可运行的 worker 数，不是算力。</p>
 <div class="mermaid">
@@ -365,7 +354,7 @@ async fn transfer_with_deadline(from: u64, to: u64, amount: i64) -&gt; anyhow::R
 async fn do_transfer(_f: u64, _t: u64, _a: i64) -&gt; anyhow::Result&lt;()&gt; { Ok(()) }
 </code></pre>
 
-<h2>② 原理 · 错误处理：问号运算符的便利与它的边界</h2>
+<h2>错误处理：问号运算符的便利与它的边界</h2>
 <p><code>Result</code> 只是普通枚举，<code>?</code> 做的事情是「是 Err 就提前 return，顺手用 <code>From</code> 转一次类型」。便利的代价是<strong>错误类型的层次要你自己设计</strong>。</p>
 <p>原则很简单但违反的人很多：库返回能被穷尽匹配的具体枚举，应用才用擦除了类型的动态错误。库里图省事对外抛 <code>anyhow::Error</code>，下游就只能 downcast 或者匹配错误字符串来决定要不要重试。</p>
 <p>另外 <code>?</code> 会吃掉上下文，跨层传递要显式补 <code>context</code>；<code>panic = "abort"</code> 会关掉栈展开，此时 <code>catch_unwind</code> 兜不住任何东西。</p>
@@ -380,7 +369,7 @@ async fn do_transfer(_f: u64, _t: u64, _a: i64) -&gt; anyhow::Result&lt;()&gt; {
 </tbody>
 </table>
 
-<h2>② 原理 · 编译时间与依赖树是要计入工期的成本</h2>
+<h2>编译时间与依赖树是要计入工期的成本</h2>
 <p>编译单元是 <strong>crate 而不是文件</strong>：一个塞了几万行的巨型 crate，改一行注释也要整体重编加重新链接。它影响的不是「流水线慢几分钟」，而是<strong>一天能做多少次改-跑-看的循环</strong>。</p>
 <p>排查顺序是固定的：<code>cargo build --timings</code> 找耗时最长的单元，<code>cargo llvm-lines</code> 找单态化最狠的函数，<code>cargo tree -d</code> 找被同时编译的多版本依赖；然后按依赖方向拆 workspace、冷路径改 <code>dyn Trait</code>、削减过程宏面积、换链接器。</p>
 <p>日常只做类型检查时用 <code>cargo check</code>，能省掉代码生成和链接两步。</p>
@@ -402,7 +391,7 @@ lto = "thin"                  # fat LTO 编译时间涨得凶，收益必须实�
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 </code></pre>
 
-<h2>② 原理 · FFI 与渐进式改造：只把热点换掉</h2>
+<h2>FFI 与渐进式改造：只把热点换掉</h2>
 <p>「用 Rust 重写」在多数团队都是错误决策——要重写的不只是代码，还有几年积累的补丁、边界处理和对接过的第三方 SDK。</p>
 <p>务实路线是压测定位热点，再把编解码、压缩、加解密、规则匹配、向量计算这类<strong>计算密集且接口面很窄</strong>的部分做成库：Go 走 cgo，Java 走 JNI 或 JDK 22 起正式的 FFM，Python 走 PyO3。边界有五条硬规则：只传 POD 与「指针加长度」，不要把 <code>String</code>、<code>Vec</code> 本身跨出去；</p>
 <p>谁分配谁释放，导出函数必须成对；跨界结构体加 <code>#[repr(C)]</code>；panic 不许越界；<strong>接口必须批量化</strong>，否则跨语言调用的固定开销会把计算收益全吃掉。</p>
@@ -430,7 +419,7 @@ pub unsafe extern "C" fn crc32_batch(ptr: *const u8, len: usize, out: *mut u32) 
 }
 </code></pre>
 
-<h2>③ 场景 · 什么场景值得用 Rust，什么场景 Go 或 Java 更合适</h2>
+<h2>什么场景值得用 Rust，什么场景 Go 或 Java 更合适</h2>
 <p>核心问题从来不是「Rust 快不快」，而是<strong>你的延迟被什么决定</strong>：如果 99% 的时间花在等数据库和下游 HTTP，换语言基本没有收益。</p>
 <div class="mermaid">
 flowchart TB

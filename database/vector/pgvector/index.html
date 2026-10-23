@@ -91,18 +91,7 @@
 <p>pgvector 的价值不在于「又多了一个向量库」，而在于向量列和业务表处在同一个事务、同一份备份、同一套权限体系里：一条 SQL 就能完成「向量召回 + JOIN 业务表 + 权限过滤 + 分页」。</p>
 <p>代价是它的能力边界比专用向量库窄，而且有好几个「不报错、但索引静默失效」的坑，小表上完全看不出来，数据一上量就突然慢几十倍。</p>
 <p>这篇只讲边界和正确用法：ANN 索引本身的原理与维度诅咒见站内「向量数据库总览」，与 Milvus / Qdrant 的横向选型见站内「Pinecone / Weaviate / Milvus 对比」，PG 自身的堆表与 HOT、VACUUM、EXPLAIN 判读、work_mem 这些基础见站内 PostgreSQL 系列，本文涉及时只指路不展开。</p>
-
-<div class="callout callout-info">
-<div class="callout-icon">💡</div>
-<div class="callout-title">这篇怎么读</div>
-<ul>
-<li><strong>① 用法</strong>：可直接抄的建表与建索引 SQL、带过滤条件的向量查询正确写法、索引静默退化成全表扫的症状对照表，以及一组上线前必须跑的验收命令。</li>
-<li><strong>② 原理</strong>：各版本与各向量类型的能力边界、操作符与 opclass 为什么必须成对出现、IVFFlat 与 HNSW 的真正分水岭是写入模式、执行计划怎么判读、带过滤时两种计划的行为差异与迭代扫描、建索引的内存与时间估算、TOAST 外存的影响。</li>
-<li><strong>③ 场景</strong>：同库同事务到底省了什么、什么信号出现时该搬去专用向量库、模型换代怎么灰度迁移。</li>
-</ul>
-</div>
-
-<h2>① 用法 · 可以直接抄的建表、建索引与查询</h2>
+<h2>可以直接抄的建表、建索引与查询</h2>
 
 <p>先给一份能跑通的完整流程。八个步骤里有三处「写错不报错」的地方：操作符与 opclass 不匹配、缺 <code>LIMIT</code>、<code>ef_search</code> 小于 k——它们在小表上完全测不出来，等表长到几百万行才以 P99 崩掉的形式出现。</p>
 
@@ -209,7 +198,7 @@ SHOW hnsw.iterative_scan;</code></pre>
 
 <p>上面每一条「为什么必须这么写」——opclass 与操作符的绑定关系、两种执行计划的选择依据、迭代扫描解决的到底是什么问题、建索引的内存从哪来——都在原理层。</p>
 
-<h2>② 原理 · 装什么版本，能存什么类型</h2>
+<h2>装什么版本，能存什么类型</h2>
 
 <p>pgvector 是 C 扩展，需要在每个 database 里单独 <code>CREATE EXTENSION</code>。版本差异非常大，很多网上的教程写于 0.4 时代，照抄会白白放弃这两年最重要的几项能力。</p>
 <p>上线前第一件事是查清服务端装的到底是哪个版本——托管云数据库经常落后社区一两个大版本。</p>
@@ -292,7 +281,7 @@ CREATE INDEX doc_chunk_emb_hnsw ON doc_chunk
 --     USING ivfflat (embedding halfvec_cosine_ops) WITH (lists = 1000);
 </code></pre>
 
-<h2>② 原理 · 三种距离操作符与 opclass 的死规矩</h2>
+<h2>三种距离操作符与 opclass 的死规矩</h2>
 
 <p>这是 pgvector 最高频的生产事故，没有第二名。<strong>查询里用的距离操作符必须和建索引时声明的 opclass 严格对应，不匹配时 PostgreSQL 不会报错、不会告警，只会安静地退化成全表精确扫描。</strong></p>
 <p>结果是完全正确的，所以测试环境里一切正常；等到线上表长到几百万行，一次查询要扫几个 GB，P99 直接崩掉。</p>
@@ -314,7 +303,7 @@ CREATE INDEX doc_chunk_emb_hnsw ON doc_chunk
 <p>另外 <code>&lt;#&gt;</code> 返回的是负内积，直接把它当相似度展示给前端会出现「负分」。</p>
 </div>
 
-<h2>② 原理 · IVFFlat 与 HNSW：真正的区别不是快慢</h2>
+<h2>IVFFlat 与 HNSW：真正的区别不是快慢</h2>
 
 <p>流传最广的错误说法是「IVFFlat 省内存所以大表用它」。实际上两者的原始向量都要落在同一张堆表里，IVFFlat 省掉的是图结构那部分开销和构建时间，查询时该读的向量页一样得读。</p>
 <p><strong>真正的分水岭是：数据是不是一次性灌完、之后还写不写。</strong></p>
@@ -362,7 +351,7 @@ flowchart TB
 <tr><td><code>hnsw.iterative_scan</code></td><td>HNSW 查询，0.8+</td><td><code>off</code></td><td><code>relaxed_order</code> 解决带过滤时结果不足，延迟上升</td><td>关闭时过滤场景经常凑不满 K 条</td><td>带 WHERE 的检索一律打开</td></tr>
 </tbody></table>
 
-<h2>② 原理 · 用 EXPLAIN 确认索引真的生效</h2>
+<h2>用 EXPLAIN 确认索引真的生效</h2>
 
 <p>向量索引的触发条件很窄：<strong>只有写成「<code>ORDER BY 向量列 距离操作符 常量</code> 升序 + <code>LIMIT k</code>」的形态才可能用上。</strong></p>
 <p>缺 <code>LIMIT</code>、把排序改写成相似度降序、在距离外面套一层算术运算、或者查询参数没有被识别成同类型的向量，都会让优化器直接放弃索引。判读方法只有一条：看计划里出现的是 <code>Index Scan using ...</code> 配 <code>Order By:</code>，还是 <code>Sort</code> 配 <code>Seq Scan</code>。</p>
@@ -406,7 +395,7 @@ FROM doc_chunk ORDER BY embedding &lt;=&gt; $1 LIMIT 10;
 <tr><td>Buffers 里 <code>shared read</code> 巨大</td><td>向量数据或图结构没在内存里</td><td>核对内存预算，考虑 halfvec 或换机型</td></tr>
 </tbody></table>
 
-<h2>② 原理 · 过滤与向量检索结合：最大优势也是最大陷阱</h2>
+<h2>过滤与向量检索结合：最大优势也是最大陷阱</h2>
 
 <p>这是 pgvector 相比专用向量库最实在的优势——过滤条件就是普通 SQL，优化器会真的做代价估算；也是最容易出现「结果诡异」的地方。同一条带 <code>WHERE</code> 的向量查询，PostgreSQL 可能生成两种完全不同的计划：</p>
 
@@ -465,7 +454,7 @@ LIMIT 10;
 <p>再进一步，可以对大租户建<strong>部分索引</strong>（<code>CREATE INDEX ... WHERE tenant_id = 7</code>），或者直接按租户做分区表，让每次检索只面对自己那一份向量。这类改造的效果通常远超把 <code>ef_search</code> 从 40 调到 200。</p>
 </div>
 
-<h2>② 原理 · 建索引的内存、并行度与时间</h2>
+<h2>建索引的内存、并行度与时间</h2>
 
 <p>HNSW 建索引是整个 pgvector 使用过程里最容易低估的一项工程成本。</p>
 <p>构图过程需要把整张图放进 <code>maintenance_work_mem</code>，<strong>装不下时 pgvector 会在日志里提示图已不适合放在维护内存中，然后退化成基于磁盘的构建方式，耗时可能拉长十倍以上</strong>。</p>
@@ -504,7 +493,7 @@ SELECT indexrelid::regclass AS idx, indisvalid
 FROM pg_index WHERE NOT indisvalid;
 </code></pre>
 
-<h2>② 原理 · 向量列的存储布局：TOAST 是隐形税</h2>
+<h2>向量列的存储布局：TOAST 是隐形税</h2>
 
 <p>一个 1536 维的 <code>vector</code> 占 6152 字节，远超 PostgreSQL 约 2KB 的行内存储阈值，因此向量列会被推到 TOAST 副表里。这意味着每取一行向量都要多一次 TOAST 表的访问；</p>
 <p>在计划 A（先过滤再精算距离）里，这个开销会乘以候选行数，是「过滤后只剩几千行却还是很慢」的常见原因。</p>
@@ -521,7 +510,7 @@ FROM pg_index WHERE NOT indisvalid;
 <p>两条实操建议。第一，把向量表做窄：只留主键、用于过滤的少量字段和向量列，业务字段 JOIN 回原表。这样堆表页里能塞进更多元组，顺序扫描和精算距离的 IO 都会明显下降。</p>
 <p>第二，如果维度不高且确实受 TOAST 拖累，可以 <code>ALTER TABLE doc_chunk ALTER COLUMN embedding SET STORAGE PLAIN</code>；注意<strong>这只对之后写入的行生效</strong>，已有数据需要重写表（比如 <code>VACUUM FULL</code> 或用新表迁移）才会改变布局，别以为执行完 ALTER 就生效了。</p>
 
-<h2>③ 场景 · 什么情况下 pgvector 是对的，什么信号出现时该搬家</h2>
+<h2>什么情况下 pgvector 是对的，什么信号出现时该搬家</h2>
 
 <p>pgvector 的判断线不是「性能够不够」，而是「向量检索的资源消耗会不会伤到同一个实例上的业务查询」。下表按场景给出做法与代价。</p>
 
@@ -536,7 +525,7 @@ FROM pg_index WHERE NOT indisvalid;
 <tr><td>需要关键词与语义混排</td><td>用 PG 的全文检索配向量做排名融合，或直接用已有的 Elasticsearch</td><td>混排是原生能力时边际成本最低</td><td>在 PG 里要自己写融合 SQL 并各自调权重，可维护性不如 ES 的原生接口</td></tr>
 </tbody></table>
 
-<h2>③ 场景 · 同库同事务到底省了什么</h2>
+<h2>同库同事务到底省了什么</h2>
 
 <p>「一条 SQL 搞定检索加过滤」只是表面收益，更值钱的是一致性。外挂向量库最典型的数据漂移是：业务库里的文档已经删了，向量库里的分块还在，于是检索把已下线的内容召回给用户看。</p>
 <p>在 pgvector 里，删文档和删向量可以放进同一个事务，要么一起成功要么一起回滚；备份恢复到某个时间点时，向量和业务数据天然对齐；行级权限、审计日志、连接池、慢查询监控这些 PG 生态的东西也全部复用。</p>
@@ -552,7 +541,7 @@ FROM pg_index WHERE NOT indisvalid;
 <tr><td>运维复杂度</td><td>只多一个扩展</td><td>多一套集群、监控、升级流程</td></tr>
 </tbody></table>
 
-<h2>③ 场景 · 模型换代：向量列的灰度迁移</h2>
+<h2>模型换代：向量列的灰度迁移</h2>
 
 <p>换嵌入模型是一定会发生的事，而且<strong>不同模型产出的向量完全不可比较</strong>——不能原地 <code>UPDATE</code> 逐步替换，因为替换期间新旧向量混在一张表里，距离计算得到的是毫无意义的数字；</p>
 <p>更糟的是检索结果看起来还挺正常，只是质量莫名下降，非常难查。正确做法是双写加灰度：</p>

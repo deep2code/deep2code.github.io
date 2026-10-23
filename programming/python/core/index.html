@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Python 运行时机制：引用计数与分代 GC、gc.freeze 与阈值、不朽对象、属性查找链、装饰器求值时机、Protocol 与常数因子。">
+        <meta name="description" content="描述符协议与 __getattr__ 的触发条件、property 递归坑，装饰器与闭包在导入期和延迟绑定上的常见错误。">
     <meta name="keywords" content="Python,数据模型,类型注解,Type Hints,装饰器,上下文管理器,迭代器,生成器,魔术方法">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/python/core/">
     <!-- Open Graph -->
     <meta property="og:title" content="Python 运行时机制：对象模型、内存与 GIL - 资深码农">
-    <meta property="og:description" content="Python 运行时机制：引用计数与分代 GC、gc.freeze 与阈值、不朽对象、属性查找链、装饰器求值时机、Protocol 与常数因子。">
+    <meta property="og:description" content="描述符协议与 __getattr__ 的触发条件、property 递归坑，装饰器与闭包在导入期和延迟绑定上的常见错误。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/python/core/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Python 运行时机制：对象模型、内存与 GIL - 资深码农">
-    <meta name="twitter:description" content="Python 运行时机制：引用计数与分代 GC、gc.freeze 与阈值、不朽对象、属性查找链、装饰器求值时机、Protocol 与常数因子。">
+    <meta name="twitter:description" content="描述符协议与 __getattr__ 的触发条件、property 递归坑，装饰器与闭包在导入期和延迟绑定上的常见错误。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="Python">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Python 运行时机制：对象模型、内存与 GIL","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Python 运行时机制：引用计数与分代 GC、gc.freeze 与阈值、不朽对象、属性查找链、装饰器求值时机、Protocol 与常数因子。","url":"https://www.yijunjun.asia/programming/python/core/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/python/core/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Python 运行时机制：对象模型、内存与 GIL","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"描述符协议与 __getattr__ 的触发条件、property 递归坑，装饰器与闭包在导入期和延迟绑定上的常见错误。","url":"https://www.yijunjun.asia/programming/python/core/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/python/core/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Python 语言核心", "item": "https://www.yijunjun.asia/programming/python/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -93,18 +93,7 @@
 <p>写业务代码不需要知道 CPython 怎么实现的，但排查内存只涨不降、解释「为什么这个类占了 200MB」、判断某段热路径还能不能优化，就必须知道。</p>
 <p>这篇只讲运行时层面的机制：对象怎么布局、内存怎么回收、属性怎么查找、哪些写法的开销来自实现而不是算法。</p>
 <p>GIL 对并发模型的影响见<a href="../">Python 做后端的适用边界与运行时约束</a>，这里只讲它在对象层留下的痕迹。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：出现内存或性能问题时的动手顺序——先按现象分型，再用 Pss 确认进程真实占用、用 tracemalloc 两次快照定位到具体行、用 GC 统计与引用查询判断是循环引用还是真被持有，外加一张工具速查表（看什么、开销多大、有什么坑）。</li>
-        <li><strong>② 原理</strong>：对象头的固定开销与常见类型的实际字节数、引用计数与分代 GC 各管什么、<code>gc.freeze()</code> 为什么能省多进程的内存、<code>__slots__</code> 换掉了什么、属性查找的优先级链、装饰器与闭包的执行时机、Protocol 的约束时机，以及热路径开销的来源。</li>
-        <li><strong>③ 场景</strong>：从症状到处置的决策矩阵、七类反模式，以及哪些问题不该在这一层解决。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 内存与性能问题的动手顺序</h2>
+<h2>内存与性能问题的动手顺序</h2>
 <p>内存问题最容易走弯路的地方是顺序错了：还没确认「是 Python 堆在涨」就开始翻业务代码。下面这张表先做分型，右列是这类现象应该先做的那一件事。</p>
 <table>
 <thead><tr><th>现象</th><th>大概率原因</th><th>先做什么</th></tr></thead>
@@ -172,7 +161,7 @@ print("谁引用了它:", [type(r).__qualname__ for r in gc.get_referrers(suspec
 </table>
 <p>这一层不解释为什么，比如「为什么 <code>getsizeof</code> 不递归就会差一个数量级」「为什么 fork 前要 freeze」，都在下面的原理层。</p>
 
-<h2>② 原理 · 一切皆对象，代价写在对象头里</h2>
+<h2>一切皆对象，代价写在对象头里</h2>
 <p>搞清这一节能解决的现象是：容量规划按元素个数乘字段长度算，结果实际占用是估算的好几倍。Python 没有「基本类型」。</p>
 <p>整数、布尔、函数、类、模块全部是堆上的对象，每个对象至少带 <strong>16 字节对象头</strong>：8 字节引用计数（<code>ob_refcnt</code>）加 8 字节类型指针（<code>ob_type</code>）。变长对象（int、str、list、tuple）再加一个 8 字节的长度字段。</p>
 
@@ -241,7 +230,7 @@ print("getsizeof 只看容器本体:", sys.getsizeof(cache) / 1024 / 1024, "MB")
 print("递归统计真实占用:", deep_size(cache) / 1024 / 1024, "MB")
 </code></pre>
 
-<h2>② 原理 · 引用计数与分代 GC 的分工</h2>
+<h2>引用计数与分代 GC 的分工</h2>
 <p>搞清这一节能解决的现象是：把所有内存问题都归给「Python 的 GC 慢」，或者在请求路径上调 <code>gc.collect()</code> 换来几百毫秒停顿。两套机制职责完全不同。引用计数是主力：计数归零立即释放，没有停顿，<code>del</code> 之后内存就回到分配器。</p>
 <p>它唯一处理不了的是<strong>循环引用</strong>——互相引用的两个对象计数永远大于零。分代 GC 就只为这一件事存在。</p>
 
@@ -304,7 +293,7 @@ print(gc.get_threshold(), gc.get_count())   # 观察各代当前计数
     <p>3.12 起 <code>None</code>、<code>True</code>、<code>False</code> 与小整数等单例成为「不朽对象」（immortal），它们的引用计数不再随使用变动。这条改动的直接收益就在多进程场景：以前哪怕只是读一下 <code>None</code>，也会改动对象头触发写时复制，现在不会了。</p>
 </div>
 
-<h2>② 原理 · <code>__slots__</code>：把属性字典换成固定槽位</h2>
+<h2><code>__slots__</code>：把属性字典换成固定槽位</h2>
 <p>搞清这一节能解决的现象是：百万级实例的服务多出几百 MB 常驻内存。普通实例的属性存在实例自带的 <code>__dict__</code> 里，灵活但每个实例都要多付一个字典。</p>
 <p>声明 <code>__slots__</code> 后，解释器在类型对象上为每个属性分配固定偏移的槽位（底层是数据描述符），实例不再创建字典。</p>
 
@@ -322,7 +311,7 @@ print(gc.get_threshold(), gc.get_count())   # 观察各代当前计数
 
 <p>判断标准很简单：实例数量到百万级才值得上 <code>__slots__</code>，几千个对象省下来的内存不值得牺牲灵活性。</p>
 
-<h2>② 原理 · 属性查找顺序：为什么 property 拦得住赋值</h2>
+<h2>属性查找顺序：为什么 property 拦得住赋值</h2>
 <p>搞清这一节能解决的现象是「明明实例里有这个属性，怎么走进了 property」以及「为什么 <code>__getattr__</code> 里打印日志会递归爆栈」。<code>obj.x</code> 不是一次字典查找，而是一条有优先级的链。</p>
 
 <div class="mermaid">
@@ -350,8 +339,8 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · 装饰器与闭包：执行时机比语法更容易出错</h2>
-<p>搞清这一节能解决的现象是：测试无法隔离、traceback 里全是 wrapper、循环里注册的回调全部拿到最后一个值。装饰器的本质就是 <code>f = deco(f)</code>，关键在于<strong>它在模块导入时就执行</strong>。</p>
+<h2>装饰器与闭包：执行时机比语法更容易出错</h2>
+<p>装饰器就是 <code>f = deco(f)</code>，<strong>它在模块导入时就执行</strong>。测试无法隔离、traceback 全是 wrapper、循环注册的回调拿到最后一个值，都是导入期执行导致的。</p>
 <p>所以在装饰器里连数据库、读远程配置、注册全局状态，会让导入顺序变成隐式依赖，测试时也无法绕开。</p>
 
 <pre><code class="language-python">import functools
@@ -397,7 +386,7 @@ print([f() for f in fns])            # [0, 1, 2]，用默认参数在定义时�
 </tbody>
 </table>
 
-<h2>② 原理 · 鸭子类型与 Protocol：比 ABC 更轻的约束</h2>
+<h2>鸭子类型与 Protocol：比 ABC 更轻的约束</h2>
 <p>搞清这一节能解决的现象是：接口约定只能在跑到那一行时才发现没实现。Python 的接口一直靠鸭子类型，<code>typing.Protocol</code> 给了结构化类型：<strong>不需要继承，只要方法签名匹配就算实现</strong>，检查交给 mypy 在 CI 里做。</p>
 
 <table>
@@ -410,7 +399,7 @@ print([f() for f in fns])            # [0, 1, 2]，用默认参数在定义时�
 </tbody>
 </table>
 
-<h2>② 原理 · CPython 的性能特征：开销来自实现</h2>
+<h2>CPython 的性能特征：开销来自实现</h2>
 <p>搞清这一节能解决的现象是：算法复杂度看着没问题，实测却慢几倍。同样的复杂度，Python 的常数因子来自三件事：每个操作都要经过对象头与类型检查、属性查找是多次字典查找、函数调用要建栈帧。</p>
 <p>所以优化方向不是「少写几行」，而是<strong>把解释器的重复工作搬出热路径</strong>。</p>
 
@@ -430,7 +419,7 @@ print([f() for f in fns])            # [0, 1, 2]，用默认参数在定义时�
 </table>
 <p>字节码层面的专用化机制、指令分发与更细的性能特征在<a href="../internals/">CPython 实现细节：字节码、解释器与性能特征</a>。</p>
 
-<h2>③ 场景 · 症状到处置的决策矩阵</h2>
+<h2>症状到处置的决策矩阵</h2>
 <p>前面的机制是「点」，这里收成「面」：按真实场景给方案、给理由、也给代价。</p>
 <table>
 <thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
@@ -446,7 +435,7 @@ print([f() for f in fns])            # [0, 1, 2]，用默认参数在定义时�
 </tbody>
 </table>
 
-<h2>③ 场景 · 反模式与不适用边界</h2>
+<h2>反模式与不适用边界</h2>
 <table>
 <thead><tr><th>反模式</th><th>后果</th><th>正确做法</th></tr></thead>
 <tbody>

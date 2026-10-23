@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Kafka 分区设计：分区数与分区键怎么定、上限从哪来、扩分区为何打断顺序，以及 compact 与 delete 的语义差异。">
+        <meta name="description" content="Kafka 分区设计：分区数上限从哪来、扩分区为何打断顺序、粘性分区器的假倾斜、倾斜判定信号、副本与 compact/delete 语义。">
     <meta name="keywords" content="Kafka分区,副本机制,ISR,Leader选举,日志段,HW,LEO">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/topic-partition/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kafka 分区设计：分区数、分区键与顺序性代价 - 资深码农">
-    <meta property="og:description" content="Kafka 分区设计：分区数与分区键怎么定、上限从哪来、扩分区为何打断顺序，以及 compact 与 delete 的语义差异。">
+    <meta property="og:description" content="Kafka 分区设计：分区数上限从哪来、扩分区为何打断顺序、粘性分区器的假倾斜、倾斜判定信号、副本与 compact/delete 语义。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/topic-partition/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kafka 分区设计：分区数、分区键与顺序性代价 - 资深码农">
-    <meta name="twitter:description" content="Kafka 分区设计：分区数与分区键怎么定、上限从哪来、扩分区为何打断顺序，以及 compact 与 delete 的语义差异。">
+    <meta name="twitter:description" content="Kafka 分区设计：分区数上限从哪来、扩分区为何打断顺序、粘性分区器的假倾斜、倾斜判定信号、副本与 compact/delete 语义。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="架构与分布式">
     <meta property="article:tag" content="Kafka,分区,副本,存储引擎">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 分区设计：分区数、分区键与顺序性代价","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 分区设计：分区数与分区键怎么定、上限从哪来、扩分区为何打断顺序，以及 compact 与 delete 的语义差异。","url":"https://www.yijunjun.asia/architecture/kafka/topic-partition/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/topic-partition/"},"articleSection":"后端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 分区设计：分区数、分区键与顺序性代价","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 分区设计：分区数上限从哪来、扩分区为何打断顺序、粘性分区器的假倾斜、倾斜判定信号、副本与 compact/delete 语义。","url":"https://www.yijunjun.asia/architecture/kafka/topic-partition/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/topic-partition/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "Kafka 分区与副本", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>Kafka 绝大多数参数都能在线改，改错改回来就行。分区数和分区键不是——<strong>分区只能增不能减，增加分区会立刻改变 key 到分区的映射；分区键一旦上线，改了就等于换一套顺序性语义</strong>。</p>
 <p>这两个决策做错，代价是一次主题级别的数据迁移。这篇只谈这两件事怎么定。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：定分区数的四步（含实测单分区吞吐的命令）、选分区键的三问判断图、验证倾斜的三条命令与判读方法，以及 topic 级配置速查。</li>
-        <li><strong>② 原理</strong>：分区数决定哪四件事、上限来自句柄与生产端批次缓冲与选举耗时、扩分区为什么当场打断顺序、粘性分区器在 2.4 的变化、倾斜的判定信号与三种治法、顺序性四个层级的代价、RF 与 <code>min.insync.replicas</code> 的组合约束与机架感知、compact 与墓碑语义。</li>
-        <li><strong>③ 场景</strong>：从需求反推一组分区参数的决策矩阵，以及存量主题要改时扩分区与重分配各自的代价。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 分区数怎么定、分区键怎么选</h2>
+<h2>分区数怎么定、分区键怎么选</h2>
 
 <p>分区数按下面四步算，别拍脑袋也别抄别人的数字。第一步和第四步都有对应命令。</p>
 
@@ -192,7 +181,7 @@ bin/kafka-console-consumer.sh --bootstrap-server kafka-1:9092 \
 </tbody>
 </table>
 
-<h2>② 原理 · 分区数决定什么，上限从哪来</h2>
+<h2>分区数决定什么，上限从哪来</h2>
 
 <p>搞清这一节能解决两个反复出现的判断：「加分区能不能解决堆积」和「分区多一点总没坏处吧」。</p>
 
@@ -224,7 +213,7 @@ bin/kafka-console-consumer.sh --bootstrap-server kafka-1:9092 \
 <p>这类故障的排查方向常常一开始就跑偏，因为 broker 的所有指标都正常。</p>
 </div>
 
-<h2>② 原理 · 扩分区为什么当场打断顺序</h2>
+<h2>扩分区为什么当场打断顺序</h2>
 
 <p>搞清这一节能解释一个诡异现象：扩完分区之后，同一个订单的退款事件比支付事件先被处理。</p>
 
@@ -252,9 +241,9 @@ flowchart TB
 <p>分区为什么不能减少：删掉一个分区就得决定里面的数据怎么办，搬到别的分区会破坏 offset 连续性与分区内有序，直接丢弃是静默丢数据，两种都不可接受，于是 Kafka 干脆禁止。</p>
 <p>真的需要减少时，唯一办法是新建一个分区数正确的主题做一次迁移。</p>
 
-<h2>② 原理 · 分区器的行为与 2.4 的那次变化</h2>
+<h2>分区器的行为与 2.4 的那次变化</h2>
 
-<p>搞清这一节能解决「为什么无 key 消息看起来分布不均」。分区选择完全发生在客户端，默认分区器的行为分两种情况：</p>
+<p>分区选择完全发生在客户端，服务端不参与。默认分区器按有没有 key 分两种行为：</p>
 
 <ul>
 <li><strong>有 key</strong>：对序列化后的 key 字节做 murmur2 哈希，转正后对当前分区总数取模。注意哈希的是<strong>序列化后的字节</strong>，所以换序列化方式会改变分区归属；取模的是当前分区总数，所以扩分区会改变映射。</li>
@@ -309,7 +298,7 @@ public class HotKeySaltingPartitioner implements Partitioner {
 // 注意：打散后该热点实体的事件会被多个消费者并行处理，
 // 下游必须能容忍乱序，或者自己按版本号与时间戳做幂等与覆盖判断。</code></pre>
 
-<h2>② 原理 · 倾斜的五个判定信号与对应治法</h2>
+<h2>倾斜的五个判定信号与对应治法</h2>
 
 <p>用法层给了取数命令，这里给的是「看到什么样的数据对应什么原因」。</p>
 
@@ -323,7 +312,7 @@ public class HotKeySaltingPartitioner implements Partitioner {
 <tr><td>分区数据量均衡，但某台 broker 负载明显偏高</td><td>Leader 分布不均，多个主题的 Leader 恰好堆在同一节点</td><td>执行优先副本选举，必要时用重分配调整副本落点</td><td>重分配期间有额外网络开销，必须限流</td></tr>
 </tbody></table>
 
-<h2>② 原理 · 顺序性的四个层级与代价</h2>
+<h2>顺序性的四个层级与代价</h2>
 
 <p>搞清这张表能避免一句很贵的口头承诺：「这个主题是有序的」。</p>
 
@@ -344,7 +333,7 @@ public class HotKeySaltingPartitioner implements Partitioner {
 <p>另外生产端也要注意：允许重试且 in-flight 请求大于 1 时，失败重试会让后发的消息先落盘，必须靠幂等 Producer 兜住，幂等与事务的边界见 <a href="../">主干篇</a>。</p>
 </div>
 
-<h2>② 原理 · 副本数、min.insync.replicas 与机架感知</h2>
+<h2>副本数、min.insync.replicas 与机架感知</h2>
 
 <p>搞清这张表能避免一类自相矛盾的配置：为了「更可靠」反而把集群配成一台重启就不可写。</p>
 
@@ -363,7 +352,7 @@ public class HotKeySaltingPartitioner implements Partitioner {
 <p>注意两点：<strong>标注必须在建主题之前完成</strong>，已有主题的副本分布不会自动调整，需要用重分配工具手动改；</p>
 <p><strong>跨可用区的副本同步会产生跨区流量</strong>，云上这部分费用常常被漏算，而且 RTT 增加会让 <code>acks=all</code> 的写入延迟上升，必要时配合 <code>replica.selector.class</code> 让消费者就近读副本。</p>
 
-<h2>② 原理 · compact 与 delete 的语义差异</h2>
+<h2>compact 与 delete 的语义差异</h2>
 
 <p>搞清这一节能避免一种静默丢数据：对事件流误用 compact。</p>
 
@@ -391,7 +380,7 @@ stateDiagram-v2
 <p>三个容易踩的点：compact <strong>只保证每个 key 的最新值必定保留，不保证旧版本立刻消失</strong>（活跃段不参与压实，短期内仍会读到多个版本）；<strong>无 key 消息在 compact 主题里无意义</strong>，无法被去重；</p>
 <p>两种策略可以同时写成 <code>compact,delete</code>，语义是先按 key 压实再按时间清理，适合状态量大但历史 key 会彻底废弃的场景。</p>
 
-<h2>③ 场景 · 从需求反推一组分区参数</h2>
+<h2>从需求反推一组分区参数</h2>
 
 <p>前面把每个维度拆开讲了，落地时需要反向映射：手上这个需求，分区数、分区键、RF 与清理策略怎么组合。下表每行是一个完整组合，代价列是选了就必须一起接受的。</p>
 
@@ -408,7 +397,7 @@ stateDiagram-v2
 </tbody>
 </table>
 
-<h2>③ 场景 · 存量主题要改：扩分区与重分配的代价</h2>
+<h2>存量主题要改：扩分区与重分配的代价</h2>
 
 <p>如果分区数或副本分布已经错了，能用的手段只有三种，代价差别很大：<strong>扩分区</strong>（便宜但打断顺序）、<strong>重分配</strong>（不影响语义但吃带宽）、</p>
 <p><strong>新建主题迁移</strong>（唯一能减少分区数的办法，但要改上下游）。重分配的过程与它的重负载点如下：</p>

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="make 的模型：时间戳依赖图、伪目标与传染性、立即与递归赋值、模式规则、并行构建与头文件依赖。">
+        <meta name="description" content="make 的时间戳依赖模型：不看内容不算哈希、touch 能骗过它、秒级文件系统破坏排序，四种赋值的展开时机差异。">
     <meta name="keywords" content="Makefile,make,构建工具,编译,CFLAGS,LDFLAGS,模式规则,并行编译,静态库,动态库,CMake,Meson,pkg-config">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/tools/devenv/make/">
     <!-- Open Graph -->
     <meta property="og:title" content="Make 的依赖图与工程化用法 - 资深码农">
-    <meta property="og:description" content="make 的模型：时间戳依赖图、伪目标与传染性、立即与递归赋值、模式规则、并行构建与头文件依赖。">
+    <meta property="og:description" content="make 的时间戳依赖模型：不看内容不算哈希、touch 能骗过它、秒级文件系统破坏排序，四种赋值的展开时机差异。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/tools/devenv/make/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Make 的依赖图与工程化用法 - 资深码农">
-    <meta name="twitter:description" content="make 的模型：时间戳依赖图、伪目标与传染性、立即与递归赋值、模式规则、并行构建与头文件依赖。">
+    <meta name="twitter:description" content="make 的时间戳依赖模型：不看内容不算哈希、touch 能骗过它、秒级文件系统破坏排序，四种赋值的展开时机差异。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="开发工具与工程效率">
     <meta property="article:tag" content="开发工具与效率">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Make 的依赖图与工程化用法","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"make 的模型：时间戳依赖图、伪目标与传染性、立即与递归赋值、模式规则、并行构建与头文件依赖。","url":"https://www.yijunjun.asia/tools/devenv/make/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/devenv/make/"},"articleSection":"开发工具与效率"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Make 的依赖图与工程化用法","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"make 的时间戳依赖模型：不看内容不算哈希、touch 能骗过它、秒级文件系统破坏排序，四种赋值的展开时机差异。","url":"https://www.yijunjun.asia/tools/devenv/make/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/devenv/make/"},"articleSection":"开发工具与效率"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "开发工具与工程效率", "item": "https://www.yijunjun.asia/tools/"}, {"position": 3, "name": "Makefile 构建", "item": "https://www.yijunjun.asia/tools/devenv/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -98,7 +98,7 @@
 <h2>核心模型：时间戳驱动的依赖图</h2>
 <p>一条规则由三部分组成：target（要生成的文件）、prerequisite（它依赖的文件）、recipe（怎么从依赖生成目标）。make 对每个目标的判定只有两条：<strong>目标文件不存在就重建；目标存在但任一依赖的 mtime 比目标新就重建</strong>。</p>
 <p>注意是「比目标新」，时间戳相等不算过期。</p>
-<p>由此推出几个反直觉的结论。第一，make <strong>不看内容也不算哈希</strong>，所以 <code>touch</code> 能骗过它，改了 CFLAGS 也不会触发重建——参数不是文件。</p>
+<p>make <strong>不看内容也不算哈希</strong>，<code>touch</code> 能骗过它；改了 CFLAGS 也不触发重建，参数不是文件。</p>
 <p>第二，文件系统的时间戳精度会直接影响正确性：ext4 是纳秒精度，而部分网络文件系统和挂载选项只有秒级，同一秒内先后生成的两个文件在 make 眼里时间戳相等，于是「该重建的没重建」。</p>
 <p>第三，目录也是文件，而目录的 mtime 会随内部增删文件而变化，所以把目录写成普通依赖会导致无限重建——这正是 order-only 依赖存在的原因。</p>
 <p>order-only 依赖写在依赖列表的竖线后面：<code>target: 普通依赖 | order-only 依赖</code>。它只保证在构建目标之前先把这些节点建好，<strong>完全不参与时间戳比较</strong>。创建输出目录是它的标准用法。</p>
@@ -168,7 +168,7 @@ flowchart TB
 
 <h2>变量的四种赋值与展开时机</h2>
 <p>make 的执行分成两个阶段：<strong>读取阶段</strong>读入所有 Makefile、求值立即赋值的变量、记录规则（recipe 原文暂不展开）；<strong>执行阶段</strong>做时间戳判定，并在真的要执行某个 recipe 时才展开其中的变量和函数。</p>
-<p>赋值运算符的差别，本质上就是「在哪个阶段求值」。</p>
+<p>各赋值运算符的区别，就是展开发生在哪个阶段。</p>
 <table>
 <thead><tr><th>运算符</th><th>求值时机</th><th>能否引用后面才定义的变量</th><th>右侧含 shell 函数时执行几次</th><th>该用在哪</th></tr></thead>
 <tbody>

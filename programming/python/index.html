@@ -74,18 +74,7 @@
     </header>
 <p>Python 在后端的位置常被两种极端说法带偏：一边说「有 GIL 所以做不了并发」，一边说「上了 asyncio 就能抗万级 QPS」。两句都不准确。</p>
 <p>这篇只做一件事——把 Python 的运行时约束讲到能用于决策的精度，然后据此回答两个问题：这个需求该不该用 Python 写，上线该用什么部署形态。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份「这个需求适不适合 Python」的七问自查清单、一段在目标环境里量 CPU 配额与单 worker 常驻内存的探针脚本，以及运行时约束速查表——每一行都写清准确值该从哪里读，而不是给一个会过期的数字。</li>
-        <li><strong>② 原理</strong>：GIL 究竟锁住了什么、哪些调用会放开它、由此推出的三种并发模型与它们的开销对照、per-interpreter GIL 与 free-threaded 构建的真实进展，以及「单进程永远吃不满多核」背后的进程模型。</li>
-        <li><strong>③ 场景</strong>：哪些场景 Python 是最优解、哪些换语言更划算、与 Go 和 Java 怎么分工，以及六类高频反模式的现象与修法。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 选型自查清单与运行时约束速查</h2>
+<h2>选型自查清单与运行时约束速查</h2>
 <p>「该不该用 Python」不是风格问题，它可以被拆成七个能用数字或事实回答的问题。下面这张表照着过一遍，任何一行答不上来就说明还没到做决定的时候；每一行背后的机制在原理层。</p>
 <table>
 <thead><tr><th>要判断什么</th><th>什么算过关</th><th>不过关怎么办</th></tr></thead>
@@ -170,7 +159,7 @@ print("建议起步 worker 数 = min(内存侧上限, 向上取整的 CPU 配额
 </table>
 <p>这一层只给判断依据，不解释为什么。GIL 的准确语义、哪些调用会放开它、三种并发模型各自的代价，都在原理层。</p>
 
-<h2>② 原理 · GIL 锁住的是字节码，不是并发</h2>
+<h2>GIL 锁住的是字节码，不是并发</h2>
 <p>搞清这一节能解决的现象是：为什么加线程之后 CPU 任务更慢，而 IO 任务确实变快了。准确表述只有一句：<strong>同一个 CPython 进程内，同一时刻只有一个线程在执行 Python 字节码</strong>。两个限定词都重要。</p>
 <p>「字节码」意味着线程一旦离开解释器——进入 IO 系统调用，或进入主动释放 GIL 的 C 代码——GIL 就被放开；「同一进程」意味着进程之间根本不存在 GIL 竞争。</p>
 <p>所以「Python 不能并发」是错的。IO 密集场景里多线程是真并行：线程 A 卡在 <code>recv</code> 上的时候线程 B 正在跑，吞吐随线程数上升。</p>
@@ -241,7 +230,7 @@ for fn in (cpu_task, gil_free_task):
     print(fn.__name__, "1 线程 %.2fs" % t1, "4 线程 %.2fs" % t4, "加速比 %.2f" % (t1 * 4 / t4))
 </code></pre>
 
-<h2>② 原理 · 由 GIL 推出的三种并发模型</h2>
+<h2>由 GIL 推出的三种并发模型</h2>
 <p>这一节解决的是「改造方向选错了」这类返工：选型不需要玄学，只看两件事——任务是等 IO 还是烧 CPU，以及关键依赖有没有异步实现。</p>
 
 <div class="mermaid">
@@ -269,7 +258,7 @@ flowchart TB
 </table>
 <p>三条路线各自的最小可用写法、锁与启动方式的细节、以及混用时的接缝，在<a href="concurrency/">Python 并发的三条路线与选择</a>。</p>
 
-<h2>② 原理 · 3.12 到 3.14：GIL 的松动程度</h2>
+<h2>3.12 到 3.14：GIL 的松动程度</h2>
 <p>这一节解决的是「要不要为了去 GIL 而等一等」的判断。关于「GIL 要没了」的传言每年一轮，实际进度要看清楚两条独立的路线：子解释器各自持锁（PEP 684），以及彻底去掉 GIL 的可选构建（PEP 703）。</p>
 
 <table>
@@ -289,7 +278,7 @@ flowchart TB
 <p>未来 2~3 年，生产环境吃满多核的可靠手段依然是多进程或多副本。</p>
 </div>
 
-<h2>② 原理 · 部署形态：单进程永远吃不满多核</h2>
+<h2>部署形态：单进程永远吃不满多核</h2>
 <p>这一节解决的是最常见的一类上线事故：8 核机器上跑一个 uvicorn 进程，压测到 CPU 只有 12% 就上不去了。原因很直接——一个进程一个 GIL，纯 Python 代码的计算吞吐上限就是一个核。<strong>要用满 N 核就必须有 N 个进程</strong>，没有别的办法。</p>
 
 <div class="mermaid">
@@ -339,7 +328,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 <p>worker 类型怎么挑、优雅退出与四个超时怎么对齐、preload 的内存收益为什么比预期小，在<a href="web/">Python Web 服务的部署形态</a>；多进程下 Prometheus 指标为什么会错乱，在<a href="fastapi-production/">Python 服务上生产</a>。容器编排下的探针、preStop 与滚动更新细节见站内 <a href="../../devops/kubernetes/">Kubernetes 专题</a>；</p>
 <p>接口耗时该怎么拆解、连接池怎么定容量见站内<a href="../../observability/performance/">后端性能优化专题</a>，这里不重复。</p>
 
-<h2>③ 场景 · 什么时候 Python 是最优解</h2>
+<h2>什么时候 Python 是最优解</h2>
 <p>判断标准就一条：<strong>瓶颈在人力还是在 CPU</strong>。瓶颈在人力，Python 的开发速度优势会直接变成交付优势；瓶颈在 CPU 或延迟，语言层面的常数差距靠架构很难补回来。</p>
 
 <div class="mermaid">
@@ -373,7 +362,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>③ 场景 · 与 Go、Java 的分工，以及反模式</h2>
+<h2>与 Go、Java 的分工，以及反模式</h2>
 <p>同一个系统里通常不需要二选一，按瓶颈切开就行：瓶颈在人力和生态的部分给 Python，瓶颈在 CPU、延迟、连接数、内存的部分给 Go 或 Java，中间用 gRPC 或消息队列解耦。</p>
 <table>
 <thead><tr><th>维度</th><th>Python</th><th>Go</th><th>Java</th></tr></thead>

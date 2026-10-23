@@ -69,18 +69,7 @@
                     <div class="article-content">
 <p>asyncio 的坑有一个共同特征：<strong>不报错</strong>。代码能跑、测试能过、单请求延迟正常，只有并发一上来才暴露，而现象又是最容易误判的「CPU 不高但延迟很高」。</p>
 <p>这篇先给一套能动手跑的判定流程——怎么证明事件循环真的被阻塞了、阻塞在哪一行、挪出去之后怎么确认有效——再把这些陷阱按机制串起来。框架层面的 async 与 sync handler 分派见<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：四步把「是不是阻塞」变成可验证的结论（静态扫一遍、开调试模式看慢回调、常驻事件循环延迟探针、并发 10 与并发 100 的吞吐对照），以及把阻塞调用挪出事件循环的四种正确写法与一张参数速查表。</li>
-        <li><strong>② 原理</strong>：协作式调度下只有 <code>await</code> 才让出控制权、五类阻塞源与各自的替代库、三种探测手段各能看到什么、<code>gather</code> 与 <code>as_completed</code> 与 <code>TaskGroup</code> 的异常语义差异、取消为什么只能在 <code>await</code> 点生效、忘记 <code>await</code> 与 <code>create_task</code> 不持引用这两类静默 bug，以及协程与线程的量级对照。</li>
-        <li><strong>③ 场景</strong>：按业务形态选并发模型、限流放在哪一层、代价是什么，以及哪些问题看着像 asyncio 问题其实不是。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 怎么测出协程被阻塞，以及把它挪出去</h2>
+<h2>怎么测出协程被阻塞，以及把它挪出去</h2>
 <p>「延迟高」不等于「被阻塞」，先按下面四步做判定，顺序不要跳：静态检查最便宜，压测对照最有说服力。</p>
 
 <pre><code class="language-bash"># ---------- 第 1 步：静态先扫一遍，不花运行时代价 ----------
@@ -254,7 +243,7 @@ async def tune_threadpool() -&gt; None:
 
 <p>为什么一次阻塞会放大到全部请求、为什么线程池对 CPU 密集没用、为什么超时对纯计算无效——都在下面几节。</p>
 
-<h2>② 原理 · 协作式调度：只有 await 才让出控制权</h2>
+<h2>协作式调度：只有 await 才让出控制权</h2>
 <p>搞清这一节能解决的现象是：QPS 上不去、延迟随并发线性恶化、CPU 使用率却只有百分之二十，于是被误判成「机器不够」。asyncio 是<strong>单线程事件循环加协程协作式调度</strong>。</p>
 <p>循环从就绪队列取一个协程跑，跑到 <code>await</code> 且确实需要等待时，协程交回控制权，循环再取下一个。关键推论：<strong>不 await 的代码，事件循环无法中断它</strong>。</p>
 <p>一段纯计算、一次同步 socket 调用、一个 <code>time.sleep</code>，期间整个循环停转，所有已就绪的协程一个都推进不了。</p>
@@ -278,7 +267,7 @@ sequenceDiagram
     L->>RN: 改用 await 之后<br/>1000 个请求的等待重叠进行，总耗时约 200ms
 </div>
 
-<h2>② 原理 · 五类最常见的阻塞源</h2>
+<h2>五类最常见的阻塞源</h2>
 <p>搞清这一节能解决的现象是：知道有阻塞，但不知道从哪些库开始找。下表左列按出现频率排序，右列是「还没来得及换库时」的过渡手段。</p>
 <table>
 <thead><tr><th>阻塞源</th><th>典型写法</th><th>替代方案</th><th>过渡手段</th></tr></thead>
@@ -298,7 +287,7 @@ sequenceDiagram
     <p>读一个几 KB 的配置文件，阻塞时间是微秒级，换成异步反而引入线程池调度开销。判断标准是量级：单次阻塞超过 1 毫秒才值得处理，超过 10 毫秒必须处理。别把「异步化」当成目标本身。</p>
 </div>
 
-<h2>② 原理 · 三种探测手段各能看到什么</h2>
+<h2>三种探测手段各能看到什么</h2>
 <p>搞清这一节能解决的现象是：开了一堆工具却互相矛盾，不知道该信哪个。三种手段的可见范围不同，不是替代关系。</p>
 <table>
 <thead><tr><th>手段</th><th>输出</th><th>怎么判读</th></tr></thead>
@@ -327,7 +316,7 @@ async def dump_tasks() -&gt; None:
         logger.info("task", extra={"name": t.get_name(), "coro": repr(t.get_coro())})
 </code></pre>
 
-<h2>② 原理 · 并发控制：gather、as_completed 与 TaskGroup</h2>
+<h2>并发控制：gather、as_completed 与 TaskGroup</h2>
 <p>搞清这一节能解决的现象是：一批并发任务里有一个失败，结果剩下的任务还在后台跑、连接没关、日志里也看不到异常。三个原语的差别主要在<strong>异常语义</strong>和<strong>资源边界</strong>，不是写法偏好。</p>
 
 <div class="mermaid">
@@ -415,7 +404,7 @@ async def gather_semantics():
 </tbody>
 </table>
 
-<h2>② 原理 · 超时与取消：只能在 await 点生效</h2>
+<h2>超时与取消：只能在 await 点生效</h2>
 <p>搞清这一节能解决的现象是：「设了 3 秒超时为什么还是卡了 30 秒」，以及优雅关闭时连接池里的连接一直没被归还。取消的实现方式是<strong>在协程下一次到达 <code>await</code> 时抛出 <code>CancelledError</code></strong>。</p>
 <p>所以一段不含 await 的纯计算、或者卡在同步阻塞里的代码，<strong>无法被取消</strong>——超时时间到了也只能等它自己跑完。</p>
 
@@ -499,7 +488,7 @@ def called_inside_running_loop():
     return fut.result(timeout=5)
 </code></pre>
 
-<h2>② 原理 · 两类最隐蔽的 bug</h2>
+<h2>两类最隐蔽的 bug</h2>
 <p>搞清这一节能解决的现象是：某个通知偶发不发出、某个后台任务偶发不执行，而日志里一条错误都没有。它们的共同点是<strong>不抛异常</strong>，只在日志里留一条容易被忽略的警告。</p>
 
 <table>
@@ -532,7 +521,7 @@ def spawn(coro) -&gt; asyncio.Task:
     return task
 </code></pre>
 
-<h2>② 原理 · asyncio 与多线程的量级对照</h2>
+<h2>asyncio 与多线程的量级对照</h2>
 <p>搞清这一节能解决的现象是：为了「性能」把一个十并发的内部服务改成全异步，付出了一堆改造成本却测不出差别。</p>
 <table>
 <thead><tr><th>并发规模</th><th>asyncio</th><th>线程池</th><th>结论</th></tr></thead>
@@ -546,7 +535,7 @@ def spawn(coro) -&gt; asyncio.Task:
 </tbody>
 </table>
 
-<h2>③ 场景 · 按业务形态选并发模型与限流位置</h2>
+<h2>按业务形态选并发模型与限流位置</h2>
 <p>把前面的判断收拢成按形态的结论，代价一并写出来。</p>
 
 <table>

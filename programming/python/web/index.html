@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>Python 服务的线上问题有很大一部分不在业务代码里，而在「应用怎么被跑起来」这一层：worker 类型选错让 WebSocket 根本无法工作，超时参数的相对大小写反了就出无规律 502，容器入口写法不对则优雅退出永远不触发。</p>
 <p>这篇先给可以直接抄走的启动配置与速查表，再讲清 WSGI/ASGI 契约、进程模型与超时语义，最后收拢部署形态的判断。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：三种最小可用启动形态（编排下单 worker、单机多 worker、仍是 WSGI 的情况）、一份全注释的 <code>gunicorn.conf.py</code>、一张「worker 类型怎么选」表，以及优雅退出与超时速查——每一行都写清不配会出什么现象。</li>
-        <li><strong>② 原理</strong>：WSGI 与 ASGI 的签名差异决定了哪些能力根本无法表达、同步框架套 <code>async</code> 为什么拿不到并发、四种 worker 的完整语义矩阵与 <code>timeout</code> 的真实含义、worker 数为什么由内存而非核数决定、preload 的写时复制收益如何衰减、信号语义与四个超时的对齐顺序、阻塞拖垮事件循环的定位手段。</li>
-        <li><strong>③ 场景</strong>：不同业务形态该选什么部署组合、代价是什么，以及哪些问题看着像部署问题其实不是。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 最小可用启动配置与两张速查表</h2>
+<h2>最小可用启动配置与两张速查表</h2>
 <p>下面三段是生产里反复出现、已经没有争议的启动形态。注释只说明为什么要这一行，语义解释在原理层。</p>
 <pre><code class="language-bash"># 形态一：容器编排下最简形态 —— 每个 Pod 一个 worker，扩容靠副本数
 # exec 很关键：CMD 写成 shell 形式时 PID 1 是 shell，不转发 SIGTERM，优雅退出永远不触发
@@ -181,7 +170,7 @@ def post_fork(server, worker):
 </table>
 <p>这一层不解释为什么，比如「为什么异步 worker 的 timeout 不是请求超时」「为什么要让代理先关连接」，都在下面的原理层。</p>
 
-<h2>② 原理 · 两份契约的形状：WSGI 与 ASGI 差在哪</h2>
+<h2>两份契约的形状：WSGI 与 ASGI 差在哪</h2>
 <p>搞清这一节能解决的现象是：为什么 WSGI 栈上做不了 WebSocket、客户端断开后为什么还在白跑查询。部署形态的结论全部从契约推出来，所以先把签名摊开。</p>
 <p>WSGI（PEP 3333）要求应用是一个<strong>普通可调用对象</strong>，接收 <code>environ</code> 字典与 <code>start_response</code> 回调，返回产出字节串的可迭代对象，请求体从 <code>environ["wsgi.input"]</code> 同步读。</p>
 <p>ASGI 要求应用是 <code>async def app(scope, receive, send)</code>：<code>scope</code> 描述这次连接（<code>type</code> 取 <code>http</code>、<code>websocket</code> 或 <code>lifespan</code>），<code>receive</code> 与 <code>send</code> 是两个协程，请求体分片、客户端断连、WebSocket 帧、进程启停全部表达成事件。</p>
@@ -252,7 +241,7 @@ sequenceDiagram
     Note over PX,AP: WSGI 没有这条通道<br/>客户端走了也会把查询跑完
 </div>
 
-<h2>② 原理 · 为什么同步框架套一层 async 得不到并发</h2>
+<h2>为什么同步框架套一层 async 得不到并发</h2>
 <p>搞清这一节能解决的现象是：把视图改成 <code>async def</code> 之后压测数字一点没变。并发的前提是<strong>有让出点，而且让出之后有人替你继续跑</strong>。这两个条件缺任何一个，写了 <code>async def</code> 也只是把同一段同步逻辑包了一层协程壳。</p>
 <p>三个具体机制值得记住。第一，WSGI 可调用对象不可 await，服务器只能在某个线程里同步调用它，函数体里怎么写都改不了这件事。</p>
 <p>第二，Flask 从 2.0 起支持 <code>async def</code> 视图，但实现方式是<strong>在当前工作线程里现起一个事件循环，跑完这个协程就关掉</strong>；</p>
@@ -271,7 +260,7 @@ sequenceDiagram
 </table>
 <p>结论是一条链路判定：<strong>ASGI 服务器 + 异步 handler + 异步驱动，三环全通才有事件循环级并发；任何一环是同步的，整条链路就退回线程或进程并发</strong>。协程调度的内部细节与阻塞源分类，详见站内<a href="../fastapi-async/">asyncio 的性能陷阱</a>。</p>
 
-<h2>② 原理 · gunicorn worker 类型的语义矩阵</h2>
+<h2>gunicorn worker 类型的语义矩阵</h2>
 <p>搞清这一节能解决的现象是：配了 timeout 却拦不住慢请求、换了 worker 类型之后某些驱动莫名卡死。gunicorn 本身只是进程管理器加 HTTP 解析，能力完全由 worker 类型决定。先把整条链路的分层摆清楚，再看每一层能换成什么。</p>
 <div class="mermaid">
 flowchart TB
@@ -335,7 +324,7 @@ flowchart TB
     A2 -->|"不能"| A4["显式 to_thread，并自己限并发，别占满默认线程池"]
 </div>
 
-<h2>② 原理 · 进程数、线程数与容器 CPU 配额</h2>
+<h2>进程数、线程数与容器 CPU 配额</h2>
 <p>搞清这一节能解决的现象是：worker 数照公式算出来之后被 OOM kill，或者把数据库连接打满。</p>
 <p>一句话结论：GIL 保证同一进程内任一时刻只有一条线程在执行 Python 字节码，所以<strong>纯 Python 的 CPU 工作只能靠多进程扩展</strong>（机制细节详见站内<a href="../">Python 做后端的适用边界与运行时约束</a>与<a href="../internals/">CPython 实现细节</a>）。</p>
 <p>这条结论之上，真正决定 worker 数的往往不是核数而是内存。</p>
@@ -355,7 +344,7 @@ flowchart TB
 <p>容器里还有一个几乎必踩的坑：<code>os.cpu_count()</code> 返回的是宿主可见的 CPU 数，与 cgroup 的 CPU 配额无关。在 64 核机器上给容器分 1 核，公式会算出 129 个 worker。3.13 新增的 <code>os.process_cpu_count()</code> 读的是 CPU 亲和性，比前者准，但仍然不等于 cgroup 的配额。</p>
 <p>稳妥做法是显式用环境变量把 worker 数写死，让编排系统的资源声明成为唯一真相来源。</p>
 
-<h2>② 原理 · preload 与写时复制：省下的内存比预期少</h2>
+<h2>preload 与写时复制：省下的内存比预期少</h2>
 <p>搞清这一节能解决的现象是：开了 preload 内存却没省下多少，还多出随机的协议错乱。<code>preload_app</code> 打开后，master 先 import 应用再 fork，子进程与父进程共享同一批物理页，看起来能把 N 份代码和常量省成 1 份。</p>
 <p>现实是这份共享会持续退化：<strong>CPython 每次触碰对象都要修改对象头里的引用计数，写操作立刻触发页复制</strong>；</p>
 <p>垃圾回收遍历时还会写对象的 GC 字段，把大片只读页一并「写花」（对象模型与内存管理详见站内<a href="../core/">Python 运行时机制</a>）。所以 preload 的内存收益是真实的，但远小于按代码体积估算的值，而且会随运行时间衰减。</p>
@@ -375,7 +364,7 @@ flowchart TB
 </table>
 <p>判定规则很简单：<strong>所有有状态的连接必须在 fork 之后建立</strong>。ASGI 的 <code>lifespan</code> 钩子、gunicorn 的 <code>post_fork</code> 钩子就是为此存在的位置；把 <code>create_engine</code> 写在模块顶层，在 preload 下几乎一定出问题。</p>
 
-<h2>② 原理 · 优雅退出：信号语义与四个超时的对齐</h2>
+<h2>优雅退出：信号语义与四个超时的对齐</h2>
 <p>搞清这一节能解决的现象是：每次滚动发布都有少量请求被重置。信号语义这一块最容易记反，因为 gunicorn 与 nginx 的约定几乎是相反的。</p>
 <table>
 <thead><tr><th>信号</th><th>gunicorn master</th><th>nginx master（对照）</th><th>踩坑点</th></tr></thead>
@@ -416,7 +405,7 @@ stateDiagram-v2
     end note
 </div>
 
-<h2>② 原理 · 反向代理与应用服务器：超时和长连接必须成对设</h2>
+<h2>反向代理与应用服务器：超时和长连接必须成对设</h2>
 <p>搞清这一节能解决的现象是「偶发 502 / 504，重试就好了」——根因通常是两侧参数的相对大小写反了，不是网络抖动。</p>
 <table>
 <thead><tr><th>参数</th><th>常见默认值</th><th>建议关系</th><th>设错的症状</th></tr></thead>
@@ -469,7 +458,7 @@ server {
 }
 </code></pre>
 
-<h2>② 原理 · 阻塞拖垮事件循环：怎么定位</h2>
+<h2>阻塞拖垮事件循环：怎么定位</h2>
 <p>搞清这一节能解决的现象是：p50 正常而 p99 爆炸、健康检查也跟着超时。先用症状做区分，能省掉大半排查时间。事件循环被阻塞的特征是：<strong>同 worker 内所有在途请求同时变慢</strong>，包括本来毫秒级返回的健康检查；</p>
 <p>p50 还正常而 p99 爆炸；单进程 CPU 打满但 QPS 不涨。如果是下游变慢，则只有依赖该下游的接口变慢，健康检查不受影响。这一条判据几乎可以直接定性。</p>
 <p>可用的手段与判读方式：开 asyncio 调试模式（<code>PYTHONASYNCIODEBUG=1</code> 或 <code>loop.set_debug(True)</code>），超过 <code>slow_callback_duration</code>（默认 0.1 秒）的回调会打出告警日志，日志里的 Handle 就指向罪魁函数；</p>
@@ -504,7 +493,7 @@ def install_debug_hooks() -&gt; None:
 <p>但要记住框架的默认线程限流器是<strong>全局共享的固定令牌数</strong>，把大量阻塞调用丢进去只是把拥塞从事件循环搬到线程池，必须自己加信号量限流并设超时。</p>
 <p>CPU 密集型的活不要丢线程池，交给独立进程池或拆成单独服务。</p>
 
-<h2>③ 场景 · 部署形态决策与不适用边界</h2>
+<h2>部署形态决策与不适用边界</h2>
 <p>前面的参数是「点」，这里收成「面」：按业务形态给组合、给理由、也给代价。</p>
 <table>
 <thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>

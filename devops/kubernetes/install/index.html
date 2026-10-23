@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Kubernetes 集群安装的两个不可逆决策与 etcd 的磁盘容量备份、节点预留与容量护栏、可回滚的升级剧本。">
+        <meta name="description" content="Kubernetes 生产化部署：kubeadm 最小路径与必调参数、四种部署形态的代价、控制面三主与 etcd 奇数要求、节点预留、不可逆的网络存储决策、升级回滚边界。">
     <meta name="keywords" content="Kubernetes 安装部署,Kubernetes,云原生,Kubernetes">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/kubernetes/install/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kubernetes 集群部署形态与生产化配置 - 资深码农">
-    <meta property="og:description" content="Kubernetes 集群安装的两个不可逆决策与 etcd 的磁盘容量备份、节点预留与容量护栏、可回滚的升级剧本。">
+    <meta property="og:description" content="Kubernetes 生产化部署：kubeadm 最小路径与必调参数、四种部署形态的代价、控制面三主与 etcd 奇数要求、节点预留、不可逆的网络存储决策、升级回滚边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/kubernetes/install/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kubernetes 集群部署形态与生产化配置">
-    <meta name="twitter:description" content="Kubernetes 集群安装的两个不可逆决策与 etcd 的磁盘容量备份、节点预留与容量护栏、可回滚的升级剧本。">
+    <meta name="twitter:description" content="Kubernetes 生产化部署：kubeadm 最小路径与必调参数、四种部署形态的代价、控制面三主与 etcd 奇数要求、节点预留、不可逆的网络存储决策、升级回滚边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
     <meta property="article:tag" content="Kubernetes,云原生">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kubernetes 集群部署形态与生产化配置","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kubernetes 集群安装的两个不可逆决策与 etcd 的磁盘容量备份、节点预留与容量护栏、可回滚的升级剧本。","url":"https://www.yijunjun.asia/devops/kubernetes/install/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/kubernetes/install/"},"articleSection":"运维与云原生"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kubernetes 集群部署形态与生产化配置","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kubernetes 生产化部署：kubeadm 最小路径与必调参数、四种部署形态的代价、控制面三主与 etcd 奇数要求、节点预留、不可逆的网络存储决策、升级回滚边界。","url":"https://www.yijunjun.asia/devops/kubernetes/install/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/kubernetes/install/"},"articleSection":"运维与云原生"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "Kubernetes 安装部署", "item": "https://www.yijunjun.asia/devops/kubernetes/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>「装 K8s」这件事的技术含量不在敲命令，而在两个决策：<strong>控制面的运维责任归谁</strong>、<strong>哪些参数一旦定了就很难改</strong>。</p>
 <p>第一个决策决定你未来三年每次升级要花多少人力，第二个决策决定你会不会在半年后被迫重建集群。命令行步骤网上一搜就有，这两件事搜不到。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一条从零到节点 Ready 的最小 kubeadm 路径，加一张「不调就会出事」的必调参数速查表和日常操作对照表。</li>
-        <li><strong>② 原理</strong>：四种部署形态各自在为什么买单、etcd 的多数派与磁盘账、节点规格与系统预留的推演、哪些决策初始化后不可逆、升级的版本偏差与回滚边界。</li>
-        <li><strong>③ 场景</strong>：自建与托管按约束条件怎么落点，以及九种会在半年后变成事故的反模式。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 一条最小可用的部署路径与必调参数速查</h2>
+<h2>一条最小可用的部署路径与必调参数速查</h2>
 
 <p>下面这条路径是「从三台干净的机器到节点全 Ready」的最短可用版本：一个控制面起步、装 CNI、加入节点、做最小验收。</p>
 <p>它不是生产交付标准（生产还要补三主、etcd 独占盘、系统预留与命名空间配额，都在后面几节），但每一条命令都可以直接敲，注释只说明「为什么要这行」。</p>
@@ -165,7 +154,7 @@ etcdctl endpoint status --write-out=table --cluster    # 关注 ALARM 列与 DB 
 </tbody>
 </table>
 
-<p>真正决定集群能不能活过三年的是下面这些参数。它们的共同点是：不调的时候一切正常，出事时全是集群级故障。</p>
+<p>下面这些参数决定集群能不能活过三年：不调时一切正常，出事时全是集群级故障。</p>
 
 <table>
 <thead><tr><th>参数</th><th>在哪配</th><th>建议值</th><th>不调会出什么现象</th></tr></thead>
@@ -187,7 +176,7 @@ etcdctl endpoint status --write-out=table --cluster    # 关注 ALARM 列与 DB 
 
 <p>上表里没写默认值的项，以你集群版本的 <code>kubeadm config print init-defaults</code> 与 <code>kubectl explain</code> 输出为准，不要照抄教程里的数字。每个参数「为什么是这个值」在后面几节展开。</p>
 
-<h2>② 原理 · 四种部署形态各自在为什么买单</h2>
+<h2>四种部署形态各自在为什么买单</h2>
 <p>现实中的部署形态就四类，下表按「你要为什么买单」来对照，而不是按功能列清单：</p>
 <table>
 <thead><tr><th>维度</th><th>kubeadm 自建</th><th>托管集群 EKS / GKE / ACK</th><th>轻量发行版 k3s / k0s</th><th>本地 kind / minikube</th></tr></thead>
@@ -217,7 +206,7 @@ flowchart TB
 </div>
 
 
-<h2>② 原理 · 控制面高可用：三主拓扑与 etcd 的奇数要求</h2>
+<h2>控制面高可用：三主拓扑与 etcd 的奇数要求</h2>
 <p>控制面高可用的本质是两件独立的事：<strong>etcd 的 Raft 多数派</strong>和<strong>apiserver 的无状态多副本</strong>。前者要求奇数成员，后者只要求前面挂一个负载均衡。</p>
 <p>把这两件事混在一起想，就会得出「3 台控制面所以能挂 2 台」这种错误结论——3 成员 etcd 只允许挂 1 台。</p>
 
@@ -267,7 +256,7 @@ flowchart TB
 <p>实践结论：<strong>200 节点以内的自建集群用 stacked 就够</strong>，把力气花在给 etcd 单独挂一块 SSD 上，收益远大于拆成 6 台机器。真正需要 external etcd 的信号是 <code>etcd_disk_wal_fsync_duration_seconds</code> 的 p99 已经被 apiserver 的 IO 拖到 10 毫秒以上。</p>
 
 
-<h2>② 原理 · etcd 是整个集群的命门</h2>
+<h2>etcd 是整个集群的命门</h2>
 <p>集群里所有对象只存在 etcd 一处，<strong>没有第二份副本，也没有 binlog 可以回放</strong>。apiserver 挂了业务还在跑，etcd 数据没了集群就真的没了。所以 etcd 的四个问题必须在交付前解决：磁盘、容量、压缩、备份。</p>
 <table>
 <thead><tr><th>关注点</th><th>参数 / 指标</th><th>推荐值</th><th>配错的后果</th></tr></thead>
@@ -321,7 +310,7 @@ etcdutl snapshot restore /backup/etcd-2026-09-23-0200.db \
 </div>
 
 
-<h2>② 原理 · 节点规划：规格、Pod 密度与系统预留</h2>
+<h2>节点规划：规格、Pod 密度与系统预留</h2>
 <p>节点规格的取舍没有标准答案，但有清晰的权衡结构：</p>
 <table>
 <thead><tr><th>维度</th><th>少量大节点（如 32C128G × 5）</th><th>大量小节点（如 4C16G × 40）</th></tr></thead>
@@ -375,7 +364,7 @@ containerLogMaxFiles: 5
 </code></pre>
 
 
-<h2>② 原理 · 网络与存储插件：哪些决策是不可逆的</h2>
+<h2>网络与存储插件：哪些决策是不可逆的</h2>
 <p>集群初始化时有一批决策的更改成本接近重建集群，必须在第一天就想清楚：</p>
 <table>
 <thead><tr><th>决策项</th><th>事后能改吗</th><th>更改代价</th><th>第一天要问自己什么</th></tr></thead>
@@ -392,7 +381,7 @@ containerLogMaxFiles: 5
 <p>这里只强调时机：<strong>这两项都属于「初始化窗口内的决策」</strong>，错过窗口就只能带着代价活下去。</p>
 
 
-<h2>② 原理 · 集群升级：版本偏差与回滚边界</h2>
+<h2>集群升级：版本偏差与回滚边界</h2>
 <p>升级出事的原因通常不是命令敲错，而是三件事没做：没扫废弃 API、跨了多个小版本、没有回滚边界的定义。先把版本偏差规则记牢：</p>
 <table>
 <thead><tr><th>组件</th><th>相对 apiserver 的允许偏差</th><th>违反后的现象</th></tr></thead>
@@ -464,7 +453,7 @@ kubeadm certs renew all &amp;&amp; systemctl restart kubelet   # 续期后要重
 </code></pre>
 
 
-<h2>② 原理 · 装完必须做的事清单：交付前的硬性配置</h2>
+<h2>装完必须做的事清单：交付前的硬性配置</h2>
 <p>「节点全 Ready」不等于集群可交付。下面这批配置缺任何一项，都会在未来某天变成事故：</p>
 
 <div class="mermaid">
@@ -537,7 +526,7 @@ spec:
 </code></pre>
 
 
-<h2>③ 场景 · 自建还是托管：按约束条件落点</h2>
+<h2>自建还是托管：按约束条件落点</h2>
 
 <p>部署形态不是偏好问题，而是被约束条件逼出来的。下表把常见约束直接映射到落点。</p>
 
@@ -558,7 +547,7 @@ spec:
 <p>需要 NetworkPolicy 却选了不支持策略的 CNI，属于初始化窗口内就注定的返工，选型见 <a href="../ingress-network/">Pod 网络模型与网络策略</a>；有状态服务的存储后端不要在装集群时顺手决定，见 <a href="../storage/">存储抽象与有状态服务</a>；</p>
 <p>集群装完之后的故障排查路径在 <a href="../ops-troubleshooting/">节点与集群级故障排查</a>，清单的版本化交付在 <a href="../../gitops/">GitOps 系列</a>。</p>
 
-<h2>③ 场景 · 反模式对照</h2>
+<h2>反模式对照</h2>
 <table>
 <thead><tr><th>反模式</th><th>为什么危险</th><th>正确做法</th></tr></thead>
 <tbody>

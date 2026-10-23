@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="drizzle-kit 的迁移机制、generate 的快照原理、危险变更清单、expand-migrate-contract 与生产迁移锁。">
+    <meta name="description" content="Drizzle 迁移工程：generate 靠快照对比、危险变更清单、expand-migrate-contract 可退回步骤、多环境迁移锁。">
     <meta name="keywords" content="Drizzle ORM,Migration 与生产部署,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/drizzle/migrations/">
     <meta property="og:title" content="迁移管理：生成、应用与生产流程 - Drizzle ORM - 资深码农">
-    <meta property="og:description" content="drizzle-kit 的迁移机制、generate 的快照原理、危险变更清单、expand-migrate-contract 与生产迁移锁。">
+    <meta property="og:description" content="Drizzle 迁移工程：generate 靠快照对比、危险变更清单、expand-migrate-contract 可退回步骤、多环境迁移锁。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/drizzle/migrations/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="迁移管理：生成、应用与生产流程 - Drizzle ORM">
-    <meta name="twitter:description" content="drizzle-kit 的迁移机制、generate 的快照原理、危险变更清单、expand-migrate-contract 与生产迁移锁。">
+    <meta name="twitter:description" content="Drizzle 迁移工程：generate 靠快照对比、危险变更清单、expand-migrate-contract 可退回步骤、多环境迁移锁。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -72,18 +72,7 @@
                     </header>
                     <div class="article-content">
 <p>迁移是 ORM 里唯一会不可逆毁掉生产数据的环节。查询写错最多报错，迁移写错列就没了。这篇讲清 drizzle-kit 的工作机制、危险变更的识别、以及生产环境怎么组织迁移流程。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：从改 schema 到生产生效的六步可执行流程（生成、审查、CI 校验、预发应用、核对漂移、生产执行），每步给验证方法与出错后的动作；再给生产环境的两条顺序铁律——<strong>加法先迁移后部署，减法先部署后迁移</strong>——以及不可逆变更的五项执行前提。</li>
-        <li><strong>② 原理</strong>：drizzle-kit 六个命令的差别与 push 为什么不能进生产、generate 对比快照而不是对比数据库、十类危险变更的 DDL 与安全做法、expand-migrate-contract 六个阶段各自的可回滚性、并发部署下迁移为什么必须剥离成独立步骤。</li>
-        <li><strong>③ 场景</strong>：出问题时该向前修复还是回滚版本、按团队与环境选执行方式的矩阵，以及不适用边界。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 从改 schema 到生产生效：六步</h2>
+<h2>从改 schema 到生产生效：六步</h2>
 
 <p>这六步是固定流程，<strong>第三步（人工审查）是唯一不能自动化也不能跳过的一步</strong>。每步的「出错怎么办」写在最后一列——只有最后一步没有便宜的退路，前五步的检查都是为它服务的。</p>
 
@@ -124,7 +113,7 @@ DATABASE_URL="$PROD_URL" npx tsx migrate.ts
 psql "$PROD_URL" -c \
   'select id, hash, created_at from drizzle.__drizzle_migrations order by created_at desc limit 5;'</code></pre>
 
-<h2>① 用法 · 生产的两条顺序铁律与不可逆变更</h2>
+<h2>生产的两条顺序铁律与不可逆变更</h2>
 
 <p>生产事故几乎都不是 SQL 写错，而是<strong>顺序错</strong>。规则只有两条：加法先迁移后部署，减法先部署后迁移；一次发布里不要同时出现这两类。</p>
 
@@ -151,9 +140,9 @@ psql "$PROD_URL" -c \
 </tbody>
 </table>
 
-<h2>② 原理 · drizzle-kit 的三条路径</h2>
+<h2>drizzle-kit 的三条路径</h2>
 
-<p>搞清这一节能解决「为什么本地 push 很顺手，但生产上不能这么干」。</p>
+<p>本地 push 很顺手，生产上不能直接这么干，迁移要留痕。</p>
 
 <p>drizzle-kit 提供三种让数据库和 schema 对齐的方式，它们的适用边界差别很大：</p>
 
@@ -188,9 +177,9 @@ flowchart TB
     C -.->|"绝不能用于生产"| L["无 SQL 文件<br/>无法审查无法重放"]
 </div>
 
-<h2>② 原理 · generate 的工作原理与产物</h2>
+<h2>generate 的工作原理与产物</h2>
 
-<p>搞清这一节能解决「为什么同一个变更被生成了两遍」。</p>
+<p>同一个变更被生成两遍，因为对比的是快照。</p>
 
 <p>generate 不是对比 schema 和数据库，而是<strong>对比当前 schema 与上一次的 JSON 快照</strong>。快照存在 <code>drizzle/meta/</code> 下，每次 generate 生成一个新快照和一个 SQL 文件。这意味着：快照必须和 SQL 文件一起提交，否则下次 generate 会重新生成已有变更。</p>
 
@@ -229,9 +218,9 @@ npx drizzle-kit pull --out ./tmp-introspect
 </tbody>
 </table>
 
-<h2>② 原理 · 危险变更识别清单</h2>
+<h2>危险变更识别清单</h2>
 
-<p>搞清这一节能解决「生成的 SQL 看起来很正常，执行完数据却少了」。</p>
+<p>SQL 看着正常、执行完数据却少了，diff 不判断业务影响。</p>
 
 <p>这是这篇最重要的一节。<strong>diff 工具只对比结构，不判断业务影响</strong>。以下变更 drizzle-kit 会老老实实生成 SQL，但执行后可能丢数据或锁表。</p>
 
@@ -257,9 +246,9 @@ npx drizzle-kit pull --out ./tmp-introspect
     <p>有没有 DROP COLUMN 或 DROP TABLE？有没有 ALTER COLUMN TYPE？有没有 SET NOT NULL？有没有在大表上 CREATE INDEX 而没加 CONCURRENTLY？有没有 ADD CONSTRAINT FOREIGN KEY 而没先 NOT VALID？有没有在一个迁移里混了 DDL 和大批量 UPDATE（会长时间持锁）？重命名是真 rename 还是 drop 加 add？以上任一为是，就不能直接合并。</p>
 </div>
 
-<h2>② 原理 · 与 expand-migrate-contract 的配合</h2>
+<h2>与 expand-migrate-contract 的配合</h2>
 
-<p>搞清这一节能解决「每一步到底还能不能退回去」。</p>
+<p>每个阶段都得回答：还能不能退回去。</p>
 
 <p>安全的结构演进遵循三阶段模式：<strong>先扩展（expand）让新旧代码都能工作，再迁移数据和流量（migrate），最后收缩（contract）删掉旧结构</strong>。每个阶段都是独立部署，中间有观察期。</p>
 
@@ -334,9 +323,9 @@ ALTER TABLE posts VALIDATE CONSTRAINT posts_author_uuid_fk;
 ALTER TABLE posts ALTER COLUMN author_uuid SET NOT NULL;
 ALTER TABLE posts DROP COLUMN author_legacy_id;</code></pre>
 
-<h2>② 原理 · 多环境与并发部署的迁移锁</h2>
+<h2>多环境与并发部署的迁移锁</h2>
 
-<p>搞清这一节能解决「滚动发布时迁移被执行了好几遍」。</p>
+<p>滚动发布时，迁移被执行了好几遍。</p>
 
 <p>最常见的错误是把迁移写在应用启动代码里。滚动更新时 5 个 Pod 同时启动，5 个进程同时执行同一个迁移，可能重复执行、部分失败，或被并发 DDL 搞出死锁。</p>
 
@@ -441,7 +430,7 @@ jobs:
     steps:
       - run: echo "部署应用..."</code></pre>
 
-<h2>③ 场景 · 回滚策略：向前修复而不是回退 DDL</h2>
+<h2>回滚策略：向前修复而不是回退 DDL</h2>
 
 <p>drizzle-kit 没有内置 down 迁移，这不是缺陷，是符合生产现实的设计。<strong>回退 DDL 在生产环境几乎总是错误的选择</strong>：</p>
 
@@ -474,7 +463,7 @@ flowchart TB
     C --> K["复盘：为什么删列<br/>没走三阶段"]
 </div>
 
-<h2>③ 场景 · 按环境与风险选执行方式</h2>
+<h2>按环境与风险选执行方式</h2>
 
 <p>同一套迁移文件，在不同环境该用不同的执行方式与门禁强度。下表把常见情形排开。</p>
 

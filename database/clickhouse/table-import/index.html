@@ -91,18 +91,7 @@
                     <div class="article-content">
 <p>ClickHouse 的 <code>CREATE TABLE</code> 看着和 MySQL 很像，这是个陷阱。<code>ENGINE</code>、<code>ORDER BY</code>、<code>PARTITION BY</code> 这三项定错了没有 ALTER 能救，只能新建表加回灌全量数据；写入姿势错了，则会在上线第三天收到 <code>Too many parts</code>。</p>
 <p>这篇只讲建表和写入这两件最容易做错的事：列存与向量化执行、稀疏主键索引的物理布局见《ClickHouse 架构与核心特性》，副本拓扑与 Distributed 表见《ClickHouse 集群与分布式表》，只给结论不展开。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份可以直接抄的建表 DDL（逐行说明引擎、排序键、分区粒度、压缩编码、TTL 为什么这么写）、批量导入的正确做法与批次区间、以及导入完成后必须跑的三条验收命令。</li>
-        <li><strong>② 原理</strong>：哪三项定错了只能重建表、MergeTree 家族的差异全部发生在 merge 那一刻、类型与 CODEC 怎么影响压缩、一次 INSERT 就是一个 part 的写入模型、各类数据源的接入链路、更新与删除在物理上为什么不存在、TTL 的三种形态。</li>
-        <li><strong>③ 场景</strong>：常见需求到「引擎 + 排序键 + 分区 + 写入方式」的组合表，以及哪些需求不该在这一层解决。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 一份可抄的建表 DDL、批量导入与验收</h2>
+<h2>一份可抄的建表 DDL、批量导入与验收</h2>
 
 <p>建表和写入这两件事，做对成本很低，做错修复成本极高——前者只能重建表回灌，后者会在上线第三天以 <code>Too many parts</code> 的形式找上来。先查下表把动作对上，再照后面的 DDL 起步。</p>
 
@@ -208,7 +197,7 @@ FROM system.mutations WHERE NOT is_done;
 
 <p>这些选择为什么是这样、选错之后会以什么形式暴露，下面逐节展开。</p>
 
-<h2>② 原理 · 建表时必须一次定对的三件事</h2>
+<h2>建表时必须一次定对的三件事</h2>
 
 <p>ClickHouse 的 DDL 自由度比关系库低得多。加列、删列、改列类型都很便宜（元数据操作或后台异步重写），但 <code>ORDER BY</code> 只能在末尾追加、不能重排已有列，<code>PARTITION BY</code> 和 <code>ENGINE</code> 完全不能改。所以建表评审比写导入脚本更费时间。</p>
 
@@ -246,7 +235,7 @@ flowchart TB
     Q4 -->|"单机"| R2["直接建表"]
 </div>
 
-<h2>② 原理 · MergeTree 家族：每个引擎在解决什么问题</h2>
+<h2>MergeTree 家族：每个引擎在解决什么问题</h2>
 
 <p>MergeTree 家族的全部差异都发生在<strong>后台 merge 的那一刻</strong>：它们共用同样的列存布局和稀疏索引，只是在合并两个 part 时对排序键相同的行做了不同处理。</p>
 <p>理解这一点就能推导出所有引擎共同的认知坑——<strong>你永远不知道 merge 什么时候发生，所以引擎的语义在查询时不是立即成立的</strong>。</p>
@@ -298,7 +287,7 @@ flowchart TB
 <p>更隐蔽的是<strong>跨分区的重复永远不会折叠</strong>：分区键是 <code>toYYYYMM(update_time)</code> 时，同一订单先后两次更新落在不同月份就是两行。<code>OPTIMIZE TABLE ... FINAL</code> 能强制合并，但会重写整张表，禁止写进定时任务。</p>
 </div>
 
-<h2>② 原理 · 列类型选对，磁盘立刻省一半</h2>
+<h2>列类型选对，磁盘立刻省一半</h2>
 
 <p>列存的压缩率几乎完全由「同一列相邻值的相似度」决定，所以类型选择在 ClickHouse 里不是洁癖而是实打实的成本。下表是实际项目里最高频的几个改法。</p>
 
@@ -351,7 +340,7 @@ SETTINGS index_granularity = 8192;                             -- 默认值，�
 ALTER TABLE events ADD INDEX idx_user user_id TYPE bloom_filter(0.01) GRANULARITY 4;
 </code></pre>
 
-<h2>② 原理 · 写入的铁律：批量，且只有批量</h2>
+<h2>写入的铁律：批量，且只有批量</h2>
 
 <p>ClickHouse 的写入模型一句话就能概括：<strong>一次 INSERT 生成一个 part，不管里面是 1 行还是 100 万行</strong>。part 是一个包含每列数据文件、标记文件和索引文件的目录，创建成本固定。</p>
 <p>逐条写入意味着每秒创建上千个目录，后台 merge 线程被迫不停合并小文件，磁盘 IO 全耗在合并上，接着写入被限速，最后直接报错。</p>
@@ -401,7 +390,7 @@ sequenceDiagram
 <tr><td>Buffer 表引擎</td><td>服务端内存表</td><td>最低</td><td>高，宕机全丢且查询结果会抖</td><td>低</td><td>已不推荐，用 async_insert 替代</td></tr>
 </tbody></table>
 
-<h2>② 原理 · 从各类数据源导入的链路差异</h2>
+<h2>从各类数据源导入的链路差异</h2>
 
 <table>
 <thead><tr><th>数据源</th><th>推荐方式</th><th>特点</th><th>最容易踩的点</th></tr></thead>
@@ -465,7 +454,7 @@ SELECT database, table, consumer_id, num_messages_read, last_exception
 FROM system.kafka_consumers;
 </code></pre>
 
-<h2>② 原理 · 导入完成后必须做的核对</h2>
+<h2>导入完成后必须做的核对</h2>
 
 <p>「导入脚本没报错」不等于数据对了。至少要核对行数、part 健康度和 mutation 队列这三件事，下面几条 SQL 可以直接存成日常巡检。</p>
 
@@ -502,7 +491,7 @@ SELECT event, value FROM system.events
 WHERE event IN ('DelayedInserts', 'RejectedInserts', 'InsertedRows', 'MergedRows');
 </code></pre>
 
-<h2>② 原理 · 更新与删除的真相</h2>
+<h2>更新与删除的真相</h2>
 
 <p>ClickHouse 里「改一行数据」这个动作在物理上不存在。part 里的列文件是压缩后顺序写入的，任何修改都意味着重写整个 part。</p>
 <p><code>ALTER TABLE ... UPDATE</code> 叫 mutation 而不叫 UPDATE，就是提醒你它是一次后台的大规模数据重写：异步执行、不返回受影响行数、不保证何时可见，一个卡住的 mutation 会让后面所有变更全部停住。</p>
@@ -535,7 +524,7 @@ stateDiagram-v2
 <tr><td>TTL</td><td>merge 时按表达式清理行、清空列或搬盘</td><td>由后台 merge 摊薄</td><td>不精确，到期后不一定立即删</td><td>数据生命周期管理</td></tr>
 </tbody></table>
 
-<h2>② 原理 · 用 TTL 管住数据生命周期</h2>
+<h2>用 TTL 管住数据生命周期</h2>
 
 <p>TTL 有三种常被忽略的形态：行级删除、<strong>列级清空</strong>（明细字段过期但维度保留）、以及配合多盘存储策略把冷数据搬到廉价介质。三者可写在同一张表上。</p>
 
@@ -564,7 +553,7 @@ FROM system.parts WHERE table = 'events' AND active LIMIT 5;
 <p>前提是分区键与 TTL 表达式基于同一个日期列，否则 part 里永远混着未过期的行，数据就一直删不掉。</p>
 </div>
 
-<h2>③ 场景 · 从需求到一张表的落地组合</h2>
+<h2>从需求到一张表的落地组合</h2>
 
 <p>前面几节把每个机制拆开讲了，落地时需要反向映射：手上这个需求，引擎、排序键、分区、写入方式该怎么组合。下表每行是一个完整组合，代价列是选了它就必须一起接受的东西。</p>
 

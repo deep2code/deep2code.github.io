@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="JWT 的格式与验签机制：JWS 与 JWE 的区别、三段结构逐字段语义、算法白名单与 iss 与 aud 与 exp 等必校验项、JWKS 与 kid 轮换的正确顺序、payload 不加密的体积与泄露代价，以及 jti 与用户级失效时间点三种吊销落点的取舍。">
+    <meta name="description" content="JWS 三段结构与逐字段校验；签名算法按信任关系选，对称密钥不宜交给第二个验签方；jti 吊销三条路的代价与令牌体积对网关的影响。">
     <meta name="keywords" content="认证授权,JWT 实战,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/auth/jwt/">
     <meta property="og:title" content="JWT 的结构与验签机制 - 认证授权 - 资深码农">
-    <meta property="og:description" content="JWT 的格式与验签机制：JWS 与 JWE 的区别、三段结构逐字段语义、算法白名单与 iss 与 aud 与 exp 等必校验项、JWKS 与 kid 轮换的正确顺序、payload 不加密的体积与泄露代价，以及 jti 与用户级失效时间点三种吊销落点的取舍。">
+    <meta property="og:description" content="JWS 三段结构与逐字段校验；签名算法按信任关系选，对称密钥不宜交给第二个验签方；jti 吊销三条路的代价与令牌体积对网关的影响。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/auth/jwt/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="JWT 的结构与验签机制 - 认证授权">
-    <meta name="twitter:description" content="JWT 的格式与验签机制：JWS 与 JWE 的区别、三段结构逐字段语义、算法白名单与 iss 与 aud 与 exp 等必校验项、JWKS 与 kid 轮换的正确顺序、payload 不加密的体积与泄露代价，以及 jti 与用户级失效时间点三种吊销落点的取舍。">
+    <meta name="twitter:description" content="JWS 三段结构与逐字段校验；签名算法按信任关系选，对称密钥不宜交给第二个验签方；jti 吊销三条路的代价与令牌体积对网关的影响。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,18 +73,7 @@
 <p>真正的问题全藏在细节里——验签通过不代表令牌是发给你的，header 里的算法字段是攻击者可控输入，密钥轮换步骤顺序颠倒就是一次全站 401。</p>
 <p>这篇只讲格式与验签机制本身：JWS 与 JWE 的区别、每个字段的语义、必须校验哪些声明、公钥怎么分发与轮换、以及令牌体积的真实代价。</p>
 <p>至于算法混淆与无签名攻击的利用细节、令牌该存在浏览器哪里，见站内 <a href="../../security/auth-security/">越权与鉴权安全</a>。</p>
-
-    <div class="callout callout-info">
-        <div class="callout-icon">💡</div>
-        <div class="callout-title">这篇怎么读</div>
-        <ul>
-            <li><strong>① 用法</strong>：一段可直接抄的验签代码、六项必校验清单与漏掉的后果、JWKS 与时钟偏移该怎么配，以及即时失效为什么必须另外做。</li>
-            <li><strong>② 原理</strong>：JWS 与 JWE 的分工、三段结构每个字段的语义、算法族按信任关系怎么选、双密钥轮换的步骤顺序为什么不能颠倒、令牌体积的代价从哪来。</li>
-            <li><strong>③ 场景</strong>：单体、多资源服务、开放平台、强合规、移动端、网关统一验签各该做到哪一步，以及 JWT 解决不了的那几件事。</li>
-        </ul>
-    </div>
-
-    <h2>① 用法 · 验签的正确写法：必校验项、kid 轮换与撤销的落点</h2>
+<h2>验签的正确写法：必校验项、kid 轮换与撤销的落点</h2>
     <p>验签代码里真正决定安全性的不是「调了 verify」这一行，而是<strong>传进去的那几个参数</strong>。</p>
 <p>绝大多数线上缺陷都长成同一个样子：签名校验通过就放行，没人问过令牌是不是发给本服务的、是否还在有效期内、算法是不是本服务期望的那种。</p>
 <p>下面这段可以直接抄进项目，六个参数一个都不能少，原因见下一节起的原理部分。</p>
@@ -251,7 +240,7 @@ curl -s https://idp.example.com/.well-known/jwks.json | jq '[.keys[] | {kid, kty
         </tbody>
     </table>
 
-    <h2>② 原理 · JWT 只是容器：先分清 JWS 与 JWE</h2>
+    <h2>JWT 只是容器：先分清 JWS 与 JWE</h2>
     <p>搞清这两者的分工，能解决一个很常见的误解引发的事故：把敏感字段写进 payload，以为签名等于加密。</p>
     <p>JWT 是一种声明的传递格式，它的具体承载有两种形态：<strong>JWS 是签名</strong>，内容公开可读但不可篡改；<strong>JWE 是加密</strong>，内容对持有者以外不可读。</p>
 <p>绝大多数人说「JWT」时指的是 JWS，这带来一个必须记住的结论：<strong>payload 只是 base64url 编码，不是加密</strong>。拿到令牌的人都能一行命令解出全部内容，手机号、证件号、内部角色描述、金额这类东西不能放进去。</p>
@@ -283,8 +272,8 @@ done
 curl -s https://idp.example.com/.well-known/jwks.json | jq '.keys[] | {kid, kty, alg}'
 # 典型输出会有两把甚至三把 key，这是正在做密钥轮换的正常现象</code></pre>
 
-    <h2>② 原理 · 三段结构逐字段拆开</h2>
-    <p>搞清每个字段的语义，能解决「上面那张必校验清单为什么是这几项」——每一项都对应一个具体的失效方式。</p>
+    <h2>三段结构逐字段拆开</h2>
+    <p>逐字段拆开看，每个字段都对应一个具体失效方式。</p>
     <p>三段分别是 header、payload、signature，前两段是 base64url 编码的 JSON，第三段是对「前两段拼接后的字符串」做签名的结果。</p>
 <p>签名的输入是<strong>编码后的字符串</strong>而不是原始 JSON，所以同一份声明用不同序列化方式会得到不同令牌，这也是不能自己拼 JSON 再复用别人签名的原因。</p>
     <table>
@@ -384,8 +373,8 @@ curl -s https://idp.example.com/.well-known/jwks.json | jq '.keys[] | {kid, kty,
 <p>在同一个授权服务器下有多个资源服务时，缺少 <code>aud</code> 校验等价于所有服务共用一张通行证，一个低敏感服务的令牌泄露会直接扩散到核心服务。</p>
     </div>
 
-    <h2>② 原理 · 签名算法族：选哪一类由信任关系决定</h2>
-    <p>搞清算法与信任关系的对应，能解决「为什么我们这套 HS256 不能再加第二个服务进来验签」。</p>
+    <h2>签名算法族：选哪一类由信任关系决定</h2>
+    <p>第二个服务要验 HS256 的令牌，就得拿到签发密钥，等于共享签发权。</p>
     <p>选算法不是选「哪个更安全」，而是选<strong>谁有能力签发</strong>。HMAC 系对称，验签方手里的密钥同时也能签发，只适合签发方与验签方同属一个信任域的场景。</p>
 <p>一旦有多个团队、多个服务甚至外部方需要验签，就必须换非对称：私钥只在授权服务器，公钥可以随便发。</p>
     <table>
@@ -461,7 +450,7 @@ flowchart TB
     H --> W["注意：密钥一旦分发给多个服务<br/>每个服务都能伪造任意用户令牌"]
 </div>
 
-    <h2>② 原理 · 密钥分发与轮换：工程上最容易出事的一环</h2>
+    <h2>密钥分发与轮换：工程上最容易出事的一环</h2>
     <p>搞清轮换的步骤顺序，能解决两种自伤型故障：切换瞬间全量 401，以及旧公钥删太早导致在线用户集体掉线。</p>
     <p>非对称方案下验签方需要公钥。标准做法是授权服务器暴露一个 <strong>JWKS 端点</strong>（通常是 <code>/.well-known/jwks.json</code>），里面是一组 JWK，每个带 <code>kid</code>。验签方读令牌 header 的 <code>kid</code>，从本地缓存取对应公钥，未命中才回源拉取。</p>
 <p>这里有两个必须做的保护：<strong>回源要限流</strong>（否则伪造随机 kid 就能让授权服务器被自家网关打挂），<strong>缓存要有 TTL</strong>（否则轮换后永远拿不到新公钥）。</p>
@@ -544,8 +533,8 @@ func AuthMiddleware(next http.Handler) http.Handler {
     })
 }</code></pre>
 
-    <h2>② 原理 · jti 与吊销：三条路都要付代价</h2>
-    <p>搞清代价的构成，能解决「到底该不该为了封禁功能放弃无状态」这个必须在设计阶段回答的问题。</p>
+    <h2>jti 与吊销：三条路都要付代价</h2>
+    <p>要不要为封禁放弃无状态，取决于吊销补救各自的代价。</p>
     <p>自包含令牌按设计不可吊销：验签方不需联系任何人就能确认令牌有效，这既是优点也是上限。补救只有三条路，选择标准是<strong>业务能容忍多长的生效延迟</strong>。</p>
     <table>
         <thead>
@@ -583,8 +572,8 @@ func AuthMiddleware(next http.Handler) http.Handler {
     </table>
     <p>第三种做法最划算：缓存只存 <code>userID</code> 到 <code>invalidBefore</code> 的映射，验签后比较令牌 <code>iat</code> 是否早于该时间点，一条记录顶掉该用户全部在途令牌，存储量和用户数同阶而非令牌数同阶。</p>
 
-    <h2>② 原理 · 令牌体积的真实代价</h2>
-    <p>搞清体积从哪来，能解决「接口忽然开始返回 400 或 431」以及「网关内存随并发线性上涨」。</p>
+    <h2>令牌体积的真实代价</h2>
+    <p>令牌体积过大时，接口会返回 400 或 431，网关内存随并发上涨。</p>
     <p>令牌在<strong>每一个请求</strong>的请求头里重传，这件事常被忽略。base64url 会让原始字节膨胀约三分之一，签名本身在 RS256 下就有 342 个字符。</p>
 <p>往 payload 里塞几十个权限字符串，令牌很容易过 2 KB，而不少服务器默认请求头上限只有 8 KB（Tomcat 的 <code>max-http-header-size</code> 默认 8 KB，nginx 的 <code>large_client_header_buffers</code> 默认 4 个 8 KB 缓冲），超限直接得到 400 或 431，错误信息通常很不直观。</p>
 <p>HTTP/2 的头部压缩只在同一连接上重复发送相同头部时才有效，令牌一变（每次刷新后都会变）压缩收益就归零。</p>
@@ -631,7 +620,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 <p>判断标准是问一句：这个字段变更后，能容忍它在令牌里保持旧值到过期吗？不能，就不该放进去。</p>
     </div>
 
-    <h2>③ 场景 · 不同系统形态该验到哪一步、吊销做到哪一档</h2>
+    <h2>不同系统形态该验到哪一步、吊销做到哪一档</h2>
     <p>前面几节给的是机制，这一节给投入顺序。<strong>判断依据只有两条：有几方需要验签，封禁的生效延迟容忍度是多少。</strong>这两条定下来，算法、公钥分发方式、吊销档位基本没有自由度。</p>
     <table>
         <thead>
@@ -691,7 +680,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 <p>它不管<strong>授权范围怎么设计</strong>（scope 与权限的区别、授权码与 PKCE 的流程），见 <a href="../oauth2/">OAuth 2.0 与 OIDC 的协议细节</a>；也不管<strong>令牌该存在浏览器哪里</strong>与算法混淆的利用条件，见 <a href="../../security/auth-security/">越权与鉴权安全</a>；</p>
 <p>放请求头免疫 CSRF 的前提与 <code>SameSite</code> 语义见 <a href="../../security/csrf-clickjacking/">CSRF 与点击劫持</a>。另外它<strong>不是缓存</strong>：用户资料、权限明细、业务状态塞进 payload 换来的只是体积与过期失真。</p>
 
-    <h2>③ 场景 · 反模式对照：每条都对应一次真实故障</h2>
+    <h2>反模式对照：每条都对应一次真实故障</h2>
     <table>
         <thead>
             <tr>

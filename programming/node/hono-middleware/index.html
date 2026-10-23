@@ -71,18 +71,7 @@
 <p>框架定位与生态取舍在 <a href="../hono/">Hono 总览</a>，路由匹配策略与 <code>c.req</code>、<code>c.var</code> 的机制在 <a href="../hono-intro/">路由与上下文机制</a>，运行时差异在 <a href="../hono-edge/">跨运行时部署</a>；</p>
 <p>这篇先给一份注册顺序正确的骨架，再谈洋葱链的执行顺序、错误传播路径和内置中间件的真实边界。</p>
 
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份注册顺序正确的骨架（CORS 在最外层、观测用 <code>try/finally</code>、鉴权与授权分成两层、<code>onError</code> 与 <code>notFound</code> 都注册），一张「要做什么 → 用什么 → 注册在哪一层」对照表，一张内置中间件的默认行为与边界速查表。</li>
-        <li><strong>② 原理</strong>：<code>await next()</code> 两侧能接触的对象为什么完全不同、漏掉 <code>await</code> 的四类静默故障怎么判定、路径写法与注册顺序如何让鉴权被整段绕过、<code>HTTPException</code> 与 <code>onError</code> 的捕获范围与响应阶段为何不可靠、每个内置中间件明确不做什么、流式响应与读写响应体的中间件为什么互斥、<code>Variables</code> 泛型与全局声明的取舍。</li>
-        <li><strong>③ 场景</strong>：一段逻辑该不该写成中间件、写成之后放在哪一层，以及哪些问题不该在中间件里解决。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 洋葱中间件的正确骨架与注册顺序</h2>
+<h2>洋葱中间件的正确骨架与注册顺序</h2>
 <p>中间件写错的形态高度集中，用三条纪律就能挡住绝大部分：<strong>只要 <code>next()</code> 后面还有代码就必须 <code>await</code></strong>；<strong>必须成对的清理动作放 <code>try/finally</code>，不放在 <code>await next()</code> 之后</strong>；<strong>CORS 注册在最外层，鉴权与授权分成两层</strong>。</p>
 <p>下面这份骨架把三条都体现出来，注释只说明为什么，机制在原理层。</p>
 <pre><code class="language-typescript">import { Hono } from 'hono'
@@ -188,7 +177,7 @@ export default app</code></pre>
 </table>
 <p>用法层到此为止。为什么漏一个 <code>await</code> 会让改响应头静默失效、为什么 <code>await next()</code> 之后的代码在异常路径上不执行、为什么 <code>notFound</code> 不进 <code>onError</code>、为什么给带鉴权的响应挂缓存会串数据——原因全部在下面几节。</p>
 
-<h2>② 原理 · await next() 两侧是两个不同的世界</h2>
+<h2>await next() 两侧是两个不同的世界</h2>
 <p>执行顺序本身很简单：先注册的中间件先进入请求阶段、最后离开响应阶段，<code>await next()</code> 就是分界线。真正要记的不是顺序，而是<strong>两侧能接触到的对象完全不同</strong>。</p>
 <p>请求阶段里 <code>c.res</code> 还不存在，你能改的只有从请求派生出来的状态；响应阶段里路由决策已经完成，<code>c.res</code> 才变得可读可换。</p>
 
@@ -229,7 +218,7 @@ sequenceDiagram
     Note over A,H: 短路发生在外层时<br/>内层的计时与审计日志全部缺失
 </div>
 
-<h2>② 原理 · 忘了 await 的四种症状</h2>
+<h2>忘了 await 的四种症状</h2>
 <p><code>next()</code> 返回的是 Promise，不 <code>await</code> 就等于「把下游整条链丢进微任务队列，自己立刻往下走」。响应阶段的代码于是跑在下游之前，此时 <code>c.res</code> 还没有被赋值。</p>
 <p>Hono 常见的表现是报 Context 未终结或读 <code>c.res</code> 出错，但相当多的写法是<strong>静默失效</strong>，本地小流量根本发现不了。</p>
 
@@ -247,7 +236,7 @@ sequenceDiagram
 
 <p>规则可以压缩成一句：<strong>只要 <code>next()</code> 后面还有任何一行代码，就必须 <code>await</code></strong>。不需要响应阶段的中间件，写 <code>return next()</code> 就好。</p>
 
-<h2>② 原理 · 注册顺序与路径写法：鉴权被整段绕过的组合</h2>
+<h2>注册顺序与路径写法：鉴权被整段绕过的组合</h2>
 <p>Hono 的中间件不是「全局钩子」，而是按注册顺序压进匹配链的普通 handler。两条硬规则：<strong>中间件必须注册在对应路由之前</strong>，写在后面不报错也不生效；<strong>路径匹配和路由一样精确</strong>，<code>/admin</code> 不包含 <code>/admin/users</code>。</p>
 <p>这两条加起来就是绝大多数「鉴权中间件明明写了却没生效」的成因。</p>
 
@@ -299,7 +288,7 @@ flowchart TB
 <p>排查方法很直接：在鉴权中间件第一行打一条带请求路径的日志，然后对可疑路径直接发请求。</p>
 <p>日志没出现就是作用范围问题，日志出现了但请求仍被放行就是授权逻辑问题——两类原因的修法完全不同，先分清再动手。</p>
 
-<h2>② 原理 · 错误传播：HTTPException、onError 与不可依赖的响应阶段</h2>
+<h2>错误传播：HTTPException、onError 与不可依赖的响应阶段</h2>
 <p>洋葱链靠 <code>await</code> 串联，异常会沿调用栈向上冒泡，不需要 Express 4 那种给每个 async handler 套捕获包装的写法。冒泡出来的异常交给 <code>app.onError</code>，<code>HTTPException</code> 自带响应对象，<code>err.getResponse()</code> 可以直接返回。</p>
 <p>两条边界必须记住。第一，<strong><code>notFound</code> 不是错误</strong>：没有路由命中时走 <code>app.notFound</code>，不进 <code>onError</code>，想统一响应格式两处都得写。第二，<strong>响应阶段的代码在异常路径下不保证执行</strong>。</p>
 <p>把释放连接、归还信号量、上报指标写在 <code>await next()</code> 之后，异常路径上就会漏掉，而这正是「压测时连接池慢慢耗尽、但没有任何报错」的常见成因；这类逻辑必须放进 <code>try/finally</code>。</p>
@@ -393,7 +382,7 @@ app.onError((err, c) =&gt; {
 
 export default app</code></pre>
 
-<h2>② 原理 · 内置中间件的真实边界</h2>
+<h2>内置中间件的真实边界</h2>
 <p>内置中间件的文档都很短，真正需要知道的是它们<strong>明确不做什么</strong>，以及依赖哪些平台能力——后者决定了同一份代码在 Workers 上能跑、在 Node 上却不行，或者反过来。</p>
 
 <table>
@@ -415,7 +404,7 @@ export default app</code></pre>
 <p><code>cache()</code> 的默认键来自请求 URL，这意味着<strong>带鉴权的响应如果不把身份维度放进键、也不设 <code>vary</code>，就会跨用户串数据</strong>。</p>
 <p>这是内置中间件里后果最严重的一种误用，而且在单用户测试下完全不会暴露。<code>compress()</code> 与 <code>etag()</code> 都需要完整响应体，天生和流式输出互斥。</p>
 
-<h2>② 原理 · CORS 与 JWT：组合配置最容易错的两个</h2>
+<h2>CORS 与 JWT：组合配置最容易错的两个</h2>
 <p>CORS 的坑不在中间件本身，而在<strong>它和错误响应、预检请求、凭据三者的组合</strong>。预检请求不携带授权头，如果鉴权中间件挂在了 OPTIONS 也会经过的位置，预检会被 401 掉，浏览器随后报的却是跨域错误。</p>
 
 <table>
@@ -483,7 +472,7 @@ app.get('/api/orders/:id', requireScope('orders:read'), async (c) =&gt; {
   return c.json({ ...row, viewer: sub })
 })</code></pre>
 
-<h2>② 原理 · 流式响应与读写响应体的中间件互斥</h2>
+<h2>流式响应与读写响应体的中间件互斥</h2>
 <p>普通响应里，响应阶段改头改体都来得及；一旦返回的是 <code>hono/streaming</code> 产出的流式响应，<strong>状态码与响应头在第一个字节写出时就已经定稿</strong>，后面所有中间件的响应阶段修改都无效，而且通常不报错。</p>
 <p>要区分两类冲突：一类是中间件读写<strong>响应体</strong>（压缩、摘要、自己拼装 body），它们会把流缓冲起来；另一类是中间件读<strong>请求体</strong>（验签、审计），它和上传型接口以及 <code>bodyLimit</code> 的组合要小心内存。</p>
 
@@ -501,7 +490,7 @@ app.get('/api/orders/:id', requireScope('orders:read'), async (c) =&gt; {
 </tbody>
 </table>
 
-<h2>② 原理 · 自定义中间件的类型扩展</h2>
+<h2>自定义中间件的类型扩展</h2>
 <p>中间件往下传值只有 <code>c.set</code> / <code>c.get</code> 一条路，类型则有两种声明方式，选错会让类型在包边界处直接失效。<strong>泛型 <code>Variables</code> 是有作用域的</strong>：<code>new Hono&lt;Env&gt;()</code> 与 <code>createMiddleware&lt;Env&gt;</code> 必须共享同一个 <code>Env</code>，中间件才能和 app 对上；</p>
 <p>而 <code>declare module 'hono'</code> 扩展 <code>ContextVariableMap</code> 是全局的，任何 Context 都能取到这个键，代价是丧失作用域约束——适合发布成公共包的中间件，不适合业务内部的临时值。</p>
 <p>两个实践细节：<code>createMiddleware</code> 与 <code>createFactory</code> 的价值不只是省类型标注，它们让中间件在被 <code>app.use</code> 之前就完成类型检查，键名拼错当场报错；</p>
@@ -561,7 +550,7 @@ app.get('/events', withUser, (c) =&gt; {
 
 
 
-<h2>③ 场景 · 什么该写成中间件，写成之后放在哪一层</h2>
+<h2>什么该写成中间件，写成之后放在哪一层</h2>
 <p>前面几节讲的是「写错会怎样」，这一节是「该不该写、放哪里」。先按下图判断形态，再按表核对代价。</p>
 <div class="mermaid">
 flowchart TB

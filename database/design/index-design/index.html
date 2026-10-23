@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="表结构上线后怎么安全改：六类改表动作与回滚点、灰度期读写错配、expand-migrate-contract 骨架、变更兼容性判定与元数据锁风险、改列名删列的代价、CHECK 与默认值、回填脚本要求、按规模选路径与版本化管理。">
+    <meta name="description" content="改表与 DDL 兼容：灰度期读写错配、expand-migrate-contract 骨架、变更兼容性判定、唯一约束与 CHECK 陷阱、回填脚本要求。">
     <meta name="keywords" content="数据库设计,索引设计原则,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/design/index-design/">
     <meta property="og:title" content="模式演进与约束设计：表结构上线之后怎么改 - 资深码农">
-    <meta property="og:description" content="表结构上线后怎么安全改：六类改表动作与回滚点、灰度期读写错配、expand-migrate-contract 骨架、变更兼容性判定与元数据锁风险、改列名删列的代价、CHECK 与默认值、回填脚本要求、按规模选路径与版本化管理。">
+    <meta property="og:description" content="改表与 DDL 兼容：灰度期读写错配、expand-migrate-contract 骨架、变更兼容性判定、唯一约束与 CHECK 陷阱、回填脚本要求。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/design/index-design/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="模式演进与约束设计：表结构上线之后怎么改">
-    <meta name="twitter:description" content="表结构上线后怎么安全改：六类改表动作与回滚点、灰度期读写错配、expand-migrate-contract 骨架、变更兼容性判定与元数据锁风险、改列名删列的代价、CHECK 与默认值、回填脚本要求、按规模选路径与版本化管理。">
+    <meta name="twitter:description" content="改表与 DDL 兼容：灰度期读写错配、expand-migrate-contract 骨架、变更兼容性判定、唯一约束与 CHECK 陷阱、回填脚本要求。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,18 +71,7 @@
     </header>
     <p>建表是一次性的，改表是无限次的。绝大多数数据库设计资料都在讲怎么把表建好，却几乎不讲一个更常见也更危险的问题：</p>
 <p><strong>表结构已经上线，上面跑着几十个服务实例和几亿行数据，现在要改，怎么改才不出事</strong>。这篇只讲改表，以及改表时那些能救命的约束设计。范式与冗余的取舍见《范式与反范式》篇。</p>
-
-    <div class="callout callout-info">
-        <div class="callout-icon">💡</div>
-        <div class="callout-title">这篇怎么读</div>
-        <ul>
-            <li><strong>① 用法</strong>：加列、加索引、加约束、改类型、改列名、删列各自的安全做法与执行顺序（<strong>加法先行、减法最后</strong>），每一步都给出验证方法和明确的回滚点；外加 DDL 前置检查 SQL、一次改类型的六步完整清单、锁与在线性相关的参数速查。</li>
-            <li><strong>② 原理</strong>：灰度期读写错配为什么必然产生事故、expand-migrate-contract 的六个阶段与各阶段的回滚动作、十类常见变更的兼容性与是否重写整表、元数据锁排队的连锁反应、唯一约束的三个语义陷阱、枚举四种实现与默认值四个陷阱、回填脚本的五条工程要求与可直接改的脚本。</li>
-            <li><strong>③ 场景</strong>：变更流程与版本化工具对照、按团队与数据规模选变更路径的取舍矩阵、不适用边界。</li>
-        </ul>
-    </div>
-
-    <h2>① 用法 · 六类改表动作：安全做法、验证与回滚点</h2>
+<h2>六类改表动作：安全做法、验证与回滚点</h2>
 
     <p>所有改表动作只按一条顺序排：<strong>加法先行，减法最后，中间用一个完整发布周期隔开</strong>。</p>
 <p>下表左到右就是执行顺序，「回滚点」一列写的是这一步出问题时该做什么——某一步填不出回滚动作，说明被切得太粗，要再拆。为什么必须这么切，原因见原理层。</p>
@@ -191,7 +180,7 @@
         </tbody>
     </table>
 
-    <h2>① 用法 · 前置检查与一次改类型的完整执行清单</h2>
+    <h2>前置检查与一次改类型的完整执行清单</h2>
 
     <p>下面两段可直接抄进变更工单。第一段是所有 DDL 的前置检查，第二段是「把 <code>status</code> 换成新枚举列 <code>status_v2</code>」这个典型不兼容变更的六步落地，每步后跟验证与回滚动作。</p>
 
@@ -253,8 +242,8 @@ SELECT status, COUNT(*) FROM orders WHERE status_v2 IS NULL GROUP BY status;
 --   前置：连续一个周期零访问 + 该列数据已导出留档 + 下游报表与同步任务确认改完
 ALTER TABLE orders DROP COLUMN status;</code></pre>
 
-    <h2>② 原理 · 为什么改表比建表难：灰度期的读写错配</h2>
-    <p>搞清这一节能解决「DDL 明明是秒级的，为什么发布窗口里接口大面积报错」。</p>
+    <h2>为什么改表比建表难：灰度期的读写错配</h2>
+    <p>秒级完成的 DDL，发布窗口里接口却大面积报错，根因在读写错配。</p>
     <p>所有改表事故的根都在同一处：<strong>发布不是原子的</strong>。滚动发布期间，新旧版本实例同时在跑，连着同一个数据库。数据库只有一个结构，代码却有两个版本的期望。</p>
 <p>这个窗口通常是几分钟到几十分钟，如果是灰度放量，可能是几天。</p>
 
@@ -279,8 +268,8 @@ sequenceDiagram
     <p>把这三类事故抽象出来就是一条纪律：<strong>任何一步变更都不能同时改读和写</strong>。违反它，一定存在一个窗口，两个版本的代码对同一份数据持有互相矛盾的假设。</p>
 <p>而遵守它，每一步都能找到一个明确的回滚动作。</p>
 
-    <h2>② 原理 · expand-migrate-contract：唯一安全的变更骨架</h2>
-    <p>搞清这一节能解决「每一步到底能不能回滚」这个在变更评审里最常答不上来的问题。</p>
+    <h2>expand-migrate-contract：唯一安全的变更骨架</h2>
+    <p>变更评审里最常答不上来的是：每一步到底能不能回滚。</p>
     <p>这个模式也叫「并行变更」或「扩张收缩」，本质是把一次不兼容变更切成若干次兼容变更：<strong>先只加不减（expand），再迁移数据和读路径（migrate），最后删除旧结构（contract）</strong>。</p>
 
     <div class="mermaid">
@@ -313,8 +302,8 @@ stateDiagram-v2
 <p>第二，<strong>阶段三的回填必须在双写已经生效之后开始</strong>，否则回填过程中产生的新数据不会进入新结构，回填完还是不全。</p>
 <p>第三，<strong>阶段四和阶段五之间要留足观察期</strong>，这段时间新结构承担读，旧结构仍在写，是唯一能安全发现问题并回退的窗口。</p>
 
-    <h2>② 原理 · 常见变更的兼容性判定</h2>
-    <p>搞清这一节能解决「这个 DDL 能不能直接在高峰执行」的判断，两个维度分别决定能不能单独一步上线、能不能不挑时间。</p>
+    <h2>常见变更的兼容性判定</h2>
+    <p>「能不能单独一步上线」和「能不能在高峰执行」是两个问题，要分开回答。</p>
     <p>这张表是评审时最常用的速查。关键区分两件事：<strong>是否兼容旧代码</strong>决定它能否单独一步上线，<strong>是否锁表重写</strong>决定它能否在业务高峰直接执行。</p>
 
     <table>
@@ -398,8 +387,8 @@ stateDiagram-v2
 <p>执行任何 DDL 前先查一遍长事务，并给 DDL 会话设置较短的锁等待超时，拿不到锁就立刻放弃重试，而不是死等。大表在线改表的工具与参数，《索引优化》篇的索引治理部分已有展开。</p>
     </div>
 
-    <h2>② 原理 · 改列名与删列：必须拆成两个发布周期</h2>
-    <p>搞清这一节能解决「元数据操作明明不到一秒，为什么反而是最危险的两类变更」。</p>
+    <h2>改列名与删列：必须拆成两个发布周期</h2>
+    <p>元数据操作不到一秒，改列名与删列却是最危险的两类变更。</p>
     <p>这两个操作在数据库层面都极快（只动元数据），所以容易被低估。风险完全来自应用侧：<strong>灰度期间还在运行的旧实例会因为找不到列而整条 SQL 失败</strong>，不是降级，是报错。</p>
 
     <div class="mermaid">
@@ -420,8 +409,8 @@ flowchart TB
     <p>关于改列名，还有一个更稳的选择：<strong>不改</strong>。列名只是标识符，在应用层做一次映射的成本远低于一次跨发布周期的协调。</p>
 <p>真要改，等价于「加新列、双写、回填、切读、停旧写、删旧列」六步，即上一节的完整流程。<code>SELECT *</code> 是隐藏地雷——它让「哪些代码用了这一列」无法被静态回答，也让删列的影响面无法评估。</p>
 
-    <h2>② 原理 · 唯一约束的三个设计陷阱</h2>
-    <p>搞清这一节能解决「同一个编码删了就再也建不回来」「别的租户建过我就建不了」这两类只在特定操作序列下复现的投诉。</p>
+    <h2>唯一约束的三个设计陷阱</h2>
+    <p>同一个编码删了就再也建不回来、别的租户建过我就建不了，这类投诉只在特定操作序列下复现。</p>
     <p>唯一约束是少数能让数据库替应用兜住 bug 的机制，但它的语义细节常被误解，而误解的代价通常要等到上线后才显现。</p>
 
     <table>
@@ -467,8 +456,8 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>② 原理 · CHECK、枚举与默认值</h2>
-    <p>搞清这一节能解决「约束写了却没生效」「改了默认值历史行却没变」这两类静默失效。</p>
+    <h2>CHECK、枚举与默认值</h2>
+    <p>约束写了却没生效、改了默认值历史行却没变，都是静默失效。</p>
     <p>数据库约束的价值不在替代应用校验，而在<strong>兜住应用的 bug 和绕过应用的直连写入</strong>。代价是改约束要走 DDL，所以约束应只覆盖「几年都不会变」的规则。</p>
 
     <table>
@@ -564,8 +553,8 @@ ALTER TABLE orders DROP CONSTRAINT ck_orders_uid_nn;</code></pre>
         </tbody>
     </table>
 
-    <h2>② 原理 · 数据迁移脚本的工程要求</h2>
-    <p>搞清这一节能解决「回填跑到九成挂了只能从头再来」和「重跑把已经对的数据改坏」。</p>
+    <h2>数据迁移脚本的工程要求</h2>
+    <p>回填跑到九成挂了只能从头再来，重跑还可能改坏已经对的数据。</p>
     <p>回填脚本的失败率比 DDL 高得多，因为运行时间长、要处理存量脏数据、还会和线上写入竞争。能进生产的迁移脚本必须同时满足下面五条，缺一条就会在凌晨三点把人叫起来。</p>
 
     <table>
@@ -669,7 +658,7 @@ with conn.cursor() as cur:
         d = replica_delay(cur)
         time.sleep(SLEEP if d &lt; DELAY_LIMIT else min(30, d))</code></pre>
 
-    <h2>③ 场景 · 变更流程与版本化管理</h2>
+    <h2>变更流程与版本化管理</h2>
     <p>把上面所有内容压缩成一条可执行的纪律：<strong>永远先发兼容的 DDL，再发代码，最后清理</strong>。顺序反了，灰度期必然出事故；顺序对了，每一步都可以单独回滚。</p>
 
     <div class="mermaid">
@@ -791,7 +780,7 @@ flowchart TB
     <p>手工执行必然漂移的原因很具体：变更由人挑时机、挑环境执行，就一定会出现某个环境漏执行、某个分片执行两遍、某次执行的内容和仓库脚本对不上这三类情况，</p>
 <p>而且事后没有任何记录能证明「当前库的结构」等于「哪个版本代码期望的结构」。版本化工具的核心价值不是省事，是把执行记录落在数据库里并校验脚本指纹，让环境之间的差异能被发现。</p>
 
-    <h2>③ 场景 · 按规模与场景选变更路径</h2>
+    <h2>按规模与场景选变更路径</h2>
     <p>同一个变更在不同规模下的正确路径不一样。下表按「表有多大、有几个消费方、能不能停机」把常见情形排开，每行都写清代价。</p>
 
     <table>

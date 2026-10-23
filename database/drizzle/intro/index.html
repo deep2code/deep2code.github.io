@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Drizzle 用 TypeScript 定义 schema：表定义函数、列名与属性名映射、类型推导的实际用法与边界。">
+    <meta name="description" content="Drizzle schema 定义：表与列的写法、$inferSelect 与 $inferInsert、relations 不建外键、复合索引位置、文件拆分与循环引用。">
     <meta name="keywords" content="Drizzle ORM,Drizzle ORM 入门,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/drizzle/intro/">
     <meta property="og:title" content="Drizzle 上手：schema 定义与类型推导 - Drizzle ORM - 资深码农">
-    <meta property="og:description" content="Drizzle 用 TypeScript 定义 schema：表定义函数、列名与属性名映射、类型推导的实际用法与边界。">
+    <meta property="og:description" content="Drizzle schema 定义：表与列的写法、$inferSelect 与 $inferInsert、relations 不建外键、复合索引位置、文件拆分与循环引用。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/drizzle/intro/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Drizzle 上手：schema 定义与类型推导 - Drizzle ORM">
-    <meta name="twitter:description" content="Drizzle 用 TypeScript 定义 schema：表定义函数、列名与属性名映射、类型推导的实际用法与边界。">
+    <meta name="twitter:description" content="Drizzle schema 定义：表与列的写法、$inferSelect 与 $inferInsert、relations 不建外键、复合索引位置、文件拆分与循环引用。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,18 +68,7 @@
                     </header>
                     <div class="article-content">
 <p>Drizzle 的 schema 就是 TypeScript 代码——没有 DSL、没有 <code>.prisma</code> 文件、没有代码生成步骤。表定义本身携带类型信息，编辑器不必等 generate 就能补全。这篇讲清 schema 定义的每个环节和类型推导的用法。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份能直接跑起来的最小 schema——两张表、一个关系、一个 <code>db</code> 实例、一份配置，加上用 <code>$inferSelect</code> 与 <code>$inferInsert</code> 写出的增查函数；再给「要表达什么 → 怎么写 → 注意什么」速查表和 <code>drizzle.config.ts</code> 各字段的作用。</li>
-        <li><strong>② 原理</strong>：表定义三个参数的语义、列类型与约束链对 DDL 和推导类型各自的影响、两套推导类型为什么形状不同、<code>relations()</code> 与 <code>.references()</code> 的六维差异、索引与复合约束的写法与版本差异、多 schema、循环引用与自引用为什么必须延迟求值。</li>
-        <li><strong>③ 场景</strong>：按项目规模选 schema 组织方式、类型边界该放在哪里、哪些列类型选择在上线后几乎改不动，以及不适用边界。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 最小可用：四个文件跑通 schema 与类型推导</h2>
+<h2>最小可用：四个文件跑通 schema 与类型推导</h2>
 
 <p>下面四段按顺序放进项目就能跑。<strong>先把这条链路打通，再回原理层看每个环节为什么这么写</strong>：schema 定义 → 类型导出 → 连接实例 → 迁移配置。</p>
 
@@ -155,7 +144,7 @@ export default defineConfig({
 // 之后只有两条命令：drizzle-kit generate 生成迁移，drizzle-kit migrate 应用迁移。
 // 生产流程与不可逆变更的处理见本簇最后一篇。</code></pre>
 
-<h2>① 用法 · 列与约束速查：要表达什么，就怎么写</h2>
+<h2>列与约束速查：要表达什么，就怎么写</h2>
 
 <p>这张表覆盖日常写 schema 时九成的动作。右列是这一处最常见的翻车方式——其中一半属于「不报错但行为不对」，所以值得逐行看一遍。</p>
 
@@ -175,9 +164,9 @@ export default defineConfig({
 </tbody>
 </table>
 
-<h2>② 原理 · 表定义的基本结构</h2>
+<h2>表定义的基本结构</h2>
 
-<p>搞清这一节能解决「同一个字段在代码里叫一个名字、在库里叫另一个名字」这类改名需求该怎么落。</p>
+<p>同一个字段在代码里叫一个名字、库里叫另一个，靠列名参数分开。</p>
 
 <p>每种数据库有专属的表定义函数：PostgreSQL 用 <code>pgTable</code>，MySQL 用 <code>mysqlTable</code>，SQLite 用 <code>sqliteTable</code>。第一个参数是真实表名，第二个是列定义对象，第三个（可选）是索引与约束。</p>
 
@@ -213,9 +202,9 @@ export const users = pgTable('users', {
   uniqueIndex('users_email_lower_idx').on(table.email),
 ]);</code></pre>
 
-<h2>② 原理 · 列类型与约束的完整对照</h2>
+<h2>列类型与约束的完整对照</h2>
 
-<p>搞清这一节能解决「这个列该选什么类型、加了约束之后插入代码要不要改」。</p>
+<p>列该选什么类型、加约束后插入代码要不要改，都在对照表里。</p>
 
 <p>Drizzle 的列类型直接映射到数据库原生类型，不做抽象磨平。这意味着你需要知道目标数据库有什么类型，但也意味着你能用到所有原生能力。</p>
 
@@ -249,9 +238,9 @@ export const users = pgTable('users', {
 </tbody>
 </table>
 
-<h2>② 原理 · 类型推导：$inferSelect 与 $inferInsert</h2>
+<h2>类型推导：$inferSelect 与 $inferInsert</h2>
 
-<p>搞清这一节能解决「插入时 TS 要求我传 id 和 createdAt」这类明显不对的类型报错。</p>
+<p>插入时 TS 要求传 id 和 createdAt，是类型推导没分清查询与插入。</p>
 
 <p>这是 Drizzle 类型系统最实用的部分。同一张表有两套类型，因为「查出来的数据」和「插入时要提供的数据」形状不同。</p>
 
@@ -316,9 +305,9 @@ type UserSummary = Pick&lt;User, 'id' | 'email' | 'displayName'&gt;;
 // 数据库里如果是 { color: 'red' }，TS 以为是 { theme: string }
 // 需要运行时校验请配合 zod 在边界处 parse</code></pre>
 
-<h2>② 原理 · relations() 与真外键的区别</h2>
+<h2>relations() 与真外键的区别</h2>
 
-<p>搞清这一节能解决「关系都定义了，为什么库里还能插进指向不存在用户的文章」。</p>
+<p>关系都定义了，库里还能插进指向不存在用户的文章：约束没生成。</p>
 
 <p>这是 Drizzle 新手最大的误解来源。<code>relations()</code> 和 <code>.references()</code> 是两件完全不同的事：</p>
 
@@ -396,9 +385,9 @@ export const postsToTagsRelations = relations(postsToTags, ({ one }) =&gt; ({
 }));
 // 多对多必须为中间表也定义 relations，否则 with 嵌套查不到</code></pre>
 
-<h2>② 原理 · 索引、复合约束与多 schema</h2>
+<h2>索引、复合约束与多 schema</h2>
 
-<p>搞清这一节能解决「索引写了却没出现在迁移文件里」这种静默失效。</p>
+<p>索引写了却没出现在迁移文件里，复合索引的定义位置常写错。</p>
 
 <p>单列的唯一约束用链式 <code>.unique()</code>，但复合索引、复合唯一、复合主键、部分索引都必须在 <code>pgTable</code> 的第三个参数里定义。</p>
 
@@ -440,9 +429,9 @@ export const invoices = billingSchema.table('invoices', {
 // 生成的 SQL 会带 schema 前缀：SELECT * FROM "auth"."sessions"
 // drizzle.config.ts 里需要配置 schemaFilter 才能让 drizzle-kit 识别</code></pre>
 
-<h2>② 原理 · schema 文件的组织方式</h2>
+<h2>schema 文件的组织方式</h2>
 
-<p>搞清这一节能解决「拆完文件后 drizzle-kit 少扫了表、db.query 少了几张表」。</p>
+<p>文件拆完后 drizzle-kit 少扫了表，db.query 里也少几张表。</p>
 
 <p>单文件塞几十张表会变成几千行的巨石文件。推荐按业务领域拆分，然后统一导出：</p>
 
@@ -503,9 +492,9 @@ const client = postgres(process.env.DATABASE_URL!, { max: 20 });
 export const db = drizzle(client, { schema });
 // 传 schema 才能用 db.query.users.findMany({ with: { posts: true } })</code></pre>
 
-<h2>② 原理 · 循环引用与延迟求值</h2>
+<h2>循环引用与延迟求值</h2>
 
-<p>搞清这一节能解决「拆文件之后编译报 circular reference，或者运行时某张表是 undefined」。</p>
+<p>拆文件后编译报 circular reference、运行时某张表 undefined，是求值太早。</p>
 
 <p>拆分文件后必然遇到循环引用：<code>users.ts</code> 里的表被 <code>posts.ts</code> 引用，而 <code>posts.ts</code> 又被 <code>users.ts</code> 的 relations 引用。</p>
 
@@ -536,7 +525,7 @@ export const categoriesRelations = relations(categories, ({ one, many }) =&gt; (
   }),
 }));</code></pre>
 
-<h2>③ 场景 · 不同规模与需求下的取舍</h2>
+<h2>不同规模与需求下的取舍</h2>
 
 <p>schema 层的决定分两类：<strong>组织方式随时能改，列类型选择上线后几乎改不动</strong>。下表把两类分别标出来。</p>
 

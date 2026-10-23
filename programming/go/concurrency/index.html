@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>Go 的并发难点从来不在 <code>go</code> 这个关键字，而在三件事：goroutine 起来之后谁负责让它停、共享状态该用哪个原语保护、以及怎么让偶发的竞争在 CI 里稳定复现。</p>
 <p>这篇按这三件事组织——先给工程上已经收敛的几个标准定式，再展开 channel 与锁的语义细节，最后收拢选型判断。调度器与内存分配的运行时机制在 <a href="../">Go 运行时模型</a>，取消信号怎么一路传下去在 <a href="../context/">Context 篇</a>。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：四个可直接抄的并发定式（errgroup 收敛错误、带缓冲 channel 限流、只初始化一次、后台 goroutine 的完整生命周期），一张「要做什么 → 用哪个原语 → 用错的后果」对照表，以及 <code>go test</code> 的并发相关旗标。</li>
-        <li><strong>② 原理</strong>：channel 在五种状态下 send / recv / close 的完整语义、select 的随机性与 timer 泄漏、五类高频并发 bug 的成因与版本差异、Mutex 与 RWMutex 与 atomic 的取舍、race 检测器能力边界与 Go 内存模型的 happens-before 规则。</li>
-        <li><strong>③ 场景</strong>：具体业务形态下该选哪套方案、代价是什么，以及哪些问题看着像并发问题其实不是。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 四个标准定式与并发测试的正确跑法</h2>
+<h2>四个标准定式与并发测试的正确跑法</h2>
 <p>会写 Go 的人缺的不是语法，是「这类问题的标准写法长什么样」。下面四段是生产代码里反复出现、且已经没有争议的形态，注释只说明为什么要这么写，机制解释见原理层。</p>
 <pre><code class="language-go">// 定式一：并发调多个下游并收敛错误 —— 永远配 SetLimit
 func fanOut(parent context.Context, urls []string) error {
@@ -242,7 +231,7 @@ go build -race -o myapp_race ./cmd/server</code></pre>
 </table>
 <p>上面这些定式为什么长这样——为什么 <code>Add</code> 必须在 <code>go</code> 之前、为什么循环里不能用 <code>time.After</code>、为什么共享变量当信号不可靠——全部在下面几节。</p>
 
-<h2>② 原理 · channel 的语义矩阵：一张表解释大多数死锁与 panic</h2>
+<h2>channel 的语义矩阵：一张表解释大多数死锁与 panic</h2>
 <p>搞清这张表能直接定位绝大多数 channel 相关的线上事故：send on closed channel 的 panic、莫名其妙的永久阻塞、以及接收方提前退出导致的泄漏。</p>
 <p>channel 的行为不是「发送方塞值、接收方取值」这么简单。它在五种状态下的表现各不相同，而绝大多数 channel 相关的 bug——死锁、panic、泄漏——都可以在这张表里直接定位到对应的格子。</p>
 <table>
@@ -283,7 +272,7 @@ stateDiagram-v2
 <p>正确做法是<strong>只让发送方关闭 channel</strong>，接收方通过 <code>range</code> 或检查 <code>ok</code> 来感知关闭。</p>
 <p>第二高频的是<strong>对 nil channel 操作</strong>：<code>var ch chan int</code> 声明但没 make，send 和 recv 都永久阻塞。在 select 里这其实是个有用的技巧——把某个 case 的 channel 设为 nil 就等于禁用了它，不会被选中。</p>
 
-<h2>② 原理 · select 的随机性与 time.After 的内存泄漏</h2>
+<h2>select 的随机性与 time.After 的内存泄漏</h2>
 <p>这一节解释两个现象：想用 case 顺序表达优先级却发现不生效，以及一个高频循环把内存吃到只涨不跌。</p>
 <p>select 多个 case 同时就绪时，Go 运行时<strong>随机选一个</strong>，不是按书写顺序。这意味着你不能用 case 的排列来表达优先级——想要优先级必须嵌套 select 或在外层做显式判断。</p>
 <p><code>default</code> 把 select 变成非阻塞的尝试：所有 case 都不就绪就走 default，常用于「试着从 channel 取值，没有就做别的事」。</p>
@@ -322,7 +311,7 @@ for {
     <p>返回 false 说明 timer 已经到期或者已经被 Stop 过了。如果是到期了，它的 channel 上有一个待读的信号，必须排掉才能安全 Reset，否则下一轮 select 会在 Reset 后立即选中 timer case。这是 timer 复用最常出错的细节。</p>
 </div>
 
-<h2>② 原理 · 五类最常见的并发 bug</h2>
+<h2>五类最常见的并发 bug</h2>
 <p>这五类覆盖了代码审查与线上事故里绝大多数 Go 并发问题，每类都对应一种可复现的症状与一个固定的定位工具。</p>
 <p>下面五类覆盖了我这些年在代码审查和线上事故里遇到的绝大多数 Go 并发问题。每类都给正反例和定位方法。</p>
 <table>
@@ -470,7 +459,7 @@ for i := 0; i &lt; 100; i++ {
 <p><code>-race</code> 检测器能在运行时发现这类问题，但它<strong>只能发现实际发生过的竞争</strong>——如果你的测试里没有触发并发路径，它什么都检不出来。</p>
 <p>所以必须写有并发的测试（多个 goroutine 同时调同一个函数），并在 CI 里带 <code>-race</code> 跑。性能开销大约 2 到 10 倍，不适合在生产开。</p>
 
-<h2>② 原理 · 锁的选择与常见陷阱</h2>
+<h2>锁的选择与常见陷阱</h2>
 <p>用法层的对照表给了结论，这一节说清依据：为什么默认选 <code>Mutex</code>、<code>RWMutex</code> 在什么读写比下才有收益、<code>sync.Map</code> 为什么常常更慢。</p>
 <p>先用决策图收敛选项，再看细节：</p>
 <div class="mermaid">
@@ -502,7 +491,7 @@ flowchart TB
 <p><strong>锁的复制陷阱</strong>：<code>sync.Mutex</code> 和 <code>sync.WaitGroup</code> 等同步原语不能被复制。把包含锁的结构体按值传递给函数或赋值给另一个变量，锁的状态不会跟着过去，两边各有一把独立的锁，不再互斥。</p>
 <p>用 <code>go vet</code> 能检出这个问题（<code>copylocks</code> 检查器）。解法是始终用指针传递包含锁的结构体。</p>
 
-<h2>② 原理 · sync.Once、errgroup 与 singleflight 的关键细节</h2>
+<h2>sync.Once、errgroup 与 singleflight 的关键细节</h2>
 <p>这三个工具的坑都不在用法上，而在失败路径上：panic 之后会不会重试、错误怎么传播、一次失败会不会放大成全员失败。</p>
 <table>
     <thead>
@@ -515,7 +504,7 @@ flowchart TB
     </tbody>
 </table>
 
-<h2>② 原理 · race 检测器的能力边界与内存模型</h2>
+<h2>race 检测器的能力边界与内存模型</h2>
 <p>搞清这一节能回答一个关键问题：CI 里 <code>-race</code> 全绿，到底能不能说明代码没有数据竞争。</p>
 <p><code>-race</code> 编译选项在运行时拦截所有内存访问并检查 happens-before 关系。它<strong>只能发现实际执行路径上的竞争</strong>，所以测试覆盖率和并发测试的质量直接决定它的效果。</p>
 <pre><code class="language-bash"># 测试时开 race
@@ -552,7 +541,7 @@ sequenceDiagram
     Note over G1,G2: 如果没有 channel 或锁，G2 读到的 x 可能是旧值甚至零值
 </div>
 
-<h2>③ 场景 · 具体业务形态下该选哪套方案</h2>
+<h2>具体业务形态下该选哪套方案</h2>
 <p>前面的原语选择是「点」，这里收拢成「面」：按真实业务形态给方案、给理由、也给代价。</p>
 <table>
     <thead>

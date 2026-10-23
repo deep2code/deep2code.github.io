@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>PG 的元组结构、xmin/xmax 与 VACUUM 在主干篇已经讲过，这一篇只谈<strong>并发控制的实际行为</strong>：四个隔离级别真正的语义差异、PG 的可重复读为什么会让从 MySQL 迁来的应用大面积报错。</p>
 <p>SERIALIZABLE 的代价为什么是回滚率而不是锁等待、八种表锁的兼容关系，以及 PG 运维最大的坑——一个等锁的 DDL 会把它后面所有毫不相干的查询一起堵死。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：事务的四个标准动作（显式指定隔离级别、设锁等待与语句超时、捕获 40001 重试、别让事务跨越外部调用）、一张「要做什么 → 用哪档锁」对照表、一条直接能用的阻塞链定位 SQL，以及并发相关参数速查。</li>
-        <li><strong>② 原理</strong>：四个隔离级别实际只有三种行为、PG 的 REPEATABLE READ 与 MySQL 同名级别为何相反、SSI 的危险结构与谓词锁、快照 <code>xmin</code> 水位与长事务的四重危害、八种表锁的冲突关系、行锁四档为什么能让外键不再死锁、FIFO 锁队列如何被一个等锁的 DDL 堵死、死锁检测的判断路径。</li>
-        <li><strong>③ 场景</strong>：按业务形态给出隔离级别与锁策略的选型矩阵，以及哪些一致性问题不该在这一层解决。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 事务的标准写法、锁的选择与阻塞链定位</h2>
+<h2>事务的标准写法、锁的选择与阻塞链定位</h2>
 <p>PG 上的并发事故绝大多数不是因为不懂 MVCC，而是因为事务少写了几个标准动作。<strong>下面这四件事一个都不能省</strong>：隔离级别显式写出来、两个超时设好、序列化失败要重试、事务里不要夹外部调用。</p>
 <pre><code class="language-sql">-- ① 事务的标准写法。这四行注释就是这段代码存在的全部理由
 BEGIN ISOLATION LEVEL REPEATABLE READ;   -- 必须在第一条语句之前指定，事务中途再改会报错
@@ -191,7 +180,7 @@ SELECT pg_cancel_backend(12345);
 </table>
 <p>用法层到此结束。为什么 RR 下会直接报 40001 而不是等锁、为什么 SERIALIZABLE 可能中止一个只读事务、为什么一个毫秒级的 <code>ALTER TABLE</code> 能让整张表十分钟不可用，下面逐个展开。</p>
 
-<h2>② 原理 · 四个隔离级别，实际只有三种行为</h2>
+<h2>四个隔离级别，实际只有三种行为</h2>
 <p>PG 声明支持 SQL 标准的四个隔离级别，但<strong>READ UNCOMMITTED 的行为和 READ COMMITTED 完全一样</strong>：PG 的 MVCC 里根本没有「未提交版本」这种可读状态，它不实现脏读。写 <code>SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED</code> 不报错，但也什么都不会变。真正有区别的只有三档。</p>
 <table>
 <thead>
@@ -211,7 +200,7 @@ SELECT pg_cancel_backend(12345);
 <p>这个行为是对的，但它意味着 <code>UPDATE ... WHERE status = 'pending'</code> 在并发下会出现「扫描时命中、最终没改」的情况，用返回的影响行数做业务判断时必须考虑到。想要「读到什么就基于什么写」，必须显式 <code>SELECT ... FOR UPDATE</code>，或者升到 RR 并接受失败重试。</p>
 </div>
 
-<h2>② 原理 · PG 的 REPEATABLE READ 和 MySQL 的同名级别不是一回事</h2>
+<h2>PG 的 REPEATABLE READ 和 MySQL 的同名级别不是一回事</h2>
 <p>这是从 MySQL 迁到 PG 时<strong>最容易造成线上大面积报错</strong>的差异。两边都叫 REPEATABLE READ，行为却相反：MySQL 在 RR 下遇到并发更新同一行会<strong>阻塞等锁</strong>，等到了就在最新版本上继续；</p>
 <p>PG 用的是快照隔离加 first-updater-wins，第二个事务一旦发现这一行在自己快照之后被别人改过，<strong>立刻抛出 <code>could not serialize access due to concurrent update</code>，SQLSTATE 40001</strong>。没有等待，没有自动重试，事务直接死掉。原来在 MySQL 上「慢一点但会成功」的并发扣库存，迁到 PG 的 RR 下就变成大量 40001。</p>
 <div class="mermaid">
@@ -276,7 +265,7 @@ def deduct(cur):
         raise ValueError("库存不足")   # 业务异常，不能被重试逻辑吞掉
     cur.execute("INSERT INTO stock_log(item_id, delta) VALUES (%s, -1)", (1,))</code></pre>
 
-<h2>② 原理 · SERIALIZABLE 用的是 SSI：代价是回滚率，不是锁等待</h2>
+<h2>SERIALIZABLE 用的是 SSI：代价是回滚率，不是锁等待</h2>
 <p>很多人以为 SERIALIZABLE 就是「读也加锁」，在 PG 上这是错的。PG 9.1 起用的是 <strong>SSI（Serializable Snapshot Isolation）</strong>：事务照样跑在快照隔离上，读操作<strong>不阻塞任何人</strong>。</p>
 <p>但内核会用谓词锁（<code>SIReadLock</code>，只记录不阻塞）跟踪「谁读了什么、谁写了什么」，一旦发现读写依赖形成了<strong>危险结构</strong>（一个事务既有进来的 rw 依赖又有出去的 rw 依赖，即所谓 pivot），就中止其中一个事务。</p>
 <p>所以 SERIALIZABLE 的开销表现在三处：跟踪读集合的内存（<code>max_pred_locks_per_transaction</code> 默认 64，超了会把行级谓词锁升级成页级甚至表级，<strong>误杀率随之上升</strong>）、CPU 上的依赖图维护、以及最关键的<strong>事务回滚率</strong>。</p>
@@ -302,7 +291,7 @@ def deduct(cur):
 <p>可以用 <code>BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE</code>：这样事务会先等到一个不可能产生冲突的安全快照再开始，<strong>永远不会被中止也永远不会中止别人</strong>，代价是开头可能要等一会儿。长时间的一致性报表就该用这个写法。</p>
 </div>
 
-<h2>② 原理 · 快照、xmin 水位与长事务的四重危害</h2>
+<h2>快照、xmin 水位与长事务的四重危害</h2>
 <p>快照的核心是三个东西：<code>xmin</code>（此刻最老的活跃事务 ID，比它小且已提交的都可见）、<code>xmax</code>（此刻的 XID 上界）、以及中间那批正在跑的事务列表。PG 13 起用 <code>pg_current_snapshot()</code> 查看，老版本是 <code>txid_current_snapshot()</code>。</p>
 <p>关键点在于：<strong>全局最老的那个 xmin 就是 VACUUM 的天花板</strong>。任何一个事务只要还持着快照，比它更新的所有死元组都不能被回收——哪怕这个事务在干的事情和那张表毫无关系。</p>
 <p>所以长事务在 PG 上的危害是四重的，而且每一重都能独立造成故障。</p>
@@ -345,7 +334,7 @@ WHERE  backend_xmin IS NOT NULL
 ORDER  BY age(backend_xmin) DESC
 LIMIT  5;</code></pre>
 
-<h2>② 原理 · 表级锁：八种模式与谁跟谁冲突</h2>
+<h2>表级锁：八种模式与谁跟谁冲突</h2>
 <p>PG 的表锁有八种模式，从 <code>ACCESS SHARE</code> 到 <code>ACCESS EXCLUSIVE</code> 强度递增。绝大多数事故只需要记住两条：<strong><code>ACCESS EXCLUSIVE</code> 和一切冲突，包括 <code>SELECT</code></strong>；<strong><code>SHARE UPDATE EXCLUSIVE</code> 不阻塞读写</strong>，所以 VACUUM、<code>ANALYZE</code>、<code>CREATE INDEX CONCURRENTLY</code> 才敢在线跑。</p>
 <div class="mermaid">
 flowchart TB
@@ -389,7 +378,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · 行级锁四档与 SKIP LOCKED 的底层差异</h2>
+<h2>行级锁四档与 SKIP LOCKED 的底层差异</h2>
 <p>行级锁不记在内存的锁表里，而是<strong>写在元组头的 xmax 上</strong>（多个持有者时才落到 multixact），所以 PG 不存在 InnoDB 那种「行锁太多升级成表锁」的问题，锁多少行都行，代价只是 WAL 与元组头的改动。</p>
 <p>四档强度从弱到强，选对了能显著降低冲突面。</p>
 <table>
@@ -440,7 +429,7 @@ SELECT pg_advisory_unlock(hashtext('nightly_settlement'));
 -- 想让锁随事务自动释放就用事务级版本，更安全，不会因为连接复用而泄漏
 SELECT pg_try_advisory_xact_lock(hashtext('nightly_settlement'));</code></pre>
 
-<h2>② 原理 · DDL 的阻塞风险：一个等锁的 DDL 会堵死整张表</h2>
+<h2>DDL 的阻塞风险：一个等锁的 DDL 会堵死整张表</h2>
 <p>这是 PG 运维最大的坑，而且和 DDL 本身快不快无关。<strong>PG 的锁请求是排队的，并且队列是 FIFO 的</strong>：当一个 <code>ALTER TABLE</code> 在等 <code>ACCESS EXCLUSIVE</code> 锁时，它后面到达的所有请求——包括本来和它毫无冲突的 <code>SELECT</code>——都必须排在它后面等。</p>
 <p>于是一个「只改元数据、毫秒级完成」的 DDL，只要前面有一个跑了 10 分钟的报表查询挡着，就能让整张表在这 10 分钟里对所有人不可用，连接池瞬间打满，故障面扩散到整个应用。</p>
 <div class="mermaid">
@@ -515,7 +504,7 @@ CREATE INDEX CONCURRENTLY idx_orders_channel ON orders (channel);
 SELECT indexrelid::regclass AS 无效索引
 FROM   pg_index WHERE NOT indisvalid;   -- 有输出就 DROP INDEX CONCURRENTLY 后重建</code></pre>
 
-<h2>② 原理 · 死锁检测的判断路径</h2>
+<h2>死锁检测的判断路径</h2>
 <p>PG 不做预防，只做检测：每个等锁的进程在等待 <code>deadlock_timeout</code>（默认 1s）之后才去检查锁依赖图，发现环就<strong>中止代价最小的那个事务</strong>，报 40P01。</p>
 <p>把 <code>deadlock_timeout</code> 调小会让所有正常的锁等待都多付一次检测开销，调大则死锁要更久才被发现，默认值在绝大多数场景都是对的。真正该做的是打开 <code>log_lock_waits</code>，这样超过 <code>deadlock_timeout</code> 的等待会写进日志，附带阻塞者的语句。</p>
 <div class="mermaid">
@@ -547,7 +536,7 @@ ALTER SYSTEM SET log_lock_waits = on;              -- 等待超过 deadlock_time
 ALTER SYSTEM SET log_min_duration_statement = '1s';
 SELECT pg_reload_conf();</code></pre>
 
-<h2>③ 场景 · 隔离级别与锁策略的选型矩阵</h2>
+<h2>隔离级别与锁策略的选型矩阵</h2>
 <p>隔离级别不是「越高越安全」的滑块，它是一组取舍：<strong>往上走一档，换来的是少写一些显式加锁，付出的是回滚率与重试代码</strong>。下表按业务形态给出选择与代价。</p>
 <table>
 <thead>

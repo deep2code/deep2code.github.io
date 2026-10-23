@@ -89,18 +89,7 @@
     </header>
     <p>「ClickHouse 比 MySQL 快 100 倍」这句话本身没错，但它是结论不是原因，而且换个场景就会反过来——同一张表，按主键查一条记录 MySQL 能比 ClickHouse 快几十倍。</p>
 <p>真正值得搞清楚的是：OLAP 的访问模式长什么样，ClickHouse 为了这种访问模式做了哪些取舍，以及这些取舍在什么情况下会反过来咬你一口。这篇从存储布局讲到向量化执行，再讲 MergeTree 与稀疏索引的设计代价。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：接手一套 ClickHouse 先敲哪几条命令——<code>system.parts</code> 看分区与 part 数、<code>system.query_log</code> 找慢查询、<code>EXPLAIN indexes</code> 与 trace 日志看一条查询扫了多少 granule，外加一张「现象 → 先查哪张系统表」映射表。</li>
-        <li><strong>② 原理</strong>：列存为什么能少读两个数量级、向量化怎么把每行的框架开销摊平、MergeTree 的 part 一生与后台 merge、稀疏主键索引 8192 行的读放大、ORDER BY 与 PARTITION BY 的分工、跳数索引为什么只能加速不能保证。</li>
-        <li><strong>③ 场景</strong>：哪些需求根本不该交给 ClickHouse、它与 MySQL 和 PostgreSQL 怎么分工，以及这条学习路径的下一步看哪篇。</li>
-    </ul>
-</div>
-
-    <h2>① 用法 · 接手一套 ClickHouse 先看这几件事</h2>
+<h2>接手一套 ClickHouse 先看这几件事</h2>
 
     <p>无论是接手别人的集群还是自己刚建完第一张表，第一步都不是调参数，而是把三件事看清楚：<strong>数据是怎么摊成 part 的、哪些查询在烧 CPU、一条查询到底扫了多少 granule</strong>。</p>
 <p>ClickHouse 把这些全部暴露成普通表，用 SQL 就能查，不需要任何外部工具。下面这张表可以直接当值班手册用，为什么是这几张表见下面的原理层。</p>
@@ -187,7 +176,7 @@ clickhouse-client --send_logs_level=trace \
 
     <p>为什么 part 数这么关键、为什么 granule 是 8192 行、为什么同一个过滤条件换个写法就裁不掉数据，答案都在下面几节。</p>
 
-    <h2>② 原理 · OLAP 和 OLTP 要的是两种完全不同的存储布局</h2>
+    <h2>OLAP 和 OLTP 要的是两种完全不同的存储布局</h2>
 
     <p>OLTP 的典型访问是「按主键或唯一键取出一条完整记录，改其中几个字段」，一次只碰一行，但要碰这一行的所有列；</p>
 <p>OLAP 的典型访问是「扫过去三个月上亿行，只用其中三四个列做聚合」，一次碰海量行，但每行只要极少数列。这两种模式对存储布局的要求正好相反：前者希望一行的所有列挨在一起，一次 IO 就把整行拿到；</p>
@@ -231,7 +220,7 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>② 原理 · 列存的三重收益：少读、高压缩、可向量化</h2>
+    <h2>列存的三重收益：少读、高压缩、可向量化</h2>
 
     <p>很多介绍只讲「只读需要的列」，这其实只是三重收益里最浅的一层。第二层是压缩：同一列的值类型相同、取值分布集中、往往还单调或重复，压缩算法能吃得非常饱。</p>
 <p>时间戳这类单调递增的列用 <code>DoubleDelta</code> 先做二阶差分，差分后全是 0 和小整数，再套 LZ4 就能压到几十分之一；</p>
@@ -278,7 +267,7 @@ ALTER TABLE events ADD INDEX idx_user user_id TYPE bloom_filter(0.01) GRANULARIT
 ALTER TABLE events MATERIALIZE INDEX idx_user;   -- 存量数据必须显式物化，否则只对新写入生效
 </code></pre>
 
-    <h2>② 原理 · 向量化执行：把每行的虚函数开销摊薄到几乎为零</h2>
+    <h2>向量化执行：把每行的虚函数开销摊薄到几乎为零</h2>
 
     <p>传统数据库执行引擎是火山模型（Volcano，也叫迭代器模型）：每个算子实现一个 <code>next()</code>，每次调用返回一行，上层算子不断向下层拉数据。它的优点是模型极其干净、内存占用极小、首行能立刻返回；</p>
 <p>缺点是每返回一行都要穿过整条算子链的虚函数调用，1 亿行经过 5 个算子就是 5 亿次虚函数调用，加上每行都要重新判断类型、重新走一遍分支，真正用于计算的指令占比可能不到 10%。</p>
@@ -309,7 +298,7 @@ ALTER TABLE events MATERIALIZE INDEX idx_user;   -- 存量数据必须显式物�
 <p>两者叠加才是 ClickHouse 的实际吞吐。<code>max_threads</code> 调大能压低单查询延迟，但会让高并发场景互相抢核——这也是它「单查询猛、高并发弱」的直接原因。</p>
     </div>
 
-    <h2>② 原理 · MergeTree：part 的一生决定了写入姿势</h2>
+    <h2>MergeTree：part 的一生决定了写入姿势</h2>
 
     <p>MergeTree 是理解 ClickHouse 的核心。一次 INSERT 的动作是：把这批数据按 ORDER BY 排序，按列切成文件，写成一个独立的目录，这个目录就是一个 part；写完后原子改名让它变成 active，查询立刻可见。</p>
 <p>注意 part 之间是不排序的，只有 part 内部有序，所以查询要同时扫多个 part 再做归并——这就是 part 数量必须被控制的根本原因。</p>
@@ -382,7 +371,7 @@ SET async_insert = 1,
     async_insert_busy_timeout_ms = 1000;   -- 或者攒够 1 秒就刷，两个条件先到先触发
 </code></pre>
 
-    <h2>② 原理 · 稀疏主键索引：8192 行一个标记的取舍</h2>
+    <h2>稀疏主键索引：8192 行一个标记的取舍</h2>
 
     <p>ClickHouse 的主键索引是稀疏的：每 <code>index_granularity</code>（默认 8192）行取一个标记，记下这个 granule 起始行的主键值，写进 <code>primary.idx</code>。10 亿行的表只有约 12.2 万个标记，假设主键三列合计 20 字节，整个索引不到 3 MB，可以常驻内存。</p>
 <p>查询时对 <code>primary.idx</code> 做二分，定位出可能命中的 granule 区间，再通过 <code>.mrk</code> 标记文件换算成每个列文件里的偏移，只解压那几个压缩块。</p>
@@ -446,7 +435,7 @@ WHERE app_id = 'shop'
 -- 如果 Granules 的分母等于分子，说明这条 WHERE 完全没用上主键，等于全表扫
 </code></pre>
 
-    <h2>② 原理 · ORDER BY 是最重要的设计决策，而且与 OLTP 直觉相反</h2>
+    <h2>ORDER BY 是最重要的设计决策，而且与 OLTP 直觉相反</h2>
 
     <p>在 MySQL 里建错索引可以补建一个，数据物理顺序不受影响。</p>
 <p>ClickHouse 不行：ORDER BY 决定的是数据在磁盘上的物理排列，它直接决定了能裁掉多少 granule，而改动它基本等于重建表（新版本支持给 ORDER BY 末尾追加列，但不能改前缀、不能重排）。所以它是建表时最贵的一个决定。</p>
@@ -470,7 +459,7 @@ flowchart TB
     Q3 -->|"不要"| C2["MergeTree 默认配置就够用"]
 </div>
 
-    <h2>② 原理 · 分区与跳数索引：粗粒度裁剪和只能加速的二级过滤</h2>
+    <h2>分区与跳数索引：粗粒度裁剪和只能加速的二级过滤</h2>
 
     <p>PARTITION BY 和 ORDER BY 分工明确：分区是目录级的物理隔离，负责粗粒度裁剪和数据生命周期管理（按分区 DROP 一整月数据是元数据操作，秒级完成，而 DELETE 是重写）；ORDER BY 负责分区内部的细粒度排序。</p>
 <p><strong>分区绝对不能按高基数列分</strong>：按 user_id 分区会产生上亿个目录，每个目录里只有几行数据，part 数量瞬间爆炸，merge 永远追不上，写入直接被 Too many parts 打死。分区总数控制在几十到几百个是健康的，单个分区 10~50 GB 比较合适。</p>
@@ -492,7 +481,7 @@ flowchart TB
 
     <p>GRANULARITY 参数容易理解错：<code>GRANULARITY 4</code> 指的是「每 4 个 granule 聚成一个索引块」，也就是索引粒度是 4 × 8192 = 32768 行。值越大索引越小但过滤越粗，值为 1 时索引最细也最占空间。默认值是 1，实践中高基数列的 bloom_filter 常用 2~4。</p>
 
-    <h2>③ 场景 · ClickHouse 不擅长什么，以及和 MySQL / PostgreSQL 的分工</h2>
+    <h2>ClickHouse 不擅长什么，以及和 MySQL / PostgreSQL 的分工</h2>
 
     <p>所有的「不擅长」都能从前面的设计推出来，它们不是 bug，而是取舍的另一面。</p>
 
@@ -527,7 +516,7 @@ flowchart TB
 
 <div class="echart-container" id="clickhouse-olap-compare"></div>
 
-    <h2>③ 场景 · 从需求到这条路径的下一步</h2>
+    <h2>从需求到这条路径的下一步</h2>
 
     <p>把上面的取舍换成「手上这个需求该怎么落」，就是下面这张表。它不追求覆盖全部场景，只覆盖最容易做错方向的那几类——注意每一行的「代价」列，那是选了这条路之后必须一起接受的东西。</p>
 

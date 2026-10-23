@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Zustand 的设计取舍：全局状态与可追溯变更记录的判断、订阅与浅比较、与组件树解耦的代价、什么时候该换重方案。">
+    <meta name="description" content="Zustand 的订阅模型与 store 结构取舍：重渲染与状态不更新的成因、浅合并边界、何时该换重方案。">
     <meta name="keywords" content="Zustand,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/frontend/zustand/">
     <meta property="og:title" content="Zustand 的设计：为什么它比 Redux 轻 - 资深码农">
-    <meta property="og:description" content="Zustand 的设计取舍：全局状态与可追溯变更记录的判断、订阅与浅比较、与组件树解耦的代价、什么时候该换重方案。">
+    <meta property="og:description" content="Zustand 的订阅模型与 store 结构取舍：重渲染与状态不更新的成因、浅合并边界、何时该换重方案。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/frontend/zustand/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Zustand 的设计：为什么它比 Redux 轻 - 资深码农">
-    <meta name="twitter:description" content="Zustand 的设计取舍：全局状态与可追溯变更记录的判断、订阅与浅比较、与组件树解耦的代价、什么时候该换重方案。">
+    <meta name="twitter:description" content="Zustand 的订阅模型与 store 结构取舍：重渲染与状态不更新的成因、浅合并边界、何时该换重方案。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -75,18 +75,7 @@
 <p>这篇先给一份「该用它还是该用别的」的现场自查与最小可用写法，再讲这三点的机制，最后把状态归属与选型判断收成矩阵。</p>
 
 <p>状态管理的整体选型脉络见站内《前端框架》一文，这里只聚焦 Zustand 的设计取舍。上手与选择器写法见《Zustand 上手》，组织模式与陷阱见《状态组织模式与常见陷阱》。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：七条「这份状态该不该进全局 store、该不该用 Zustand」的现场自查，一个最小可用 store（选择器怎么写、组件外怎么读写），以及常见任务与 API 速查表。</li>
-        <li><strong>② 原理</strong>：动作与归约器模型多出来的那层间接换到了什么、两种 store 的更新链路差别、订阅比较为什么是引用相等（这是无限重渲染的成因）、以及「与组件树解耦」在代码上意味着什么。</li>
-        <li><strong>③ 场景</strong>：状态归属决策矩阵（哪些该进 store、哪些该去数据获取库或地址栏）、与 Redux Toolkit、Jotai、Valtio、Context 的多维对照，以及该换更重方案的六个信号。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 先做三分钟自查，再写第一个 store</h2>
+<h2>先做三分钟自查，再写第一个 store</h2>
 
 <p>选型上真正会返工的决定只有两类：<strong>这份状态该不该是全局的</strong>，以及<strong>你要不要那套可回放的变更记录</strong>。下表每行都是能当场执行的判断，不需要先理解任何机制。</p>
 
@@ -174,7 +163,7 @@ function IncButton() {
 
 <p>上面这些默认值——为什么比较是按引用做的、为什么合并是浅的、为什么方法引用稳定——下面逐节展开。</p>
 
-<h2>② 原理 · 概念数量：三段式的间接成本</h2>
+<h2>概念数量：三段式的间接成本</h2>
 
 <p>搞清这一节能回答一个具体问题：那层被省掉的间接，原本是在为谁服务。</p>
 
@@ -193,7 +182,7 @@ function IncButton() {
 <p>注意最后一行。<strong>动作模型的间接层不是白加的</strong>：它换来了可追溯性——每次变更都有名字和载荷，于是可以录制、回放、审计。如果你的业务确实需要这个，那个「重」是在买东西，不是在浪费。</p>
 <p>轻方案的取舍是放弃这份规范，换取更短的代码路径。这也是用法层第三条自查的全部依据。</p>
 
-<h2>② 原理 · 两种 store 结构</h2>
+<h2>两种 store 结构</h2>
 
 <p>搞清这一节能解释一个现象：为什么 Zustand 通常不需要额外的记忆化层，而动作模型里选择器旁边常常跟着一个记忆化工具。</p>
 
@@ -219,9 +208,9 @@ flowchart TB
 </div>
 
 <p>两张图的差别集中在最后两步：一边是「状态树整体更新，再由订阅者自己裁剪」，另一边是「更新后逐个订阅者比较选择器结果」。</p>
-<p>后者把裁剪内建进了订阅机制，这就是为什么 Zustand 通常不需要额外的记忆化层。第三步的「浅合并」也在这张图上：更新只发生在状态对象的第一层，嵌套结构由你自己负责展开。</p>
+<p>后者把裁剪内建进订阅机制，Zustand 一般不用额外记忆化层。第三步的「浅合并」：更新只发生在状态对象的第一层，嵌套结构自己展开。</p>
 
-<h2>② 原理 · 订阅粒度：一次更新之后发生了什么</h2>
+<h2>订阅粒度：一次更新之后发生了什么</h2>
 
 <p>搞清这一节能解决两个最高频的现象：「组件疯狂重渲染直到卡死」和「明明改了状态界面却没反应」。</p>
 
@@ -288,7 +277,7 @@ export const notify = (text: string) =&gt; useUI.getState().pushToast(text)</cod
 <p>这段代码说明了「与组件树解耦」的实际价值：最后一行的通知函数可以在任何地方调用——接口层的错误处理、键盘事件监听、甚至另一个库的回调里，都不需要拿到组件上下文。</p>
 <p>这在上层框架的状态方案里通常要绕一圈才能做到。代价在服务端渲染时才显现：模块顶层这一句意味着进程内只有一份实例，细节见组织模式那篇。</p>
 
-<h2>③ 场景 · 状态归属：什么该进全局 store</h2>
+<h2>状态归属：什么该进全局 store</h2>
 
 <p>大多数「状态管理很复杂」的抱怨，根因不是库选错了，而是<strong>把服务端数据当客户端状态在管</strong>。</p>
 <p>服务端数据需要的是一整套同步策略：缓存有效期、重复请求合并、聚焦时刷新、失败重试、分页与预取、写操作后的失效重取。</p>
@@ -351,7 +340,7 @@ export function ProductList({ category }: { category: string }) {
 // 于是缓存、并发请求去重、失效重取都要自己写，
 // 并且任何模块都能直接改 products，界面与服务端很快就不一致了</code></pre>
 
-<h2>③ 场景 · 选型对照与该换方案的信号</h2>
+<h2>选型对照与该换方案的信号</h2>
 
 <p>同类方案的差别不在功能覆盖，而在<strong>心智模型</strong>与<strong>订阅粒度</strong>这两列——它们决定了半年后代码读起来是什么样。</p>
 

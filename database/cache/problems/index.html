@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="缓存一致性与失效：穿透击穿雪崩的标准答案、删缓存与延迟双删、主从延迟脏读、逻辑过期与不可缓存的场景。">
+    <meta name="description" content="缓存三大问题、四种更新策略对照、删缓存失败兜底、binlog 订阅、状态流转、主从延迟与多级窗口叠加。">
     <meta name="keywords" content="缓存架构,缓存三大问题,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/cache/problems/">
     <meta property="og:title" content="缓存一致性与失效：四种更新策略的脏数据窗口推演 - 缓存架构 - 资深码农">
-    <meta property="og:description" content="缓存一致性与失效：穿透击穿雪崩的标准答案、删缓存与延迟双删、主从延迟脏读、逻辑过期与不可缓存的场景。">
+    <meta property="og:description" content="缓存三大问题、四种更新策略对照、删缓存失败兜底、binlog 订阅、状态流转、主从延迟与多级窗口叠加。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/cache/problems/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="缓存一致性与失效：四种更新策略的脏数据窗口推演">
-    <meta name="twitter:description" content="缓存一致性与失效：穿透击穿雪崩的标准答案、删缓存与延迟双删、主从延迟脏读、逻辑过期与不可缓存的场景。">
+    <meta name="twitter:description" content="缓存三大问题、四种更新策略对照、删缓存失败兜底、binlog 订阅、状态流转、主从延迟与多级窗口叠加。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,18 +73,7 @@
                     <div class="article-content">
 <p>这篇只讲一件真正难的事：<strong>缓存与数据库怎么保持一致</strong>。</p>
 <p>穿透、击穿、雪崩这三个被面试题反复消费的问题其实都有标准答案，下面用一张表交待完，剩下的篇幅全部给一致性——因为一致性没有标准答案，只有取舍。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：选更新策略的四步判断（业务能不能容忍旧值、写入点散落在哪、有没有可靠异步链路、回源会不会读到从库），加四种策略的最小可用代码——每个函数头上都标着它的脏数据窗口，含删缓存与写库的顺序、延迟双删的真实作用边界、singleflight 防击穿的边界。</li>
-        <li><strong>② 原理</strong>：穿透击穿雪崩的差异、四种更新策略产生脏数据所需的并发时序推演、删缓存失败的四层兜底、订阅 binlog 删缓存的七维对照与消费端实现、一条数据的状态流转、主从延迟如何把毫秒级延迟放大成分钟级不一致、多级缓存窗口的叠加、分布式锁重建的四类超时风险与 Lua 脚本。</li>
-        <li><strong>③ 场景</strong>：一致性方案的选择路径与代价矩阵、对账按重要性怎么分级、哪些业务必须彻底放弃缓存。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 选更新策略：四步判断</h2>
+<h2>选更新策略：四步判断</h2>
 
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
@@ -115,7 +104,7 @@
 </tbody>
 </table>
 
-<h2>① 用法 · 四份最小可用代码，每份标出脏数据窗口</h2>
+<h2>四份最小可用代码，每份标出脏数据窗口</h2>
 
 <p>写路径四种策略放在一起，函数头上的注释就是它们的判决书。生产代码里只应该出现第一个：</p>
 
@@ -226,9 +215,9 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 
 <p>上面每条注释背后的时序推演、删除失败的完整兜底链路、以及跨实例收敛为什么这么麻烦，下面逐节展开。</p>
 
-<h2>② 原理 · 三大问题：一张表交待完</h2>
+<h2>三大问题：一张表交待完</h2>
 
-<p>搞清这一节能解决「把穿透和击穿混为一谈，然后用错解法」——加锁对击穿有用，对穿透完全没用。</p>
+<p>把穿透和击穿混为一谈会用错解法：加锁对击穿有用，对穿透完全没用。</p>
 
 <table>
 <thead><tr><th>问题</th><th>触发条件</th><th>直接后果</th><th>标准解法</th><th>深入阅读</th></tr></thead>
@@ -239,9 +228,9 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 </tbody>
 </table>
 
-<h2>② 原理 · 四种更新策略的完整对照</h2>
+<h2>四种更新策略的完整对照</h2>
 
-<p>搞清这一节能解决「为什么大家都说先更库再删缓存」——不是因为它没有窗口，而是因为它的窗口需要一个几乎不成立的时序。</p>
+<p>都说先更库再删缓存，不是说它没有窗口，而是它的窗口需要一个几乎不成立的时序。</p>
 
 <table>
 <thead><tr><th>策略</th><th>产生脏数据需要的并发时序</th><th>脏数据能存活多久</th><th>发生概率</th><th>评价</th></tr></thead>
@@ -288,9 +277,9 @@ sequenceDiagram
     Note over R,DB: 一次回源零点几毫秒<br/>一次写事务几毫秒到几十毫秒<br/>所以这个时序概率极低
 </div>
 
-<h2>② 原理 · 删缓存失败：必须假设它一定会失败</h2>
+<h2>删缓存失败：必须假设它一定会失败</h2>
 
-<p>搞清这一节能解决「代码逻辑明明是对的，为什么还是出现了脏数据」——因为删除这一步本身会失败，而且没有补偿。</p>
+<p>代码逻辑是对的还出脏数据，因为删缓存这一步本身会失败，又没补偿。</p>
 
 <table>
 <thead><tr><th>兜底层级</th><th>做法</th><th>覆盖的失败</th><th>漏洞</th></tr></thead>
@@ -357,9 +346,9 @@ func (s *Service) evictWithRetry(ctx context.Context, key string, times int) err
     return last
 }</code></pre>
 
-<h2>② 原理 · 订阅 binlog 删缓存：规模化之后的正解</h2>
+<h2>订阅 binlog 删缓存：规模化之后的正解</h2>
 
-<p>搞清这一节能解决「明明每个写入点都写了删缓存，还是有数据不一致」——因为不是所有写入都走了你的代码。</p>
+<p>每个写入点都写了删缓存还是不一致，因为不是所有写入都走你的代码。</p>
 
 <p>当写入点散落在几十个服务、上百个方法里时，靠「每个写入点都记得删缓存」是不可能守住的。</p>
 <p><strong>漏删不是概率问题而是时间问题</strong>，尤其是这几类情况业务层的删除逻辑根本覆盖不到：运维直接改库、数据修复脚本、其他团队的服务写了同一张表、定时任务批量更新。</p>
@@ -413,9 +402,9 @@ func (c *Consumer) Run(ctx context.Context, ch &lt;-chan ChangeEvent) {
     }
 }</code></pre>
 
-<h2>② 原理 · 一条数据的状态流转</h2>
+<h2>一条数据的状态流转</h2>
 
-<p>搞清这一节能解决「到底哪个瞬间会读到旧值」——只有一个状态会，而通往它的路有两条。</p>
+<p>哪个瞬间会读到旧值：只有一个状态会读到，通往它的路有两条。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -436,9 +425,9 @@ stateDiagram-v2
     end note
 </div>
 
-<h2>② 原理 · 主从延迟：被忽略的脏数据放大器</h2>
+<h2>主从延迟：被忽略的脏数据放大器</h2>
 
-<p>搞清这一节能解决「数据库层面早就一致了，缓存里的旧值却活了十分钟」。</p>
+<p>数据库早就一致了，缓存里的旧值却活了十分钟。</p>
 
 <p>看上面那条 <code>重建中 --&gt; 脏读窗口</code> 的转移，它是实践中最常被漏掉的漏洞。<strong>从库的旧值一旦被写进缓存，脏数据的存活时间就不再是主从延迟，而是整个 TTL。</strong></p>
 
@@ -458,9 +447,9 @@ stateDiagram-v2
 <p>正确做法有两个：<strong>缓存回源查询强制走主库</strong>，或者在写入后的一小段时间内对该主键强制路由主库。这也解释了延迟双删存在的真正理由——它就是在给这个问题打补丁，而打补丁不如从根上避免。</p>
 <p>复制延迟本身怎么度量与治理，MySQL 侧见 <a href="../../mysql/">MySQL 深度原理</a>，Redis 侧的异步复制与丢写窗口见 <a href="../../redis/">Redis 深度原理</a>。</p>
 
-<h2>② 原理 · 多级缓存：不一致窗口是叠加的</h2>
+<h2>多级缓存：不一致窗口是叠加的</h2>
 
-<p>搞清这一节能解决「加了本地缓存之后，说好的毫秒级窗口为什么变成了分钟级」。</p>
+<p>加了本地缓存后，原本毫秒级的窗口会退化到分钟级。</p>
 
 <table>
 <thead><tr><th>架构</th><th>失效动作能精确作用到</th><th>实际不一致窗口</th></tr></thead>
@@ -475,9 +464,9 @@ stateDiagram-v2
 <p>所以多级缓存的代价必须写在设计文档里：<strong>每加一层，你能承诺的一致性就退化一档</strong>。</p>
 <p>做法上有两个原则——一是需要精确失效的数据只放分布式缓存这一层，二是靠前的层只给很短的 TTL，把窗口控制在业务可接受范围内。多级缓存的分层设计见本专题 <a href="../architecture/">多级缓存与拓扑</a>。</p>
 
-<h2>② 原理 · 分布式锁重建与超时风险</h2>
+<h2>分布式锁重建与超时风险</h2>
 
-<p>搞清这一节能解决「用了分布式锁收敛重建，反而引入了新的并发覆盖与线程池耗尽」。</p>
+<p>用分布式锁收敛重建，反而引入新的并发覆盖和线程池耗尽。</p>
 
 <pre><code class="language-lua">-- 释放锁必须用 Lua：先校验持有者再删除，这两步必须原子。
 -- 常见错误写法是「先 GET 判断是不是自己的锁，再 DEL」，
@@ -512,7 +501,7 @@ end</code></pre>
 <p>这样任何时刻都有值可返回，重建慢也不会阻塞用户请求，代价是用户会看到一小段时间的旧值。</p>
 <p>分布式锁的完整正确性分析与失效边界（包括主从异步复制下锁凭空消失），见 <a href="../../redis/">Redis 深度原理</a>；业务侧的幂等兜底见 <a href="../../../architecture/distributed/idempotency/">幂等设计</a>。</p>
 
-<h2>③ 场景 · 一致性方案怎么选</h2>
+<h2>一致性方案怎么选</h2>
 
 <p>选择取决于三件事：业务能不能容忍旧值、写入点有多散、有没有可靠的异步基础设施。</p>
 
@@ -542,7 +531,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>③ 场景 · 对账与必须放弃缓存的场景</h2>
+<h2>对账与必须放弃缓存的场景</h2>
 
 <p>对账的原则是<strong>按业务重要性分级</strong>，不要给所有缓存都做对账，成本撑不住：</p>
 
@@ -565,7 +554,7 @@ flowchart TB
 <p>Redis 自身的过期删除、淘汰实现、复制与集群、分布式锁的正确性边界在 <a href="../../redis/">Redis 深度原理</a>；回源查询本身慢怎么治在 <a href="../../optimization/slow-query/">慢查询治理</a>；</p>
 <p>补偿与重试的幂等设计在 <a href="../../../architecture/distributed/idempotency/">幂等设计</a>；脏数据告警与对账指标怎么配在 <a href="../../../observability/metrics/">指标与监控</a>。</p>
 
-<p>这条路径上，上一篇算清了缓存的账，本篇解决「加了之后怎么不读到脏数据」，下一篇往上走一层：用什么结构去承载这些被缓存的数据。</p>
+<p>上篇算清缓存的收益，本篇讲怎么不读到脏数据，下篇讲用什么结构承载这些数据。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../">← 上一步：缓存的收益与代价：命中率算式、四项成本与读写模式选型</a> · <a href="../redis-practice/">下一步：数据结构选型与业务建模：用什么结构解什么问题 →</a></p>
 

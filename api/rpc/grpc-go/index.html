@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="grpc-go 的落地细节：拦截器链、context 取消传播、错误转换、惰性连接与 service config、流式泄漏与 GracefulStop 停机。">
+        <meta name="description" content="Go 侧 gRPC 落地：代码生成两个插件、context 取消怎么传到底、拦截器 recover、错误码转换、优雅停机与流式泄漏排查的判据。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/api/rpc/grpc-go/">
     <!-- Open Graph -->
     <meta property="og:title" content="Go 中 gRPC 服务的工程实践 - 资深码农">
-    <meta property="og:description" content="grpc-go 的落地细节：拦截器链、context 取消传播、错误转换、惰性连接与 service config、流式泄漏与 GracefulStop 停机。">
+    <meta property="og:description" content="Go 侧 gRPC 落地：代码生成两个插件、context 取消怎么传到底、拦截器 recover、错误码转换、优雅停机与流式泄漏排查的判据。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/rpc/grpc-go/">
     <meta property="og:site_name" content="资深码农">
@@ -38,7 +38,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Go 中 gRPC 服务的工程实践 - 资深码农">
-    <meta name="twitter:description" content="grpc-go 的落地细节：拦截器链、context 取消传播、错误转换、惰性连接与 service config、流式泄漏与 GracefulStop 停机。">
+    <meta name="twitter:description" content="Go 侧 gRPC 落地：代码生成两个插件、context 取消怎么传到底、拦截器 recover、错误码转换、优雅停机与流式泄漏排查的判据。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="接口、协议与安全">
@@ -93,18 +93,7 @@
                     <div class="article-content">
 <p>HTTP/2 的帧与流控、四种调用模式的边界、deadline 端到端传播的机制、错误模型里 status 与 details 的设计、keepalive 与中间代理造成的偶发断连，都在<a href="../grpc/">gRPC 的传输机制与工程落地</a>里。</p>
 <p>这一篇不重复那些，只讲 <strong>Go 这个具体实现里那些会让你半夜起来的细节</strong>：版本、拦截器、停机、泄漏、测试。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一套能直接开跑的最小服务端与客户端——代码生成命令、两条拦截器链都挂上、recover、优雅停机的四步顺序、<code>status.FromError</code> 判错、<code>bufconn</code> 进程内测试，每项都给验证方法。</li>
-        <li><strong>② 原理</strong>：为什么这些写法是必须的——两个插件两套版本、一次调用在 Go 侧穿过的层、ctx 取消的传递与失效边界、两条链的独立性与 recover 的作用域、error 转 status 的必要性、<code>NewClient</code> 的惰性与解析器变更、流泄漏的成因、<code>GracefulStop</code> 的「一直等」语义。</li>
-        <li><strong>③ 场景</strong>：单体内部服务、多团队共用 proto、长连流式服务、K8s 编排、大报文、浏览器调用各该配到哪一步。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 最小可用的服务端、客户端与测试</h2>
+<h2>最小可用的服务端、客户端与测试</h2>
 <p>这一层给一套能直接跑起来的骨架：生成代码、启服务、挂两条拦截器链、优雅停机、客户端判错、进程内测试。每个选项旁边的注释只写「为什么要这行」，机制解释在下一节起的原理部分。</p>
 
 <pre><code class="language-bash"># 两个插件必须分别装：protoc-gen-go 只生成消息类型，服务桩由 protoc-gen-go-grpc 生成
@@ -326,8 +315,8 @@ func startTestServer(t *testing.T, srv pb.OrderServiceServer) pb.OrderServiceCli
 </tbody>
 </table>
 
-<h2>② 原理 · 代码生成：两个插件、两套版本</h2>
-<p>搞清这一节，能解决「装了 protoc-gen-go 却没生成 service 代码」和「proto 加了方法但没人发现忘了实现」。</p>
+<h2>代码生成：两个插件、两套版本</h2>
+<p>只装 protoc-gen-go 不生成 service 代码，proto 里加的方法也不会自动进桩。</p>
 <p>原因是 protobuf 的 Go 实现换到新 API 之后，<strong>protoc-gen-go 只负责消息类型，服务桩交给了独立的 protoc-gen-go-grpc</strong>，两个插件的版本号完全独立，必须分别安装。</p>
 <table>
 <thead><tr><th>组件</th><th>负责什么</th><th>版本与坑</th></tr></thead>
@@ -350,7 +339,7 @@ func startTestServer(t *testing.T, srv pb.OrderServiceServer) pb.OrderServiceCli
 </tbody>
 </table>
 
-<h2>② 原理 · 一次调用在 Go 侧穿过哪些层</h2>
+<h2>一次调用在 Go 侧穿过哪些层</h2>
 <p>搞清这张图，后面所有「这段逻辑该写在哪」的问题都能直接回答。</p>
 <div class="mermaid">
 flowchart TB
@@ -374,15 +363,15 @@ flowchart TB
 <p>两个位置关系要记牢：<strong>StatsHandler 比拦截器链更靠外</strong>，所以链路上下文在你的日志拦截器运行之前就已经解出来了；</p>
 <p>而<strong>service config 里的重试发生在客户端拦截器之内</strong>，你在客户端拦截器里看到的是一次逻辑调用，看不到它底下重试了几次。</p>
 
-<h2>② 原理 · context：取消怎么才算真的传到底</h2>
-<p>搞清这一节，能解决「客户端早返回了，服务端还在跑慢查询」与「handler 里 go 出去的任务为什么立刻失败」。</p>
+<h2>context：取消怎么才算真的传到底</h2>
+<p>客户端提前返回后服务端还在跑慢查询，go 出去的协程也立刻失败。</p>
 <p>服务端 handler 拿到的 <code>ctx</code> 会在两种情况下被取消：客户端主动断开，或者 deadline 到期。但<strong>取消只有被一路传下去才有意义</strong>。</p>
 <p>把 <code>ctx</code> 换成 <code>context.Background()</code> 去查数据库，是 Go 服务里最普遍的一类浪费——客户端早就超时返回了，服务端还在慢查询上占着连接和内存。</p>
 <p>反方向也有个坑：<strong><code>handler</code> 一返回，它的 <code>ctx</code> 立刻被取消</strong>。所以在 handler 里 <code>go</code> 出去一个异步任务、还把这个 ctx 带上，那个任务几乎必然立刻失败。</p>
 <p>要做异步收尾，用 <code>context.WithoutCancel</code> 剥掉取消信号（Go 1.21 起），或投给一个有自己生命周期的后台队列。流式方法的 <code>stream.Context()</code> 生命周期和这次调用绑定，同样不能带出去。Go 侧 context 与协程生命周期见站内 <a href="../../../programming/go/concurrency/">Go 并发编程</a>。</p>
 
-<h2>② 原理 · 拦截器：两条链、顺序与 recover</h2>
-<p>搞清这一节，能解决「流式接口里的 panic 为什么直接打挂进程」与「为什么告警长期误报」。</p>
+<h2>拦截器：两条链、顺序与 recover</h2>
+<p>流式 handler 里的 panic 直接打挂进程，拦截器顺序错还会让告警长期误报。</p>
 <p><strong>grpc-go 不会替你兜 panic</strong>：handler 在服务流的 goroutine 里跑，panic 一路冒上去就是进程退出。这一点和多数 HTTP 框架的默认行为相反，是 Go gRPC 服务上线初期最常见的事故来源。</p>
 <p>更容易漏的是<strong>一元和流式是两条完全独立的链</strong>，只在一元链上挂了 recover，流式方法照样能把进程打挂。</p>
 <table>
@@ -463,8 +452,8 @@ func (s *orderServer) GetOrder(ctx context.Context, req *pb.GetOrderRequest) (*p
 	return o, nil
 }</code></pre>
 
-<h2>② 原理 · 错误：别把 error 直接返回给客户端</h2>
-<p>搞清这一节，能解决「客户端拿到的全是 Unknown 没法做分支」与「错误信息里泄露了表名」。</p>
+<h2>错误：别把 error 直接返回给客户端</h2>
+<p>没做转换时，客户端拿到的全是 Unknown 没法分支，还会泄露表名。</p>
 <p>从 handler 里 <code>return err</code> 有两个后果：客户端看到的码是 <strong>Unknown</strong>，没法做任何分支也没法配重试；并且 <strong><code>err.Error()</code> 会原样发给客户端</strong>，数据库报错里的表名、SQL 片段、内部地址全都可能泄露。转换必须在边界上统一做。</p>
 <table>
 <thead><tr><th>code</th><th>Go 侧的典型来源</th><th>算服务端故障吗</th><th>客户端该做什么</th></tr></thead>
@@ -498,8 +487,8 @@ flowchart TB
     Q4 -->|"还没回来"| CFG["交给 retryPolicy，并且一定配上 retryThrottling"]
 </div>
 
-<h2>② 原理 · 客户端：惰性连接与 service config</h2>
-<p>搞清这一节，能解决「从 Dial 迁到 NewClient 后测试全挂」与「启动时以为连上了其实没有」。</p>
+<h2>客户端：惰性连接与 service config</h2>
+<p>Dial 迁到 NewClient 后测试容易全挂，启动时看着连上了其实没有。</p>
 <p><code>grpc.Dial</code> 已经废弃，换成 <code>grpc.NewClient</code>。这次替换不是改个名字，有两个行为差异会直接让代码跑不起来。</p>
 <p>第一，<strong>它不建连就返回</strong>，通道处于 IDLE，第一次 RPC 才触发连接。因此 <code>err == nil</code> 完全不代表服务端活着，拿它当启动期健康检查是错的；想预热就显式调 <code>Connect()</code>，因为 <code>NewClient</code> <strong>不支持</strong> <code>WithBlock</code> 那一组选项。</p>
 <p>第二，<strong>默认解析器从 passthrough 变成了 dns</strong>，目标串会走 DNS 解析路径；测试里用自定义拨号器时必须显式写 <code>passthrough:///</code> 前缀，否则它会真的去解析一个不存在的域名——这是从 Dial 迁过来时最典型的翻车点。</p>
@@ -535,8 +524,8 @@ stateDiagram-v2
 </tbody>
 </table>
 
-<h2>② 原理 · 流式接口的资源释放与泄漏排查</h2>
-<p>搞清这一节，能解决「协程数单调上涨」「没有请求 CPU 也不降」这两类线上现象。</p>
+<h2>流式接口的资源释放与泄漏排查</h2>
+<p>线上表现为协程数单调上涨，没有请求时 CPU 也不降。</p>
 <p>流式调用的泄漏几乎都来自同一个误解：<strong>以为流会自己关</strong>。客户端侧只要没读到结束标志就提前退出循环，这条流在传输层依然存在，读循环协程也不会退出。</p>
 <p>标准写法是创建流之前用可取消的上下文包一层并立刻 <code>defer cancel()</code>，这样无论从哪个分支返回都会把流关掉。</p>
 <p>服务端侧对应的规则是：<strong>handler 一返回流就结束</strong>，所以在 handler 里起的协程必须在返回前收敛，否则它们会拿着一个已取消的上下文继续跑。</p>
@@ -575,8 +564,8 @@ func firstN(ctx context.Context, c pb.OrderServiceClient, n int) ([]*pb.Order, e
 </tbody>
 </table>
 
-<h2>② 原理 · 优雅停机：GracefulStop 与 K8s 的配合</h2>
-<p>搞清这一节，能解决「每次发布都有一小批 Unavailable」和「进程收到 SIGTERM 后永不退出」。</p>
+<h2>优雅停机：GracefulStop 与 K8s 的配合</h2>
+<p>发布时总有一小批 Unavailable，进程收到 SIGTERM 后迟迟不退出。</p>
 <p><code>GracefulStop</code> 的语义是：关闭监听、给已有连接发 GOAWAY、<strong>然后一直等到所有在途调用结束</strong>。问题就在「一直等」上——长生命周期的流式调用不会自己结束，于是进程永远不退，最后被编排系统强杀。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -610,7 +599,7 @@ sequenceDiagram
 <p>还有一个容易被忽略的前提：<strong>gRPC 是长连接，摘掉 Endpoints 并不会断开已建立的连接</strong>。真正让客户端换实例的是 GOAWAY。</p>
 <p>所以顺序必须是「先让新连接不再选到我（摘流），再对老连接发 GOAWAY（GracefulStop）」，反过来做就会在窗口期里制造一批失败请求。探针与 preStop 的完整语义见站内 <a href="../../../devops/kubernetes/">Kubernetes</a>。</p>
 
-<h2>③ 场景 · 不同项目形态该配到哪一步</h2>
+<h2>不同项目形态该配到哪一步</h2>
 <p>上面所有手段不必一次做全。下表按项目形态给该做到哪一步，以及停在这里的理由。</p>
 <table>
 <thead><tr><th>场景</th><th>该做到哪一步</th><th>为什么停在这里</th><th>代价</th></tr></thead>

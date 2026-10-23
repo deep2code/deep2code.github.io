@@ -91,18 +91,7 @@
                     <div class="article-content">
 <p>写 OLAP 表最反直觉的一点是：<strong>你在 OLTP 里学到的范式化训练，在这里要反过来用</strong>。OLTP 消除冗余是为了单行更新安全且便宜，分析型负载根本不更新单行，只关心「一次查询要扫多少字节」。</p>
 <p>这篇讲数据怎么组织成能被高效扫描的形态。列存与向量化原理见《ClickHouse 架构与核心特性》，分布式拓扑见《ClickHouse 集群与分布式表》，选型对比见《ClickHouse vs Elasticsearch vs Doris》。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：从需求到一张表的五步动手顺序（先定查询模式与更新口径，再选大宽表还是星型，再定分层与粒度，最后定幂等与验收），配大宽表与字典的快速判定表，以及缓慢变化维的可直接用的 SQL 写法。</li>
-        <li><strong>② 原理</strong>：为什么 OLAP 要用冗余换扫描效率、星型与雪花在 ClickHouse 上为什么会退化成宽表、SCD 四种类型的落地差异、四层分层各自的职责与 TTL、宽表与长表的取舍、幂等重跑为什么只有分区替换一条路、漏斗留存路径函数的语义。</li>
-        <li><strong>③ 场景</strong>：需求形态到建模方案的决策矩阵、建模反模式与对应改法，以及哪些问题不该在建模层解决。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 从需求到建模的五步顺序</h2>
+<h2>从需求到建模的五步顺序</h2>
 
 <p>建模最常见的失败不是选错星型或宽表，而是<strong>顺序错了</strong>：先画表结构，再回头发现查询模式对不上、重跑粒度对不上。下面五步有依赖关系，每一步的产出是下一步的输入。</p>
 
@@ -184,7 +173,7 @@ FROM dwd.order_detail WHERE user_id = 1001 GROUP BY d ORDER BY d;
 
 <p>下面几节解释这些选择背后的机制：冗余为什么在列存里不贵、分层各层该放什么、幂等为什么只有分区替换一条干净的路。</p>
 
-<h2>② 原理 · OLAP 建模的第一性原理：用冗余换扫描效率</h2>
+<h2>OLAP 建模的第一性原理：用冗余换扫描效率</h2>
 
 <table>
 <thead><tr><th>维度</th><th>OLTP 建模</th><th>OLAP 建模</th></tr></thead>
@@ -198,7 +187,7 @@ FROM dwd.order_detail WHERE user_id = 1001 GROUP BY d ORDER BY d;
 <tr><td>表数量</td><td>几十到上百张规范化小表</td><td>少量宽表加分层汇总表</td></tr>
 </tbody></table>
 
-<h2>② 原理 · 星型、雪花，与最终的大宽表</h2>
+<h2>星型、雪花，与最终的大宽表</h2>
 
 <p>星型模型是一张事实表（订单、事件）加一圈维度表（用户、商品、地区），维度表直接挂在事实表上；雪花模型把维度表再规范化一层（商品挂品类，品类挂一级类目）。</p>
 <p>这套方法论来自 MPP 和数仓时代，在 ClickHouse 上会遇到一个现实问题：<strong>ClickHouse 的 join 很贵，连星型模型的单层 join 都常常慢到无法接受</strong>，所以实践里往往一路退化到大宽表（One Big Table）。</p>
@@ -273,7 +262,7 @@ flowchart TB
     W4 --> P
 </div>
 
-<h2>② 原理 · 缓慢变化维：分析历史必须用当时的值</h2>
+<h2>缓慢变化维：分析历史必须用当时的值</h2>
 
 <p>用户九月是青铜等级、十月升到黄金，「九月各等级用户的消费额」该用哪个等级算？答案是九月的青铜。<strong>这不是性能问题，而是数据正确性问题</strong>，是报表口径争议里最常见的一类。</p>
 <p>用 <code>dictGet</code> 关联当前维度表的写法，会让历史报表的数字随维度变化而变动，昨天跑出来的月报今天再跑就不一样了。</p>
@@ -294,7 +283,7 @@ flowchart TB
 <p>一张表同时提供两列、并在字段命名上写清 snapshot 与 current，比事后解释报表为什么对不上要省事得多。</p>
 </div>
 
-<h2>② 原理 · 分层：ODS、DWD、DWS、ADS 在 ClickHouse 里怎么落</h2>
+<h2>分层：ODS、DWD、DWS、ADS 在 ClickHouse 里怎么落</h2>
 
 <p>分层把「解析清洗」「关联打平」「聚合汇总」三种变更频率不同的逻辑隔开，出问题能定位到层、重跑只重跑一层。ClickHouse 里前两层通常是 MergeTree 明细表加调度任务，后两层多用 AggregatingMergeTree 加物化视图。</p>
 
@@ -391,7 +380,7 @@ WHERE tenant_id = 42 AND stat_date &gt;= today() - 30
 GROUP BY stat_date ORDER BY stat_date;
 </code></pre>
 
-<h2>② 原理 · 时间序列与指标建模：宽表还是长表</h2>
+<h2>时间序列与指标建模：宽表还是长表</h2>
 
 <p>指标数据有两种组织方式：<strong>宽表</strong>每个指标一列（<code>cpu_pct</code>、<code>mem_pct</code>、<code>qps</code>），<strong>长表</strong>用 <code>metric_name</code> 加 <code>value</code> 两列装所有指标。二者不是对错问题，取决于指标集合是否稳定。</p>
 
@@ -410,7 +399,7 @@ GROUP BY stat_date ORDER BY stat_date;
 <p>存储上小时级和天级加起来不到分钟级的 5%，几乎免费。<strong>关键是不要让上层直接查明细</strong>：看板固定查 DWS 或 ADS，明细层只留给排障和下钻。</p>
 <p>另外分钟级聚合表的 TTL 可以设得比天级短很多，比如分钟级留 7 天、小时级留 90 天、天级留 3 年。</p>
 
-<h2>② 原理 · 幂等重跑是 ETL 的硬要求</h2>
+<h2>幂等重跑是 ETL 的硬要求</h2>
 
 <p>任何离线任务都会失败重跑，也会因为口径修正而重算。<strong>能不能安全地重跑同一个时间段，是 ETL 设计里最硬的一条要求</strong>。</p>
 <p>在 ClickHouse 里，幂等的正确实现是「按分区整体替换」：先把数据算到临时表，再用 <code>REPLACE PARTITION</code> 原子替换目标分区。这样重跑一百次结果都一样，且切换瞬间完成。</p>
@@ -483,7 +472,7 @@ DROP TABLE dws.order_1d_tmp;
 <p><strong>空值语义写进字段注释</strong>（0 表示「值为零」还是「没采集到」必须约定，因为 ClickHouse 里我们用默认值替代了 Nullable，这层语义只能靠约定保留）；</p>
 <p><strong>去重策略只选一侧</strong>——要么写入侧靠 ReplacingMergeTree 和分区替换保证幂等，要么查询侧统一用 <code>argMax</code> 去重，两边都做会互相掩盖问题，出错时无法定位。</p>
 
-<h2>② 原理 · 实时与离线的口径一致</h2>
+<h2>实时与离线的口径一致</h2>
 
 <p>Lambda 架构的经典问题不是维护两套代码累，而是<strong>两条链路的口径会悄悄分叉</strong>：实时链路为低延迟用近似去重，离线用精确去重；</p>
 <p>实时把退款算进当天，离线算进原单日期。月底对账时差异已无法归因。</p>
@@ -500,7 +489,7 @@ DROP TABLE dws.order_1d_tmp;
 <p>落地的关键动作是把聚合逻辑写成一份可参数化的 SQL 模板，实时链路以分钟为窗口调用它、离线链路以天为窗口调用它，指标定义只存在一处。</p>
 <p>同时把「时间语义」写清：用事件时间还是处理时间、迟到数据容忍窗口多长、超窗数据进哪个分区，这三个不明确，两条链路必然对不上。</p>
 
-<h2>② 原理 · 漏斗、留存、路径：ClickHouse 特有的分析函数</h2>
+<h2>漏斗、留存、路径：ClickHouse 特有的分析函数</h2>
 
 <p>这三类需求如果用标准 SQL 写，都要多次自连接或窗口函数，在亿级数据上基本跑不动。ClickHouse 提供了专门的聚合函数，把它们压缩成一次扫描。</p>
 
@@ -577,7 +566,7 @@ FROM
 -- sequenceCount 同样参数可以返回匹配次数；这两个函数的时间列必须与条件同一行，不能跨表
 </code></pre>
 
-<h2>③ 场景 · 需求形态到建模方案</h2>
+<h2>需求形态到建模方案</h2>
 
 <p>把前面的机制反过来用：拿到一类需求，直接查这张表定方案。代价列必须和业务方一起确认，因为其中几条（如历史要不要跟着维度变）是口径问题而非技术问题。</p>
 
@@ -594,7 +583,7 @@ FROM
 <tr><td>要支撑对外产品化看板</td><td>再加一层 ADS 结果表，行数压到很小，前面挡缓存</td><td>单查询吃满多核的模型决定了并发能力弱</td><td>多一层链路与一致性窗口</td></tr>
 </tbody></table>
 
-<h2>③ 场景 · 建模反模式与对应改法</h2>
+<h2>建模反模式与对应改法</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>后果</th><th>正确做法</th></tr></thead>

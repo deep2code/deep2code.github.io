@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="消息可靠投递：五个丢失点逐点验证，Broker 持久化取舍、消费端先处理后确认，以及至少一次语义下的幂等与对账兜底。">
+    <meta name="description" content="消息进出链路不丢的落地：按业务类型定可靠性等级、ack 与副本组合、幂等 Producer 与事务边界、幂等的几种写法。">
     <meta name="keywords" content="消息队列深入,可靠投递与消费,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/messaging/reliable/">
     <meta property="og:title" content="消息可靠投递：五个丢失点与跨产品通用防法 - 消息队列深入 - 资深码农">
-    <meta property="og:description" content="消息可靠投递：五个丢失点逐点验证，Broker 持久化取舍、消费端先处理后确认，以及至少一次语义下的幂等与对账兜底。">
+    <meta property="og:description" content="消息进出链路不丢的落地：按业务类型定可靠性等级、ack 与副本组合、幂等 Producer 与事务边界、幂等的几种写法。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/messaging/reliable/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="消息可靠投递：五个丢失点与跨产品通用防法">
-    <meta name="twitter:description" content="消息可靠投递：五个丢失点逐点验证，Broker 持久化取舍、消费端先处理后确认，以及至少一次语义下的幂等与对账兜底。">
+    <meta name="twitter:description" content="消息进出链路不丢的落地：按业务类型定可靠性等级、ack 与副本组合、幂等 Producer 与事务边界、幂等的几种写法。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,18 +73,7 @@
                     <div class="article-content">
 <p>「消息不丢」不是一个开关，而是链路上<strong>五个独立环节</strong>各自都要做对。任何一环漏掉，其他四环配得再完美也会丢。这篇讲跨产品通用原理，并落到 RabbitMQ 与 RocketMQ 的具体机制上；</p>
 <p>Kafka 侧的 acks 与 min.insync.replicas 组合、幂等 Producer、事务边界见站内 Kafka 可靠性专篇，这里只给结论。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：五个丢失点逐点验证的清单——生产确认、Broker 落盘与副本、消费提交时机、重试与死信、消费端幂等，每点给怎么配、怎么注入故障验证、通过标准，外加一段可直接套用的收发核对脚本与跨产品参数速查表。</li>
-        <li><strong>② 原理</strong>：每个丢失点的成因与残留风险、RabbitMQ 的 confirm 与 return 两条独立失败通道、为什么共识是多副本加异步刷盘、持久化三件套缺一件各自怎么丢、RocketMQ 四种组合的丢失窗口、requeue 立即回队的死循环、至少一次为什么是唯一现实语义、一条消息的完整状态机与三条回边。</li>
-        <li><strong>③ 场景</strong>：按业务类型定可靠性等级的决策矩阵、什么时候该降级换吞吐、对账与重建能力在哪些场景比「不丢」更重要。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 五个丢失点逐点验证：这张清单跑完再上线</h2>
+<h2>五个丢失点逐点验证：这张清单跑完再上线</h2>
 
 <p>可靠性不是配完就算完，是<strong>每一点都要有一次能复现的验证</strong>。顺序按链路从前往后走，前一点没验过就不要验后一点——前面丢了，后面收不到消息。配置为何这样见原理层。</p>
 
@@ -149,7 +138,7 @@ psql -c "SELECT count(*) AS 结果行数, count(DISTINCT biz_key) AS 去重后
 
 <p>清单跑完还剩一件事：把每轮的实测现象写进文档，分「预期」和「实测」两列。<strong>实测与预期不符的那几格就是你真正的风险点</strong>，比任何配置检查表都准。下面几节解释这些配置各自在挡什么。</p>
 
-<h2>② 原理 · 消息全链路的五个丢失点</h2>
+<h2>消息全链路的五个丢失点</h2>
 <div class="mermaid">
 flowchart TB
     subgraph L1["环节一 业务与发送之间"]
@@ -190,7 +179,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · 生产端确认的三种形态</h2>
+<h2>生产端确认的三种形态</h2>
 <p>三家的 API 名字完全不同，但要解决的是同一件事：<strong>让客户端知道 Broker 到底收没收到</strong>。区别在于确认的粒度和失败时能拿到多少信息。</p>
 <table>
 <thead><tr><th>产品</th><th>机制</th><th>失败信息粒度</th><th>必须额外处理的场景</th></tr></thead>
@@ -263,7 +252,7 @@ def publish(payload: dict) -> bool:
         # 保留 outbox 记录让兜底线程重发，重复由消费端幂等消化
         return False</code></pre>
 
-<h2>② 原理 · Broker 端持久化的通用取舍</h2>
+<h2>Broker 端持久化的通用取舍</h2>
 <p>三种策略的本质区别是「返回成功」这句话的含金量。这里有一个现代共识值得强调：<strong>多副本比单机同步刷盘更划算</strong>。</p>
 <table>
 <thead><tr><th>策略</th><th>返回成功意味着</th><th>延迟量级</th><th>能防住什么 / 防不住什么</th></tr></thead>
@@ -294,7 +283,7 @@ flowchart TB
     Q4 -->|否| A3
 </div>
 
-<h2>② 原理 · RabbitMQ 的持久化三件套与 Quorum Queue</h2>
+<h2>RabbitMQ 的持久化三件套与 Quorum Queue</h2>
 <p>「我配了持久化怎么还会丢」几乎都是因为只配了其中一件。三件套<strong>缺任何一个都会丢</strong>，而且丢的方式各不相同：</p>
 <table>
 <thead><tr><th>要件</th><th>怎么配</th><th>缺了它会怎样</th></tr></thead>
@@ -309,7 +298,7 @@ flowchart TB
 <p>Quorum Queue 的价值就在这里：它用 Raft 把写入变成多数派确认，只要多数副本存活，<strong>已确认的消息就不会丢</strong>，故障切换也不需要人工介入。</p>
 <p>代价是单队列吞吐低于经典队列、不支持全局 QoS、队列数量极多时内存开销更高（详见<a href="../compare/">机制对比篇</a>）。</p>
 
-<h2>② 原理 · RocketMQ 的四种组合与丢失窗口</h2>
+<h2>RocketMQ 的四种组合与丢失窗口</h2>
 <p><code>flushDiskType</code> 与 <code>brokerRole</code> 正交，四种组合的丢失窗口差别很大：</p>
 <table>
 <thead><tr><th>组合</th><th>返回成功时消息在哪</th><th>丢失窗口</th><th>延迟与适用</th></tr></thead>
@@ -349,7 +338,7 @@ autoCreateSubscriptionGroup=false
 transactionCheckInterval=60000
 transactionCheckMax=15</code></pre>
 
-<h2>② 原理 · 消费端确认：唯一原则是先处理后确认</h2>
+<h2>消费端确认：唯一原则是先处理后确认</h2>
 <p>自动确认（auto-ack）等于放弃可靠性——Broker 一投递出去就删除消息，消费者崩溃时这批消息永久消失，而且连丢了哪些都不知道。下面这张表是 RabbitMQ 三个确认动作的语义差异，<code>requeue</code> 参数是事故高发点：</p>
 <table>
 <thead><tr><th>动作</th><th>语义</th><th>Broker 行为</th><th>什么时候用</th></tr></thead>
@@ -404,7 +393,7 @@ consumer.registerMessageListener(new MessageListenerConcurrently() {
 // try { handle(m); } catch (Exception e) { log.error(e); }
 // return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;</code></pre>
 
-<h2>② 原理 · 「至少一次」是现实中唯一可靠的语义</h2>
+<h2>「至少一次」是现实中唯一可靠的语义</h2>
 <p>三种语义里，最多一次会丢，精确一次只在「单个系统内部、且状态更新与位点提交能落进同一个事务」的前提下成立——一旦消费逻辑要写外部数据库、调外部接口、发短信，精确一次就不存在了。</p>
 <p>所以现实选择只有至少一次，<strong>消费端幂等因此是必需品而不是可选项</strong>。</p>
 <p>重复的四个来源都不是配置能消除的：发送超时但服务端已写入导致重试产生第二条；处理成功但确认前进程被杀；</p>
@@ -413,7 +402,7 @@ consumer.registerMessageListener(new MessageListenerConcurrently() {
 <p><strong>幂等键必须是业务唯一键</strong>（订单号加事件类型），不能用每次重试都会变的随机 ID；</p>
 <p><strong>去重表要有保留期与清理任务</strong>，并且清理窗口要大于消息最大可能延迟，否则超期的迟到重复会被当成新消息处理一遍。</p>
 
-<h2>② 原理 · 一条消息的完整状态机</h2>
+<h2>一条消息的完整状态机</h2>
 <p>把上面所有环节合起来，一条消息的生命周期是这样。有<strong>三条回边</strong>：发送失败回到待发送、消费者断连回到 Broker 待投递、人工处理后回到待投递——这三条回边正是重复投递的来源。</p>
 <div class="mermaid">
 stateDiagram-v2
@@ -449,7 +438,7 @@ stateDiagram-v2
     end note
 </div>
 
-<h2>② 原理 · 故障注入与监控：证明配置真的生效</h2>
+<h2>故障注入与监控：证明配置真的生效</h2>
 <p>配置写对了不等于生效。唯一可信的验证方式是在预发环境边发消息边制造故障，然后<strong>核对收发条数</strong>。每一项都要先写下预期现象，实测与预期不符处就是真实风险点。</p>
 <table>
 <thead><tr><th>故障注入</th><th>操作</th><th>预期现象</th><th>不符预期说明什么</th></tr></thead>
@@ -480,7 +469,7 @@ stateDiagram-v2
 <p>两条硬要求：对账逻辑<strong>必须独立于消息链路</strong>（不要用消息去驱动对账，否则消息链路故障时对账一起失效）；</p>
 <p>对账发现的差异要能<strong>一键补偿</strong>，只告警不提供修复入口的对账在真出问题时依然救不了场。</p>
 
-<h2>③ 场景 · 按业务类型定可靠性等级</h2>
+<h2>按业务类型定可靠性等级</h2>
 <p>可靠性是买来的，不是白送的。下表把前面的机制按业务类型收成默认配置，第四列是你要付的账——只看第二列会得出「全都上最高档」的结论，而那通常撑不住吞吐。</p>
 <table>
 <thead><tr><th>场景</th><th>该怎么配</th><th>为什么是这个组合</th><th>代价</th></tr></thead>
@@ -496,7 +485,7 @@ stateDiagram-v2
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：这篇解决「消息进出链路不丢」，不解决「该不该用消息」——那见 <a href="../">主干篇</a>；消息定成命令还是事件、契约怎么演进见 <a href="../patterns/">消息通信模式</a>；产品能力差异与选型流程见 <a href="../compare/">MQ 选型方法论</a>；</p>
+<p><strong>不适用边界</strong>：这篇讲消息链路不丢，不解决该不该用消息，后者见 <a href="../">主干篇</a>；命令还是事件、契约演进见 <a href="../patterns/">消息通信模式</a>；选型见 <a href="../compare/">MQ 选型方法论</a>。</p>
 <p>Kafka 的 acks 与 <code>min.insync.replicas</code> 组合、幂等 Producer 与事务边界在 <a href="../../kafka/reliability/">Kafka 消息可靠性落地</a>；幂等的四种落地写法与柔性事务在 <a href="../../distributed/idempotency/">幂等的完整工程实现</a> 与 <a href="../../distributed/transaction/">柔性事务</a>。</p>
 <p>需要「精确一次」且消费逻辑要写外部系统的场景，这里给不出方案，因为端到端精确一次并不存在。</p>
 

@@ -93,18 +93,7 @@
 <p>「用 Go 操作 Git 仓库」有两条路：<code>github.com/go-git/go-git</code> 这个纯 Go 实现，或者用 <code>os/exec</code> 调本机的 <code>git</code>。</p>
 <p>网上的讨论常常把它当成二选一的信仰之争，实际工程里正确答案是<strong>按操作类型分工</strong>——go-git 在「读对象、解析引用、收发 packfile、把 Git 当数据库用」这一侧很强，在「需要和官方行为逐字节一致」的那一侧则有明确边界。</p>
 <p>Git 自身的对象模型（blob/tree/commit/tag 四类对象、内容寻址、引用与 packfile）站内已有专篇，见 <a href="../../../tools/vcs/">Git</a>，这里只用结论，不重复推演。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：克隆、读历史、读文件、提交四段可直接抄的代码，一张「这件事该用 go-git 还是调命令行」的对照表，以及认证方式速查——每行都写清失败时会看到什么报错。</li>
-        <li><strong>② 原理</strong>：Git 概念到 Go 类型的映射与三种存储后端的差异、一次克隆的协议往返与内存峰值来源、<code>CloneOptions</code> 各字段的默认值与后果、历史遍历与 diff 的真实代价、worktree 与原生 git 的行为偏差、packfile 与 delta 决定的性能画像。</li>
-        <li><strong>③ 场景</strong>：三条路线的逐维度分工矩阵、不支持操作的回落方案，以及一个「两套实现同一个接口」的选路写法。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 四个最小可用示例与认证速查</h2>
+<h2>四个最小可用示例与认证速查</h2>
 <p>先看最常用的四件事怎么写。这四段覆盖了绝大多数「服务端读仓库」的需求，注释只说明为什么要这么写：</p>
 <pre><code class="language-go">// 一、克隆：目标是把远端某个分支的最新提交拉进内存，不带历史、不写工作区。
 func shallowClone(ctx context.Context, url, branch, token string) (*git.Repository, error) {
@@ -241,7 +230,7 @@ func commitFile(repo *git.Repository, path string, content []byte, name, email s
 </table>
 <p>为什么 <code>Depth</code> 不设会 OOM、为什么迭代器必须 Close、为什么 <code>Author</code> 不能省——都在下面几节。</p>
 
-<h2>② 原理 · 对象模型怎么映射到 Go 类型</h2>
+<h2>对象模型怎么映射到 Go 类型</h2>
 <p>搞清这层映射，API 文档基本就不用查了，而且能预判每个调用背后有多少次对象读取。</p>
 <p>go-git 的包结构是分层的：上层是面向用户语义的 porcelain，中层是对象与协议的 plumbing，底层是 <code>storage.Storer</code> 接口，再往下是 <code>billy</code> 文件系统抽象。<strong>「存储可插拔」是它区别于命令行的根本价值</strong>——对象存哪里由你决定。</p>
 <div class="mermaid">
@@ -301,7 +290,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · 克隆与抓取：参数决定了你会不会 OOM</h2>
+<h2>克隆与抓取：参数决定了你会不会 OOM</h2>
 <p>这一节回答一个常见困惑：仓库工作区只有几百兆，为什么克隆吃了好几倍内存。</p>
 <p>一次克隆的协议往返如下。注意最后一条注释：<strong>内存峰值来自 pack 解析与对象索引，而不是工作区文件</strong>，所以答案在历史长度和对象数量上。</p>
 <div class="mermaid">
@@ -337,7 +326,7 @@ sequenceDiagram
 </tbody>
 </table>
 
-<h2>② 原理 · 遍历历史与算 diff 的真实代价</h2>
+<h2>遍历历史与算 diff 的真实代价</h2>
 <p>这一节解释为什么「只是看看提交记录」也能把服务打挂。</p>
 <p>历史遍历本身是惰性的：迭代器每次 <code>Next</code> 才去加载对象。真正的代价在两个地方。第一是<strong>遍历顺序</strong>：默认是深度优先，跨多分支时输出顺序会很反直觉，要按时间看必须显式指定提交者时间序。</p>
 <p>第二是<strong>内容差异</strong>：只要知道「哪些文件变了」，比较两棵 tree 就够；一旦去取逐行补丁或提交统计，新旧两份文件内容都要完整读进内存做行级比对，遇到自动生成的巨型文件或二进制文件就是内存尖峰。</p>
@@ -371,7 +360,7 @@ func changedPaths(ctx context.Context, from, to *object.Commit) ([]string, error
     return paths, nil
 }</code></pre>
 
-<h2>② 原理 · worktree、索引与和原生 git 的行为差异</h2>
+<h2>worktree、索引与和原生 git 的行为差异</h2>
 <p>只要你用到工作区，就进入了「行为一致性」这个灰色地带。go-git 的 <code>Worktree</code> 实现了 add / commit / checkout / status / reset，模型和 Git 一致，但几个细节和原生 git 不完全等价。</p>
 <div class="mermaid">
 stateDiagram-v2
@@ -396,7 +385,7 @@ stateDiagram-v2
 <p><strong>文件模式位、符号链接、大小写不敏感文件系统</strong>这几处的判定和原生 git 有偏差，会表现为 status 里凭空出现一批「被修改」的文件。<strong>索引扩展字段</strong>两边写法不同，所以不要让 go-git 和原生 git 交替写同一个 <code>.git</code> 目录。</p>
 <p>最后，磁盘存储不是并发安全的，多 goroutine 写必须自己串行化；引用更新要避免丢写，用带比较的设置引用接口做 CAS，而不是无脑覆盖——并发写法的取舍见 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>。</p>
 
-<h2>② 原理 · packfile 与 delta：性能特征从哪来</h2>
+<h2>packfile 与 delta：性能特征从哪来</h2>
 <p>go-git 的性能画像几乎完全由 packfile 决定，理解这几条就能预判它在你的仓库上表现如何：</p>
 <ul>
 <li><strong>对象是 delta 压缩的。</strong> pack 里大量对象只存相对某个基对象的增量，取一个 blob 可能要沿 delta 链回溯若干次并逐层重建。链越长，单次随机访问越慢，这就是「遍历历史比想象中慢」的根源。</li>
@@ -406,7 +395,7 @@ stateDiagram-v2
 <li><strong>顺序遍历远比随机访问友好。</strong> 需要扫全量历史时，按 pack 内顺序批量处理比按提交图随机跳转快得多。</li>
 </ul>
 
-<h2>③ 场景 · 按操作类型选路，越界了怎么回落</h2>
+<h2>按操作类型选路，越界了怎么回落</h2>
 <p>把前面的能力与代价收成架构决策。先是三条路线的逐维度分工矩阵，每一行都会真实影响决策：</p>
 <table>
 <thead><tr><th>维度</th><th>go-git（纯 Go 库）</th><th>调 git 命令行</th><th>libgit2 绑定</th></tr></thead>

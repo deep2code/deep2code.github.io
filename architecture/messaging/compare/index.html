@@ -74,18 +74,7 @@
 <p>所有「哪个 MQ 更快」的对比都不可信：吞吐数字取决于消息体大小、批量参数、刷盘策略和副本数，换一组参数就能让任意一款赢。</p>
 <p>真正能决定选型的是<strong>能力有无</strong>——路由是否够灵活、延迟消息是否原生、顺序保证的粒度、能不能重放历史。</p>
 <p>这篇先给筛选方法，再拆 RabbitMQ 的 Exchange 路由模型与 RocketMQ 的存储和事务机制，Kafka 部分只给结论，内部实现见站内 Kafka 专题。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一条可执行的四步筛流程（投递语义与回溯 → 顺序要求 → 吞吐与消息体 → 运维承接能力），每步的产出是「排除掉谁」；附各产品自带压测命令的用法与判读要点，以及一张硬约束速查表。</li>
-        <li><strong>② 原理</strong>：为什么要先筛能力再比性能、RabbitMQ 的 Exchange 路由模型与通配语义、五种队列形态的边界与 prefetch 的真实影响、TTL 加死信做延迟队列为什么必然翻车、RocketMQ 单 CommitLog 的优势与代价、NameServer 为什么无状态、延迟与顺序与事务消息的实现细节。</li>
-        <li><strong>③ 场景</strong>：八类项目该落在哪个产品上与各自代价、四种 MQ 的能力矩阵、团队与基础设施因素为什么权重更高、迁移共存时抽象层该抽到哪一层。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 四步筛：从需求走到候选产品</h2>
+<h2>四步筛：从需求走到候选产品</h2>
 
 <p>选型流程只有四步，顺序不能反：<strong>投递语义与回溯 → 顺序要求 → 吞吐与消息体 → 运维承接能力</strong>。每步的产出是「排除哪些候选」，不是「选定谁」。四步走完通常只剩一两个，差异已不足以改变结论。</p>
 
@@ -146,7 +135,7 @@ kafka-producer-perf-test.sh --topic bench --num-records 2000000 \
 
 <p>四步的结论压成三行：<strong>选了谁、因为哪个硬约束、放弃了什么能力、用什么替代</strong>。第三行最重要，是半年后有人质疑选型时唯一有用的东西。下面解释这些能力差异从哪来。</p>
 
-<h2>② 原理 · 为什么先筛能力，再比性能</h2>
+<h2>为什么先筛能力，再比性能</h2>
 <p>把<a href="../">主干篇</a>那六个维度变成一棵判断树，大多数项目走两三个节点就能收敛。注意每个菱形问的都是「有没有」而不是「好不好」。</p>
 <div class="mermaid">
 flowchart TB
@@ -170,7 +159,7 @@ flowchart TB
 <p>量级对比只能用于<strong>排除明显不匹配的选项</strong>（比如每秒五十万条日志显然不该用 RabbitMQ），不能用于「A 比 B 快所以选 A」。要数字就用自己的消息体和参数压一遍。</p>
 </div>
 
-<h2>② 原理 · RabbitMQ 的差异化能力：Exchange 路由模型</h2>
+<h2>RabbitMQ 的差异化能力：Exchange 路由模型</h2>
 <p>RabbitMQ 和日志型 MQ 最大的结构差异：生产者<strong>从不直接发到队列</strong>，而是发到 Exchange，由 Exchange 按 Binding 规则决定消息进哪些队列。路由在 Broker 侧完成，这是它相比「消费端自己筛」的核心优势。</p>
 <div class="mermaid">
 flowchart TB
@@ -269,7 +258,7 @@ def on_msg(channel, method, props, body):
 ch.basic_consume("audit.queue", on_msg, auto_ack=False)
 ch.start_consuming()</code></pre>
 
-<h2>② 原理 · RabbitMQ 的队列形态与堆积应对</h2>
+<h2>RabbitMQ 的队列形态与堆积应对</h2>
 <p>队列类型选错是 RabbitMQ 事故最集中的来源。下表第四列是实际会踩到的边界：</p>
 <table>
 <thead><tr><th>队列形态</th><th>复制机制</th><th>适用与否</th><th>边界与代价</th></tr></thead>
@@ -284,7 +273,7 @@ ch.start_consuming()</code></pre>
 <p><strong>prefetch 的影响被严重低估。</strong>默认 <code>prefetch_count=0</code> 意味着无限预取：第一个连上来的消费者会把消息一口气拉到本地缓冲区，后来的消费者拿不到任何消息，看起来像「扩容无效」。</p>
 <p>但 prefetch 设成 1 会让每处理一条都多一轮网络往返，吞吐掉到十分之一。经验值是处理耗时 50ms 左右时取 10 到 50；耗时超过 1 秒时取 1 到 5。unacked 消息会占 Broker 内存，<code>prefetch 乘以消费者数</code>就是内存上限的估算基数。</p>
 
-<h2>② 原理 · RabbitMQ 做延迟队列：TTL 加死信的致命缺陷</h2>
+<h2>RabbitMQ 做延迟队列：TTL 加死信的致命缺陷</h2>
 <p>「消息 TTL + 死信交换机」是流传最广的延迟队列做法，也是最容易翻车的做法。原因在于<strong>队列是 FIFO 的，Broker 只检查队首那条消息是否过期</strong>。</p>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
@@ -302,7 +291,7 @@ ch.start_consuming()</code></pre>
 </tbody>
 </table>
 
-<h2>② 原理 · RocketMQ 的存储设计：一条 CommitLog 走天下</h2>
+<h2>RocketMQ 的存储设计：一条 CommitLog 走天下</h2>
 <p>RocketMQ 把所有 Topic 的消息<strong>顺序追加进同一个 CommitLog</strong>，每个队列只维护一份定长索引 ConsumeQueue。这个设计决定了它的优势与短板。</p>
 <div class="mermaid">
 flowchart TB
@@ -339,7 +328,7 @@ flowchart TB
 <p>因为路由数据在每台 NameServer 上都是全量的，节点之间不需要复制，也就不需要选主和一致性协议，运维上任意增减节点都不影响。</p>
 <p>代价是路由信息<strong>最终一致</strong>：Broker 刚下线的那几十秒内，客户端可能还拿着旧路由发消息，所以生产端必须依赖发送重试（同步发送默认重试 2 次，自动切换到其他 Broker）。</p>
 
-<h2>② 原理 · RocketMQ 的三个特色能力</h2>
+<h2>RocketMQ 的三个特色能力</h2>
 <p>延迟消息、顺序消息、事务消息是 RocketMQ 相比其他产品最省事的地方——它们都不需要自研。</p>
 <table>
 <thead><tr><th>能力</th><th>4.x 的实现与限制</th><th>5.x 的变化</th><th>使用时的坑</th></tr></thead>
@@ -450,7 +439,7 @@ consumer.registerMessageListener(new MessageListenerOrderly() {
     }
 });</code></pre>
 
-<h2>③ 场景 · 八类项目的落地选择</h2>
+<h2>八类项目的落地选择</h2>
 <p>把四步筛套到具体项目上，结论大致收敛成下面八种。第四列是选定之后要立刻开始准备的事，不看它就会在上线后被同一批问题逐个绊住。</p>
 <table>
 <thead><tr><th>项目形态</th><th>该怎么选</th><th>为什么是它</th><th>代价与要提前准备的事</th></tr></thead>
@@ -466,7 +455,7 @@ consumer.registerMessageListener(new MessageListenerOrderly() {
 </tbody>
 </table>
 
-<h2>③ 场景 · 四种 MQ 的能力矩阵</h2>
+<h2>四种 MQ 的能力矩阵</h2>
 <p>Kafka 一列只给结论，内部机制（分段日志与稀疏索引、ISR 与 HW、acks 组合、幂等与事务、Rebalance）见站内 Kafka 专题。</p>
 <table>
 <thead><tr><th>维度</th><th>RabbitMQ</th><th>Kafka</th><th>RocketMQ</th><th>Pulsar</th></tr></thead>
@@ -484,7 +473,7 @@ consumer.registerMessageListener(new MessageListenerOrderly() {
 </tbody>
 </table>
 
-<h2>③ 场景 · 现实考量与迁移共存</h2>
+<h2>现实考量与迁移共存</h2>
 <p>需求没有被硬指标卡死时，下面三条比技术参数更决定结果——这不是妥协，而是因为长期成本主要发生在运维和故障处置上。</p>
 <table>
 <thead><tr><th>现实因素</th><th>为什么它权重更高</th><th>怎么判断</th></tr></thead>

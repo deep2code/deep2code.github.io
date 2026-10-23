@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="数据库设计取舍：同一份事实存几遍，范式与三类更新异常、1NF 到 BCNF 与函数依赖、反范式四种手段与维护义务、快照列与冗余列的同步、主键外键选型、软删除代价，以及冗余决策路径与评审清单。">
+    <meta name="description" content="范式与反范式：三类更新异常、1NF 到 BCNF 逐级拆表、反范式手段与同步、冗余列与快照列、主键选型、软删除代价与列规范。">
     <meta name="keywords" content="数据库设计,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/design/">
     <meta property="og:title" content="范式与反范式：数据库设计的取舍 - 资深码农">
-    <meta property="og:description" content="数据库设计取舍：同一份事实存几遍，范式与三类更新异常、1NF 到 BCNF 与函数依赖、反范式四种手段与维护义务、快照列与冗余列的同步、主键外键选型、软删除代价，以及冗余决策路径与评审清单。">
+    <meta property="og:description" content="范式与反范式：三类更新异常、1NF 到 BCNF 逐级拆表、反范式手段与同步、冗余列与快照列、主键选型、软删除代价与列规范。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/design/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="范式与反范式：数据库设计的取舍 - 资深码农">
-    <meta name="twitter:description" content="数据库设计取舍：同一份事实存几遍，范式与三类更新异常、1NF 到 BCNF 与函数依赖、反范式四种手段与维护义务、快照列与冗余列的同步、主键外键选型、软删除代价，以及冗余决策路径与评审清单。">
+    <meta name="twitter:description" content="范式与反范式：三类更新异常、1NF 到 BCNF 逐级拆表、反范式手段与同步、冗余列与快照列、主键选型、软删除代价与列规范。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -72,18 +72,7 @@
     <p>数据库设计里的绝大多数争论，最后都能归到同一个问题：<strong>同一份事实，在库里存几遍</strong>。存一遍，修改只改一处，数据永远不自相矛盾，代价是查询要把散在多张表里的行拼回来；</p>
 <p>存多遍，一次查询就能拿全，代价是你从此背上「让这几份副本保持同步」的债务。范式与反范式不是两种审美风格，而是这条取舍线的两端。</p>
 <p>这篇讲清楚这条线该画在哪里，以及画错之后会以什么形式还债。</p>
-
-    <div class="callout callout-info">
-        <div class="callout-icon">💡</div>
-        <div class="callout-title">这篇怎么读</div>
-        <ul>
-            <li><strong>① 用法</strong>：判断「这张表该规范化到什么程度」的四步——先列全高频查询，再标出读到旧值就会出事的字段，再判断每个候选列是快照还是引用，最后按源列变更频率与两表是否同库选同步方式；配一张「场景 → 该范式化还是冗余 → 冗余后怎么保证不脏」对照表，和一段改个表名就能用的建表与登记 SQL。</li>
-            <li><strong>② 原理</strong>：三类更新异常各自的触发操作与根因、1NF 到 BCNF 分别赶走哪种函数依赖、反范式四种手段引入的维护义务、冗余列三种同步方式的不一致窗口与失败模式、主键四方案六维对照与外键取舍、软删除的三笔账与字段设计规范。</li>
-            <li><strong>③ 场景</strong>：冗余提案的完整决策路径、按业务场景排开的取舍矩阵、可贴进评审文档的检查清单与本篇的不适用边界。</li>
-        </ul>
-    </div>
-
-    <h2>① 用法 · 这张表该规范化到什么程度：四步判断</h2>
+<h2>这张表该规范化到什么程度：四步判断</h2>
     <p>范式级别不是凭审美定的，它由两件事推出来：<strong>这张表的高频查询长什么样</strong>，以及<strong>哪些字段读到旧值会出事</strong>。</p>
 <p>下面四步按顺序问，第二步的答案经常直接否掉后面两步。每一步为什么这样问，原因见原理层。</p>
 
@@ -171,7 +160,7 @@
         </tbody>
     </table>
 
-    <h2>① 用法 · 冗余登记四要素与最小可用建表片段</h2>
+    <h2>冗余登记四要素与最小可用建表片段</h2>
     <p>冗余本身不是错，<strong>没有登记的冗余才是错</strong>。登记的成本只是一句列注释，收益是出问题三十秒内能判断哪个值是权威的、该找谁。这四项缺一项，半年后没人敢动这列。</p>
 
     <table>
@@ -240,8 +229,8 @@ ALTER TABLE `order`
   ADD COLUMN buyer_name VARCHAR(64) NOT NULL DEFAULT ''
       COMMENT '冗余自 user.nickname 由 user 变更消息回填 容忍 5 秒 对账任务 job_order_buyer_name';</code></pre>
 
-    <h2>② 原理 · 范式到底在解决什么：三类更新异常</h2>
-    <p>搞清这一节能解决「宽表用着挺顺，为什么某次改名之后报表里同一个部门被拆成了两组」。</p>
+    <h2>范式到底在解决什么：三类更新异常</h2>
+    <p>宽表用着挺顺，改名之后报表里同一个部门被拆成了两组。</p>
     <p>「范式是为了消除冗余」这句话只说对了一半。冗余本身不可怕，磁盘很便宜；</p>
 <p>真正致命的是冗余带来的<strong>更新异常</strong>——同一事实存在多个位置，任何一次不完整写入都会让数据库进入自相矛盾的状态，而数据库自己无法判断哪份才对。</p>
 <p>把一张典型的「员工兼部门」宽表摊开，三类异常同时暴露出来。</p>
@@ -329,8 +318,8 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>② 原理 · 1NF 到 BCNF：同一张表逐步拆</h2>
-    <p>搞清这一节能解决「知道要拆表，但说不清该拆到哪一步就停」。</p>
+    <h2>1NF 到 BCNF：同一张表逐步拆</h2>
+    <p>知道要拆表不难，难的是说不清该拆到哪一步就停。</p>
     <p>范式的定义都围绕<strong>函数依赖</strong>展开：知道 A 的值就能唯一确定 B 的值，就说 B 函数依赖于 A。范式做的事就是逐级赶走「不该出现在这张表里」的依赖。用一张订单明细宽表演示，它一次踩满三级。</p>
 
     <pre><code class="language-sql">-- 起点：一张什么都往里塞的订单明细表
@@ -410,8 +399,8 @@ CREATE TABLE order_item_bad (
 <p>你的表如果是「自增 id 做主键，外加一个业务唯一索引」，做到 3NF 通常就已经满足 BCNF，不必再花时间推导。把精力放在识别传递依赖上，回报率高得多。</p>
     </div>
 
-    <h2>② 原理 · 反范式的四种手段与它们的维护义务</h2>
-    <p>搞清这一节能解决「冗余加下去之后，为什么维护成本远超当初预估」。</p>
+    <h2>反范式的四种手段与它们的维护义务</h2>
+    <p>冗余加下去之后，维护成本往往远超当初预估。</p>
     <p>范式化把一个业务对象拆散到多张表，查询就要关联。关联本身不慢，慢的是「深分页加多表关联加排序字段跨表」这种组合，以及分库分表后关联根本做不了。这时才轮到反范式。</p>
 <p>反范式只有四种手段，每一种都同时引入一份维护义务，把这三列摆在一起看才能做决定。</p>
 
@@ -489,8 +478,8 @@ flowchart TB
 <p>谁负责让它们同步、允许多大滞后？答得出来叫设计，答不出来叫技术债。最低成本的落地是写进列注释，例如 <code>COMMENT '冗余自 product.name，商品改名后由消息回填，容忍 5 秒'</code>。</p>
     </div>
 
-    <h2>② 原理 · 冗余字段怎么同步：三种方式与不一致窗口</h2>
-    <p>搞清这一节能解决「冗余列明明写了同步逻辑，线上还是持续出现对不上的行」。</p>
+    <h2>冗余字段怎么同步：三种方式与不一致窗口</h2>
+    <p>冗余列明明写了同步逻辑，线上还是持续出现对不上的行。</p>
     <p>先区分两种长得很像、语义却相反的列。<strong>快照列</strong>按定义就不该跟随源表变化：订单明细里的 <code>unit_price</code> 记的是下单那一刻的价格，商品后来涨跌都与它无关，不需要同步。</p>
 <p><strong>冗余列</strong>才需要同步：订单上冗余的 <code>buyer_name</code> 本意是展示买家当前昵称，源表一改它就该跟着改。把快照当冗余去「修复」，是一类真实发生过的严重事故。</p>
 
@@ -569,8 +558,8 @@ SELECT oi.id, oi.sku_name AS stale_value, p.name AS truth
 -- 3) 把差异行数打成监控指标。对账的意义在于「差异数长期为 0」这条曲线，
 --    一旦抬头就说明有写入入口绕过了同步通道，而不是等用户来投诉。</code></pre>
 
-    <h2>② 原理 · 主键与外键：两个最贵的早期决策</h2>
-    <p>搞清这一节能解决「主键选型当时觉得无所谓，分库或对外开放接口时才发现改不动了」。</p>
+    <h2>主键与外键：两个最贵的早期决策</h2>
+    <p>主键选型当时觉得无所谓，分库或对外开放接口时才发现改不动了。</p>
     <p>主键选错的代价不是性能，而是<strong>迁移成本</strong>——它会被所有引用它的表、所有缓存键、所有对外接口固化下来。下表是四类方案的横向对照。</p>
 <p>至于「主键长度如何放大每个二级索引」「随机主键为什么造成页分裂和写放大」这类存储层机制，《MySQL 深度原理》篇已从 B+ 树和聚簇索引层面推演过，这里只取结论。</p>
 
@@ -633,8 +622,8 @@ SELECT oi.id, oi.sku_name AS stale_value, p.name AS truth
 <p>关键是认清不建外键的真实代价：「应用层保证」如果没有配套的孤儿行扫描任务和显式的父子删除处理，就只是一句口号，最终表现为报表里永远对不上的那几百行。</p>
     </div>
 
-    <h2>② 原理 · 软删除的代价与字段设计规范</h2>
-    <p>搞清这一节能解决「加了 deleted 标记之后，唯一索引为什么开始报重复键、统计数字为什么慢慢偏了」。</p>
+    <h2>软删除的代价与字段设计规范</h2>
+    <p>加了 deleted 标记后，唯一索引开始报重复键，统计数字慢慢偏了。</p>
     <p>软删除是被讨论最多、被低估最严重的设计。它有三笔账：<strong>第一，此后每条查询都必须带上 <code>deleted = 0</code></strong>，漏一处就是数据泄露或统计错误，而这个条件全靠人工纪律，没有机制强制；</p>
 <p><strong>第二，唯一索引失效</strong>，同一个编码删了再建就会撞唯一键；<strong>第三，表无限增长</strong>，已删行和活跃行挤在相同的数据页里，拉低所有查询的缓存命中率。</p>
 
@@ -706,7 +695,7 @@ ALTER TABLE coupon_archive
         </tbody>
     </table>
 
-    <h2>③ 场景 · 这个字段该不该冗余：完整决策路径</h2>
+    <h2>这个字段该不该冗余：完整决策路径</h2>
     <p>「加个冗余字段吧」这句话在评审会上出现时，要能在三十秒内判断该不该点头。</p>
 <p>这条路径把判断拆成几个可回答的问题，顺序很重要：先确认收益（是否高频且必须），再确认语义（快照还是冗余），再确认成本（源列变不变、能否同一事务），最后选同步方式。</p>
 <p>它是用法层四步判断的展开版，多出的两个分叉专门处理「读写比不够」和「跨库」这两种最常被忽略的否决条件。</p>
@@ -789,7 +778,7 @@ flowchart TB
         </tbody>
     </table>
 
-    <h2>③ 场景 · 表设计评审清单与不适用边界</h2>
+    <h2>表设计评审清单与不适用边界</h2>
     <p>把这张表贴在评审文档末尾，逐条打勾。它能在十分钟内拦住绝大多数上线后要付代价的设计。</p>
 
     <table>

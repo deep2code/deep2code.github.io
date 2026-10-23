@@ -94,18 +94,7 @@
 <p>这篇不逐个组件讲配置，只讲三件事：<strong>在 K8s 上哪些组件该换成平台能力、哪些必须留在应用里</strong>，<strong>换代的原因是什么</strong>，以及<strong>三条技术路线各自的代价</strong>。</p>
 <p>微服务本身该不该拆、怎么拆、DDD 边界怎么划，见站内 <a href="../../../architecture/microservices/split/">微服务的代价模型</a> 与 <a href="../../../architecture/microservices/ddd-split/">DDD 拆分</a>；熔断限流的参数怎么定见 <a href="../../../architecture/governance/circuit-breaker/">熔断与限流</a>；</p>
 <p>网关的责任边界见 <a href="../../../architecture/governance/api-gateway/">API 网关</a>；注册发现的摘除延迟与保护模式见 <a href="../../../architecture/governance/service-discovery/">服务注册与发现</a>。这些本文只给结论。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一张「这个能力在 K8s 上换成什么、应用里还要留什么、怎么验证换对了」的替换对照表，K8s 原生路线的最小可用配置（Feign 直接用 Service 名、优雅停机、探针、外部配置导入），以及 Feign 的生产级参数与配置不生效的排查表。</li>
-        <li><strong>② 原理</strong>：六个组件换代的真实原因与迁移成本、OpenFeign 一次调用的完整链路与四个高频坑、Sleuth 到 Micrometer Tracing 的变化、为什么大多数场景不该引入 Seata、<code>bootstrap.yml</code> 与 <code>@RefreshScope</code> 的两个陷阱、发布列车版本矩阵。</li>
-        <li><strong>③ 场景</strong>：全家桶、K8s 原生、服务网格三条路线的逐维对比与选择依据，以及八条反模式。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · K8s 上的组件替换对照与最小可用配置</h2>
+<h2>K8s 上的组件替换对照与最小可用配置</h2>
 <p>先给结论表。左列是 Spring Cloud 提供的能力，中间两列回答「平台接走哪一部分、应用必须留哪一部分」——这条界线画错就是重复建设或者能力缺口。最后一列是验收标准，没有验收手段的替换不算完成。</p>
 <table>
     <thead>
@@ -238,7 +227,7 @@ resilience4j:
 </tbody></table>
 <p>为什么这些组件被换掉、Feign 的四个坑分别发生在哪一层、版本为什么一动就炸——下面几节展开。</p>
 
-<h2>② 原理 · 六个核心组件全部换代，以及换掉的原因</h2>
+<h2>六个核心组件全部换代，以及换掉的原因</h2>
 
 <p>搞清这一节能一眼判断一篇资料是否已经过时，也能估出迁移要付多少成本。</p>
 
@@ -295,7 +284,7 @@ flowchart TB
 <p>K8s 依据探针结果摘除 Endpoints，注册中心依据心跳摘除实例，两者的判定周期和判定条件不同。</p>
 <p>滚动更新时经常出现这种状况：Pod 已经被 K8s 从 Endpoints 里摘掉，注册中心里还挂着，客户端从注册中心拿到地址直连过去，撞上正在终止的 Pod。探针语义、<code>preStop</code> 与滚动更新的时序细节见 <a href="../../../devops/kubernetes/">Kubernetes 深度剖析</a>。</p>
 
-<h2>② 原理 · OpenFeign 的机制与四个高频坑</h2>
+<h2>OpenFeign 的机制与四个高频坑</h2>
 
 <p>搞清这一节能解释用法层那份 Feign 配置里每一项在拦哪一个坑。</p>
 
@@ -394,7 +383,7 @@ public class FeignConfig {
     }
 }</code></pre>
 
-<h2>② 原理 · 可观测性：Sleuth 已经退场</h2>
+<h2>可观测性：Sleuth 已经退场</h2>
 
 <p>搞清这一节能避免一次无谓的升级失败：带着 Sleuth 依赖去升 Boot 3，应用根本起不来。</p>
 
@@ -403,7 +392,7 @@ public class FeignConfig {
 <p>真正的变化是 <code>Observation</code> API 的引入。以前埋一个关键操作，要在指标侧写一遍 <code>Timer</code>、在链路侧写一遍 <code>Span</code>，两边的标签还容易写得不一致；现在一次 <code>Observation</code> 声明同时产出指标和 span，标签共享。</p>
 <p>traceId 依然会自动进日志的 MDC，日志里只要在 pattern 里加上占位符就能打出来。指标、日志、链路三支柱怎么关联、采样率怎么定，见站内 <a href="../../../observability/tracing/">分布式链路追踪</a>，本文不展开。</p>
 
-<h2>② 原理 · 分布式事务：大多数场景不该引入 Seata</h2>
+<h2>分布式事务：大多数场景不该引入 Seata</h2>
 
 <p>搞清这一节能省掉一个新的高可用组件，以及它带来的一整类难以测试的故障。</p>
 
@@ -416,7 +405,7 @@ public class FeignConfig {
 <p>本地消息表的做法是：业务数据和「待发送消息」写在<strong>同一个本地数据库事务</strong>里，提交后由后台任务扫表投递到 MQ，消费方按业务唯一键幂等处理。没有额外中间件、失败可以无限重放、排查只看两张表。</p>
 <p>代价是最终一致而非强一致，以及需要消费方真正做到幂等。绝大多数下单、发券、积分场景要的就是最终一致。事务边界与「提交后再发消息」的具体写法见 <a href="../spring-core/">Spring 核心机制</a>。</p>
 
-<h2>② 原理 · 配置与启动的两个陷阱</h2>
+<h2>配置与启动的两个陷阱</h2>
 
 <p>搞清这一节能解决两类「文件明明在那里却不生效」的现象。</p>
 
@@ -448,7 +437,7 @@ sequenceDiagram
 <p>结论是：<strong><code>@RefreshScope</code> 只适合无状态、且每次调用都重新读取字段值的 Bean</strong>。数据库连接池的最大连接数、线程池的核心线程数这类「初始化时读一次」的参数，靠它刷新是无效的，必须用组件自己提供的动态调整 API。</p>
 <p>配置中心侧的推送机制、长轮询与本地快照兜底见 <a href="../../../architecture/governance/config-client/">配置中心</a>。</p>
 
-<h2>② 原理 · 版本矩阵：Spring Cloud 最大的坑</h2>
+<h2>版本矩阵：Spring Cloud 最大的坑</h2>
 
 <p>搞清这一节能避免一整类「编译通过、运行期炸」的问题，它们的根因全在依赖版本组合上。</p>
 
@@ -484,7 +473,7 @@ mvn dependency:list | grep -iE "javax\.(servlet|persistence|validation|annotatio
 # 确认运行时真正生效的自动配置（哪些装上了、哪些没装上以及原因）
 java -jar app.jar --debug 2&gt;&amp;1 | sed -n '/CONDITIONS EVALUATION REPORT/,/^$/p'</code></pre>
 
-<h2>③ 场景 · 三条路线怎么选，以及在 K8s 上还需不需要 Spring Cloud</h2>
+<h2>三条路线怎么选，以及在 K8s 上还需不需要 Spring Cloud</h2>
 
 <p>这是本文最重要的结构性判断。把 Spring Cloud 的能力和 K8s 的能力逐项对齐，会发现重叠得相当厉害：服务发现有 Service，负载均衡有 kube-proxy 的转发规则，配置有 ConfigMap 与 Secret，入口网关有 Ingress 或 Gateway API，健康检查有探针，灰度有多 Deployment 加 Service 选择器。</p>
 <p><strong>在 K8s 上再搭一套 Eureka 加 Config Server，是把平台已经做好的事在应用层重做一遍。</strong></p>

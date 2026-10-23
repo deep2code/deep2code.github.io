@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Procedure 设计：input schema 是唯一运行时防线、中间件做类型收窄、垂直与水平权限分工、next() 不抛异常的陷阱、事务并发与死锁对策。">
+    <meta name="description" content="tRPC procedure 的 output schema 泄露防护、router 分层替代不了路由级中间件、query/mutation/subscription 行为差异。">
     <meta name="keywords" content="tRPC,Procedures 与路由,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/trpc/procedures/">
     <meta property="og:title" content="Procedure 设计：输入校验、中间件与鉴权 - tRPC - 资深码农">
-    <meta property="og:description" content="Procedure 设计：input schema 是唯一运行时防线、中间件做类型收窄、垂直与水平权限分工、next() 不抛异常的陷阱、事务并发与死锁对策。">
+    <meta property="og:description" content="tRPC procedure 的 output schema 泄露防护、router 分层替代不了路由级中间件、query/mutation/subscription 行为差异。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/trpc/procedures/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Procedure 设计：输入校验、中间件与鉴权 - tRPC">
-    <meta name="twitter:description" content="Procedure 设计：input schema 是唯一运行时防线、中间件做类型收窄、垂直与水平权限分工、next() 不抛异常的陷阱、事务并发与死锁对策。">
+    <meta name="twitter:description" content="tRPC procedure 的 output schema 泄露防护、router 分层替代不了路由级中间件、query/mutation/subscription 行为差异。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,18 +68,7 @@
                     </header>
                     <div class="article-content">
 <p>router 只是命名空间，真正承载业务逻辑与安全边界的是 procedure。tRPC 把 procedure 设计成一条可组合的构建链：<code>.use()</code> 挂中间件、<code>.input()</code> 声明输入 schema、<code>.output()</code> 声明输出 schema、<code>.query()</code> 或 <code>.mutation()</code> 收尾。每一环都有明确的安全含义，写错一环就是一个漏洞。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：输入校验、中间件、鉴权的三段标准写法——分页与写操作的 input schema 模板、分层 procedure 的定义方式、水平权限落在 resolver 的两种写法，以及每一项怎么验证。</li>
-        <li><strong>② 原理</strong>：为什么这些写法是必须的——类型擦除后 input 是唯一运行时防线、output 的取舍、中间件如何把运行期守卫变成编译期类型收窄、router 为什么给不了「路由级鉴权」、三种调用类型的硬性差异、垂直与水平权限的分工、<code>next()</code> 不抛异常导致的事务陷阱。</li>
-        <li><strong>③ 场景</strong>：公开读、登录写、管理员操作、批量写、跨服务写各该组合哪几层，以及反模式的替代做法。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 输入校验、中间件与鉴权的标准写法</h2>
+<h2>输入校验、中间件与鉴权的标准写法</h2>
 <p>这一层给三段可以直接抄的模板：input 与 output schema、分层 procedure、resolver 里的归属校验。三段合起来就是一个 procedure 的完整安全边界。为什么每一处都不能省，见下一节起的原理部分。</p>
 
 <pre><code class="language-typescript">// ===== 1) input schema 模板：上界、白名单、strict 三件事都不能省 =====
@@ -252,7 +241,7 @@ export const postMutations = router({
 </tbody>
 </table>
 
-<h2>② 原理 · input schema 是唯一的运行时防线</h2>
+<h2>input schema 是唯一的运行时防线</h2>
 <p>搞清这条，就知道为什么「端到端类型安全」不能替代校验——它保护的是调用方，不是服务端。</p>
 
 <p>这一点必须反复强调：<strong>TS 的类型在编译后完全擦除，服务端运行时没有任何类型信息</strong>。procedure 收到的就是 <code>JSON.parse</code> 出来的裸对象。没有 <code>input()</code> 的 procedure 不是「输入类型是 undefined」，而是「任何人可以发任何东西进来」。</p>
@@ -275,8 +264,8 @@ export const postMutations = router({
     <p>把 <code>authorId</code>、<code>ownerId</code>、<code>role</code>、<code>isAdmin</code> 这类归属或权限字段放进 input schema，再用 <code>...input</code> 展开写库。调用方只要在请求体加一个 <code>role: "admin"</code> 就完成提权。<strong>所有归属与权限字段必须从 <code>ctx</code> 取，永远不能从 input 取</strong>，写操作的 input 建议一律加 <code>.strict()</code>。</p>
 </div>
 
-<h2>② 原理 · output schema：什么时候值得付这个维护成本</h2>
-<p>搞清这个取舍，能解决「ORM 加了个字段，密码哈希就上了前端」。</p>
+<h2>output schema：什么时候值得付这个维护成本</h2>
+<p>ORM 加了个字段，密码哈希就跟着上了前端。</p>
 
 <p><code>output()</code> 的作用是把返回值再过一遍 schema，没声明的字段会被剥掉。它解决的是一个非常现实的泄露路径：ORM 查出来的实体对象往往带着 <code>passwordHash</code>、<code>phone</code>、<code>deletedAt</code>、<code>internalNote</code>，而 <code>return user</code> 会把它们整个下发。</p>
 
@@ -291,7 +280,7 @@ export const postMutations = router({
 <tr><td>建议</td><td>用户、支付、权限相关 router 强制加</td><td>内部聚合、报表类接口可以省</td></tr>
 </tbody></table>
 
-<h2>② 原理 · middleware：把运行期守卫变成编译期类型收窄</h2>
+<h2>middleware：把运行期守卫变成编译期类型收窄</h2>
 <p>搞清这个机制，就知道为什么「用错基座」会被编译器抓住，而「放错鉴权位置」不会。</p>
 
 <p>这是 tRPC 设计里最值得称赞的一点。<code>t.middleware</code> 拿到 <code>ctx</code> 和 <code>next</code>，<strong><code>next({ ctx: {...} })</code> 传入的新 ctx 会把类型向下游传递</strong>。于是鉴权中间件在运行期确认 session 存在后，下游 resolver 里 <code>ctx.user</code> 的类型就从 <code>User | null</code> 收窄成 <code>User</code>——不是靠断言，是编译器真的知道。</p>
@@ -328,8 +317,8 @@ sequenceDiagram
 <p>最后一列那行「编译器会报错」是这套机制最大的实用价值：用 <code>publicProcedure</code> 写一段需要 <code>ctx.user</code> 的逻辑，类型检查就通不过。<strong>但反过来不成立</strong>——把不需要 <code>ctx.user</code> 的敏感操作（如按 id 删记录）写成 <code>publicProcedure</code>，编译器不会有任何意见。</p>
 <p>所以基座选择仍然要靠 review 和约定，类型系统只兜住了一半。</p>
 
-<h2>② 原理 · procedure 分层为什么替代不了「路由级中间件」</h2>
-<p>搞清这一节，能解决「以为整个 admin 目录都受保护，其实有几个接口完全公开」。</p>
+<h2>procedure 分层为什么替代不了「路由级中间件」</h2>
+<p>router 只是命名空间，不做保护，admin 下有几个接口完全公开。</p>
 
 <p>tRPC 的 <code>router</code> 只做一件事：把 procedure 组织成命名空间，决定客户端调用路径。<strong>它不是 Express 的 <code>app.use('/admin', auth)</code></strong>，嵌套关系不会向下传递任何行为。安全边界只由「procedure 从哪个基座 <code>.use()</code> 出来」决定，与它挂在哪个 router 下无关。</p>
 
@@ -357,8 +346,8 @@ flowchart TB
 <p>落地上有三条纪律能把这个风险压到最低：<strong>把 <code>t.procedure</code> 藏起来</strong>，只从 <code>server/trpc.ts</code> 导出三到四个基座，用 lint 规则禁止其他文件直接用 <code>t.procedure</code>；<strong>基座名出现在每个 procedure 的第一行</strong>，review 扫一眼就知道接口要不要登录；</p>
 <p><strong>写一个遍历 router 的测试</strong>，断言「不在白名单里的 path 未登录调用时必须返回 UNAUTHORIZED」，这样新增接口漏挂基座会被测试直接拦住。</p>
 
-<h2>② 原理 · query、mutation 与 subscription 的真实差异</h2>
-<p>搞清这三者的硬性差异，能解决「偶发重复扣款」和「用户还没点按钮操作就执行了」。</p>
+<h2>query、mutation 与 subscription 的真实差异</h2>
+<p>三者差异是硬性的：选错会偶发重复扣款，或操作在点击前就执行。</p>
 
 <p>很多人以为这三者只是命名约定，实际行为差异是硬性的，选错会直接产生线上问题。</p>
 
@@ -385,7 +374,7 @@ flowchart TB
 <p>subscription 还有一个容易踩的点：<strong>它的 context 只在连接建立时计算一次</strong>。长连接跑了两小时后，<code>ctx.session</code> 里的 token 早已过期，但订阅还在推送数据。</p>
 <p>生产上要么在推送逻辑里定期重新校验会话，要么给连接设置最大存活时间强制客户端重连。</p>
 
-<h2>② 原理 · 鉴权的两层：垂直权限与水平权限</h2>
+<h2>鉴权的两层：垂直权限与水平权限</h2>
 <p>搞清这个分工，能解决最常见的一类越权：登录态校验通过，但记录不是你的。</p>
 
 <p>中间件能解决的只是「你是不是登录用户」「你是不是管理员」这类与具体资源无关的判断，也就是垂直权限。</p>
@@ -418,7 +407,7 @@ sequenceDiagram
 
 <p>越权的完整分类（水平、垂直、上下文越权）、枚举 id 的防护、敏感资源为何统一返回 NOT_FOUND，见站内 <a href="../../security/auth-security/">认证授权与越权防护</a>；会话与 token 的设计见站内 <a href="../../auth/jwt/">JWT 实践</a>。</p>
 
-<h2>② 原理 · 事务与并发：next() 不抛异常带来的陷阱</h2>
+<h2>事务与并发：next() 不抛异常带来的陷阱</h2>
 <p>搞清 <code>next()</code> 的返回值语义，能解决「失败的 mutation 居然提交了事务」这类最隐蔽的数据不一致。</p>
 
 <p>「中间件能改写 ctx」这个特性还有一个很实用的落地：<strong>写一个事务中间件，把 <code>ctx.db</code> 换成事务句柄</strong>。</p>
@@ -457,7 +446,7 @@ export const txProcedure = protectedProcedure.use(withTransaction)</code></pre>
 <p>第二，tRPC 的 batch 会让多个 mutation 在同一个 HTTP 请求里到达并各自开事务并发执行，<strong>如果两个 mutation 以相反顺序更新同样两行记录就会死锁</strong>；对策是固定更新顺序，或把需要原子性的操作合并成一个 procedure。</p>
 <p>写操作的幂等与重试安全见站内 <a href="../../design/best-practices/">API 设计最佳实践</a>。</p>
 
-<h2>③ 场景 · 按接口类型决定要组合哪几层</h2>
+<h2>按接口类型决定要组合哪几层</h2>
 <p>同一套构建链，不同接口该组合的层数不同。下表给常见接口类型的推荐组合与代价。</p>
 
 <table>

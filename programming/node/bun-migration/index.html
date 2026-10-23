@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="从 Node.js 迁移到 Bun：按回退成本分阶段、依赖体检、行为差异、Dockerfile 与回退指标，以及三条回退纪律。">
+    <meta name="description" content="Node 迁 Bun：Docker 与部署差异为什么逃过单测，回退靠构建阶段写死 target 和镜像版本，灰度每步明确谁看什么、何时能下结论。">
     <meta name="keywords" content="Bun,从 Node.js 迁移,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/programming/node/bun-migration/">
     <meta property="og:title" content="从 Node.js 迁移到 Bun：分阶段路径、行为差异清单与回退预案 - Bun - 资深码农">
-    <meta property="og:description" content="从 Node.js 迁移到 Bun：按回退成本分阶段、依赖体检、行为差异、Dockerfile 与回退指标，以及三条回退纪律。">
+    <meta property="og:description" content="Node 迁 Bun：Docker 与部署差异为什么逃过单测，回退靠构建阶段写死 target 和镜像版本，灰度每步明确谁看什么、何时能下结论。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/node/bun-migration/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="从 Node.js 迁移到 Bun：分阶段路径、行为差异清单与回退预案 - Bun">
-    <meta name="twitter:description" content="从 Node.js 迁移到 Bun：按回退成本分阶段、依赖体检、行为差异、Dockerfile 与回退指标，以及三条回退纪律。">
+    <meta name="twitter:description" content="Node 迁 Bun：Docker 与部署差异为什么逃过单测，回退靠构建阶段写死 target 和镜像版本，灰度每步明确谁看什么、何时能下结论。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,18 +68,7 @@
                     <div class="article-content">
 <p>迁移到 Bun 失败的项目基本都犯同一个错：<strong>把「换运行时」当成迁移的第一步。</strong>正确的顺序恰好相反——先拿走风险最低、收益最确定的部分（CI 装依赖），最后才碰生产运行时，而且每一步都要有独立的回退开关。</p>
 <p>这篇给的是可执行的清单：阶段划分、依赖体检、行为差异、Dockerfile、上线后验证项、回退预案。为什么值得迁、快多少是真的见 <a href="../bun/">Bun 总览</a>，工具链用法见 <a href="../bun-intro/">Bun 工具链上手</a>，运行时机制与兼容层边界见 <a href="../bun-runtime/">Bun 运行时机制</a>。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：可以直接照着敲的分阶段清单（导出依赖树基线并 diff、CI 换装依赖、本地与测试迁移、改镜像 tag 完成切换与回退），一张「要做什么 → 怎么做 → 注意什么」表，以及一张回退触发条件表——什么信号出现就立刻切回去，不要犹豫。</li>
-        <li><strong>② 原理</strong>：五个阶段为什么必须是这个顺序、每阶段的准入线与回退成本、迁移前依赖体检的八个检查项、十一条「测试全绿但线上出事」的行为差异、多阶段 Dockerfile 与镜像变体的取舍、灰度与回退的完整动作序列。</li>
-        <li><strong>③ 场景</strong>：什么项目适合迁、迁到哪一步为止就该停，上线后必须逐项确认的验证清单，以及回退预案为什么必须在迁移之前就建好。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 分阶段迁移清单与回退触发条件</h2>
+<h2>分阶段迁移清单与回退触发条件</h2>
 <p>下面这段按阶段排好了顺序，前三个阶段今天就能执行、回退成本都极低；后两个阶段的切换与回退动作是同一条命令的两个方向。注释写的是每一步为什么不能省。</p>
 <pre><code class="language-bash"># ---- 阶段零：先留基线。没有基线，之后所有「变好了吗」都只是感觉 ----
 npm ls --all --parseable | sed 's#.*node_modules/##' | sort -u &gt; /tmp/deps-npm.txt
@@ -146,7 +135,7 @@ grep -rn 'Bun\.\|bun:sqlite' src/ &amp;&amp; echo '存在专有 API：回退预�
 </table>
 <p>下面的原理层解释这五个阶段为什么必须是这个顺序，以及每一条行为差异背后的机制。</p>
 
-<h2>② 原理 · 分阶段迁移路径为什么必须是这个顺序</h2>
+<h2>分阶段迁移路径为什么必须是这个顺序</h2>
 <p>搞清这一节能避免最贵的一类错误：把三种风险一次性叠加，出问题之后无法归因。顺序的逻辑很简单——<strong>按「回退成本」从低到高排，每一步只引入一种新风险</strong>。</p>
 <div class="mermaid">
 stateDiagram-v2
@@ -177,7 +166,7 @@ stateDiagram-v2
     </tbody>
 </table>
 
-<h2>② 原理 · 迁移前的依赖体检</h2>
+<h2>迁移前的依赖体检</h2>
 <p>搞清这一节能在投入之前就知道「这件事有没有得谈」。<strong>有一个不可替代的 native addon，运行时迁移就可以直接放弃了</strong>，不要抱着「大概能跑」的心态往下推。</p>
 <table>
     <thead>
@@ -216,7 +205,7 @@ diff /tmp/deps-npm.txt /tmp/deps-bun.txt | head -50
 ls -1 bun.lock bun.lockb package-lock.json 2&gt;/dev/null   # 理想情况只剩一个
 bun install --frozen-lockfile                             # 与 package.json 不一致就直接失败</code></pre>
 
-<h2>② 原理 · 行为差异清单：为什么测试全绿也会出事</h2>
+<h2>行为差异清单：为什么测试全绿也会出事</h2>
 <p>搞清这一节能解释一个让人措手不及的现象：CI 全绿、预发正常，上线却出问题。原因是下面这些差异大多落在单测覆盖范围之外——环境变量、构建路径、信号、时区、日志解析，没有一项是「业务逻辑」。</p>
 <table>
     <thead>
@@ -237,8 +226,8 @@ bun install --frozen-lockfile                             # 与 package.json 不
     </tbody>
 </table>
 
-<h2>② 原理 · Docker 镜像与部署</h2>
-<p>搞清这一节能解决「回退预案执行不了」的根因：退路是在构建阶段决定的，不是在出事那一刻决定的。关键只有两条——<strong>产物的 target 选 node，镜像版本写死。</strong></p>
+<h2>Docker 镜像与部署</h2>
+<p>回退预案执行不了，根因在构建阶段而非出事那一刻。关键只有两条：<strong>产物的 target 选 node，镜像版本写死。</strong></p>
 <table>
     <thead>
         <tr><th>基础镜像</th><th>体积量级</th><th>适用</th><th>注意</th></tr>
@@ -322,8 +311,8 @@ flowchart TB
     D3 -->|"任一指标劣化"| D5["改镜像 tag 回 node<br/>一次部署即完成回退"]
 </div>
 
-<h2>② 原理 · 灰度与回退的动作序列</h2>
-<p>搞清这一节能解决「观察了两周也不知道观察了什么」的问题：每一步该由谁看、看什么、什么时候可以下结论。</p>
+<h2>灰度与回退的动作序列</h2>
+<p>观察了两周还说不出看了什么，多半是没定清每一步由谁看、看什么、何时能下结论。</p>
 <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -344,7 +333,7 @@ sequenceDiagram
     Note over CD,K8: 回退能成立的前提是代码里没有 Bun 专有 API<br/>否则这一步根本执行不了
 </div>
 
-<h2>③ 场景 · 什么项目适合迁、迁到哪一步为止</h2>
+<h2>什么项目适合迁、迁到哪一步为止</h2>
 <p>「迁不迁」不是二选一，真正的问题是「迁到第几阶段就该停」。下表给的是怎么做、为什么、代价：</p>
 <table>
     <thead>
@@ -383,7 +372,7 @@ sequenceDiagram
 <p>如果目标是「一份代码同时跑在 Node、Bun、Workers 上」，那是框架抽象层的问题，不是迁移问题，见 <a href="../hono-edge/">Hono 的跨运行时部署</a>。只想拿工具链收益而完全不碰运行时的做法，在 <a href="../bun-intro/">Bun 工具链上手</a>。</p>
 <p>这是本簇的最后一篇，四篇连起来是一条完整路径：先判断值不值得引入，再把工具链用起来，然后理解运行时风险来自哪里，最后按阶段迁移并随时能退回去。</p>
 
-<h2>③ 场景 · 反模式与正确做法对照</h2>
+<h2>反模式与正确做法对照</h2>
 <table>
     <thead>
         <tr><th>反模式</th><th>后果</th><th>正确做法</th></tr>

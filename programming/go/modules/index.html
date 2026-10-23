@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 模块与包组织：MVS 选版算法、go.mod 指令与 vendor、语义化导入版本、按业务能力分包与接口定义在消费方。">
+        <meta name="description" content="Go 模块与包组织：按业务能力分包、接口定义在消费方、init 的隐式装配风险、MVS 选版与 go.mod 指令的真实作用。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/modules/">
     <!-- Open Graph -->
     <meta property="og:title" content="模块、包组织与依赖管理 - 资深码农">
-    <meta property="og:description" content="Go 模块与包组织：MVS 选版算法、go.mod 指令与 vendor、语义化导入版本、按业务能力分包与接口定义在消费方。">
+    <meta property="og:description" content="Go 模块与包组织：按业务能力分包、接口定义在消费方、init 的隐式装配风险、MVS 选版与 go.mod 指令的真实作用。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/modules/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="模块、包组织与依赖管理 - 资深码农">
-    <meta name="twitter:description" content="Go 模块与包组织：MVS 选版算法、go.mod 指令与 vendor、语义化导入版本、按业务能力分包与接口定义在消费方。">
+    <meta name="twitter:description" content="Go 模块与包组织：按业务能力分包、接口定义在消费方、init 的隐式装配风险、MVS 选版与 go.mod 指令的真实作用。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "模块、包组织与依赖管理", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 模块与包组织：MVS 选版算法、go.mod 指令与 vendor、语义化导入版本、按业务能力分包与接口定义在消费方。", "url": "https://www.yijunjun.asia/programming/go/modules/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/modules/"}, "articleSection": "后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "模块、包组织与依赖管理", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 模块与包组织：按业务能力分包、接口定义在消费方、init 的隐式装配风险、MVS 选版与 go.mod 指令的真实作用。", "url": "https://www.yijunjun.asia/programming/go/modules/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/modules/"}, "articleSection": "后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go 常用包", "item": "https://www.yijunjun.asia/programming/go/modules/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>这篇的靶子是两类反复出现的问题：<strong>依赖侧「构建在我机器上是好的」，包组织侧「改一个功能要同时动四个包」</strong>。</p>
 <p>前者的根源是不知道 Go 的选版算法与其他语言是反的（MVS 取「被要求过的最大版本」，不是最新版本），后者的根源是把 MVC 的 <code>models</code> / <code>services</code> / <code>utils</code> 分层直接搬进了 Go。两件事都有固定的动手顺序和可以照抄的目录形状。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：从 <code>go mod init</code> 到发版的完整动手顺序、可照抄的目录骨架，以及命令与环境变量速查表——每一行都标出「用错的后果」，包括 CI 里必须加的两个开关和发布 v2 缺一不可的三步。</li>
-        <li><strong>② 原理</strong>：<code>go.mod</code> 每条指令的真实作用与作用域、MVS 为什么让构建可复现却不会自动带来安全补丁、<code>go.sum</code> 与 <code>GOPROXY</code> 的下载校验链路、按业务能力分包与 <code>internal</code> 的编译器级约束、接口定义在消费方如何消掉循环导入、<code>init</code> 的四个问题。</li>
-        <li><strong>③ 场景</strong>：单体、多二进制、公共库、monorepo 多模块、离线构建这几种形态下模块怎么切的决策矩阵，以及依赖出问题时从症状到根因的判断路径与不适用边界。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 从建模块到发版的动手顺序</h2>
+<h2>从建模块到发版的动手顺序</h2>
 <p>下面这串命令是一个新服务从零开始的完整顺序，也是日常改依赖时的检查顺序。每条注释只写「不这么做会怎样」，机制原因在原理层展开。</p>
 <pre><code class="language-bash"># 0) 建模块。这个路径就是将来的 import 前缀，写错了改起来要动所有文件
 go mod init github.com/acme/order-api
@@ -182,7 +171,7 @@ git tag v2.0.0 &amp;&amp; git push origin v2.0.0</code></pre>
 <p>包组织侧的「定式」比命令更短，只有三条，但它决定了以后每次改动要动几个包：<strong>默认把代码放 <code>internal/</code>；按业务能力建包（<code>internal/order</code> 里放订单的模型、逻辑、存储），不要按技术分层建 <code>models</code> / <code>services</code>。</p>
 <p>接口定义在消费方，只声明自己用到的方法。</strong>这三条为什么成立、以及它们如何顺带消掉循环导入，见原理层。</p>
 
-<h2>② 原理 · go.mod 里每条指令的真实作用</h2>
+<h2>go.mod 里每条指令的真实作用</h2>
 <p>搞清这一节，能解决一类具体现象：<code>replace</code> 明明写了却「对下游不起作用」，以及升 v2 之后下游拿到的还是 v1。</p>
 <p>Go 的依赖管理表面上很简单——一个 <code>go.mod</code>、一个 <code>go.sum</code>、没有 lock 文件。但它的行为经常让从其他语言过来的人意外，因为<strong>它的选版算法和其他语言是反的</strong>。先把 <code>go.mod</code> 的指令过一遍。</p>
 <table>
@@ -229,7 +218,7 @@ replace github.com/some/broken v1.2.3 =&gt; github.com/acme/broken v1.2.3-patch1
 // 用得少，因为解决不了「传递依赖明确要求这个版本」的情况
 exclude github.com/some/lib v1.4.0</code></pre>
 
-<h2>② 原理 · 最小版本选择：Go 依赖行为的根源</h2>
+<h2>最小版本选择：Go 依赖行为的根源</h2>
 <p>搞清这一节，能同时解释两个现象：为什么 Go 不需要 lock 文件，以及为什么依赖发了修复 CVE 的版本而你的构建毫无变化。</p>
 <p><strong>MVS 的规则只有一句：把依赖图里每个模块被 require 过的所有版本收集起来，对每个模块取最大值。</strong></p>
 <p>注意它取的是「被要求过的最大值」，而不是「可用的最新版本」——即使 <code>libC v1.6.0</code> 已经发布，只要没有任何模块要求它，就绝不会被选中。</p>
@@ -277,7 +266,7 @@ flowchart TB
 <p>流水线上该在哪一层设这道卡点，见 <a href="../../../devops/cicd/">CI/CD 流水线设计原则：三个词的边界、分层卡点与 DORA 度量</a>。</p>
 </div>
 
-<h2>② 原理 · go.sum、GOPROXY 与私有模块</h2>
+<h2>go.sum、GOPROXY 与私有模块</h2>
 <p>搞清这一节，能解决三类现象：私有模块必然 404、校验和不匹配导致构建中断、以及 CI 每次都重新下载全部依赖。</p>
 <p>一个常见误解是把 <code>go.sum</code> 当成 lock 文件。它不是：<strong>版本由 <code>go.mod</code> 加 MVS 唯一确定，<code>go.sum</code> 只负责校验下载到的内容没被动过</strong>。删掉 <code>go.sum</code> 不会改变任何一个依赖的版本。</p>
 <div class="mermaid">
@@ -304,8 +293,8 @@ sequenceDiagram
 <p>关于语义化导入版本：<strong>v2 及以上必须在模块路径里带 <code>/v2</code></strong>，这是 Go 独有的设计。原因是 Go 把不同主版本视为不同的包，这样 v1 和 v2 才能在同一个程序里共存——而「我直接依赖 v2 但某个传递依赖还在 v1」是极常见的情况。</p>
 <p>代价是升主版本时所有 import 都要改，以及库作者必须记得改 <code>module</code> 行。版本 tag 本身的语义与「删了 tag 为什么还能拉到」见 <a href="../../../tools/vcs/">Git 的对象模型与常见操作的真实语义</a>。</p>
 
-<h2>② 原理 · 包的组织：按业务分层，不要按技术分层</h2>
-<p>搞清这一节，能解决「改一个功能要同时动四个包」与「循环导入反复出现」这两个现象。这是 Go 项目结构上影响最大的一个决定。从 MVC 框架过来的人习惯建 <code>models</code>、<code>controllers</code>、<code>services</code>、<code>utils</code>，这在 Go 里会持续产生麻烦。</p>
+<h2>包的组织：按业务分层，不要按技术分层</h2>
+<p>「改一个功能要同时动四个包」和「循环导入反复出现」，根子在包的组织方式。从 MVC 框架过来的人习惯建 <code>models</code>、<code>controllers</code>、<code>services</code>、<code>utils</code>，这在 Go 里会持续产生麻烦。</p>
 <div class="mermaid">
 flowchart TB
     subgraph bad["反模式 按技术分层"]
@@ -366,8 +355,8 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · 接口定义在消费方</h2>
-<p>搞清这一节，能解决「单测要 mock 二十个方法」与「两个业务包互相导入」这两类问题。这条惯例和 Java 相反，原因是<strong>Go 的接口是隐式实现</strong>——实现方不需要知道接口存在。</p>
+<h2>接口定义在消费方</h2>
+<p>「单测要 mock 二十个方法」「两个业务包互相导入」，出在接口定义的位置。惯例和 Java 相反，<strong>Go 的接口是隐式实现</strong>，实现方不必知道接口存在。</p>
 <p>于是消费方可以只声明自己真正需要的方法，依赖关系从「大接口双向牵连」变成「小接口单向依赖」。</p>
 <pre><code class="language-go">// ===== 反例：接口定义在实现方，Java 习惯 =====
 // 文件 internal/storage/store.go
@@ -424,8 +413,8 @@ func (f fakeUsers) GetUser(context.Context, int64) (*User, error) { return f.u, 
 <p>这条原则还有一个连带好处：它天然解决了大部分循环导入。<code>order</code> 需要用户数据、<code>user</code> 需要订单数量做统计，按「接口定义在实现方」的写法这两个包会互相导入；</p>
 <p>按「定义在消费方」的写法，两个包各自声明一个单方法接口，彼此不导入对方，装配在 <code>main</code> 里完成。假实现与真实依赖各该用在哪一层测试，见 <a href="../../testing/">测试策略与可测性设计</a>。</p>
 
-<h2>② 原理 · init 的危险与显式装配</h2>
-<p>搞清这一节，能解决「跑一个纯函数单测却连上了数据库」和「启动报错栈离真正的配置问题很远」这两个现象。</p>
+<h2>init 的危险与显式装配</h2>
+<p>「跑一个纯函数单测却连上了数据库」「启动报错栈离真正的配置问题很远」，都出在 init 上。</p>
 <p><code>init()</code> 的执行顺序是确定的：先递归初始化所有被导入的包，同一个包内先初始化包级变量再执行 <code>init</code>，多个文件按文件名顺序。确定不等于好用——<strong>依赖这个顺序就等于依赖了导入图的实现细节</strong>。</p>
 <pre><code class="language-go">// ===== 反模式：用 init 做隐式初始化 =====
 var db *sql.DB
@@ -491,7 +480,7 @@ func init() {
 // 下面这行比放进 init 里更清晰，且编译期就能发现正则写错
 var emailLike = regexp.MustCompile(`^[^@\s]+@[^@\s]+$`)</code></pre>
 
-<h2>③ 场景 · 项目形态决定模块怎么切、目录怎么摆</h2>
+<h2>项目形态决定模块怎么切、目录怎么摆</h2>
 <p>动手建仓库之前先过这张图：<strong>模块边界的唯一判据是「能不能独立发版」</strong>，不是「代码看起来是不是该分开」。</p>
 <div class="mermaid">
 flowchart TB
@@ -523,7 +512,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>③ 场景 · 依赖出问题时的判断路径与不适用边界</h2>
+<h2>依赖出问题时的判断路径与不适用边界</h2>
 <p>依赖类故障的症状和根因往往离得很远，下面这张表把症状直接落到第一条该敲的命令上。</p>
 <table>
 <thead><tr><th>症状</th><th>先敲什么</th><th>输出怎么判读</th><th>对应根因</th></tr></thead>

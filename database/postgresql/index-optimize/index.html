@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>PG 的索引能力远超「B-tree 加几个技巧」：五种索引类型对应五种完全不同的数据形态，加上部分索引、表达式索引和 <code>INCLUDE</code> 覆盖列，很多在 MySQL 上只能靠改表结构解决的问题在 PG 上是一行 DDL。</p>
 <p>但索引选对了不等于计划走对了，所以后半篇全部用来讲 <code>EXPLAIN (ANALYZE, BUFFERS)</code> 怎么读、优化器为什么不走你建的索引。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：拿到一条慢 SQL 之后的判读顺序——<code>EXPLAIN (ANALYZE, BUFFERS)</code> 只看哪三处、估行数与实际行数差多少才算统计信息问题、什么时候该建索引什么时候该改 SQL，配一张「查询形态 → 索引类型」对照表与影响索引选择的参数速查。</li>
-        <li><strong>② 原理</strong>：五种索引类型各自实现的操作符类与失效条件、部分索引与表达式索引与 <code>INCLUDE</code> 的前提、计划里每个字段的语义、四种扫描方式与 Bitmap 的两步结构、三种 join 与 <code>work_mem</code> 的分配单位、优化器不走索引的九种成因与修法、索引运维的四类巡检 SQL。</li>
-        <li><strong>③ 场景</strong>：按业务形态给出索引组合与代价矩阵，以及哪些问题不该靠索引解决、该转去站内哪一篇。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 拿到一条慢 SQL 之后的判读顺序</h2>
+<h2>拿到一条慢 SQL 之后的判读顺序</h2>
 <p>顺序是固定的，跳步就会得出错误结论：<strong>先确认这条语句值得优化，再判断统计信息可不可信，最后才决定是建索引还是改 SQL</strong>。下面这段可以直接照着敲，注释写的是为什么要这一步。</p>
 <pre><code class="language-sql">-- 第 0 步：先确认这条语句值得优化。按总耗时排序，不是按单次耗时排序
 --   调用量大而单次不慢的语句，优化收益往往远高于那条偶发的慢查询
@@ -225,7 +214,7 @@ flowchart TB
 </table>
 <p>用法层到此结束。为什么 Bitmap Heap Scan 不是问题、为什么 <code>actual rows</code> 必须乘 <code>loops</code>、为什么 GIN 的写入代价高、为什么 <code>INCLUDE</code> 依赖 VACUUM，下面的原理层逐个展开。</p>
 
-<h2>② 原理 · 五种索引类型：按数据形态选，不是按「快慢」选</h2>
+<h2>五种索引类型：按数据形态选，不是按「快慢」选</h2>
 <p>先把结论说清楚：<strong>B-tree 覆盖 95% 的场景</strong>，剩下的 5% 才需要挑类型。</p>
 <p>选错的典型后果不是慢一点，而是<strong>索引根本不会被用到</strong>——因为每种索引只实现了特定的操作符类，查询里的操作符不在这个集合里，优化器就只能全表扫。</p>
 <table>
@@ -286,7 +275,7 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 ALTER TABLE bookings ADD CONSTRAINT no_overlap
       EXCLUDE USING gist (room_id WITH =, during WITH &amp;&amp;);</code></pre>
 
-<h2>② 原理 · PG 特有的三件索引利器</h2>
+<h2>PG 特有的三件索引利器</h2>
 <p>这三样是 PG 相比 MySQL 最实在的优势，而且都不需要改表结构。</p>
 <table>
 <thead>
@@ -308,7 +297,7 @@ ALTER TABLE bookings ADD CONSTRAINT no_overlap
 <p>唯一要注意的是查询条件必须让优化器能静态判定蕴含关系，把 <code>status</code> 做成绑定参数就废了。</p>
 </div>
 
-<h2>② 原理 · EXPLAIN 逐字段判读：只看 cost 是白看</h2>
+<h2>EXPLAIN 逐字段判读：只看 cost 是白看</h2>
 <p><strong>永远用 <code>EXPLAIN (ANALYZE, BUFFERS)</code></strong>。不带 <code>ANALYZE</code> 只有估算，看不出优化器估错；不带 <code>BUFFERS</code> 看不出是内存命中还是真的读盘。计划是一棵树，<strong>从最内层、缩进最深的节点开始往外读</strong>，每个节点的耗时都包含了它的子节点。</p>
 <div class="mermaid">
 flowchart TB
@@ -386,7 +375,7 @@ ALTER TABLE orders ALTER COLUMN status SET STATISTICS 1000;
 CREATE STATISTICS st_orders_city_zip (dependencies, ndistinct) ON city, zipcode FROM orders;
 ANALYZE orders;</code></pre>
 
-<h2>② 原理 · 四种扫描方式与 Bitmap 的真正含义</h2>
+<h2>四种扫描方式与 Bitmap 的真正含义</h2>
 <p>很多人以为「Bitmap Heap Scan 出现就是没用好索引」，恰恰相反：<strong>Bitmap 是索引命中行数中等时的最优解</strong>。它分两步——先扫索引把所有命中的<strong>块号</strong>攒成位图，再按块号从小到大<strong>顺序</strong>读堆。</p>
 <p>这样把随机 IO 变成了接近顺序的 IO，还顺带去掉了同一页被多次访问的重复读。</p>
 <div class="mermaid">
@@ -420,7 +409,7 @@ sequenceDiagram
 </tbody>
 </table>
 
-<h2>② 原理 · 三种 join 方式与 work_mem 的分配单位</h2>
+<h2>三种 join 方式与 work_mem 的分配单位</h2>
 <p>join 方式选错的代价通常比扫描方式选错大一个数量级，而且原因几乎总是行数估算不准。</p>
 <table>
 <thead>
@@ -435,7 +424,7 @@ sequenceDiagram
 <p><code>work_mem</code> 是<strong>每个排序或哈希节点</strong>各分配一份，不是每个查询一份。一条带三个排序节点的查询在 50 个并发下，理论峰值是 <code>work_mem × 3 × 50</code>。</p>
 <p>所以正确做法是全局设一个保守值（比如 16MB 到 64MB），再对已知的重查询按会话或按角色单独放大。PG 13 起还有 <code>hash_mem_multiplier</code>（默认 2.0），可以只给哈希类节点更多内存而不放大排序。</p>
 
-<h2>② 原理 · 为什么优化器不走我建的索引</h2>
+<h2>为什么优化器不走我建的索引</h2>
 <p>先接受一个事实：<strong>大多数情况下不走索引是对的</strong>。PG 的优化器是基于代价的，当它估计要返回表里 10% 以上的行时，顺序扫描加上预读几乎一定比几十万次随机读堆更快。真正需要修的是下面这几类。</p>
 <table>
 <thead>
@@ -466,7 +455,7 @@ ALTER SYSTEM SET random_page_cost = 1.1;          -- 默认 4.0 是机械盘假�
 ALTER SYSTEM SET effective_cache_size = '48GB';   -- 设为物理内存的 50% 到 75%，只是给优化器的提示
 SELECT pg_reload_conf();</code></pre>
 
-<h2>② 原理 · 索引运维：找出没用的、膨胀的、最慢的</h2>
+<h2>索引运维：找出没用的、膨胀的、最慢的</h2>
 <p>索引不是只有收益：每个索引都在吃写入性能（主干篇讲过，非 HOT 更新要维护<strong>全部</strong>索引）、吃内存、吃磁盘。一个跑了两年的库里通常躺着 20% 到 40% 从未被使用的索引。</p>
 <pre><code class="language-sql">-- 1. 从未被使用的索引：idx_scan = 0 且不是唯一约束的，基本可以删
 -- 前提：统计自上次 pg_stat_reset 起累计，确认已经覆盖了完整业务周期（含月末月初）
@@ -522,7 +511,7 @@ SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;</code></pre>
 <p>网上流传的「直接 UPDATE pg_index 把 indisvalid 改成 false 让索引假死」不要用，手改系统目录绕过了所有一致性检查，出问题无从排查。</p>
 </div>
 
-<h2>③ 场景 · 按业务形态选索引组合，以及索引解决不了的问题</h2>
+<h2>按业务形态选索引组合，以及索引解决不了的问题</h2>
 <p>前面给的是单条语句的判读与单个索引的选型。落到一张表上时，决定索引方案的是这张表在业务里的角色：它承担哪几种查询形态、写入有多密集、能不能把一部分查询分流出去。</p>
 <p>下表按常见业务形态给出组合方案与它的代价。</p>
 <table>

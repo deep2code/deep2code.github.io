@@ -91,18 +91,7 @@
                     <div class="article-content">
 <p>ClickHouse 的查询优化没有一堆技巧，只有一条原则：<strong>让引擎少读 granule</strong>。一个 granule 默认覆盖 8192 行，是读取的最小单位——哪怕只要一行，也要把它所在 granule 的相关列全部解压。</p>
 <p>后面所有手段——分区裁剪、主键前缀、跳数索引、PREWHERE、预聚合——都是这条原则的推论。列存为什么扫描快、稀疏索引的 mark 文件长什么样，见《ClickHouse 架构与核心特性》，这里只用结论。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：拿到一条慢查询之后的固定判读顺序——先看扫了多少 part 与 granule，再看有没有走主键前缀，再看 PREWHERE 与 JOIN 顺序，配一张「症状 → 改法」表和几个会话级开关的速查。</li>
-        <li><strong>② 原理</strong>：五级裁剪各自砍掉什么、EXPLAIN 与 query_log 的字段怎么判读、主键裁剪失效的七种写法、PREWHERE 为什么是列存独有的优化、JOIN 为什么没有自动调序、聚合与去重的内存账、物化视图与 PROJECTION 的差异。</li>
-        <li><strong>③ 场景</strong>：常见慢查询反模式的对应改法，以及什么时候该停止调 SQL、转而改建模或换组件。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 拿到一条慢查询后的判读顺序</h2>
+<h2>拿到一条慢查询后的判读顺序</h2>
 
 <p>调 ClickHouse 的 SQL 不需要灵感，需要顺序。<strong>四个数按下面次序量一遍，慢在哪一级就清楚了</strong>，每一级都有明确的下一步动作。顺序不能颠倒：分区裁剪不生效时，改 PREWHERE 毫无意义。</p>
 
@@ -173,7 +162,7 @@ GROUP BY normalized_query_hash ORDER BY avg_bytes DESC LIMIT 10;
 
 <p>下面原理层解释这几步为什么有效：granule 是怎么被逐级砍掉的、主键裁剪为什么这么挑食、PREWHERE 为什么只有列存才有。</p>
 
-<h2>② 原理 · 所有优化都是同一件事：少读 granule</h2>
+<h2>所有优化都是同一件事：少读 granule</h2>
 
 <p>一次 <code>SELECT</code> 到达存储层后，数据量是被逐级砍掉的。每一级砍掉的比例可以直接观测，所以优化不该靠猜：<strong>先定位是哪一级没起作用，再针对那一级改。</strong></p>
 
@@ -208,7 +197,7 @@ flowchart TB
 <p>如果读取量没变而耗时变短了，你什么都没优化，只是把数据读进了缓存。</p>
 </div>
 
-<h2>② 原理 · 先量化：EXPLAIN 与 query_log 怎么读</h2>
+<h2>先量化：EXPLAIN 与 query_log 怎么读</h2>
 
 <pre><code class="language-sql">-- 1) 看主键到底裁掉了多少 granule，这是最有信息量的一条命令
 EXPLAIN indexes = 1
@@ -262,7 +251,7 @@ ORDER BY read_bytes DESC LIMIT 10;
 <tr><td><code>ProfileEvents</code> 里的 <code>SelectedMarks</code></td><td>同上</td><td>与 Granules 命中数吻合</td><td>比预期大很多说明跳数索引没生效</td></tr>
 </tbody></table>
 
-<h2>② 原理 · 主键裁剪为什么失效</h2>
+<h2>主键裁剪为什么失效</h2>
 
 <p>ClickHouse 的主键是稀疏索引，只能做<strong>前缀范围定位</strong>，它比关系库的 B+ 树更挑食。下面这些写法在 MySQL 里也许还能勉强走索引，在 ClickHouse 里则是直接退化成全表扫。</p>
 
@@ -296,7 +285,7 @@ flowchart TB
     E -->|"否"| E2["上预聚合<br/>物化视图或 PROJECTION"]
 </div>
 
-<h2>② 原理 · PREWHERE：先读便宜的列，再读贵的列</h2>
+<h2>PREWHERE：先读便宜的列，再读贵的列</h2>
 
 <p><code>PREWHERE</code> 是列存独有的优化：先只读过滤列判断哪些行命中，再按命中行去读其余列。</p>
 <p>ClickHouse 默认开启 <code>optimize_move_to_prewhere</code>，会自动搬部分条件，但启发式基于列大小估算，两种场景需手写：<strong>一是过滤性最强的条件涉及函数或多个列</strong>，优化器不敢搬；</p>
@@ -329,7 +318,7 @@ GROUP BY order_id
 HAVING argMax(is_deleted, version) = 0;      -- 顺带过滤掉逻辑删除的行
 </code></pre>
 
-<h2>② 原理 · JOIN：ClickHouse 最痛的地方</h2>
+<h2>JOIN：ClickHouse 最痛的地方</h2>
 
 <p>这是从关系库转过来的人踩得最惨的一点：<strong>ClickHouse 默认的 hash join 会把右表全量读进内存建哈希表，优化器不会自动调换左右顺序</strong>。MySQL 或 PostgreSQL 里，优化器基于统计信息选驱动表，小表自动做内表；</p>
 <p>在 ClickHouse 里你写错顺序，就是把大表塞内存然后 OOM。记住一句话：<strong>小表永远放右边。</strong></p>
@@ -396,7 +385,7 @@ SELECT name, status, element_count, formatReadableSize(bytes_allocated) AS mem,
 FROM system.dictionaries;
 </code></pre>
 
-<h2>② 原理 · 聚合与去重的内存账</h2>
+<h2>聚合与去重的内存账</h2>
 
 <p><code>GROUP BY</code> 的内存占用与<strong>分组基数</strong>成正比，与扫描行数关系不大。按 <code>event_type</code> 分组只有几十组，按 <code>user_id</code> 就是几千万组，后者会撑爆哈希表。</p>
 <p>两个兜底开关：<code>max_bytes_before_external_group_by</code> 允许聚合落盘（建议设为 <code>max_memory_usage</code> 的一半），<code>max_bytes_before_external_sort</code> 对排序同理。落盘慢，但比查询直接失败好。</p>
@@ -419,7 +408,7 @@ FROM system.dictionaries;
 <p>另外 <code>argMax</code>、<code>anyHeavy</code>、<code>quantileTDigest</code> 这类组合与近似函数也被严重低估：<code>argMax(status, version)</code> 一次聚合就替代了「取每个 key 最新一行」这种通常要写窗口函数或自连接的需求。</p>
 </div>
 
-<h2>② 原理 · 预计算：物化视图与 PROJECTION</h2>
+<h2>预计算：物化视图与 PROJECTION</h2>
 
 <p>ClickHouse 的物化视图<strong>不是定时刷新的视图，而是一个插入触发器</strong>。每次向源表写入一个数据块，物化视图的 SELECT 就在<strong>这个块</strong>上执行一次，结果追加到目标表。</p>
 <p>由此推出三条结论：它只对新写入的数据生效，历史数据必须手动回填；它看不到源表已有数据，<code>JOIN</code> 在 MV 里语义很危险；源表的 <code>DELETE</code> 和 <code>UPDATE</code> 不会传递到视图。</p>
@@ -502,7 +491,7 @@ GROUP BY hour ORDER BY hour;
 <tr><td>适用</td><td>跨表、复杂聚合、需要独立生命周期</td><td>同一张表换一种排序键或加一层聚合</td></tr>
 </tbody></table>
 
-<h2>③ 场景 · 常见慢查询反模式与对应改法</h2>
+<h2>常见慢查询反模式与对应改法</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>发生了什么</th><th>怎么改</th></tr></thead>
@@ -517,7 +506,7 @@ GROUP BY hour ORDER BY hour;
 <tr><td>在 <code>GROUP BY</code> 里放高基数列</td><td>哈希表随基数线性膨胀直至 OOM</td><td>先过滤再聚合；或换近似函数、上预聚合表</td></tr>
 </tbody></table>
 
-<h2>③ 场景 · 什么时候该停止调 SQL</h2>
+<h2>什么时候该停止调 SQL</h2>
 
 <p>调 SQL 的收益有上限。当读取量已降到与结果规模同量级、裁剪比值也正常，继续改写法基本没有空间——问题在建模或组件选择上。下表给出越界信号与该往哪一层退。</p>
 

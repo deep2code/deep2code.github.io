@@ -74,18 +74,7 @@
 <p><strong>本篇只写实现层与部署层</strong>：两条技术路线的架构差异、xDS 动态配置、与服务网格的关系、部署拓扑与容量规划、配置发布流程。</p>
 <p>网关的责任边界（责任链模型、为什么不放业务逻辑、认证与鉴权的分工、重试风暴、超时预算分配、六种网关选型）在 <a href="../api-gateway/">API 网关的责任边界</a> 已写透；Nginx 的 11 个处理阶段、location 优先级、proxy_buffering、上游长连接与 limit_req 三形态见 <a href="../../../devops/nginx/">Nginx 深入</a>；</p>
 <p>三块治理基础设施的共性见 <a href="../">服务治理的三块基础设施</a>。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：选数据面形态的五个步骤（按变更频率与长连接比例决定路线、拆几组、按什么算容量、配置怎么发），以及上线前后逐条敲的验收命令。</li>
-        <li><strong>② 原理</strong>：多进程加 Lua 与单进程加 xDS 的架构差异、四类 xDS 资源为什么能独立推送、reload 对长连接的真实代价、网关与服务网格的南北向东西向分工、容量瓶颈在 CPU 还是内存句柄、限流计数放哪里、指标标签为什么必须收敛。</li>
-        <li><strong>③ 场景</strong>：按五个维度拆多组网关的收益与代价、配置发布流水线与自动回滚、七类反模式与不适用边界。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 选部署形态的五个步骤与验收命令</h2>
+<h2>选部署形态的五个步骤与验收命令</h2>
 
 <p>数据面形态一旦定下，换的成本很高（配置模型、排障姿势、监控口径都要重做），所以按下面顺序一次问清。每一步的判断依据都是可量化现状，不是偏好，原因见原理层。</p>
 
@@ -125,7 +114,7 @@ sysctl fs.file-nr net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_ma
 curl -sS localhost:9901/stats | grep -E 'upstream_cx_active' | head -10
 </code></pre>
 
-<h2>② 原理 · 两条技术路线：多进程加 Lua，与单进程加 xDS</h2>
+<h2>两条技术路线：多进程加 Lua，与单进程加 xDS</h2>
 
 <p>同样是改一行上游地址，一边不中断、一边掉连接。所有网关的数据面本质只有两条路线。<strong>第一条是 Nginx 血脉</strong>：master 加多 worker 的多进程模型，配置来自静态文件，扩展通过 Lua（OpenResty、APISIX、Kong）实现。</p>
 <p><strong>第二条是 Envoy 血脉</strong>：单进程多线程，配置完全由控制面通过 xDS 协议动态下发，扩展通过 WASM 或 C++ filter 实现。这个差异决定两类网关在「配置变更能否不重启生效」上的根本不同。</p>
@@ -175,7 +164,7 @@ flowchart TB
 <tr><td>适合场景</td><td>南北向入口、已有 Nginx 运维经验、变更频率不高</td><td>变更频繁、实例数多、需要与服务网格统一数据面</td></tr>
 </tbody></table>
 
-<h2>② 原理 · xDS 为什么关键，以及 reload 的隐性代价</h2>
+<h2>xDS 为什么关键，以及 reload 的隐性代价</h2>
 
 <p>搞清这一节能解决的现象是：每次网关发布，长连接业务就掉一批线。「改配置 reload 一下」在实例数少、变更不频繁时完全够用。</p>
 <p>问题出现在两个条件叠加之后：<strong>后端实例数量多且经常变化</strong>（容器环境里扩缩容与滚动更新是常态），<strong>网关实例本身也有几十台</strong>。</p>
@@ -300,7 +289,7 @@ if not ok then ngx.log(ngx.ERR, "set_current_peer failed: ", err) return ngx.exi
 balancer.set_timeouts(1, 3, 5)                   -- 连接、发送、读取超时，必须小于上游预算
 </code></pre>
 
-<h2>② 原理 · 网关与服务网格：南北向与东西向</h2>
+<h2>网关与服务网格：南北向与东西向</h2>
 
 <p>网格上了半年，排障时间反而变长。两者常被混为一谈，划清边界其实很简单：<strong>网关处理南北向流量</strong>（外部进入内部），关注认证、对外协议、统一入口与外部限流；</p>
 <p><strong>网格处理东西向流量</strong>（服务之间互相调用），关注重试、超时、熔断、双向 TLS 与调用拓扑。<strong>Envoy 能同时扮演两者</strong>，Istio 的入口网关本身就是一个 Envoy，只是配的是南北向策略。</p>
@@ -323,7 +312,7 @@ flowchart TB
 <p>网格最被低估的成本是<strong>排障复杂度</strong>：流量被透明劫持后，一个 503 可能来自应用、来自本端 sidecar、来自对端 sidecar，也可能来自控制面下发的配置。</p>
 <p>团队需要专门积累这类经验，也要习惯用代理的 admin 接口去看当前生效的配置。服务数不多时，这个成本换不回相应收益。</p>
 
-<h2>② 原理 · 容量规划：短连接看 CPU，长连接看内存与句柄</h2>
+<h2>容量规划：短连接看 CPU，长连接看内存与句柄</h2>
 
 <p>CPU 只用了三成，网关却开始拒连接。网关是全站流量的必经点，<strong>不能按满负载规划</strong>。</p>
 <p>常态单实例负载建议控制在五成以下，才有空间承接单实例故障时的流量转移与突发。估算分两类场景，瓶颈完全不同。</p>
@@ -345,7 +334,7 @@ flowchart TB
 <p>对连接敏感的后端（例如按连接分配线程或内存的服务）可能直接被打挂。扩容网关时必须同步下调单实例连接池上限。</p>
 </div>
 
-<h2>② 原理 · 限流、灰度与流量镜像的数据面实现</h2>
+<h2>限流、灰度与流量镜像的数据面实现</h2>
 
 <p>限流阈值配了 1000，实际却在 300 就开始拒绝。限流的算法与参数在 <a href="../../distributed/rate-limit/">限流</a> 和 <a href="../../../devops/nginx/">Nginx 深入</a> 已写过，这里只讲数据面的一个实现选择：<strong>计数放在哪里</strong>。</p>
 <p>这个决定直接影响阈值准不准以及每请求的开销。</p>
@@ -365,7 +354,7 @@ flowchart TB
 <p>流量镜像是<strong>把请求复制一份异步发给影子集群，并丢弃其响应</strong>，用真实流量验证新版本。镜像有两个必须注意的点：镜像流量不能触达写接口或真实下游依赖，否则会产生脏数据；</p>
 <p>镜像本身会给网关增加约一倍的出向连接开销，要计入容量。</p>
 
-<h2>② 原理 · 可观测性：网关是最佳采集点，但标签要收敛</h2>
+<h2>可观测性：网关是最佳采集点，但标签要收敛</h2>
 
 <p>搞清这一节能解决的现象是：监控系统被网关自己的指标打挂。</p>
 <p>网关能看到所有外部请求的完整信息：状态码、耗时、上游、路由、客户端特征，是<strong>采集黄金信号的最佳位置</strong>——业务侧指标可能因各服务埋点不一致而无法横向比较，网关侧天然统一。</p>
@@ -406,7 +395,7 @@ max by (instance) (gateway_active_connections) / 100000
 min by (instance) (envoy_control_plane_connected_state) == 0
 </code></pre>
 
-<h2>③ 场景 · 部署拓扑：拆几组网关，以及不适用边界</h2>
+<h2>部署拓扑：拆几组网关，以及不适用边界</h2>
 
 <p>网关在 LB 之后还是之前？标准答案是<strong>四层 LB 在前、网关在后</strong>：LB 只做四层转发与健康检查，把流量均摊到网关实例，网关做七层处理。</p>
 <p>公有云环境通常是云 LB 加网关组，自建则是 LVS 或硬件负载均衡加网关组。</p>
@@ -430,7 +419,7 @@ min by (instance) (envoy_control_plane_connected_state) == 0
 <p>上游端点从哪来、摘除延迟为什么是四段见 <a href="../service-discovery/">服务注册发现</a>；路由与插件配置的版本、审批与灰度见 <a href="../config-center/">配置中心的服务端机制与选型</a>；Nginx 的处理阶段、location 优先级与限流三形态见 <a href="../../../devops/nginx/">Nginx 深入</a>；</p>
 <p>限流算法本身见 <a href="../../distributed/rate-limit/">分布式限流</a>；指标与链路的存储与查询在 <a href="../../../observability/metrics/">指标体系</a> 与 <a href="../../../observability/tracing/opentelemetry/">OpenTelemetry 实战</a>。</p>
 
-<h2>③ 场景 · 配置发布与反模式</h2>
+<h2>配置发布与反模式</h2>
 
 <p>一次错误的网关配置能让全站 502，而且故障是瞬时全量的，没有任何缓冲。因此网关配置必须像代码一样管理：<strong>入库、评审、自动校验、灰度、可自动回滚</strong>。</p>
 <p>手工登录机器改配置文件是最危险的做法——它既没有评审，也没有版本，故障时没人知道改了什么。</p>

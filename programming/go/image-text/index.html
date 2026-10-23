@@ -93,18 +93,7 @@
 <p>后端做图片生成——验证码、分享卡片、水印、报表导出、图表出图——最终都会落到「把文字画到位图上」这件事。</p>
 <p>它看起来只是几行 API 调用，实际上踩坑密度极高：文字总是偏半行、小字号发虚、英文字距有空洞、某些字变成空心方框、并发一上来图就花了、内存涨得莫名其妙。</p>
 <p>根源是<strong>大家默认渲染库会顺带帮你做排版，而它只负责画字形</strong>。这篇先给能跑的代码，再把分层、单位、度量、性能几件事讲透。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份从字体加载到 PNG 输出的完整代码（<code>go:embed</code> 加一次解析、按字号建 <code>Face</code> 池、基线定位、行距、断行调用、编码参数），一张「要画什么 → 用哪个库或接口」对照表，以及中文字体与 DPI 的九项速查。</li>
-        <li><strong>② 原理</strong>：像素层、字形层、排版层各自负责什么；字体格式与 GPOS 的支持天花板；26.6 定点数与 <code>Size</code> 加 DPI 的换算；<code>Ascent</code>、<code>Height</code>、墨迹边界与步进的区别；hinting 三档的取舍；断行与字体回退怎么自己实现；Face 为什么不能共享。</li>
-        <li><strong>③ 场景</strong>：验证码、分享图、水印、报表、图表五类需求各自真正的约束在哪，以及什么时候该换掉这条栈。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 生成一张带文字的图：能直接跑的最小实现</h2>
+<h2>生成一张带文字的图：能直接跑的最小实现</h2>
 <p>下面这段把「字体只解析一次、按字号建池、按基线定位、按 <code>Height</code> 走行距、编码时别用最高压缩」这几件事一起解决。<code>wrap</code> 的实现见原理层——断行没有任何库替你做：</p>
 <pre><code class="language-go">//go:embed fonts/NotoSansSC-subset.ttf
 var fontBytes []byte
@@ -227,7 +216,7 @@ func RenderCard(title string, w, h, pad int) ([]byte, error) {
 </tbody>
 </table>
 
-<h2>② 原理 · 分层：谁负责像素，谁负责字形，谁负责排版</h2>
+<h2>分层：谁负责像素，谁负责字形，谁负责排版</h2>
 <p>搞清这三层的边界，就知道哪些问题该去查 API、哪些问题注定得自己写。</p>
 <p>标准库的 <code>image</code> 与 <code>image/draw</code> 只管像素与 alpha 合成；<code>golang.org/x/image</code> 下的 <code>sfnt</code> 解析字体表结构、<code>opentype</code> 把轮廓光栅化成灰度掩码、<code>font.Face</code> 提供「给一个 rune，返回掩码和步进」的能力；</p>
 <p>而<strong>断行、对齐、行高、禁则、字体回退、复杂文字整形这一整层，没有任何一个包提供</strong>——要么你自己写，要么换一条带整形能力的栈。</p>
@@ -286,7 +275,7 @@ sequenceDiagram
     Note over DR,DM: 目标图与掩码不是具体类型时，draw 会走逐像素通用慢路径
 </div>
 
-<h2>② 原理 · 字体文件与字形：支持到哪一层</h2>
+<h2>字体文件与字形：支持到哪一层</h2>
 <p>这一节解决两类报错：otf 字体加载失败，以及某些字画不出来。</p>
 <p>历史包袱先交代清楚：老的 <code>github.com/golang/freetype</code> 已归档，它只认 TrueType 的 glyf 轮廓，加载 CFF 轮廓的 OTF 直接失败——这是「为什么我的 otf 字体报解析错误」的标准答案。现在的事实标准是 <code>golang.org/x/image</code> 下的 <code>font/sfnt</code> 与 <code>font/opentype</code>，两种轮廓都吃。但它的支持面有明确天花板：</p>
 <table>
@@ -307,7 +296,7 @@ sequenceDiagram
 <p>两个高频误解要纠正。第一，<strong>豆腐块不是渲染库的 bug，而是字体缺字的正常表现</strong>：码点查不到字形时返回索引 0，多数字体把 0 号字形设计成空心方框。</p>
 <p><strong>x/image 完全没有字体回退机制</strong>，多语言混排必须自己包一层按字符挑字体的 <code>Face</code>。第二，<strong>英文字距不对往往不是你写错了</strong>：<code>Face.Kern</code> 只读传统 kern 表，而很多现代字体把字距全放进 GPOS，于是 Kern 返回 0。</p>
 
-<h2>② 原理 · 单位与度量：字号、DPI、定点数与基线</h2>
+<h2>单位与度量：字号、DPI、定点数与基线</h2>
 <p>这一节的坑全部来自单位。所有度量都是 <code>fixed.Int26_6</code>——26 位整数加 6 位小数的定点数，最小刻度是 1/64 像素。把它当整数像素直接比较，误差会被放大 64 倍。</p>
 <table>
 <thead><tr><th>概念</th><th>含义</th><th>换算关系</th><th>踩坑点</th></tr></thead>
@@ -336,7 +325,7 @@ sequenceDiagram
 </tbody>
 </table>
 
-<h2>② 原理 · 抗锯齿与 hinting 的取舍</h2>
+<h2>抗锯齿与 hinting 的取舍</h2>
 <p>光栅化的输出是 0 到 255 的灰度掩码，<strong>抗锯齿是常开的，没有关闭开关</strong>；想要硬边效果只能自己对掩码做阈值化。可调的是 hinting——把轮廓对齐到像素网格的程度：</p>
 <table>
 <thead><tr><th>Hinting 取值</th><th>做什么</th><th>小字号清晰度</th><th>字形保真</th><th>适合</th></tr></thead>
@@ -349,7 +338,7 @@ sequenceDiagram
 <p>另外两点容易忽略：把基线 Y 取整到<strong>整像素</strong>能显著提升清晰度，因为掩码不再跨半个像素铺开；</p>
 <p>反过来，如果你保留了 X 方向的小数偏移（亚像素定位，长行排版更均匀），那么字形掩码缓存的键必须包含这个偏移，否则缓存永远不命中。</p>
 
-<h2>② 原理 · 排版是你自己的事</h2>
+<h2>排版是你自己的事</h2>
 <p><code>Drawer</code> 的语义就是「按顺序把 rune 画出去，Dot 一路右移」，它不换行、不对齐、不处理禁则、遇到宽度超限也不会停。中英混排的断行规则还不一样：汉字可以在任意两字之间断，拉丁单词必须整体挪行。</p>
 <p>加上标点不能出现在行首、前引号不能留在行尾这类禁则，最小可用的实现大概是下面这个样子。</p>
 <div class="mermaid">
@@ -494,7 +483,7 @@ func (ff *fallbackFace) Close() error {
     return last
 }</code></pre>
 
-<h2>② 原理 · 性能、并发与内存</h2>
+<h2>性能、并发与内存</h2>
 <p>这一节回答压测里最常见的两个现象：图并不复杂但 CPU 打满，以及并发一上来图就花了。</p>
 <table>
 <thead><tr><th>开销项</th><th>一次性还是每次</th><th>正确做法</th><th>做错的症状</th></tr></thead>
@@ -513,7 +502,7 @@ func (ff *fallbackFace) Close() error {
 <p>务实做法是静态文案用小子集、动态文本另配一份覆盖面广的字体并挂在回退链上，同时对渲染结果里的缺字数量打点报警——指标怎么埋见 <a href="../../../observability/logging/">日志与指标</a>。</p>
 <p>并发方面，<code>Face</code> 池的借还本身就是并发原语的应用，取舍见 <a href="../concurrency/">Go 并发原语与常见并发 bug</a>。</p>
 
-<h2>③ 场景 · 五类出图需求的真实约束</h2>
+<h2>五类出图需求的真实约束</h2>
 <p>同一套渲染栈，不同业务形态的真正难点完全不在一处。下表左列是需求，重点看第二列——它决定你该在哪里投入时间：</p>
 <table>
 <thead><tr><th>场景</th><th>真正的约束在哪</th><th>对应的技术选择</th><th>代价</th></tr></thead>

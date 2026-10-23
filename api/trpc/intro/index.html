@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="tRPC 上手：context、router、createContext 三件套的生命周期、transformer 与 errorFormatter 取舍、适配器差异、错误结构与 createCaller 服务端调用。">
+    <meta name="description" content="tRPC 服务端三件套生命周期、客户端 link 链组合、框架适配器差异、错误码映射与 transformer 取舍。">
     <meta name="keywords" content="tRPC,tRPC 入门,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/trpc/intro/">
     <meta property="og:title" content="tRPC 上手：Router、Context 与客户端调用 - tRPC - 资深码农">
-    <meta property="og:description" content="tRPC 上手：context、router、createContext 三件套的生命周期、transformer 与 errorFormatter 取舍、适配器差异、错误结构与 createCaller 服务端调用。">
+    <meta property="og:description" content="tRPC 服务端三件套生命周期、客户端 link 链组合、框架适配器差异、错误码映射与 transformer 取舍。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/trpc/intro/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="tRPC 上手：Router、Context 与客户端调用 - tRPC">
-    <meta name="twitter:description" content="tRPC 上手：context、router、createContext 三件套的生命周期、transformer 与 errorFormatter 取舍、适配器差异、错误结构与 createCaller 服务端调用。">
+    <meta name="twitter:description" content="tRPC 服务端三件套生命周期、客户端 link 链组合、框架适配器差异、错误码映射与 transformer 取舍。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,18 +68,7 @@
                     </header>
                     <div class="article-content">
 <p>tRPC 的 API 面很小，真正要理解的只有三个服务端概念和一条客户端 link 链。这篇不讲它为什么能类型安全（见 <a href="../">tRPC 的端到端类型安全</a>），只讲怎么从零搭一个能跑、能排查、错误结构统一的服务。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一套能直接跑的最小骨架——context、initTRPC、router、适配器挂载、客户端调用，五段代码接起来就是一个可用服务，每步都给验证方法。</li>
-        <li><strong>② 原理</strong>：三件套的生命周期差异为什么决定性能与越权风险、transformer 与 errorFormatter 的取舍、link 链的组合规则、各适配器拿到的 context 不同、错误 code 到状态码的映射、中间件与 input 校验的真实顺序、<code>createCaller</code> 为什么不等于直接调 resolver。</li>
-        <li><strong>③ 场景</strong>：Express、Fastify、Next.js 两种路由、边缘运行时、WebSocket 各该怎么配，以及 transformer 与 batch 开不开的判断。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 最小可用：context、router、挂载与客户端调用</h2>
+<h2>最小可用：context、router、挂载与客户端调用</h2>
 <p>下面五段代码接起来就是一个能跑的服务，顺序固定：先有 context 类型才能初始化 <code>initTRPC</code>；有了 <code>t</code> 才能定义 router；router 类型导出给客户端。机制解释在原理部分。</p>
 
 <pre><code class="language-typescript">// ===== server/context.ts —— 每个请求执行一次，必须保持轻量 =====
@@ -219,8 +208,8 @@ grep -l "PrismaClient" dist/assets/*.js &amp;&amp; echo "AppRouter 被写成了�
 </tbody>
 </table>
 
-<h2>② 原理 · 服务端三件套的生命周期差异</h2>
-<p>搞清这三层的执行次数，能解决「全站接口平白多一次数据库往返」和「偶发读到别人的数据」这两类问题。</p>
+<h2>服务端三件套的生命周期差异</h2>
+<p>三件套生命周期搞混，接口平白多一次数据库往返，还会偶发读到别人的数据。</p>
 
 <p>几乎所有 tRPC 服务端都是同一骨架：一个全局 <code>initTRPC</code> 实例、若干嵌套 <code>router</code>、一个每请求执行一次的 <code>createContext</code>。三者生命周期完全不同，混淆它们是新手最大的性能坑。</p>
 
@@ -262,8 +251,8 @@ flowchart TB
     <p>DataLoader 自带缓存，若在模块顶层只建一个实例，缓存会跨请求生效：用户 A 请求过的记录被用户 B 命中，权限过滤失效。<strong>DataLoader 必须在 createContext 里 new</strong>，这是它唯一正确的位置。</p>
 </div>
 
-<h2>② 原理 · transformer 与 errorFormatter 的取舍</h2>
-<p>搞清这两个选项，能解决「Date 字段莫名变成字符串」和「堆栈被发到浏览器」。</p>
+<h2>transformer 与 errorFormatter 的取舍</h2>
+<p>transformer 处理 Date 字段序列化为字符串的问题；errorFormatter 决定堆栈是否发到浏览器。</p>
 
 <pre><code class="language-typescript">// server/trpc.ts 的完整版：把两个全局选项都配上
 import { initTRPC, TRPCError } from '@trpc/server'
@@ -305,8 +294,8 @@ export const middleware = t.middleware</code></pre>
 
 <p>router 组织上有一条经验值：<strong>嵌套层级控制在三层内</strong>。层级越深，类型推导的实例化量上升越快，表现为编辑器补全从毫秒级掉到秒级，<code>tsc</code> 也明显变慢。按业务域横向拆分比纵向嵌套划算。</p>
 
-<h2>② 原理 · 客户端 link 链的组合规则</h2>
-<p>搞清 link 链，能解决「慢接口拖慢整页」和「日志里看不到请求耗时」。</p>
+<h2>客户端 link 链的组合规则</h2>
+<p>link 链没配好：慢接口拖慢整页，日志里看不到请求耗时。</p>
 
 <p>客户端只有两个概念：一个带 <code>AppRouter</code> 类型参数的 client，和一条 link 链。link 是可组合的中间件，从上到下依次处理请求，<strong>最末端必须是一个「终结型」link</strong>（真正发 HTTP 请求的那个）。</p>
 
@@ -344,8 +333,8 @@ export const trpc = createTRPCClient&lt;AppRouter&gt;({
   ],
 })</code></pre>
 
-<h2>② 原理 · 适配器：挂到不同框架上的差异</h2>
-<p>搞清这张表，能解决「同一份 context 代码换个框架就编译不过」和「Next.js 里设不了 cookie」。</p>
+<h2>适配器：挂到不同框架上的差异</h2>
+<p>context 类型跨适配器不兼容，换框架就编译不过；Next.js 设 cookie 也有坑。</p>
 
 <table>
 <thead><tr><th>运行环境</th><th>适配器</th><th>createContext 收到什么</th><th>要特别注意</th></tr></thead>
@@ -363,8 +352,8 @@ export const trpc = createTRPCClient&lt;AppRouter&gt;({
 <p>还有一个跨适配器的共性问题：<strong>请求体大小限制与超时由宿主框架和反向代理决定，不是 tRPC 管的</strong>。上传类接口报 413、长耗时 procedure 被网关掐断，排查要先看宿主框架与代理的配置，而不是翻 tRPC 文档。</p>
 <p>可靠的做法是在 <code>errorFormatter</code> 里带上 requestId，并把这个 id 写进服务端访问日志，一条报错就能横跨网关、框架、tRPC 三层串起来。代理侧的超时与请求体限制参数见站内 <a href="../../../devops/nginx/">Nginx 实践</a>。</p>
 
-<h2>② 原理 · 错误处理：code、状态码与统一结构</h2>
-<p>搞清这一节，能解决「前端拿到的全是 500 和中性文案，没法区分参数错还是服务挂了」。</p>
+<h2>错误处理：code、状态码与统一结构</h2>
+<p>前端收到的全是 500 和中性文案时，区分不了参数错还是服务挂了。</p>
 
 <p>tRPC 的错误模型只有一个入口：抛 <code>TRPCError</code>。适配器按内置映射表把 <code>code</code> 转成 HTTP 状态码，<code>errorFormatter</code> 决定响应体结构。任何非 <code>TRPCError</code> 异常都被包成 <code>INTERNAL_SERVER_ERROR</code>，原始信息进日志但不返回客户端。</p>
 
@@ -427,7 +416,7 @@ try {
   }
 }</code></pre>
 
-<h2>② 原理 · 一次调用的完整链路</h2>
+<h2>一次调用的完整链路</h2>
 <p>把上面的部件串起来。这张图有一个反直觉的顺序值得记住：<strong>中间件在 input 校验之前执行</strong>，所以中间件里拿到的输入还没被 schema 验证过，不能假设其结构。</p>
 
 <div class="mermaid">
@@ -457,7 +446,7 @@ sequenceDiagram
     P-->>U: 按类型推导返回 无需断言
 </div>
 
-<h2>② 原理 · 服务端内部调用与单元测试</h2>
+<h2>服务端内部调用与单元测试</h2>
 <p>搞清 <code>createCaller</code> 与直接调 resolver 的区别，能解决「测试全过但线上越权」和「日志里出现看起来重复的请求」。</p>
 
 <p>有三类场景需要在服务端直接执行 procedure，而不是绕一圈发 HTTP 请求：服务端渲染时预取数据、定时任务复用已有业务逻辑、以及写测试。</p>
@@ -481,7 +470,7 @@ sequenceDiagram
 <p>另外，<code>createCaller</code> 常被误用来在一个 procedure 里调另一个。能跑通，但整条中间件链被重复执行一遍，鉴权、日志、事务都被算两次，日志里还会出现像重复请求的记录。</p>
 <p><strong>procedure 之间的复用应该下沉到业务函数层</strong>：把逻辑写成接受明确参数的普通函数，两个 procedure 各自调用它，这样既没有重复开销，调用关系也是显式的。</p>
 
-<h2>③ 场景 · 按运行环境与项目形态选配置</h2>
+<h2>按运行环境与项目形态选配置</h2>
 <p>骨架是同一个，配置要按环境调。下表给每种形态必须动的地方与代价。</p>
 
 <table>

@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="慢查询治理流水线：采样渠道与语句摘要、按总耗时排序、返回行数与执行计划判读、CI 卡口。">
+    <meta name="description" content="慢查询排查全流程：慢日志与语句摘要统计、EXPLAIN 判读、六类根因、改写与现场命令。">
     <meta name="keywords" content="数据库性能优化,慢查询优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/optimization/slow-query/">
     <meta property="og:title" content="慢查询治理：从发现到根治的完整闭环 - 数据库性能优化 - 资深码农">
-    <meta property="og:description" content="慢查询治理流水线：采样渠道与语句摘要、按总耗时排序、返回行数与执行计划判读、CI 卡口。">
+    <meta property="og:description" content="慢查询排查全流程：慢日志与语句摘要统计、EXPLAIN 判读、六类根因、改写与现场命令。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/optimization/slow-query/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="慢查询治理：从发现到根治的完整闭环">
-    <meta name="twitter:description" content="慢查询治理流水线：采样渠道与语句摘要、按总耗时排序、返回行数与执行计划判读、CI 卡口。">
+    <meta name="twitter:description" content="慢查询排查全流程：慢日志与语句摘要统计、EXPLAIN 判读、六类根因、改写与现场命令。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -74,18 +74,7 @@
 <p>慢查询治理常见的做法是：收到告警、翻慢日志、找到最慢那条、加个索引、结束。这个流程有两个漏洞：慢日志看不到高频低耗时的语句，而那往往才是资源消耗的大头；</p>
 <p>修完一条不建立机制，下个季度同类问题会原样再来一次。这篇把慢查询当成一个闭环来写——发现、定级、归因、修复、回归、卡口。</p>
 <p>执行计划字段含义、索引失效场景、B+ 树这些底层原理详见站内 <a href="../../mysql/">MySQL 深度原理</a>，这里只用结论。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一轮治理的六步闭环——把采样开到真的能抓到问题、按 SQL 指纹聚合而不是盯单条、拿到 Top N 之后的五步判读顺序、改完用什么数据证明改对了。每步给可直接敲的命令与验收标准。</li>
-        <li><strong>② 原理</strong>：慢日志八个参数的默认值与配错后果、语句摘要统计为什么能抓到慢日志抓不到的大头、<code>pt-query-digest</code> 与 PG 侧 <code>pg_stat_statements</code> 与 <code>auto_explain</code>、六大类根因的识别特征与治法、语句一个字没改却突然变慢的七种原因、八种改写技巧的前提与代价、现场排查命令集的逐字段判读。</li>
-        <li><strong>③ 场景</strong>：同一个现象在不同场景下的正解并不一样，一张决策矩阵收拢；什么时候该停手（不是 SQL 的问题）；上线卡口、周期复查、运行时告警怎么落地成机制。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 一轮治理的六步闭环：命令与验收标准</h2>
+<h2>一轮治理的六步闭环：命令与验收标准</h2>
 
 <p>治理慢查询是一条有固定顺序的流水线，顺序错了后面全是白工：没开对采样就没有输入，不按指纹聚合就会去修一天只跑三次的语句，不看返回行数就会给「一次返回八万行」的接口加索引。</p>
 <p>下面六步照着跑一轮，验收标准都是「做完能看到什么」，看不到就说明这步没成。</p>
@@ -159,9 +148,9 @@ TRUNCATE TABLE performance_schema.events_statements_summary_by_digest;</code></p
 
 <p>这六步为什么是这个顺序、每个参数背后的机制、每一类根因的识别特征，下面逐节展开。</p>
 
-<h2>② 原理 · 慢日志的默认配置等于没开</h2>
+<h2>慢日志的默认配置等于没开</h2>
 
-<p>搞清这一节能解决「明明开了慢日志，一年只有几条记录」和「刚开就把磁盘写满」这两个相反的现象。</p>
+<p>开了慢日志，一年却只有几条记录，或者刚开就把磁盘写满，是两个相反的现象。</p>
 
 <p><code>slow_query_log</code> 打开之后还有一组参数决定它到底有没有用。最关键的是 <code>long_query_time</code>，默认 10 秒——能跑到 10 秒的语句，接口早就超时了，这个阈值只能抓到灾难，抓不到问题。</p>
 
@@ -203,9 +192,9 @@ SHOW VARIABLES LIKE 'long_query_time';</code></pre>
 <p>反过来，等锁时间是计入执行时间的，所以一条执行计划完美的语句也可能出现在慢日志里。</p>
 </div>
 
-<h2>② 原理 · 比慢日志更重要的是语句摘要统计</h2>
+<h2>比慢日志更重要的是语句摘要统计</h2>
 
-<p>搞清这一节能解决「慢日志里的语句都修完了，数据库负载一点没降」。</p>
+<p>慢日志里的语句都修完了，数据库负载却一点没降。</p>
 
 <p>慢日志按单次耗时过滤，这个过滤条件天生漏掉一整类问题：<strong>单条不慢但调用次数极高的语句</strong>。</p>
 <p>一条 8 毫秒的查询每分钟调用一百万次，总耗时是 8000 秒，比十条一秒的语句加起来还多两个数量级，但它永远不会进慢日志。这类语句几乎总是真正的资源大头，也最容易被忽略。</p>
@@ -269,9 +258,9 @@ LIMIT 20;
 -- 统计是累计值，做基线对比前先清零，跑一个业务周期后再取数
 -- TRUNCATE TABLE performance_schema.events_statements_summary_by_digest;</code></pre>
 
-<h2>② 原理 · 慢日志分析工具与 PG 侧的对应物</h2>
+<h2>慢日志分析工具与 PG 侧的对应物</h2>
 
-<p>搞清这一节能解决「几百 MB 的慢日志文件摆在面前不知道从哪看」，以及 PG 上找不到 <code>performance_schema</code> 的问题。</p>
+<p>几百 MB 的慢日志文件摆在面前不知道从哪看，PG 上又找不到 <code>performance_schema</code>。</p>
 
 <p>慢日志原始文件不适合人肉翻，<code>pt-query-digest</code> 会按模板聚合并给出排名，输出的重点不是最慢那条，而是「总耗时占比」一列。</p>
 
@@ -319,9 +308,9 @@ LIMIT 20;
 
 <p>PG 侧的索引类型选择与计划判读细节见站内 <a href="../../postgresql/index-optimize/">PostgreSQL 索引选型与执行计划判读</a>。</p>
 
-<h2>② 原理 · 拿到一条慢 SQL 之后的分析路径</h2>
+<h2>拿到一条慢 SQL 之后的分析路径</h2>
 
-<p>搞清这一节能解决「加了三个索引都没变快」——因为顺序错了，真正的原因在第一个判断里。</p>
+<p>加了三个索引都没变快，多半是顺序错了，真正原因藏在第一个判断里。</p>
 
 <p>大多数人的第一反应是 <code>EXPLAIN</code>，但这一步应该排在第二。第一步是看它返回多少行——如果业务真的需要一次拿十万行，那是接口设计问题，任何索引都救不了。</p>
 
@@ -345,9 +334,9 @@ flowchart TB
 <p>这条路径里有两个位置最容易走错。一是<strong>看到全表扫就加索引</strong>：小表全表扫比走索引更快，优化器的选择是对的，给几百行的字典表加索引没有意义。</p>
 <p>二是<strong>忽略等锁</strong>：等锁的语句执行计划完全正常，只看计划会得出「这条 SQL 没问题」的结论，然后陷入困惑。</p>
 
-<h2>② 原理 · 六大类根因与对应治法</h2>
+<h2>六大类根因与对应治法</h2>
 
-<p>搞清这一节能解决「知道慢，但说不出到底慢在哪一环」。所有慢查询都能归进这六类，归不进去说明证据还没收集够。</p>
+<p>说不出慢在哪一环时，慢查询都能归进这六类，归不进去说明证据还没收集够。</p>
 
 <table>
 <thead><tr><th>根因</th><th>识别特征</th><th>治法</th><th>注意</th></tr></thead>
@@ -361,9 +350,9 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · SQL 没变但突然变慢</h2>
+<h2>SQL 没变但突然变慢</h2>
 
-<p>搞清这一节能解决「代码没动、索引没删，昨天 5 毫秒今天 3 秒」这类看起来最没道理的故障。原因一定在语句之外。</p>
+<p>代码没动、索引没删，昨天 5 毫秒今天 3 秒，原因一定在语句之外。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -393,9 +382,9 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · SQL 改写技巧</h2>
+<h2>SQL 改写技巧</h2>
 
-<p>搞清这一节能解决「索引已经最优了，但语句形态本身就贵」。每一条改写都有前提，抄之前先看最后一列。</p>
+<p>索引已经最优，但语句形态本身就贵。每一条改写都有前提，抄之前先看最后一列。</p>
 
 <table>
 <thead><tr><th>原写法</th><th>问题</th><th>改写方向</th><th>前提与代价</th></tr></thead>
@@ -411,9 +400,9 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · 现场排查命令集与输出判读</h2>
+<h2>现场排查命令集与输出判读</h2>
 
-<p>搞清这一节能解决「现在就在故障中，该敲什么」。命令本身不难，难的是输出怎么判读。</p>
+<p>正在故障现场要敲哪些命令不难，难的是怎么判读输出。</p>
 
 <pre><code class="language-sql">-- A. 谁在跑、卡在哪个阶段
 SELECT id, user, db, time, state, LEFT(info, 150) AS sql_head
@@ -465,7 +454,7 @@ WHERE t.thread_id IN (
 </tbody>
 </table>
 
-<h2>③ 场景 · 同一个现象在不同场景下的正解并不一样</h2>
+<h2>同一个现象在不同场景下的正解并不一样</h2>
 
 <p>前面的根因分类回答「是什么」，这一节回答「在你的场景里该做什么、要付什么代价」。</p>
 
@@ -487,7 +476,7 @@ WHERE t.thread_id IN (
 <p>索引该怎么从查询模式推导、索引数量怎么管住在 <a href="../index/">索引设计与治理</a>；单机容量与写入吞吐已经到顶时才进入 <a href="../sharding/">分库分表</a>；</p>
 <p>B+ 树树高、MVCC 可见性、Next-Key 加锁范围这些机制在 <a href="../../mysql/">MySQL 深度原理</a>，PG 侧在 <a href="../../postgresql/index-optimize/">PostgreSQL 索引选型与执行计划判读</a>；用缓存挡住回源的收益与代价在 <a href="../../cache/">缓存的收益与代价</a>；指标怎么采、阈值怎么定在 <a href="../../../observability/metrics/">指标与监控</a>。</p>
 
-<h2>③ 场景 · 从「修一条」到「有机制」</h2>
+<h2>从「修一条」到「有机制」</h2>
 
 <p>只修不建机制，同一类问题会在每个季度以不同语句的形式回来。闭环要同时具备上线前卡口、周期性复查、运行时告警三件事。</p>
 

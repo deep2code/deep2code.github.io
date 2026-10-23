@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="InnoDB 磁盘页布局、聚簇索引与回表、Change Buffer、MVCC 与 Read View、Next-Key Lock 与死锁推演。">
+        <meta name="description" content="MySQL 索引原理与 SQL 优化：聚簇索引与回表的代价、覆盖索引、索引失效的常见条件。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/mysql/">
     <!-- Open Graph -->
     <meta property="og:title" content="MySQL 深度原理：B+树、MVCC、加锁范围 - 资深码农">
-    <meta property="og:description" content="InnoDB 磁盘页布局、聚簇索引与回表、Change Buffer、MVCC 与 Read View、Next-Key Lock 与死锁推演。">
+    <meta property="og:description" content="MySQL 索引原理与 SQL 优化：聚簇索引与回表的代价、覆盖索引、索引失效的常见条件。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/mysql/">
     <meta property="og:site_name" content="资深码农">
@@ -38,7 +38,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="MySQL 深度原理：B+树、MVCC、加锁范围">
-    <meta name="twitter:description" content="InnoDB 磁盘页布局、聚簇索引与回表、Change Buffer、MVCC 与 Read View、Next-Key Lock 与死锁推演。">
+    <meta name="twitter:description" content="MySQL 索引原理与 SQL 优化：聚簇索引与回表的代价、覆盖索引、索引失效的常见条件。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
@@ -92,18 +92,7 @@
 
     <p>很多人用 MySQL 只会写 SQL，但不知道为什么索引能加速，不知道事务隔离级别怎么实现的，也不知道 MVCC 是什么。</p>
 <p>这篇从 InnoDB 的磁盘页布局讲到加锁范围推演，中间穿插真实的参数数值和排查命令——目标是让你下次线上出现「锁等待超时」「慢查询突然飙升」时，知道该敲哪条命令、看哪个数字。</p>
-
-    <div class="callout callout-info">
-        <div class="callout-icon">💡</div>
-        <div class="callout-title">这篇怎么读</div>
-        <ul>
-            <li><strong>① 用法</strong>：慢查询与锁等待两条排查路径的命令序列（<code>EXPLAIN ANALYZE</code> 怎么逐行判读、<code>performance_schema</code> 怎么看谁在等谁、死锁现场从哪里捞），一张「现象 → 先查什么 → 判定依据」对照表，以及一份必调参数速查（每行写清不调会看到什么现象）。</li>
-            <li><strong>② 原理</strong>：InnoDB 三层结构的归因地图、B+ 树树高推演、聚簇索引与回表、Buffer Pool 分段 LRU 与 Change Buffer、redo/undo/binlog 与两阶段提交、MVCC 可见性判定算法、Next-Key 加锁范围推演与死锁复盘、<code>EXPLAIN</code> 各字段判读与索引失效矩阵。</li>
-            <li><strong>③ 场景</strong>：深分页两种改法各自的适用边界、按场景该动哪个旋钮与代价，以及什么时候该停手别再调 MySQL。</li>
-        </ul>
-    </div>
-
-    <h2>① 用法 · 慢查询与锁等待的动手顺序</h2>
+<h2>慢查询与锁等待的动手顺序</h2>
     <p>线上只有两类现象：<strong>某条 SQL 变慢</strong>，和<strong>事务卡在锁上</strong>。两条路径的第一刀完全不同，走错方向能白花一小时。下面的命令按顺序敲，每条都写了看哪个数字；为什么这么判断见原理层。</p>
     <pre><code class="language-sql">-- ===== 路径 A：某条 SQL 慢 =====
 -- 8.0.18 起有 EXPLAIN ANALYZE，它看的是「实际」而不是「预估」。
@@ -310,7 +299,7 @@ ORDER  BY 已运行秒 DESC;</code></pre>
     </table>
     <p>上面这些动作为什么是这个顺序、每个数字背后是什么机制，从下一节的三层结构开始展开。</p>
 
-    <h2>② 原理 · InnoDB 的三层结构：所有性能问题的归因地图</h2>
+    <h2>InnoDB 的三层结构：所有性能问题的归因地图</h2>
     <p>先建立全局地图。InnoDB 不是一坨黑盒，它是「内存层 + 日志层 + 磁盘层」三段结构，所有性能问题最终都能归因到其中某一段：</p>
 
     <div class="mermaid">
@@ -392,7 +381,7 @@ flowchart TB
 
 
 
-    <h2>② 原理 · B+ 树凭什么 3 层就装下两千万行</h2>
+    <h2>B+ 树凭什么 3 层就装下两千万行</h2>
     <p>「索引用 B+ 树」是背答案，真正要会算的是：<strong>一棵 3 层 B+ 树到底能放多少行、查一行要几次 IO</strong>。这个数字是后面所有索引决策的基础。</p>
 
     <p>InnoDB 的磁盘和内存交换单位是<strong>页（page）</strong>，默认 16KB（<code>innodb_page_size</code>）。非叶子节点里不存数据，只存「索引键 + 子页号」，子页号固定 6 字节。以 <code>BIGINT</code> 主键（8 字节）为例：</p>
@@ -521,7 +510,7 @@ flowchart TD
         </tbody>
     </table>
 
-    <h2>② 原理 · 聚簇索引、回表与覆盖索引</h2>
+    <h2>聚簇索引、回表与覆盖索引</h2>
     <p>InnoDB 的表<strong>本身就是一棵 B+ 树</strong>（聚簇索引），主键就是它的排序键，行数据直接放在叶子页。二级索引是另一棵树，叶子页存的不是行，而是<strong>主键值</strong>。理解这一点，回表、覆盖索引、主键该用什么类型，全部一目了然。</p>
 
     <div class="mermaid">
@@ -539,7 +528,7 @@ flowchart LR
     S2 -->|字段都在索引里 不回表<br/>Using index| R2["直接返回"]
     </div>
 
-    <p>回表的代价是「再走一次 3 层树」。所以一条二级索引范围查询命中 1000 行，最坏是 <strong>1000 次回表</strong>——这就是为什么「索引走了但还是慢」。</p>
+    <p>回表要多走一次 3 层树。一条二级索引范围查询命中 1000 行，最坏 <strong>1000 次回表</strong>，索引走了也会慢。</p>
 
     <pre><code class="language-sql">-- 建一张演示表
 CREATE TABLE `orders` (
@@ -624,7 +613,7 @@ EXPLAIN SELECT amount FROM orders
 <p>业务需要 UUID 就单独建列加唯一索引，主键仍用自增或有序 ID（雪花 / UUIDv7）。</p>
     </div>
 
-    <h2>② 原理 · Buffer Pool 凭什么能挡住 99% 的磁盘 IO</h2>
+    <h2>Buffer Pool 凭什么能挡住 99% 的磁盘 IO</h2>
     <p>所有读写都先落在 Buffer Pool 上，命中率决定了整个实例的性能天花板。它不是普通 LRU，而是<strong>分段 LRU</strong>：整条链表按 <code>innodb_old_blocks_pct</code>（默认 37）切成 young 区和 old 区。</p>
 
     <div class="mermaid">
@@ -698,7 +687,7 @@ SHOW STATUS LIKE 'Innodb_buffer_pool_pages_total';</code></pre>
         <p>它<strong>只对非唯一二级索引生效</strong>。唯一索引插入必须立刻读页判重，没法延迟，所以「给字段加个唯一索引保险一点」在写密集场景是实打实的性能损失——它把可以攒批的随机写，变成了每次都必须读盘。</p>
     </div>
 
-    <h2>② 原理 · 三大日志与两阶段提交</h2>
+    <h2>三大日志与两阶段提交</h2>
     <p>ACID 不是口号，每个字母都对应一个具体机制。先把三个容易混的日志分清楚——它们的归属层、物理/逻辑性质、用途完全不同：</p>
 
     <table>
@@ -854,7 +843,7 @@ sequenceDiagram
         </tbody>
     </table>
 
-    <h2>② 原理 · MVCC 的可见性判定算法</h2>
+    <h2>MVCC 的可见性判定算法</h2>
     <p>MVCC 让「读」不用加锁：读事务顺着 undo log 版本链往回找，找到一个自己「有权看见」的版本。问题是——<strong>凭什么判定有权看见？</strong>这套判定只有 4 条规则，背下来就能自己推演任何并发场景。</p>
 
     <p>每行有三个隐藏字段，版本链就是靠 <code>roll_pointer</code> 串起来的：</p>
@@ -1032,7 +1021,7 @@ SELECT trx_id, trx_state, trx_started,
  ORDER BY run_sec DESC;</code></pre>
     </div>
 
-    <h2>② 原理 · 加锁范围推演与死锁复盘</h2>
+    <h2>加锁范围推演与死锁复盘</h2>
     <p>行锁的真相：<strong>InnoDB 锁的是索引，不是行</strong>。这一句能解释 90% 的诡异锁冲突——包括「我明明只改一行，为什么别人插不进去」。</p>
 
     <div class="mermaid">
@@ -1190,7 +1179,7 @@ SELECT object_name, index_name, lock_type, lock_mode, lock_status, lock_data
         <p>应用层要区别对待：1213 直接重试（幂等前提下），1205（等锁超时）则说明有慢事务，重试往往无效，该去抓长事务。</p>
     </div>
 
-    <h2>② 原理 · EXPLAIN 怎么读，索引为什么失效</h2>
+    <h2>EXPLAIN 怎么读，索引为什么失效</h2>
     <p>慢查询优化的全部起点是 <code>EXPLAIN</code>。只需重点看三列：<code>type</code>（访问方式）、<code>key</code>（真实用了哪个索引）、<code>Extra</code>（有没有额外开销）。</p>
 
     <table>
@@ -1331,7 +1320,7 @@ SELECT object_name, index_name, lock_type, lock_mode, lock_status, lock_data
         </tbody>
     </table>
 
-    <h2>③ 场景 · 深分页的两种改法与按场景的取舍</h2>
+    <h2>深分页的两种改法与按场景的取舍</h2>
     <p><code>LIMIT 1000000, 10</code> 的真实行为是：<strong>取出 1000010 行，丢掉前 1000000 行</strong>。偏移量越大越慢，而且是线性变慢。</p>
 
     <pre><code class="language-sql">-- ❌ 硬翻页：扫 100 万行 + 100 万次回表

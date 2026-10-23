@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="PG 列类型选择与迁移代价：text 与 varchar 的差别、numeric 与浮点、TOAST、jsonb 与数组、改类型的锁代价。">
+        <meta name="description" content="PostgreSQL 数据类型选型：timestamptz 的实际存储与跨区读写、字符与数值类型的取舍。">
     <meta name="keywords" content="PostgreSQL 数据类型,PostgreSQL,关系数据库,PostgreSQL">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/postgresql/datatypes/">
     <!-- Open Graph -->
     <meta property="og:title" content="PostgreSQL 数据类型选择与代价 - 资深码农">
-    <meta property="og:description" content="PG 列类型选择与迁移代价：text 与 varchar 的差别、numeric 与浮点、TOAST、jsonb 与数组、改类型的锁代价。">
+    <meta property="og:description" content="PostgreSQL 数据类型选型：timestamptz 的实际存储与跨区读写、字符与数值类型的取舍。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/postgresql/datatypes/">
     <meta property="og:site_name" content="资深码农">
@@ -39,7 +39,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PostgreSQL 数据类型选择与代价 - 资深码农">
-    <meta name="twitter:description" content="PG 列类型选择与迁移代价：text 与 varchar 的差别、numeric 与浮点、TOAST、jsonb 与数组、改类型的锁代价。">
+    <meta name="twitter:description" content="PostgreSQL 数据类型选型：timestamptz 的实际存储与跨区读写、字符与数值类型的取舍。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>类型选错的代价不是「不太优雅」，而是真金白银：用 <code>float8</code> 存金额的系统迟早会在对账时差出几分钱；用 <code>timestamp</code> 存时间的系统一到跨时区或夏令时就开始错乱；</p>
 <p>把 <code>varchar(20)</code> 当性能优化写满全库，等到手机号要存国际号段时才发现改长度要 <code>ALTER TABLE</code>。这篇按「选什么、为什么、选错了迁移要付多少代价」来组织，重点是那些<strong>改起来要重写全表或者根本改不动</strong>的决定。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：建表时照着查的「这个字段该选什么类型」判断表（金额、时刻、标识、有限取值、半结构化、标签、网络地址、时间段），每行写清常见的错误选择与选错后的迁移代价；外加一段能揪出老库里已经选错的列的体检 SQL，和六个常见需求的标准写法。</li>
-        <li><strong>② 原理</strong>：TOAST 为什么让大 jsonb 高频更新塌陷、浮点为什么不能存钱、PG 里三种字符类型底层相同、<code>timestamptz</code> 到底存了什么、jsonb 两种 GIN opclass 的差别与四条硬边界、数组与 enum 的演进限制、UUID 主键的写放大。</li>
-        <li><strong>③ 场景</strong>：哪些类型转换会重写全表、大表改类型的几条迁移路线与各自代价。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 这个字段该选什么类型</h2>
+<h2>这个字段该选什么类型</h2>
 
 <p>建表时不需要记住所有类型，只需要按顺序问几个问题：<strong>是不是钱、是不是时刻、是不是标识、取值集合会不会变、结构稳不稳定</strong>。</p>
 <p>下面这张图与这张表就是这几个问题的答案，最后一列是选错之后的迁移代价——这才是为什么值得在建表时多花十分钟。</p>
@@ -207,7 +196,7 @@ LIMIT  10;</code></pre>
 
 <p>为什么是这些答案——浮点误差从哪来、<code>timestamptz</code> 到底存了什么、jsonb 的索引怎么选、改类型为什么会重写全表，下面逐节展开。先看一个影响所有变长类型的机制。</p>
 
-<h2>② 原理 · 类型系统全景与 TOAST</h2>
+<h2>类型系统全景与 TOAST</h2>
 
 <p>先把类型按「要存什么」分好组，再记住一个横跨所有变长类型的机制：TOAST。它解释了「为什么大 jsonb 字段一高频更新，表就开始疯涨」。</p>
 
@@ -251,7 +240,7 @@ flowchart TB
 <p>顺带提一个影响所有变长类型的机制：<strong>TOAST</strong>。一行超过约 2 KB（页大小的四分之一）时，PG 会把大的变长字段压缩，压不下去就挪到附属的 TOAST 表里，主表只留一个指针。好处是宽表不会撑爆页；</p>
 <p>代价是访问被 TOAST 化的字段要多一次 IO，而且<strong>更新一个大 jsonb 字段会连带整行重写</strong>，这是 jsonb 大字段高频更新场景性能塌陷的根因。</p>
 
-<h2>② 原理 · 数值：钱的问题只有一个正确答案</h2>
+<h2>数值：钱的问题只有一个正确答案</h2>
 
 <p><code>float8</code> 是 IEEE 754 二进制浮点，十进制的 0.1 在二进制里是无限循环小数，存进去就已经有误差。这不是「精度够不够」的问题，而是「每一笔都带误差、累加后必然对不上」的问题。</p>
 
@@ -296,7 +285,7 @@ SELECT setval(pg_get_serial_sequence('legacy_order', 'id'),
               (SELECT max(id) FROM legacy_order));   -- 别忘了对齐当前值
 </code></pre>
 
-<h2>② 原理 · 字符类型：text、varchar(n)、char(n) 在 PG 里性能相同</h2>
+<h2>字符类型：text、varchar(n)、char(n) 在 PG 里性能相同</h2>
 
 <p>这是 PG 与 MySQL 最容易被误搬的一条经验。MySQL 里 <code>char</code> 定长、<code>varchar</code> 变长，行格式和索引前缀都受影响；<strong>PG 内部三者都是同一个 varlena 结构</strong>，带 1 或 4 字节长度头，存储与比较路径完全一致。</p>
 <p><code>varchar(n)</code> 唯一的作用是多一条长度检查，<code>char(n)</code> 则会补空格到定长，既费空间又让比较语义变怪（尾部空格在比较时被忽略）。</p>
@@ -316,9 +305,9 @@ SELECT setval(pg_get_serial_sequence('legacy_order', 'id'),
     <p>把列声明成 <code>text</code>，再写 <code>CHECK (char_length(phone) BETWEEN 5 AND 32)</code>。以后要放宽限制，只需删掉旧约束、加一条新的 <code>NOT VALID</code> 约束再 <code>VALIDATE</code>，全程只取 SHARE UPDATE EXCLUSIVE 锁，不重写表；而缩短 <code>varchar</code> 上限是要重写全表的。另外 <code>char_length</code> 数的是字符数，<code>octet_length</code> 才是字节数，校验中文长度时注意选对。</p>
 </div>
 
-<h2>② 原理 · 时间类型：默认就该用 timestamptz</h2>
+<h2>时间类型：默认就该用 timestamptz</h2>
 
-<p>先纠正一个广泛误解：<strong><code>timestamptz</code> 并不存储时区</strong>。它存的是一个绝对时刻（UTC 微秒数），写入时把输入按会话 <code>TimeZone</code> 换算成 UTC，读出时再换算回会话时区。</p>
+<p><strong><code>timestamptz</code> 并不存储时区</strong>。它存的是一个绝对时刻（UTC 微秒数），写入时按会话 <code>TimeZone</code> 换算成 UTC，读出时换算回会话时区。</p>
 <p><code>timestamp</code> 存的是「字面值」，数据库完全不知道它属于哪个时区，跨时区读写时不做任何换算——这就是跨区数据错乱的来源。</p>
 
 <div class="mermaid">
@@ -379,7 +368,7 @@ ALTER TABLE orders
   USING created_at AT TIME ZONE 'Asia/Shanghai';
 </code></pre>
 
-<h2>② 原理 · JSONB 与 JSON：选前者，但别当主数据模型</h2>
+<h2>JSONB 与 JSON：选前者，但别当主数据模型</h2>
 
 <table>
 <thead><tr><th>维度</th><th>json</th><th>jsonb</th><th>影响</th></tr></thead>
@@ -442,7 +431,7 @@ SELECT key, count(*) FROM product, jsonb_each_text(attrs) GROUP BY key ORDER BY 
 <p>三是<strong>更新任意一个键都重写整行</strong>，大字段高频更新会让表快速膨胀；四是<strong>约束能力弱</strong>，类型与取值范围只能用 CHECK 加表达式勉强补。把它当主数据模型用，等于把关系数据库最值钱的那部分能力关掉。</p>
 </div>
 
-<h2>② 原理 · 数组、enum 与那些「看起来很方便」的类型</h2>
+<h2>数组、enum 与那些「看起来很方便」的类型</h2>
 
 <p><strong>数组</strong>适合标签这类小集合：单行内元素不多、整体一起读写、不需要被外键引用。</p>
 <p>它的限制很硬——元素不能建外键，追加一个元素要重写整行，而且多对多关系一旦需要反向查询（「哪些文章打了这个标签、按时间排序分页」），数组加 GIN 虽然能过滤但没法高效排序与分页。</p>
@@ -496,7 +485,7 @@ ALTER TYPE order_state ADD VALUE 'refunded' AFTER 'shipped';   -- 加值可以�
 <p>更隐蔽的代价是<strong>写放大</strong>：随机 UUID（v4）每次插入落在 B-tree 的随机页上，页分裂频繁、缓存命中率差，写吞吐明显低于顺序自增的 <code>bigint</code>。</p>
 <p>要既保留分布式生成和不可枚举，又恢复插入局部性，用<strong>时间有序的 UUIDv7</strong>（高位是毫秒时间戳）或 ULID；PG 18 内置了 <code>uuidv7()</code>，更早的版本用扩展或在应用侧生成。</p>
 
-<h2>③ 场景 · 改类型要付多少代价：哪些转换会重写全表</h2>
+<h2>改类型要付多少代价：哪些转换会重写全表</h2>
 
 <p>判断标准是<strong>新旧类型的存储表示是否二进制兼容</strong>。兼容则只改系统表里的类型定义，秒级完成；不兼容就要重写整张表的每一行，全程持有 ACCESS EXCLUSIVE 锁，读写全部阻塞，并且所有相关索引都要重建。</p>
 
@@ -538,7 +527,7 @@ flowchart TB
 <p>做法是先 <code>SET lock_timeout = '3s'</code>，抢不到锁就失败重试，别让它无限等待。</p>
 </div>
 
-<h2>③ 场景 · 大表改类型的迁移路线与取舍</h2>
+<h2>大表改类型的迁移路线与取舍</h2>
 
 <p>知道哪些转换会重写全表之后，剩下的就是选路线。下面这张矩阵按「现在要改什么」给动作，第四列是必须提前认的账：</p>
 

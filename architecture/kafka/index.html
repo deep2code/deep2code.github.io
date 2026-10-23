@@ -76,18 +76,7 @@
 
 <p>「Kafka 快是因为顺序写磁盘」只是四个原因之一，而且解释不了它更重要的部分：<strong>怎么在异步复制的前提下做到不丢消息</strong>。</p>
 <p>这一篇是整条 Kafka 路径的主干，既是集群出问题时的入口，也是后面六篇共同依赖的机制底座。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：集群一出问题先敲哪几条命令——<code>kafka-topics.sh --describe</code> 看 ISR、<code>kafka-consumer-groups.sh --describe</code> 看逐分区 LAG、<code>kafka-metadata-quorum.sh</code> 看 controller，外加一张「症状 → 看哪个字段 → 去哪一节」的对照表。</li>
-        <li><strong>② 原理</strong>：分段日志与稀疏索引、零拷贝的四种失效条件、ISR 与 HW/LEO 水位怎么推进、acks 与 <code>min.insync.replicas</code> 的真实组合、幂等 PID 与事务边界、Rebalance 的五个触发源、offset 提交与三种投递语义。</li>
-        <li><strong>③ 场景</strong>：按处境给出配置组合与它的代价，哪些需求应该直接换掉 Kafka，以及这条路径上接下来该读哪一篇。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 集群出问题时先敲的四条命令</h2>
+<h2>集群出问题时先敲的四条命令</h2>
 
 <p>Kafka 的故障现象高度重复：要么写入被拒，要么 LAG 只涨不降，要么消费者反复重分配。这三类问题都能用下面四条命令在两分钟内定位到环节。</p>
 <p>注释说明的是「为什么要看这一行」，字段含义的由来在原理层展开。</p>
@@ -163,7 +152,7 @@ bin/kafka-configs.sh --bootstrap-server localhost:9092 --describe --entity-type 
 </tbody>
 </table>
 
-<h2>② 原理 · 全景：一条消息经过的六个环节</h2>
+<h2>全景：一条消息经过的六个环节</h2>
 
 <p>搞清这张图能解决一类困惑：为什么某个参数改在 Producer 端却在 Broker 端报错，以及为什么「消费者已经收到」和「消息已经提交」不是同一件事。</p>
 
@@ -199,7 +188,7 @@ flowchart TB
     KR -.->|Leader 选举与 ISR 变更| REP
 </div>
 
-<h2>② 原理 · 存储引擎：分段日志与稀疏索引</h2>
+<h2>存储引擎：分段日志与稀疏索引</h2>
 
 <p>搞清这一节能解决两个现象：磁盘占用为什么是阶梯式下降而不是平滑下降，以及开了 TLS 之后吞吐为什么会掉一截。</p>
 <p>一个 Partition 在磁盘上就是一个目录，里面是一组<strong>分段（Segment）</strong>文件，文件名是该段第一条消息的 offset，天然有序：</p>
@@ -243,7 +232,7 @@ flowchart LR
     <p>同理，<code>vm.swappiness</code> 建议设 1 而不是 0——完全禁止 swap 会让内存紧张时直接触发 OOM Killer，留一点余量更稳。</p>
 </div>
 
-<h2>② 原理 · ISR、HW/LEO 与「真正不丢」的参数组合</h2>
+<h2>ISR、HW/LEO 与「真正不丢」的参数组合</h2>
 
 <p>搞清这一节能解决用法层第一行那个现象：为什么写入会被 broker 主动拒绝，以及为什么 <code>acks=all</code> 配了却还是丢了数据。先分清两个水位：</p>
 
@@ -309,7 +298,7 @@ delivery.timeout.ms=120000</code></pre>
 </tbody>
 </table>
 
-<h2>② 原理 · 幂等、事务与顺序的相互制约</h2>
+<h2>幂等、事务与顺序的相互制约</h2>
 
 <p>「Kafka 支持 Exactly Once，所以我不用做幂等了」这句话错在哪：幂等 Producer 只有两个字段：<strong>PID（Producer ID）加分区级递增序号</strong>。Broker 为每个「PID 加分区」维护最近 5 个 batch 的序号，重复序号直接丢弃，序号跳跃则报错。</p>
 
@@ -353,7 +342,7 @@ sequenceDiagram
 <p>这种场景唯一可靠的做法是<strong>至少一次投递加消费端幂等</strong>（唯一键、状态机、去重表），不要指望配置参数。落地写法见 <a href="../distributed/idempotency/">幂等设计</a>。</p>
 </div>
 
-<h2>② 原理 · Consumer Group 与 Rebalance</h2>
+<h2>Consumer Group 与 Rebalance</h2>
 
 <p>LAG 涨而 <code>CONSUMER-ID</code> 不停变化，是用法层最常见的那条现象。Rebalance 是 Kafka 消费端最大的稳定性风险：期间<strong>整个消费组停止消费</strong>（经典协议下是 stop-the-world）。要控制它，先得知道它被什么触发。</p>
 
@@ -404,7 +393,7 @@ stateDiagram-v2
 </tbody>
 </table>
 
-<h2>② 原理 · offset 提交与投递语义</h2>
+<h2>offset 提交与投递语义</h2>
 
 <p>「消息明明处理了却又来一遍」和「位点莫名跳走」这两类现象，根源在消费位点。位点存在内置 topic <code>__consumer_offsets</code> 里（默认 50 分区，compact 策略）。三种投递语义的差别完全取决于<strong>「提交 offset」和「处理业务」的先后顺序</strong>：</p>
 
@@ -435,7 +424,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · 积压诊断与容量决策</h2>
+<h2>积压诊断与容量决策</h2>
 
 <p>「该加消费者还是加分区」是每次堆积都要吵一遍的问题。Lag 的定义很简单：<code>Lag = 分区 LEO 减去已提交 offset</code>。但看 lag 的方式决定你能不能定位问题——<strong>要看每个分区的 lag，而不是总和</strong>。</p>
 
@@ -472,7 +461,7 @@ kafka-run-class.sh kafka.tools.GetOffsetShell \
     <p>分区数也有上限：每个分区在每台 broker 上占若干文件句柄，Producer 为每个分区维护独立 batch 缓冲（<code>batch.size</code> 乘以分区数可能吃满 <code>buffer.memory</code>），节点故障时的 Leader 选举时间也随分区数线性增长。估算步骤见 <a href="topic-partition/">分区设计</a>。</p>
 </div>
 
-<h2>③ 场景 · 按处境选配置组合，以及什么时候别用 Kafka</h2>
+<h2>按处境选配置组合，以及什么时候别用 Kafka</h2>
 
 <p>前面几节把机制拆开了，落地时需要的是反向映射：手上这个处境，参数该怎么组合、要付什么代价。下表每一行都是一个完整组合。</p>
 

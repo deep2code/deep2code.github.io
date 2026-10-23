@@ -71,18 +71,7 @@
 <p>理解这套机制才能解释三件常见的怪事：为什么换一行 import 就有性能差异、为什么第一个请求明显更慢、为什么加一条正则路由会让框架直接抛异常。</p>
 <p>框架定位与生态取舍在 <a href="../hono/">Hono 总览</a>，洋葱链执行顺序与内置中间件边界在 <a href="../hono-middleware/">中间件篇</a>；这篇先给类型安全路由与上下文对象的最小写法，再谈路由匹配、上下文和类型链路这三层机制。</p>
 
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份类型安全路由的最小写法（<code>Env</code> 泛型、链式注册、<code>zValidator</code> 校验三种 target、<code>c.req.valid</code> 取已校验值、导出 <code>AppType</code>），一张「要做什么 → 怎么写」对照表，一张 <code>c.req</code> 与 <code>c.var</code> 与 <code>c.env</code> 的语义速查表。</li>
-        <li><strong>② 原理</strong>：四个 router 把开销放在注册还是匹配、RegExpRouter 的一次匹配与它拒绝的路径模式、SmartRouter 为什么等到第一个请求才锁定实现、<code>c.req</code> 的 bodyCache 与绕过包装层的后果、三类上下文成员各自的所有者与生命周期、路径参数类型推导的退化条件、validator 到 <code>hc</code> 整条类型链的断点。</li>
-        <li><strong>③ 场景</strong>：按 app 实例能否跨请求复用决定入口预设，以及哪些问题不该在这一层找答案。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 类型安全路由与 validator 的最小写法</h2>
+<h2>类型安全路由与 validator 的最小写法</h2>
 <p>Hono 的路由写法有两条决定成败的规则，两条都在下面这段代码里：<strong>链式连写</strong>（否则类型不累积，客户端补全直接消失），以及 <strong>validator 必须作为同一次方法调用的中间参数传进去</strong>（否则 <code>c.req.valid</code> 拿不到类型）。</p>
 <p>这两条违反了都不报错、代码照样跑，所以要当成写法纪律记住，原因见原理层。</p>
 <pre><code class="language-bash"># 校验器与 schema 库是两个独立包，zValidator 只是把 zod 接进 Hono 的校验入口
@@ -167,7 +156,7 @@ export default app</code></pre>
 </table>
 <p>用法层到此为止。为什么第一个请求明显更慢、为什么加一条正则路由会让性能静默回归、为什么先 <code>json()</code> 再取 <code>text()</code> 验签一定失配、为什么把路径抽成变量之后参数名拼错不再报错——原因在下面几节。</p>
 
-<h2>② 原理 · 四个 router 的分工：开销花在注册还是花在匹配</h2>
+<h2>四个 router 的分工：开销花在注册还是花在匹配</h2>
 <p>搞清这一层能解释两件事：为什么换一行 import 就有性能差异，以及为什么同一份代码在常驻服务和函数型运行时上该选不同的入口。</p>
 <p>Hono 的 <code>Router</code> 是一个可替换接口，官方内置四个实现加一个调度器。它们的差别不是「谁更快」这种一维排序，而是<strong>把开销放在注册阶段还是匹配阶段</strong>——这个取舍取决于你的 app 实例能不能跨请求复用。</p>
 
@@ -221,7 +210,7 @@ flowchart TB
     SR --> LR
 </div>
 
-<h2>② 原理 · RegExpRouter 的一次匹配，与它拒绝的模式</h2>
+<h2>RegExpRouter 的一次匹配，与它拒绝的模式</h2>
 <p>流传最广的误解是「RegExpRouter 就是用正则一条条 test」。事实相反：逐条 test 才是最慢的做法，RegExpRouter 做的是<strong>把所有路径合并成一个正则，并在构建期算出每个捕获组对应哪条路由的哪个参数</strong>。</p>
 <p>请求进来只做一次匹配，拿到的是命中路由的 handler 链加参数映射，匹配耗时与路由条数基本脱钩。</p>
 <p>合并是有代价的：当两条路径在同一位置产生无法共存的约束时，合并失败，RegExpRouter 会抛 <code>UnsupportedPathError</code>。</p>
@@ -241,7 +230,7 @@ flowchart TB
 </tbody>
 </table>
 
-<h2>② 原理 · SmartRouter 的决定发生在第一个请求</h2>
+<h2>SmartRouter 的决定发生在第一个请求</h2>
 <p>这一节解释「压测第一发请求为什么特别慢」，以及为什么路由写法的问题不会在启动时暴露。</p>
 <p>SmartRouter 不是「智能地按路由特征选实现」，它的逻辑朴素得多：注册阶段把每次 <code>add</code> 转发给所有候选并记账，第一个请求到达时按顺序尝试构建各候选的匹配器，<strong>谁先构建成功就永久锁定谁</strong>，之后不再重新评估。</p>
 
@@ -292,7 +281,7 @@ export async function selfCheck() {
 
 export default app</code></pre>
 
-<h2>② 原理 · c.req：包装层、bodyCache 与真正的一次性</h2>
+<h2>c.req：包装层、bodyCache 与真正的一次性</h2>
 <p>搞清这一层能解决两类事故：验签时好时坏，以及某个中间件上线后全站 POST 接口一起报 body 已被使用。</p>
 <p><code>c.req</code> 是 <code>HonoRequest</code>，一个对标准 <code>Request</code> 的包装层，原始对象在 <code>c.req.raw</code>。「Hono 的 body 只能读一次」这个说法把两层混为一谈了：<strong>一次性属于底层的 ReadableStream，而包装层带缓存</strong>。只要你始终通过 <code>c.req</code> 的方法读，第一次读取会缓存，换一种形式再读会从缓存重建。</p>
 
@@ -357,7 +346,7 @@ app.post('/webhook', verifySignature, async (c) =&gt; {
   return c.json({ ok: payload.event })
 })</code></pre>
 
-<h2>② 原理 · c.var、c.env、c.executionCtx 的作用域与生命周期</h2>
+<h2>c.var、c.env、c.executionCtx 的作用域与生命周期</h2>
 <p>这三者经常被当成「上下文里的三个字段」，实际上它们的<strong>所有者完全不同</strong>：一个属于本次请求，一个属于运行时，一个属于平台调度器。</p>
 
 <table>
@@ -375,12 +364,12 @@ app.post('/webhook', verifySignature, async (c) =&gt; {
 
 <p>要写能同时跑在 Node 与 Workers 上的中间件，对 <code>c.executionCtx</code> 必须做能力探测而不是假定存在，探测写法与边缘侧的后台任务边界见站内 Hono 跨运行时部署篇。</p>
 
-<h2>② 原理 · 路径参数的类型推导从哪里开始退化</h2>
+<h2>路径参数的类型推导从哪里开始退化</h2>
 <p>Hono 的路径参数类型不来自任何代码生成，而是<strong>从路径字符串的字面量类型里解析出来的</strong>。这决定了它的脆弱点：任何让字面量退化成 <code>string</code> 的写法都会让 <code>c.req.param</code> 失去键约束。</p>
 <p>常见退化来源有三类——把路径抽成普通变量、用数组循环批量注册路由、把路径拼接进模板字符串。想保留推导就给常量加 <code>as const</code>，或者干脆接受退化并在 handler 里显式校验。</p>
 <p>另外注意：正则约束 <code>:id{[0-9]+}</code> 只影响匹配，不会把类型变成 <code>number</code>；可选参数会推成联合类型，忘了判空时 <code>undefined</code> 会一路流到查询层。</p>
 
-<h2>② 原理 · 从 validator 到 hc：类型链路的断点在哪</h2>
+<h2>从 validator 到 hc：类型链路的断点在哪</h2>
 <p>RPC 不是运行时功能，而是<strong>一条从 zod schema 一直连到客户端调用处的类型链</strong>。链上任何一环断掉，客户端就只剩下宽泛的类型，而代码依然能跑——这正是它难排查的原因。</p>
 
 <div class="mermaid">
@@ -458,7 +447,7 @@ if (res.ok) {
 </tbody>
 </table>
 
-<h2>③ 场景 · 选型：按 app 能否复用来决定</h2>
+<h2>选型：按 app 能否复用来决定</h2>
 <p>这一节把前面的机制收成判断。判断依据只有两条：app 实例能不能跨请求复用、产物体积有没有硬上限；吞吐不是依据，真实服务里路由匹配几乎从不是瓶颈。</p>
 <div class="mermaid">
 flowchart TB

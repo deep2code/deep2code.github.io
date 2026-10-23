@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Git 的对象模型与常见操作语义：内容寻址、索引与 stage、引用与 reflog、merge/rebase/reset/revert、强推与可达性。">
+        <meta name="description" content="Git 的四种对象与内容寻址：头部格式、整体哈希、SHA-1 到 SHA-256 的过渡，以及不可变对象带来的代价。">
     <meta name="keywords" content="Git,版本控制,分支管理,merge,rebase,stash,reset,checkout,工作区,暂存区,远程仓库,conventional commits">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/tools/vcs/">
     <!-- Open Graph -->
     <meta property="og:title" content="Git 的对象模型与常见操作的真实语义 - 资深码农">
-    <meta property="og:description" content="Git 的对象模型与常见操作语义：内容寻址、索引与 stage、引用与 reflog、merge/rebase/reset/revert、强推与可达性。">
+    <meta property="og:description" content="Git 的四种对象与内容寻址：头部格式、整体哈希、SHA-1 到 SHA-256 的过渡，以及不可变对象带来的代价。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/tools/vcs/">
     <meta property="og:site_name" content="资深码农">
@@ -38,7 +38,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Git 的对象模型与常见操作的真实语义 - 资深码农">
-    <meta name="twitter:description" content="Git 的对象模型与常见操作语义：内容寻址、索引与 stage、引用与 reflog、merge/rebase/reset/revert、强推与可达性。">
+    <meta name="twitter:description" content="Git 的四种对象与内容寻址：头部格式、整体哈希、SHA-1 到 SHA-256 的过渡，以及不可变对象带来的代价。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="开发工具与工程效率">
@@ -92,18 +92,7 @@
 
     <p>Git 的表层命令不算多，语义却经常被口口相传的说法带偏：「Git 存快照不存差异」「rebase 会丢提交」「<code>reset --hard</code> 之后就彻底没救了」。这些说法都只对一半。</p>
 <p>要把 Git 用准，得先看清底下那套只有四种对象的内容寻址存储，再看每条命令到底动了 HEAD、索引、工作区中的哪一层。</p>
-
-    <div class="callout callout-info">
-        <div class="callout-icon">💡</div>
-        <div class="callout-title">这篇怎么读</div>
-        <ul>
-            <li><strong>① 用法</strong>：一张「常见处境 → 该用哪条命令 → 前置检查」对照表（救回丢失提交、撤销已推送的改动、拆分提交都在里面），加一份保命配置速查与三段可直接跑的剧本，破坏性命令标了可逆性。</li>
-            <li><strong>② 原理</strong>：四种对象与内容寻址存储、索引作为第三状态与 stage 号、HEAD 与 detached 的成因、merge 与 rebase 在提交图上的差异、reset 五种模式各改哪一层、reflog 与可达性、gc 保留期参数、租约强推为什么会被一次 fetch 破防。</li>
-            <li><strong>③ 场景</strong>：按协作形态选历史策略——谁能 rebase、谁只能 merge、什么时候必须用 revert，以及各自的代价。</li>
-        </ul>
-    </div>
-
-    <h2>① 用法 · 常见处境 → 该用哪条命令 → 前置检查</h2>
+<h2>常见处境 → 该用哪条命令 → 前置检查</h2>
 
     <p>下表按「你现在的处境」查，不按命令名查。第三列是动手之前必须先看到的输出，第四列标出这条路径可不可逆——凡是标了不可逆的，跑之前必须先做备份动作。原因一律在原理层，这里只给做法。</p>
 
@@ -176,8 +165,8 @@ git stash push -u -m "before hard reset"   # -u 让未跟踪文件也写进对�
 <p>三者的共同前置检查是：先跑一次 <code>git stash push -u</code> 或打一个备份分支，再确认 <code>git clean -nd</code> 的清单与 <code>git log --left-right origin/分支...HEAD</code> 的左侧都是你真的不要的东西。</p>
     </div>
 
-    <h2>② 原理 · 四种对象：一个内容寻址的键值库</h2>
-    <p><code>.git/objects</code> 本质上是个键值存储：key 是对象内容的哈希，value 是 zlib 压缩后的字节。写入前 Git 会拼一个头部，格式是「类型 空格 字节数 NUL」，再接原始内容，对整体求哈希。</p>
+    <h2>四种对象：一个内容寻址的键值库</h2>
+    <p><code>.git/objects</code> 是键值存储：key 是内容的哈希，value 是 zlib 压缩字节。写入前拼一个头部「类型 空格 字节数 NUL」，再接原始内容，整体求哈希。</p>
 <p>因此同样的内容在任何仓库、任何时间点都得到同一个 key，这就是「内容寻址」的含义，也是 Git 去重的全部机制。默认哈希算法是 SHA-1，自 2.13 起用的是带碰撞检测的 sha1dc 实现；</p>
 <p>新仓库可以用 <code>git init --object-format=sha256</code> 建成 SHA-256 格式，但这类仓库目前还不能和 SHA-1 仓库互相推送。</p>
     <p>四种对象里只有三种会被日常提到，第四种（tag 对象）还经常和「轻量标签」混在一起讲，实际上轻量标签根本不产生对象。</p>
@@ -253,7 +242,7 @@ git ls-files -u                 # 只列 stage 非 0 的冲突条目，冲突残
 # 5) 松散对象与 packfile 各占多少空间，判断该不该 gc
 git count-objects -vH</code></pre>
 
-    <h2>② 原理 · 索引是独立的第三状态，不是「工作区的缓存」</h2>
+    <h2>索引是独立的第三状态，不是「工作区的缓存」</h2>
     <p><code>.git/index</code> 是一个二进制文件，对每个被跟踪路径记录：路径名、blob 哈希、文件模式、一份 stat 缓存（设备号、inode、mtime、ctime、uid、gid、文件大小），以及一个 stage 号。stat 缓存的作用是让 <code>git status</code> 在绝大多数文件上不必读内容就能断定「没变」；</p>
 <p>这也是为什么把仓库放在时间戳不稳定的网络文件系统上时，status 会莫名其妙变慢。</p>
     <p>stage 号是理解冲突的关键：正常情况恒为 0；合并冲突时同一路径会同时存在 stage 1（共同祖先）、stage 2（当前分支，ours）、stage 3（对方分支，theirs）三条记录。</p>
@@ -304,7 +293,7 @@ stateDiagram-v2
     end note
     </div>
 
-    <h2>② 原理 · HEAD、分支与 detached HEAD 的成因</h2>
+    <h2>HEAD、分支与 detached HEAD 的成因</h2>
     <p>分支不是目录副本，也不是提交序列，它就是 <code>refs/heads/</code> 下一个 41 字节的文本文件：40 位十六进制哈希加一个换行（打包引用后会被折叠进 <code>packed-refs</code>）。HEAD 是 <code>.git/HEAD</code> 里的一行，正常情况写着 <code>ref: refs/heads/main</code>，这叫符号引用。</p>
     <p>于是切分支的真实动作是：改写 HEAD 那一行，再把索引和工作区刷成目标提交的 tree。创建分支是 O(1)，永远是毫秒级；</p>
 <p>切换分支的成本只和两棵 tree 的差异规模相关，跟仓库总历史大小无关——所以「仓库大所以切分支慢」这个说法不成立，真正的慢因是差异文件多、或者 status 前的 stat 扫描慢。</p>
@@ -324,7 +313,7 @@ stateDiagram-v2
         </tbody>
     </table>
 
-    <h2>② 原理 · merge 与 rebase 在提交图上的差异</h2>
+    <h2>merge 与 rebase 在提交图上的差异</h2>
     <p>merge 的算法是三方合并：先用 <code>git merge-base</code> 找共同祖先，再把两侧相对祖先的改动合起来。如果共同祖先就是当前 HEAD，Git 默认走 fast-forward——只移动引用，一个新对象都不产生，所谓「合并」其实什么都没合。</p>
 <p>这也是很多团队看不到合并提交的原因，要强制留痕得加 <code>--no-ff</code>。真正的合并提交有两个父，且父的顺序有语义：parent 1 是执行合并时所在的分支，<code>git log --first-parent</code> 能靠它把主干拉成一条线。</p>
 <p>默认合并策略自 Git 2.34 起是 ort，取代了旧的 recursive，在大仓库上快一个数量级，重命名检测也更准。</p>
@@ -366,7 +355,7 @@ flowchart LR
         </tbody>
     </table>
 
-    <h2>② 原理 · reset 的五种模式，各改哪一层</h2>
+    <h2>reset 的五种模式，各改哪一层</h2>
     <p><code>git reset</code> 被讲成「撤销」，其实它做的事非常机械：把当前分支引用移到指定提交，然后按模式决定是否连带刷新索引和工作区。理解成「三层开关」就不会用错。</p>
     <table>
         <thead>
@@ -384,7 +373,7 @@ flowchart LR
     <p>两个必须纠正的认知。第一，<code>reset --hard</code> 不删除未跟踪文件，清空工作目录的是 <code>git clean -fd</code>，这两条命令经常被当成一条来记，结果该清的没清、不该丢的丢了。第二，<code>--hard</code> 真正不可逆的只有「从未进入对象库的工作区改动」；</p>
 <p>只要 <code>git add</code> 过，blob 就已经落盘，<code>git fsck --lost-found</code> 能捞出来（代价是只有内容、没有文件名）。</p>
 
-    <h2>② 原理 · cherry-pick 与 revert：补丁语义，不是「搬提交」</h2>
+    <h2>cherry-pick 与 revert：补丁语义，不是「搬提交」</h2>
     <p>cherry-pick 不会把提交移过来。它取的是「该提交与其父提交之间的差异」，然后以三方合并的方式应用到当前 HEAD，生成一个内容相似但哈希、父提交、时间全都不同的新提交。</p>
 <p>三个直接后果：提交图上看不出任何关联，除非加 <code>-x</code> 在消息里写一行来源哈希；对合并提交做 cherry-pick 必须用 <code>-m</code> 指明相对哪个父取差异；</p>
 <p>后续能否识别「这个补丁已经应用过」完全取决于 patch-id 是否一致，差异只要有一点偏移就识别不出来。</p>
@@ -434,7 +423,7 @@ flowchart TB
     F -->|"否"| P2["改用反向提交 不要改写历史"]
     </div>
 
-    <h2>② 原理 · reflog 与可达性：为什么「丢失」的提交还在</h2>
+    <h2>reflog 与可达性：为什么「丢失」的提交还在</h2>
     <p>对象的生死只由可达性决定。Git 从一组「根」出发做图遍历：所有 <code>refs/heads</code>、<code>refs/tags</code>、<code>refs/remotes</code>、<code>refs/stash</code>、HEAD、索引，以及引用日志里记录过的每一个旧值。遍历不到的对象才叫 unreachable，而 unreachable 也不等于立刻删除。</p>
     <p>引用日志就是「引用的历史位置流水」，存在 <code>.git/logs/HEAD</code> 和 <code>.git/logs/refs/heads/</code> 下，每次 commit、checkout、reset、merge、rebase 移动引用都会追加一行，带上操作类型和时间。所以 <code>reset --hard</code> 之后，旧提交仍被引用日志引用，仍然可达，gc 根本不会碰它——这就是「救得回来」的机制。</p>
     <table>
@@ -471,7 +460,7 @@ git fsck --no-reflogs 2&gt;/dev/null | awk '/dangling commit/{print $3}' | xargs
 git branch backup/before-reset-$(date +%Y%m%d-%H%M%S)
 git stash push -u -m "before hard reset"   # -u 连未跟踪文件一起写进对象库</code></pre>
 
-    <h2>② 原理 · 推送的安全语义：--force-with-lease 与 --force</h2>
+    <h2>推送的安全语义：--force-with-lease 与 --force</h2>
     <p><code>git push --force</code> 是无条件覆盖：远端引用直接被设成你给的值，别人在这期间推上去的提交立刻变成不可达，等远端 gc 跑过就彻底没了。托管平台的 reflog 有时能救，但那是运气不是机制。</p>
     <p><code>--force-with-lease</code> 加了一道乐观锁：只有远端引用的当前值等于你本地记录的远端跟踪引用时才更新，否则以 stale info 拒绝。</p>
 <p>它的可靠性完全依赖那个「期望值」有多可信，而这正是它的软肋——<strong>任何一次 fetch 都会刷新远端跟踪引用</strong>，包括 IDE 后台自动 fetch、<code>git pull</code> 内部隐含的 fetch。</p>
@@ -513,7 +502,7 @@ git push --force-with-lease=feature/x:1a2b3c4 origin feature/x
 # 仓库级兜底：把裸 force 从肌肉记忆里去掉
 git config --global alias.fpush 'push --force-with-lease --force-if-includes'</code></pre>
 
-    <h2>③ 场景 · 按协作形态选历史策略</h2>
+    <h2>按协作形态选历史策略</h2>
 
     <p>上面这些机制放到团队里，会收敛成一个很简单的判断：<strong>这条分支是不是你独占</strong>。独占就可以改写历史，不独占就只能追加提交。下表把常见形态和它们的代价摊开。</p>
 

@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>配置在 K8s 里反复出问题，不是因为 ConfigMap 难懂，而是因为<strong>四种注入方式的热更新行为完全不同，清单上却看起来差别很小</strong>。本篇核心就是那张对照表。</p>
 <p>应用侧的配置热更新范式、配置中心服务端机制分别见 <a href="../../../architecture/governance/config-client/">微服务配置中心篇</a> 与 <a href="../../../architecture/governance/">配置中心系列</a>，本篇只讲集群内的落地方式与密钥安全。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：挂载与环境变量注入两种方式的最小可用清单、日常操作命令，以及一张「配置变了到底要不要重启」的对照表。</li>
-        <li><strong>② 原理</strong>：四种注入方式的行为差异、卷挂载的符号链接原子切换与 subPath 为何永不更新、让变更生效的几条路、Secret 的真实保护边界与密钥来源方案、ServiceAccount 与云 IAM 联邦、大小限制与不可变配置。</li>
-        <li><strong>③ 场景</strong>：什么该进镜像、什么进 ConfigMap、什么必须走外部密钥服务，以及多环境差异与七种反模式。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 挂载与注入的两个最小示例，以及改了配置要不要重启</h2>
+<h2>挂载与注入的两个最小示例，以及改了配置要不要重启</h2>
 
 <p>集群里落地配置只有两种姿势：<strong>挂成文件</strong>（能自动同步，但应用要自己重读）和<strong>注入成环境变量</strong>（最省事，改了必须重启）。下面两份清单可直接 apply，注释只说明为什么要这行。</p>
 
@@ -231,7 +220,7 @@ kubectl rollout restart deploy/api</code></pre>
 
 <p>上面的默认值以你集群版本的 <code>kubectl explain pod.spec.volumes.configMap</code> 输出为准。为什么卷挂载会更新而 subPath 不会、Secret 到底保护了什么，都在下面几节。</p>
 
-<h2>② 原理 · 四种注入方式的行为差异</h2>
+<h2>四种注入方式的行为差异</h2>
 
 <table>
 <thead><tr><th>注入方式</th><th>写法</th><th>能否热更新</th><th>应用要做什么</th><th>粒度</th><th>权限与风险</th></tr></thead>
@@ -299,7 +288,7 @@ spec:
 </code></pre>
 
 
-<h2>② 原理 · 为什么卷挂载会更新而 subPath 不会</h2>
+<h2>为什么卷挂载会更新而 subPath 不会</h2>
 
 <p>把卷挂载的目录 <code>ls -la</code> 一下就明白了：容器里看到的 <code>app.yaml</code> 是一条符号链接，指向 <code>..data/app.yaml</code>，而 <code>..data</code> 本身又是一条指向带时间戳目录的符号链接。</p>
 <p>kubelet 更新配置时，先写一个全新的时间戳目录，然后<strong>原子地把 <code>..data</code> 这条符号链接指过去</strong>——这样应用永远不会读到写了一半的配置。</p>
@@ -337,7 +326,7 @@ flowchart TB
 </div>
 
 
-<h2>② 原理 · 让配置变更真正生效的两条路</h2>
+<h2>让配置变更真正生效的两条路</h2>
 
 <table>
 <thead><tr><th>做法</th><th>触发机制</th><th>优点</th><th>代价</th></tr></thead>
@@ -390,7 +379,7 @@ generatorOptions:
 </code></pre>
 
 
-<h2>② 原理 · Secret 的真相</h2>
+<h2>Secret 的真相</h2>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
@@ -412,7 +401,7 @@ generatorOptions:
 <p>所以「把 get secret 权限收了」并不构成隔离，真正的隔离是按命名空间切分，并且让凭证短期化。</p>
 
 
-<h2>② 原理 · 密钥的正确来源：不要手写进仓库</h2>
+<h2>密钥的正确来源：不要手写进仓库</h2>
 
 <table>
 <thead><tr><th>方案</th><th>密钥以什么形式进 Git</th><th>解密发生在哪</th><th>轮转</th><th>灾难场景</th><th>适用</th></tr></thead>
@@ -468,7 +457,7 @@ spec:
 </code></pre>
 
 
-<h2>② 原理 · ServiceAccount 与云 IAM 的联邦</h2>
+<h2>ServiceAccount 与云 IAM 的联邦</h2>
 
 <p>上面所有方案解决的都是「密钥怎么安全地送到集群」。但对云平台凭证来说，更好的答案是<strong>根本不要有长期密钥</strong>。</p>
 <p>IRSA 与 Workload Identity 的做法是：kubelet 往容器里投一个有效期一小时的 ServiceAccount token，云端的 STS 用集群的 OIDC 公钥校验它，然后换给 Pod 一份短期凭证。</p>
@@ -518,7 +507,7 @@ spec:
 </code></pre>
 
 
-<h2>② 原理 · 大小限制与不可变配置</h2>
+<h2>大小限制与不可变配置</h2>
 
 <p>ConfigMap 与 Secret 的单对象上限约 1 MiB，来自 etcd 的单值大小限制（默认 1.5 MiB）。更实际的约束是：<strong>每个引用它的 Pod 所在节点的 kubelet 都会缓存它</strong>，几百 KB 乘几百个节点就是可观的内存与 watch 流量。</p>
 
@@ -545,7 +534,7 @@ spec:
 </table>
 
 
-<h2>② 原理 · 把上面的结论逐条验证一遍</h2>
+<h2>把上面的结论逐条验证一遍</h2>
 
 <pre><code class="language-bash"># Secret 根本不是加密的：一条命令还原明文
 kubectl -n prod get secret api-secret -o jsonpath='{.data.password}' | base64 -d; echo
@@ -581,7 +570,7 @@ for d in json.load(sys.stdin)["items"]:
 </code></pre>
 
 
-<h2>③ 场景 · 什么进镜像、什么进 ConfigMap、什么必须走外部密钥服务</h2>
+<h2>什么进镜像、什么进 ConfigMap、什么必须走外部密钥服务</h2>
 
 <p>判断标准只有两条：<strong>这个值会不会随环境变化</strong>、<strong>泄露之后损失多大</strong>。下表把常见配置按这两条落到位置。</p>
 
@@ -601,13 +590,13 @@ for d in json.load(sys.stdin)["items"]:
 <p><strong>不适用边界</strong>：ConfigMap 不是配置中心，没有灰度、版本审批与客户端推送；Secret 不是保险箱，能在该命名空间建 Pod 的人就等于能读它，收口靠命名空间切分与短期凭证。</p>
 <p>清单模板化与多环境覆盖在 <a href="../helm/">Helm</a> 与 <a href="../../gitops/">GitOps 系列</a>；配置变更走不走流水线审批见 <a href="../../cicd/">CI 流水线</a>；配置改坏后的现象定位在 <a href="../ops-troubleshooting/">节点与集群级故障排查</a>。</p>
 
-<h2>③ 场景 · 多环境差异管理：一句结论</h2>
+<h2>多环境差异管理：一句结论</h2>
 
 <p>结论是：<strong>用同一份基线加环境覆盖层，不要给每个环境各写一份完整清单，也不要靠命名前缀在同一个命名空间里区分环境</strong>。</p>
 <p>具体怎么组织目录、怎么做覆盖层、怎么跟自动同步配合，见 <a href="../../gitops/">GitOps 系列的多环境篇</a>；用 Helm 的 values 做参数化还是用 Kustomize 做覆盖层，取舍见 <a href="../helm/">Helm 篇</a>。</p>
 
 
-<h2>③ 场景 · 反模式</h2>
+<h2>反模式</h2>
 
 <table>
 <thead><tr><th>反模式</th><th>症状</th><th>后果</th><th>正确做法</th></tr></thead>

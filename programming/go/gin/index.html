@@ -92,18 +92,7 @@
                     <div class="article-content">
 <p>把 Gin 剥开只有三样东西：一棵压缩前缀树做路由、一个 <code>sync.Pool</code> 复用 <code>Context</code>、一个由 <code>index</code> 字段驱动的 handler 切片遍历。它的性能来自前两样，线上事故也来自前两样。</p>
 <p>另外记住一个前提：Gin 不实现 HTTP 协议，它只是一个 <code>http.Handler</code>，底下还是标准库的 <code>net/http</code>，所以超时、TLS、HTTP/2 的行为与标准库完全一致，配置也要去 <code>http.Server</code> 上做，而不是找 Gin 的 API。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：一份能直接跑的最小服务骨架（路由分组、绑定与校验、统一错误响应、中间件注册顺序、<code>http.Server</code> 超时与优雅退出），加「要做什么 → 怎么写 → 注意什么」对照表，以及 <code>Next</code>、<code>Abort</code>、<code>Copy</code>、<code>SetTrustedProxies</code> 的速查。</li>
-        <li><strong>② 原理</strong>：路由匹配为什么与路由数无关、<code>RouterGroup</code> 其实只是注册期语法糖、<code>sync.Pool</code> 复用 <code>Context</code> 如何变成数据竞争、<code>Next</code> 与 <code>Abort</code> 的 index 真实语义、<code>Bind</code> 与 <code>ShouldBind</code> 的副作用差异、信任代理的安全模型。</li>
-        <li><strong>③ 场景</strong>：什么项目适合继续用 Gin、什么时候该换成 Echo 或标准库，以及上线前那张只有四条的检查清单。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 一个能直接跑的最小服务骨架</h2>
+<h2>一个能直接跑的最小服务骨架</h2>
 <p>下面这份骨架覆盖了一个 Gin 服务上线所需的全部要件：路由分组、参数绑定与校验、统一错误响应、中间件注册顺序、超时与优雅退出。可以整段抄走再往里填业务。</p>
 <p>注释只说明为什么要这么写，机制解释在原理层。</p>
 <pre><code class="language-go">// main.go —— 最小可用骨架。import 省略：gin、validator、net/http、os/signal、syscall、context、errors、log、time
@@ -242,7 +231,7 @@ func createOrder(c *gin.Context) {
 </table>
 <p>上面这些约定为什么长这样——为什么 Recovery 必须第一个、为什么 <code>Abort</code> 之后还要 <code>return</code>、为什么异步代码不能碰 <code>*gin.Context</code>——全部在下面几节。</p>
 
-<h2>② 原理 · 路由：压缩前缀树让匹配与路由数无关</h2>
+<h2>路由：压缩前缀树让匹配与路由数无关</h2>
 <p>搞清这一节能回答两个具体问题：路由涨到上万条会不会变慢，以及为什么某些路由注册在一起会让进程启动就 panic。</p>
 <p>Gin 给每个 HTTP 方法维护一棵独立的树。注册路由时按公共前缀切分节点，查询时从根节点逐段下降，比较的字符数只和请求路径长度有关，和树里有多少条路由无关，所以单次匹配是 <strong>O(k)</strong>，k 是路径长度。</p>
 <p>这就是「路由多了会不会变慢」这个问题的标准答案：不会。</p>
@@ -281,7 +270,7 @@ flowchart TB
 <p>顺带纠正一个流传很广的说法：<code>RouterGroup</code> 不是运行时的一层包装，它只是「路径前缀 + 中间件切片」的语法糖。路由注册的那一刻，全局中间件、组中间件、路由自己的 handler 就已经被合并成一个扁平切片存进了树节点。</p>
 <p>这解释了为什么 <code>r.Use()</code> 只对之后注册的路由生效——之前注册的路由，切片早就定型了。</p>
 
-<h2>② 原理 · Context 复用与 c.Copy：Gin 最经典的数据竞争</h2>
+<h2>Context 复用与 c.Copy：Gin 最经典的数据竞争</h2>
 <p>搞清这一节能解释一类极难复现的线上现象：日志里 A 用户的记录带着 B 用户的 trace_id，且只在高并发时出现。</p>
 <p>Gin 每个请求不新建 <code>Context</code>，而是从 <code>sync.Pool</code> 取一个出来重置。这省掉了热路径上最大的一笔分配，也是 Gin 基准测试里「每请求分配次数只有个位数」的来源。</p>
 <p>代价是：<strong><code>Context</code> 的生命周期严格等于 handler 调用栈的生命周期</strong>，handler 一返回，这个对象随时可能被别的请求抢走。</p>
@@ -348,7 +337,7 @@ func bestAsync(c *gin.Context) {
 </tbody>
 </table>
 
-<h2>② 原理 · 中间件链：index 驱动的洋葱结构</h2>
+<h2>中间件链：index 驱动的洋葱结构</h2>
 <p>搞清这一节就不用死记「中间件该按什么顺序注册」，顺序可以从机制推出来。</p>
 <p>Gin 的中间件常被描述成「洋葱模型」，这个比喻对，但实现没有嵌套函数调用那么玄。<code>Context</code> 里有个 <code>index int8</code>，<code>c.Next()</code> 做的事就是自增 index 然后循环调用 <code>handlers[index]</code>；<code>c.Abort()</code> 做的事就是把 index 赋成 <code>abortIndex</code>（<code>math.MaxInt8 / 2</code>，即 63），让循环条件不成立。</p>
 <p>洋葱的「回程」之所以存在，是因为内层 handler 是在外层 handler 的 <code>Next()</code> 调用栈里执行的，内层返回后自然回到外层 <code>Next()</code> 之后的代码。</p>
@@ -385,7 +374,7 @@ sequenceDiagram
 </tbody>
 </table>
 
-<h2>② 原理 · 绑定与校验：ShouldBind 与 Bind 的行为差异</h2>
+<h2>绑定与校验：ShouldBind 与 Bind 的行为差异</h2>
 <p>搞清这一节能解决两类现象：统一错误格式莫名被绕过，以及「明明加了 binding tag，传 0 却被判成缺失」。</p>
 <p>这是新手最容易踩的一组 API。<code>Bind</code> 系列和 <code>ShouldBind</code> 系列解析逻辑完全相同，唯一区别是出错时的副作用：<strong><code>Bind</code> 会自动执行 <code>AbortWithError(400, err)</code></strong>，写入 400 状态码和一段英文错误串。</p>
 <p>这意味着项目里统一约定的错误响应格式会被悄悄绕过，而且如果你在 <code>Bind</code> 返回 error 后又写一次响应，会触发 <code>headers were already written</code> 警告。</p>
@@ -446,7 +435,7 @@ func init() {
 }</code></pre>
 <p>把校验错误翻译成统一响应体的那段代码在用法层的 <code>createOrder</code> 里，这里只补一句：<code>validator.ValidationErrors</code> 是一个切片类型，用 <code>errors.As</code> 取出来之后逐条读 <code>Field()</code> 与 <code>Tag()</code>，不要去解析它的 <code>Error()</code> 字符串——那段文案会随库版本变化。</p>
 
-<h2>② 原理 · 生产配置：ReleaseMode 与信任代理的安全模型</h2>
+<h2>生产配置：ReleaseMode 与信任代理的安全模型</h2>
 <p>搞清这一节能避免两类问题：日志被调试输出刷满，以及基于 IP 的限流与风控被静默绕过。</p>
 <p>Gin 的默认配置是为本地开发调优的。运行模式好理解：不调 <code>gin.SetMode(gin.ReleaseMode)</code> 就留在 debug 模式，每个请求打调试日志、启动时打整张路由表。信任代理这一项则是安全问题。</p>
 <div class="callout callout-danger">
@@ -471,7 +460,7 @@ func init() {
 </tbody>
 </table>
 
-<h2>③ 场景 · 什么项目适合 Gin，什么时候该换掉它</h2>
+<h2>什么项目适合 Gin，什么时候该换掉它</h2>
 <p>前面几节是「点」，这里收成「面」：按项目形态给方案、给理由，也给代价。</p>
 <table>
 <thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>

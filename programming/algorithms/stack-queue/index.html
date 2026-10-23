@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="栈与队列：容量与延迟上界、无界队列的隐式故障、栈深度与语言的差异、工作窃取与无锁的真实优势、进程内队列的边界。">
+        <meta name="description" content="栈与队列：容量与延迟上界、无界队列把背压换成 OOM、工作窃取、无锁队列的真实收益与它不比锁快的条件。">
     <meta name="keywords" content="栈,队列,单调栈,单调队列,括号匹配,BFS">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/algorithms/stack-queue/">
     <!-- Open Graph -->
     <meta property="og:title" content="栈与队列的语义边界与并发实现 - 资深码农">
-    <meta property="og:description" content="栈与队列：容量与延迟上界、无界队列的隐式故障、栈深度与语言的差异、工作窃取与无锁的真实优势、进程内队列的边界。">
+    <meta property="og:description" content="栈与队列：容量与延迟上界、无界队列把背压换成 OOM、工作窃取、无锁队列的真实收益与它不比锁快的条件。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/algorithms/stack-queue/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="栈与队列的语义边界与并发实现 - 资深码农">
-    <meta name="twitter:description" content="栈与队列：容量与延迟上界、无界队列的隐式故障、栈深度与语言的差异、工作窃取与无锁的真实优势、进程内队列的边界。">
+    <meta name="twitter:description" content="栈与队列：容量与延迟上界、无界队列把背压换成 OOM、工作窃取、无锁队列的真实收益与它不比锁快的条件。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="算法,栈,队列">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"栈与队列的语义边界与并发实现","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"栈与队列：容量与延迟上界、无界队列的隐式故障、栈深度与语言的差异、工作窃取与无锁的真实优势、进程内队列的边界。","url":"https://www.yijunjun.asia/programming/algorithms/stack-queue/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/algorithms/stack-queue/"},"articleSection":"更多技术"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"栈与队列的语义边界与并发实现","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"栈与队列：容量与延迟上界、无界队列把背压换成 OOM、工作窃取、无锁队列的真实收益与它不比锁快的条件。","url":"https://www.yijunjun.asia/programming/algorithms/stack-queue/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/algorithms/stack-queue/"},"articleSection":"更多技术"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "栈与队列", "item": "https://www.yijunjun.asia/programming/algorithms/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -93,18 +93,7 @@
 <p>栈和队列是后端工程里最常被「顺手加一个」的结构，也最常被加错：无界队列把可控的拒绝换成了不可控的 OOM。</p>
 <p>线程池的队列容量决定了最大线程数会不会生效，递归深度一旦由外部输入决定，栈就从性能参数变成攻击面。</p>
 <p>这篇不讲括号匹配和 BFS，讲的是受限访问换来的确定性、这些确定性在什么条件下失效，以及配一个队列时必须同时配上的东西。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：有界队列与线程池配合的最小可用写法（Go 用带缓冲 channel、Java 手写 <code>ThreadPoolExecutor</code>）、队列容量从「可接受排队时间乘消费速率」反推的算法，以及「队列该看什么指标」清单。</li>
-        <li><strong>② 原理</strong>：调用栈深度在各运行时的差异、单调栈与单调队列对应的滑窗聚合、队列的缓冲削峰解耦三种语义各自的成立前提、无界队列怎么把背压变成 OOM、线程池入队与扩容的真实顺序、工作窃取为什么两端取向不同、无锁队列的 ABA 与内存序。</li>
-        <li><strong>③ 场景</strong>：进程内队列与消息中间件的分界线、典型故障形态该怎么改，以及哪些问题加队列解决不了。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 有界队列与线程池的最小可用写法，以及该看什么指标</h2>
+<h2>有界队列与线程池的最小可用写法，以及该看什么指标</h2>
 <p>配一个队列的标准动作是三件事一起做：<strong>容量必须有界且由计算得出</strong>、<strong>入队打截止时间、出队先判过期</strong>、<strong>拒绝与过期都要计数</strong>。</p>
 <p>少任何一件，积压时的表现都是「系统很忙但没有有效产出」，而且从监控上看不出来。</p>
 <table>
@@ -240,7 +229,7 @@ public final class Pools {
 </table>
 <p>为什么必须有界、为什么线程池的顺序常被记反、为什么工作窃取要从两端取——都在下面的原理层。</p>
 
-<h2>② 原理 · 栈首先是执行模型，其次才是数据结构</h2>
+<h2>栈首先是执行模型，其次才是数据结构</h2>
 <p>搞清这一节能堵住一类可用性风险：一份深层嵌套的外部输入就能把进程打崩。</p>
 <p>后端工程师和栈打交道最多的场合不是算法题，而是<strong>调用栈</strong>：它决定了递归能走多深、异常栈能打印多少层、协程要占多少内存。</p>
 <p>每个栈帧要放返回地址、参数、局部变量和寄存器保存区，所以「深度」是有成本的，而这个成本在不同运行时上差异巨大。</p>
@@ -285,7 +274,7 @@ flowchart TB
     S1 --> S4
 </div>
 
-<h2>② 原理 · 单调栈与单调队列：滑窗聚合的底层结构</h2>
+<h2>单调栈与单调队列：滑窗聚合的底层结构</h2>
 <p>搞清这一节能解决监控里一个具体问题：算「最近一分钟最大响应时间」时，为什么不需要每次遍历窗口内全部样本。</p>
 <p>单调栈解决的是一类固定形状的问题：<strong>为每个元素找它左边或右边第一个比它大（或小）的元素</strong>。柱状图最大矩形、接雨水、股票跨度都是它的变形。</p>
 <p>单调队列解决的是另一类：<strong>固定窗口内的极值</strong>，每个元素进出各一次，整体线性。</p>
@@ -338,7 +327,7 @@ func (w *MaxWindow) Push(v int64) int64 {
 }
 </code></pre>
 
-<h2>② 原理 · 队列的三种语义：缓冲、削峰、解耦</h2>
+<h2>队列的三种语义：缓冲、削峰、解耦</h2>
 <p>搞清这一节能在设计评审上问出一个关键问题：这个队列到底是哪一种语义。「加个队列」这句话出现时往往没人追问，而三者的成立条件完全不同。</p>
 <p><strong>缓冲</strong>处理的是速率抖动，前提是<strong>长期平均消费速率高于平均生产速率</strong>；<strong>削峰</strong>处理的是有限时长的高峰，前提是<strong>峰值的总量有界，而且业务能接受延迟</strong>；</p>
 <p><strong>解耦</strong>处理的是可用性与发布节奏，前提是<strong>下游不可用期间数据可以先攒着，且顺序与重复语义已明确</strong>。</p>
@@ -355,7 +344,7 @@ func (w *MaxWindow) Push(v int64) int64 {
 </tbody>
 </table>
 
-<h2>② 原理 · 有界与无界：无界队列是把背压换成 OOM</h2>
+<h2>有界与无界：无界队列是把背压换成 OOM</h2>
 <p>搞清这一节能避免一次进程级故障。这是整篇最该记住的一条：<strong>无界队列不是更安全，它只是把「拒绝请求」这个显式故障，换成了「内存耗尽」这个隐式故障</strong>。</p>
 <p>有界队列满时你有明确的决策点——阻塞生产者、丢弃最老的、丢弃最新的、或者返回错误；无界队列没有这个决策点，问题会一直积累，直到 OOM 把整个进程连带那些本来正常的请求一起干掉。</p>
 <p>另一个被低估的代价是<strong>延迟失控</strong>：客户端超时是固定的，排队时间一旦超过它，消费者处理的每一条都是<strong>已经没人要的请求</strong>，系统进入活性很高但有效吞吐为零的状态。</p>
@@ -399,7 +388,7 @@ sequenceDiagram
     Note over W: 出队先判截止时间<br/>过期直接丢弃 不要浪费下游配额
 </div>
 
-<h2>② 原理 · 阻塞队列与线程池拒绝策略的配合</h2>
+<h2>阻塞队列与线程池拒绝策略的配合</h2>
 <p>搞清这一节能解释一个配置常见病：最大线程数配了却从来没生效。线程池的行为完全由队列决定，而顺序常被记反。</p>
 <p>正确顺序是：<strong>核心线程未满则新建核心线程，核心线程满了先入队，队列满了才扩到最大线程数，最大线程数也满了才触发拒绝策略</strong>。</p>
 <p>很多人以为是先把线程扩到最大再入队，于是配出「最大线程数永远用不上」的池子。</p>
@@ -428,16 +417,16 @@ sequenceDiagram
 </tbody>
 </table>
 
-<h2>② 原理 · 双端队列与工作窃取</h2>
+<h2>双端队列与工作窃取</h2>
 <p>搞清这一节能解释一个真实的死锁形态：工作窃取池里放了阻塞 IO，任务全卡住但 CPU 是空的。双端队列让「本地快、窃取也快」同时成立。</p>
 <p>每个工作线程有自己的双端队列，<strong>自己从一端后进先出取</strong>（刚产生的子任务还在缓存里，局部性最好），<strong>空闲线程从另一端先进先出偷</strong>（偷最老的任务，粒度更大，一次能干更久）。</p>
 <p>Go 运行时的每 P 本地队列与 Java 的 ForkJoinPool 都是这个模式。</p>
 <p>要注意三点：本地队列有容量上限（Go 每 P 本地队列是 256 个，满了把一半挪到全局队列）；窃取本身是原子操作，任务粒度过细时调度开销会盖过并行收益；</p>
 <p><strong>任务之间不能阻塞式互相等待</strong>，否则工作线程被占满形成自死锁，这也是 ForkJoinPool 里不做阻塞 IO 的原因。Go 侧调度器的本地队列与全局队列细节详见 <a href="../../go/concurrency/">Go 并发原语与常见并发 bug</a>。</p>
 
-<h2>② 原理 · 无锁队列：ABA 与内存序</h2>
+<h2>无锁队列：ABA 与内存序</h2>
 <p>搞清这一节能避免一次方向性错误的优化：把加锁队列换成无锁之后吞吐反而下降。</p>
-<p>无锁队列的价值是<strong>没有线程被挂起</strong>，因此不会出现「持锁线程被调度出去导致全体等待」的情况，尾延迟更可预测。但要先纠正一个普遍误解：<strong>无锁不等于更快</strong>。</p>
+<p>无锁队列的价值是<strong>没有线程被挂起</strong>，不会出现「持锁线程被调度出去导致全体等待」，尾延迟更可预测。<strong>无锁不等于更快</strong>。</p>
 <p>在争用激烈时，CAS 失败重试会让多个核心互相打断，缓存行在核间来回弹跳，吞吐可能低于一把简单的互斥锁；无锁的真正优势在低到中等争用、且要求延迟稳定的路径上。</p>
 <p>实现层面有四个绕不开的问题。<strong>ABA</strong>：指针从 A 变到 B 又变回 A，CAS 察觉不到中间的变化，要用带版本号的标记指针或双字 CAS。</p>
 <p><strong>内存序</strong>：必须先写好节点内容再发布指针，写侧用释放语义、读侧用获取语义，否则消费者会看到新指针配旧数据。<strong>内存回收</strong>：摘下的节点可能还有线程在读，需要 hazard pointer 或纪元回收。</p>
@@ -455,7 +444,7 @@ sequenceDiagram
 </table>
 <p>基于索引的环形数组实现与伪共享填充的具体写法详见 <a href="../array-linkedlist/">线性结构的内存布局与真实代价</a>。</p>
 
-<h2>③ 场景 · 进程内队列与消息中间件的分界</h2>
+<h2>进程内队列与消息中间件的分界</h2>
 <p>分界线很硬：<strong>进程内队列的数据在进程消失的那一刻就没了</strong>。它只能承担「丢了能接受或上游能重试补回」的工作：批量聚合、异步日志、本地限速、请求内并行。</p>
 <p>需要跨进程扩展、重启后继续、多方订阅或投递语义保证的场景，必须落到中间件。</p>
 <p>最典型的错误是用本地队列做「异步保证」：塞进队列就返回成功，实例重启时数据静默丢失而调用方以为成功。正确形态是先落库或先写消息队列（本地消息表、事务消息），再异步消费。</p>

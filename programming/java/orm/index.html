@@ -94,18 +94,7 @@
 
 <p>这篇不写 CRUD 教程，先给两个框架的最小可用写法与选型定式，再讲机制和陷阱。SQL 本身怎么写快、索引怎么建、执行计划怎么读，见站内 <a href="../../../database/mysql/">MySQL 深度剖析</a> 与 <a href="../../../database/optimization/">数据库优化</a>；</p>
 <p>连接池参数矩阵、真正的批量写入、事务边界与事务内 RPC 的危害，见 <a href="../../../observability/performance/">性能优化</a>。这几处本文只给结论，不重复展开。</p>
-
-<div class="callout callout-info">
-    <div class="callout-icon">💡</div>
-    <div class="callout-title">这篇怎么读</div>
-    <ul>
-        <li><strong>① 用法</strong>：JPA 与 MyBatis 各自的最小可用写法对照、一张「这类查询用哪个」的分派表，以及 N 加 1 的检测方法——打开 SQL 日志并把「单次请求 SQL 条数」写成断言。</li>
-        <li><strong>② 原理</strong>：持久化上下文为什么等于一级缓存加脏检查加动作队列、实体四种状态与每个 API 的真实行为、flush 的四个时机、<code>LazyInitializationException</code> 的成因与 <code>open-in-view</code> 的代价、N 加 1 的两种 JPA 特有形态、集合 fetch 配分页为什么会把全表拉进内存、实体设计的七个坑与乐观锁重试。</li>
-        <li><strong>③ 场景</strong>：按查询形态选 JPA 还是 MyBatis、混用时唯一不能破的边界、八条反模式对照。</li>
-    </ul>
-</div>
-
-<h2>① 用法 · 两个框架的最小可用写法与 N 加 1 的检测方法</h2>
+<h2>两个框架的最小可用写法与 N 加 1 的检测方法</h2>
 <p>先给 JPA 侧的标准形态。关键不是语法，而是三条约定：<strong>所有关联显式写 <code>LAZY</code>、只读查询用投影、需要关联时在查询层显式声明</strong>。做到这三条，后面原理层列的坑有一半根本不会出现。</p>
 <pre><code class="language-java">// ---------- JPA 侧 ----------
 @Entity
@@ -258,7 +247,7 @@ class OrderQueryServiceSqlCountTest {
 <p>没有 Hibernate 的场合（纯 MyBatis）用同样的思路：接入 <code>datasource-proxy</code> 或给数据源包一层计数装饰器，断言单次请求的语句条数。这条断言的价值在于它<strong>与数据量无关</strong>——数据涨了条数还是常数，才说明没有 N 加 1。</p>
 <p>上面这些写法为什么必须这样——为什么不调 <code>save</code> 也会更新、为什么原生 SQL 前不会自动 flush、为什么集合 fetch 配分页会把全表拉进内存——下面几节逐个解释。</p>
 
-<h2>② 原理 · 持久化上下文：一级缓存、脏检查、身份映射是同一个东西</h2>
+<h2>持久化上下文：一级缓存、脏检查、身份映射是同一个东西</h2>
 
 <p>搞清这一节能解释开头那三个「玄学」现象，也能解释为什么批处理里事务越长越慢。</p>
 
@@ -289,7 +278,7 @@ flowchart TB
 <p>批处理场景要么用 DTO 投影绕开管理，要么每处理若干条主动 <code>flush()</code> 加 <code>clear()</code>。堆为什么会因此涨上去、以及怎么确认是它，见 <a href="../jvm-tuning/">JVM 调优实战</a>。</p>
 </div>
 
-<h2>② 原理 · 实体的四种状态，以及每个 API 实际在做什么</h2>
+<h2>实体的四种状态，以及每个 API 实际在做什么</h2>
 
 <p>搞清这一节能提前预判「这行代码会不会发 SQL」，也能解释 <code>merge</code> 之后改动丢失这类无报错的数据错误。</p>
 
@@ -325,7 +314,7 @@ stateDiagram-v2
 <p>第二，<strong><code>persist</code> 不保证立刻发 INSERT</strong>。只有主键策略是 <code>IDENTITY</code>（依赖数据库自增）时，Hibernate 被迫立刻执行 INSERT 才能拿到主键填进身份映射表；用 <code>SEQUENCE</code> 或 <code>TABLE</code> 策略时它能先取号、把 INSERT 攒到 flush。</p>
 <p>这也解释了为什么 <strong>MySQL 自增主键下 JPA 的批量插入很难真正 batch</strong> ——每条都要立刻回写主键，JDBC 批处理攒不起来。真要批量写，方案见 <a href="../../../observability/performance/">性能优化</a> 里的批量写入部分。</p>
 
-<h2>② 原理 · flush 的时机，以及为什么 SQL 出现得比你想的晚</h2>
+<h2>flush 的时机，以及为什么 SQL 出现得比你想的晚</h2>
 
 <p>搞清这一节能解决一类很费时间的误判：日志里 UPDATE 出现的位置和代码顺序对不上，于是怀疑框架有 bug。</p>
 
@@ -366,7 +355,7 @@ sequenceDiagram
 
 <p>最后一行值得单独强调：很多人以为「查询前会自动 flush」是无条件的，于是在同一事务里先改实体、再用原生 SQL 统计，结果统计值不含本次改动。Hibernate 对 JPQL 能解析出涉及的实体表，对原生 SQL 只能放弃判断。</p>
 
-<h2>② 原理 · LazyInitializationException 的完整成因，和 open-in-view 的代价</h2>
+<h2>LazyInitializationException 的完整成因，和 open-in-view 的代价</h2>
 
 <p>搞清这一节能解释为什么「把 open-in-view 打开异常就没了」是最糟的修法：异常消失了，代价转移到了连接池上。</p>
 
@@ -411,7 +400,7 @@ flowchart TB
 <tr><td>拉长 Session</td><td><code>open-in-view</code> 保持 true</td><td>内部管理后台、并发极低</td><td>连接池吃紧、接口 P99 抖动时第一个该关掉的开关</td></tr>
 </tbody></table>
 
-<h2>② 原理 · N plus 1 在 JPA 里的两种特有形态</h2>
+<h2>N plus 1 在 JPA 里的两种特有形态</h2>
 
 <p>搞清这一节能解释用法层那条断言为什么有效：这两种形态都会让 SQL 条数随数据量增长，而条数断言正好把它锁死。</p>
 
@@ -431,7 +420,7 @@ flowchart TB
 <tr><td>拆成两次查询手工装配</td><td>2 条</td><td>跨服务、跨库，或关联数据来自缓存</td><td>代码啰嗦但最可控，微服务里往往是唯一选择</td></tr>
 </tbody></table>
 
-<h2>② 原理 · JOIN FETCH 加分页：Hibernate 会把全表拉进内存排序</h2>
+<h2>JOIN FETCH 加分页：Hibernate 会把全表拉进内存排序</h2>
 
 <p>搞清这一节能避免这一簇里事故率最高的一种写法，它在测试环境完全没有症状。</p>
 
@@ -481,7 +470,7 @@ public class OrderPageService {
 
 <p>如果嫌两步查询啰嗦，退而求其次的方案是保持单次分页查询，给集合关联加 <code>@BatchSize</code>，让 N 条子查询合并成 N 除以 batchSize 条 <code>IN</code> 查询。分页正确、SQL 条数可控，代价是比两步查询多几条 SQL。</p>
 
-<h2>② 原理 · 实体设计的坑：equals、双向关联、级联、乐观锁、枚举</h2>
+<h2>实体设计的坑：equals、双向关联、级联、乐观锁、枚举</h2>
 
 <p>搞清这一节能避开一类最贵的问题：不是慢，而是<strong>数据错了</strong>，而且错得很安静。</p>
 
@@ -548,7 +537,7 @@ public class AccountService {
 
 <p>如果冲突率本身很高（例如秒杀的同一行库存），乐观锁重试会退化成活锁，此时该换成数据库的悲观锁 <code>select ... for update</code>，或者把并发压力挪到缓存层。判断标准是压测下的重试次数分布，不是感觉。</p>
 
-<h2>③ 场景 · JPA 和 MyBatis 怎么选，混用的边界在哪</h2>
+<h2>JPA 和 MyBatis 怎么选，混用的边界在哪</h2>
 
 <p>这个问题不该按喜好回答，而该按<strong>查询形态</strong>回答。两个框架的设计目标本来不同：JPA 是对象持久化方案，假设你的操作以领域对象为单位；MyBatis 是 SQL 映射方案，假设你要精确控制每条 SQL。</p>
 
