@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="JVM 调优：可抄的启动参数模板、现象对应先调哪个旋钮、G1 周期与日志判读、六种 OOM 入口、泄漏与 RSS 构成。">
+        <meta name="description" content="容器下的 JVM 参数模板与排查路径：先用 jstat 和 GC 日志定量，再按停顿、内存、CPU 限制定位，最后才轮到换收集器。">
     <meta name="keywords" content="JVM,GC,G1,ZGC,Shenandoah,内存模型,Arthas,GC日志,内存泄漏,OOM,技术博客,性能调优">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/java/jvm-tuning/">
     <!-- Open Graph -->
     <meta property="og:title" content="JVM 调优实战：GC 选型、参数配置与 OOM 排查 - 资深码农">
-    <meta property="og:description" content="JVM 调优：可抄的启动参数模板、现象对应先调哪个旋钮、G1 周期与日志判读、六种 OOM 入口、泄漏与 RSS 构成。">
+    <meta property="og:description" content="容器下的 JVM 参数模板与排查路径：先用 jstat 和 GC 日志定量，再按停顿、内存、CPU 限制定位，最后才轮到换收集器。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/java/jvm-tuning/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="JVM 调优实战：GC 选型、参数配置与 OOM 排查 - 资深码农">
-    <meta name="twitter:description" content="JVM 调优：可抄的启动参数模板、现象对应先调哪个旋钮、G1 周期与日志判读、六种 OOM 入口、泄漏与 RSS 构成。">
+    <meta name="twitter:description" content="容器下的 JVM 参数模板与排查路径：先用 jstat 和 GC 日志定量，再按停顿、内存、CPU 限制定位，最后才轮到换收集器。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "JVM 调优实战：GC 选型、参数配置与 OOM 排查", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "JVM 调优：可抄的启动参数模板、现象对应先调哪个旋钮、G1 周期与日志判读、六种 OOM 入口、泄漏与 RSS 构成。", "url": "https://www.yijunjun.asia/programming/java/jvm-tuning/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/java/jvm-tuning/"}, "articleSection": "后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "JVM 调优实战：GC 选型、参数配置与 OOM 排查", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "容器下的 JVM 参数模板与排查路径：先用 jstat 和 GC 日志定量，再按停顿、内存、CPU 限制定位，最后才轮到换收集器。", "url": "https://www.yijunjun.asia/programming/java/jvm-tuning/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/java/jvm-tuning/"}, "articleSection": "后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Java 总览", "item": "https://www.yijunjun.asia/programming/java/"}, {"position": 4, "name": "JVM 调优与内存管理", "item": "https://www.yijunjun.asia/programming/java/jvm-tuning/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -88,7 +88,7 @@
         </div>
     </header>
     <p>调优这件事的真相是：<strong>绝大多数 GC 问题不是收集器选错了，而是堆太小或者有泄漏。</strong>换收集器、抄一份参数模板贴上去，是最没有性价比的两个动作。</p>
-<p>这篇按「拿到现场怎么办」的顺序组织：先给一份能直接抄的启动参数与「现象 → 先调哪个 → 怎么验证」的对照，再展开 G1 的回收周期、日志逐行判读。</p>
+<p>按「拿到现场怎么办」的顺序组织：先给一份能直接抄的启动参数与「现象 → 先调哪个 → 怎么验证」的对照，再展开 G1 的回收周期、日志逐行判读。</p>
 <p>六种 OOM 的排查入口、泄漏排查流程与 RSS 构成，最后收拢收集器选型与按场景的取舍。内存区域划分与对象晋升规则见 <a href="../">JVM 运行时原理</a>，这里只讲操作。</p>
 <h2>一份可抄的启动参数模板与「现象 → 先调哪个」</h2>
     <p>在线服务要显式配的参数不到十个，其余交给默认值和自适应。模板可以直接抄，注释是「为什么要这行」。</p>
@@ -160,7 +160,7 @@ exec java "${OPTS[@]}" -jar /app/app.jar</code></pre>
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">JDK 8u191 之前的容器坑</div>
-        <p>老版本 JVM <strong>不读 cgroup 限制</strong>，默认堆按<strong>宿主机</strong>物理内存的 1/4 推算。一台 256 GB 的机器上跑一个 limit 为 2 GB 的容器，JVM 会认为自己能用 64 GB 堆，于是完全不着急 GC，一路涨到 2 GB 被内核杀掉，日志里什么都没有，只在编排平台上看到 <code>OOMKilled</code> 和反复重启。</p>
+        <p>老版本 JVM <strong>不读 cgroup 限制</strong>，默认堆按<strong>宿主机</strong>物理内存 1/4 算。256 GB 机器上 limit 2 GB 的容器，JVM 以为能用 64 GB 堆，完全不急着 GC，一路涨到 2 GB 被内核杀掉，日志里什么都没有，只在编排平台看到 <code>OOMKilled</code> 和反复重启。</p>
 <p>8u191 起 <code>UseContainerSupport</code> 默认开启才解决；如果被迫停留在更老的版本，必须显式写死 <code>-Xmx</code>。</p>
     </div>
     <p>参数配好之后，调优就变成查表：左列是你在监控或日志里看到的样子，右列是「怎么证明改对了」——<strong>没有验证手段的调参等于赌博</strong>。</p>
@@ -208,7 +208,7 @@ jcmd $PID VM.native_memory summary
     <p>上面这些动作为什么是这个顺序、每个参数背后的机制是什么，下面几节展开。</p>
 
     <h2>定位优先于调参：判断路径长什么样</h2>
-    <p>搞清这一节能避免最贵的一类错误：把泄漏当成容量不足，加了两轮堆之后故障照旧，而现场已经被重启抹掉好几次了。</p>
+    <p>把泄漏当成容量不足，加了两轮堆之后故障照旧，而现场已经被重启抹掉好几次了。</p>
     <p>任何 GC 调参之前，必须先回答两个问题：停顿是否真的发生在 GC 期间，以及<strong>老年代回收后能不能回落</strong>。</p>
 <p>第二个问题把所有内存类故障切成两半：能回落的是容量与速率问题，可以用参数解决；不能回落的是泄漏，改参数只是延迟爆炸时间。</p>
     <div class="mermaid">
@@ -226,14 +226,14 @@ flowchart TB
     <div class="callout callout-tip">
         <div class="callout-icon">✅</div>
         <div class="callout-title">这一步不需要停机，也不需要改参数</div>
-        <p><code>jstat -gcutil &lt;pid&gt; 1000</code> 连续采样十分钟就能得出结论：看 <code>O</code> 列在 <code>FGC</code> 计数增加前后是否回落、<code>YGC</code> 每分钟多少次、<code>GCT</code> 占进程运行时间的比例。GC 总耗时占比长期超过 1% 值得关注，超过 5% 基本可以确定是主要瓶颈。</p>
+        <p><code>jstat -gcutil &lt;pid&gt; 1000</code> 采样十分钟出结论：看 <code>O</code> 列在 <code>FGC</code> 增加前后是否回落、<code>YGC</code> 每分钟次数、<code>GCT</code> 占运行时间比例。GC 总耗时占比长期超过 1% 要关注，超过 5% 基本确定是主要瓶颈。</p>
 <p>不要跳过这一步直接改参数，否则你没有对照基线，改完也不知道是变好还是变差。</p>
     </div>
 
     <h2>G1 的一个完整周期，以及 MaxGCPauseMillis 的误用</h2>
-    <p>搞清这一节能解释两件事：为什么把停顿目标调小之后停顿总量反而变大，以及日志里哪两行才是真正该告警的信号。</p>
+    <p>为什么把停顿目标调小之后停顿总量反而变大，以及日志里哪两行才是真正该告警的信号。</p>
     <p>G1 把堆切成 1 MB 到 32 MB 的等大 Region，每个 Region 动态扮演 Eden、Survivor、Old 或 Humongous 角色，「分代」从固定的连续空间变成了逻辑标签。</p>
-<p>这带来两个特性：一是可以只挑<strong>回收收益最高</strong>的那批 Region 来回收，从而把停顿控制在目标附近，这也是它名字里 Garbage First 的含义；二是超过半个 Region 的对象被当作 Humongous 对象特殊处理，直接占用连续 Region 并计入老年代。</p>
+<p>这带来两个特性：一是只挑<strong>回收收益最高</strong>的那批 Region 回收，把停顿控制在目标附近，这是 Garbage First 的来历；二是超过半个 Region 的对象当 Humongous 特殊处理，占连续 Region 并计入老年代。</p>
     <div class="mermaid">
 stateDiagram-v2
     state "Young GC 全程 STW" as YGC
@@ -269,7 +269,7 @@ stateDiagram-v2
 <p>这两条比停顿时长更值得告警——它们说明回收速度跟不上分配速度，而 Full GC 在 G1 里是单线程整理，停顿可能是平时的几十倍。</p>
 
     <h2>GC 日志逐行判读</h2>
-    <p>搞清这一节能把「日志看不懂只能看监控图」变成「一段日志就能定位到旋钮」。</p>
+    <p>读懂日志就不用只盯监控图，一段日志能定位该调的旋钮。</p>
     <p>下面是一段真实形态的 G1 统一日志。判读顺序是：先看停顿类型和耗时，再看各区域 Region 数量的变化，最后看触发原因。</p>
     <pre><code class="language-bash">[2026-09-22T10:14:03.412+0800][info][gc,start] GC(842) Pause Young (Normal) (G1 Evacuation Pause)
 # 上面这行：Normal 表示普通 young 回收；括号里的 Evacuation Pause 是疏散停顿，即复制存活对象。
@@ -301,7 +301,7 @@ stateDiagram-v2
 # 两个信号叠加：回收跟不上分配，且老年代回收不掉，基本可以判定为内存泄漏。</code></pre>
 
     <h2>六种 OOM 与各自的排查入口</h2>
-    <p>搞清这一节能避免用法层那张三分类表之后最容易犯的错：分类对了，但第一步动作选错，把现场浪费掉。</p>
+    <p>分类对了，但第一步动作选错，把现场浪费掉。</p>
     <table>
         <thead>
             <tr><th>报错</th><th>典型成因</th><th>第一步查什么</th><th>常见误修</th></tr>
@@ -317,7 +317,7 @@ stateDiagram-v2
     </table>
 
     <h2>内存泄漏排查流程与常见泄漏源</h2>
-    <p>搞清这一节能解决一个组织问题而不只是技术问题：值班时按什么顺序动手，才能既恢复服务又留住证据。</p>
+    <p>值班时按什么顺序动手，才能既恢复服务又留住证据。</p>
     <p>处置顺序比工具重要。<strong>直接重启是最常见也最致命的错误</strong>——服务恢复了，证据全没了，下一次还会发生，而且你依然不知道原因。</p>
     <div class="mermaid">
 sequenceDiagram
@@ -372,7 +372,7 @@ jstack &lt;pid&gt; | grep -oE '^"[^"]+"' | sed -E 's/-?[0-9]+"$/"/' | sort | uni
     </table>
 
     <h2>堆外内存、RSS 构成与线上诊断命令集</h2>
-    <p>搞清这一节能解决那个最让人抓瞎的现象：堆一切正常，进程却一直在长胖，最后被容器杀掉。</p>
+    <p>堆一切正常，进程却一直在长胖，最后被容器杀掉。</p>
     <p>「进程占了 6 GB 但 <code>-Xmx</code> 只有 4 GB，是不是漏了」——多数时候不是。堆之外还有一长串开销，全部算进进程常驻内存。</p>
     <div class="mermaid">
 flowchart TB
@@ -394,7 +394,7 @@ flowchart TB
         end
     end
 </div>
-    <p>判断堆外是否异常的唯一可靠方法是<strong>基线对比</strong>：启动时加 <code>-XX:NativeMemoryTracking=summary</code>，服务稳定后打一个基线，隔一段时间做差值，看哪一类在单调上升。只有单调上升才是泄漏，来回波动是正常的。</p>
+    <p>堆外是否异常，唯一可靠办法是<strong>基线对比</strong>：启动时加 <code>-XX:NativeMemoryTracking=summary</code>，稳定后打基线，隔段时间做差，看哪类单调上升。只有单调上升才是泄漏，来回波动正常。</p>
 <p>注意本地内存跟踪本身有固定的性能与内存开销，长期开启要在压测里量一遍再决定。</p>
     <table>
         <thead>
@@ -415,8 +415,8 @@ flowchart TB
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">容器化之后必须补的两件事</div>
-        <p>第一，<strong>CPU limit 会影响 JVM 的并行度决策</strong>。<code>availableProcessors</code> 的返回值决定了 GC 线程数、JIT 编译线程数，以及几乎所有默认线程池的大小。cpu limit 是小数时取整结果常常不符合预期，用 <code>-XX:ActiveProcessorCount</code> 显式指定最省心。</p>
-<p>第二，<strong>内存 limit 不等于堆上限</strong>，必须给上面那一整串非堆开销留出余量，通常堆占 limit 的 50% 到 70%。至于 CPU 配额本身怎么被内核限流、为什么配额卡着会出现周期性毛刺，属于容器编排范畴，详见站内 <a href="../../../devops/kubernetes/">Kubernetes 原理篇</a>。</p>
+        <p>第一，<strong>CPU limit 决定 JVM 并行度</strong>。<code>availableProcessors</code> 决定 GC 线程数、JIT 编译线程数和几乎所有默认线程池大小。cpu limit 取小数时取整常不符合预期，用 <code>-XX:ActiveProcessorCount</code> 显式指定最省心。</p>
+<p>第二，<strong>内存 limit 不等于堆上限</strong>，必须给前面那一串非堆开销留余量，堆通常占 limit 的 50% 到 70%。CPU 配额被内核限流、毛刺从哪来在 <a href="../../../devops/kubernetes/">Kubernetes 原理篇</a>。</p>
     </div>
 
     <h2>收集器怎么选，以及每种场景该动哪个旋钮</h2>
@@ -437,7 +437,7 @@ flowchart TB
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
         <div class="callout-title">先别换收集器</div>
-        <p>「换了 ZGC 停顿就短了」在压测报告里成立，在故障现场基本不成立。泄漏场景下 ZGC 只是把长停顿换成了持续的高 CPU 占用和更晚到来的 OOM；堆偏小场景下它会因为回收跟不上分配而退化。</p>
+        <p>「换 ZGC 停顿就短」只在压测报告里成立，故障现场基本不成立。泄漏时 ZGC 只把长停顿换成持续高 CPU 和更晚的 OOM；堆偏小时回收跟不上分配，照样退化。</p>
 <p>换收集器是把堆配对、泄漏修完、GC 日志读明白之后的<strong>最后一步</strong>，而不是第一步。</p>
     </div>
     <table>
@@ -469,13 +469,13 @@ flowchart TB
             <tr><td>只看堆不看堆外</td><td>堆快照里完全看不到直接内存与本地库分配，查一整天也找不到</td><td>堆水位正常但 RSS 持续涨，直接上本地内存跟踪做基线对比</td></tr>
             <tr><td>GC 日志不配轮转</td><td>单文件无限增长，几周后把磁盘写满，连带整台机器上其他服务出故障</td><td><code>filecount</code> 与 <code>filesize</code> 必须同时给</td></tr>
             <tr><td>关掉 GC 开销检查让报错消失</td><td>这是 JVM 在替你报警，关掉只是把明确的异常变成无限卡顿</td><td>去查为什么回收不掉</td></tr>
-            <tr><td>抄一份「线上通用 JVM 参数」几十个开关</td><td>大量参数在新版本里已失效、语义变了或彼此冲突，出问题时无法归因</td><td>只配本文表格里那几类，其余交给默认值与自适应</td></tr>
+            <tr><td>抄一份「线上通用 JVM 参数」几十个开关</td><td>大量参数在新版本里已失效、语义变了或彼此冲突，出问题时无法归因</td><td>只配表格里那几类，其余交给默认值与自适应</td></tr>
         </tbody>
     </table>
-    <p><strong>不适用边界</strong>：这篇只解决 JVM 自己能解释的问题。内存区域划分、晋升规则、安全点与类加载机制在 <a href="../">JVM 运行时原理</a>；对象为什么被框架长期持有（单例 bean 缓存请求级数据、代理链、事务未提交）在 <a href="../spring-core/">Spring 核心机制</a>；</p>
-<p>一次查询把百万行捞进内存、持久化上下文撑大这类「业务侧制造的堆压力」在 <a href="../orm/">JPA 持久化上下文与 MyBatis 选型</a>；容器 limit、<code>OOMKilled</code>、驱逐与 CPU 限流的现场判定在 <a href="../../../devops/kubernetes/ops-troubleshooting/">Kubernetes 运维排障</a>；GC 指标怎么采集、阈值怎么定在 <a href="../../../observability/metrics/">指标与监控</a>；</p>
+    <p><strong>不适用边界</strong>：只算 JVM 能解释的问题。内存区域、晋升、安全点、类加载机制在 <a href="../">JVM 运行时原理</a>；框架为何长期持有对象（bean 缓存请求级数据、代理链、未提交事务）在 <a href="../spring-core/">Spring 核心机制</a>；</p>
+<p>一次查询捞百万行、持久化上下文撑大这类堆压力在 <a href="../orm/">JPA 与 MyBatis 选型</a>；容器 limit、<code>OOMKilled</code>、驱逐与 CPU 限流的判定在 <a href="../../../devops/kubernetes/ops-troubleshooting/">Kubernetes 运维排障</a>；指标采集与阈值在 <a href="../../../observability/metrics/">指标与监控</a>；</p>
 <p>升级 JDK 带来的 GC 行为变化与压测对比方法在 <a href="../java17-springboot3/">Java 8 升 17 的实战路径</a>。</p>
-    <p>这条路径上，上一篇给的是概念地基（区域、晋升、安全点），本篇把它变成参数与命令，下一篇往上走一层，讲框架层面为什么会持有那些不该持有的对象。</p>
+    <p>概念（区域、晋升、安全点）归 JVM 运行时原理，参数与命令归这里；框架层面为什么持有那些对象，要往上层看。</p>
 
     <p class="cluster-nav">同主题路径：<a href="../">← 上一步：JVM 运行时原理：内存区域、GC 与类加载</a> · <a href="../spring-core/">下一步：Spring 核心机制：IoC 容器、AOP 代理与事务陷阱 →</a></p>
 

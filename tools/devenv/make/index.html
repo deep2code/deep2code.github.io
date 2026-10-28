@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="make 的时间戳依赖模型：不看内容不算哈希、touch 能骗过它、秒级文件系统破坏排序，四种赋值的展开时机差异。">
+        <meta name="description" content="Make 的本质是时间戳依赖图：order-only 与 .PHONY、变量展开时机、模式规则、-MMD/-MP、每行一个 shell、-j 依赖声明不全的坑。">
     <meta name="keywords" content="Makefile,make,构建工具,编译,CFLAGS,LDFLAGS,模式规则,并行编译,静态库,动态库,CMake,Meson,pkg-config">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/tools/devenv/make/">
     <!-- Open Graph -->
     <meta property="og:title" content="Make 的依赖图与工程化用法 - 资深码农">
-    <meta property="og:description" content="make 的时间戳依赖模型：不看内容不算哈希、touch 能骗过它、秒级文件系统破坏排序，四种赋值的展开时机差异。">
+    <meta property="og:description" content="Make 的本质是时间戳依赖图：order-only 与 .PHONY、变量展开时机、模式规则、-MMD/-MP、每行一个 shell、-j 依赖声明不全的坑。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/tools/devenv/make/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Make 的依赖图与工程化用法 - 资深码农">
-    <meta name="twitter:description" content="make 的时间戳依赖模型：不看内容不算哈希、touch 能骗过它、秒级文件系统破坏排序，四种赋值的展开时机差异。">
+    <meta name="twitter:description" content="Make 的本质是时间戳依赖图：order-only 与 .PHONY、变量展开时机、模式规则、-MMD/-MP、每行一个 shell、-j 依赖声明不全的坑。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="开发工具与工程效率">
     <meta property="article:tag" content="开发工具与效率">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Make 的依赖图与工程化用法","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"make 的时间戳依赖模型：不看内容不算哈希、touch 能骗过它、秒级文件系统破坏排序，四种赋值的展开时机差异。","url":"https://www.yijunjun.asia/tools/devenv/make/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/devenv/make/"},"articleSection":"开发工具与效率"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Make 的依赖图与工程化用法","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Make 的本质是时间戳依赖图：order-only 与 .PHONY、变量展开时机、模式规则、-MMD/-MP、每行一个 shell、-j 依赖声明不全的坑。","url":"https://www.yijunjun.asia/tools/devenv/make/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/devenv/make/"},"articleSection":"开发工具与效率"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "开发工具与工程效率", "item": "https://www.yijunjun.asia/tools/"}, {"position": 3, "name": "Makefile 构建", "item": "https://www.yijunjun.asia/tools/devenv/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,16 +92,16 @@
                     <div class="article-content">
 
 <p>Make 被当成脚本入口用了太久，以至于很多人写了几年 Makefile 也没用到它唯一不可替代的能力。</p>
-<p>它的核心不是「按顺序执行命令」，而是<strong>解一张由文件时间戳定义的依赖图</strong>：给定一个目标，它递归判断哪些节点过期，只重建过期的部分，并在允许的前提下并发执行。</p>
+<p>核心不是按顺序跑命令，而是<strong>解一张文件时间戳定义的依赖图</strong>：给定目标后递归判断哪些节点过期，只重建过期部分，允许时并发。</p>
 <p>所有让人困惑的行为——Tab、展开时机、每行一个 shell、并行偶发失败——都能从这个模型推出来。</p>
 
 <h2>核心模型：时间戳驱动的依赖图</h2>
-<p>一条规则由三部分组成：target（要生成的文件）、prerequisite（它依赖的文件）、recipe（怎么从依赖生成目标）。make 对每个目标的判定只有两条：<strong>目标文件不存在就重建；目标存在但任一依赖的 mtime 比目标新就重建</strong>。</p>
+<p>规则分三部分：target（要生成的文件）、prerequisite（它依赖的文件）、recipe（生成方法）。make 的判定只有两条：<strong>目标文件不存在就重建；存在但任一依赖的 mtime 比目标新也重建</strong>。</p>
 <p>注意是「比目标新」，时间戳相等不算过期。</p>
 <p>make <strong>不看内容也不算哈希</strong>，<code>touch</code> 能骗过它；改了 CFLAGS 也不触发重建，参数不是文件。</p>
-<p>第二，文件系统的时间戳精度会直接影响正确性：ext4 是纳秒精度，而部分网络文件系统和挂载选项只有秒级，同一秒内先后生成的两个文件在 make 眼里时间戳相等，于是「该重建的没重建」。</p>
-<p>第三，目录也是文件，而目录的 mtime 会随内部增删文件而变化，所以把目录写成普通依赖会导致无限重建——这正是 order-only 依赖存在的原因。</p>
-<p>order-only 依赖写在依赖列表的竖线后面：<code>target: 普通依赖 | order-only 依赖</code>。它只保证在构建目标之前先把这些节点建好，<strong>完全不参与时间戳比较</strong>。创建输出目录是它的标准用法。</p>
+<p>时间戳精度影响正确性：ext4 是纳秒，部分网络文件系统和挂载选项只有秒级；同一秒内生成的两个文件在 make 眼里时间戳相等，该重建的没重建。</p>
+<p>目录也是文件，而目录的 mtime 会随内部增删文件而变化，所以把目录写成普通依赖会导致无限重建——这正是 order-only 依赖存在的原因。</p>
+<p>order-only 依赖写在竖线后：<code>target: 普通依赖 | order-only 依赖</code>。它只保证这些节点先于目标建好，<strong>完全不参与时间戳比较</strong>，创建输出目录是标准用法。</p>
 
 <div class="mermaid">
 flowchart BT
@@ -160,14 +160,14 @@ flowchart TB
 
 <h2>.PHONY 为什么必要</h2>
 <p>伪目标解决三个互不相关的问题，任何一个单独出现都足以让构建行为出错。</p>
-<p>一是<strong>同名文件冲突</strong>。<code>clean</code>、<code>test</code>、<code>docs</code> 这些目标名很容易和仓库里真实存在的目录或文件撞上。一旦撞上，make 发现目标文件存在、又没有依赖比它新，就直接输出「已是最新」什么都不做。</p>
+<p>一是<strong>同名文件冲突</strong>。<code>clean</code>、<code>test</code>、<code>docs</code> 这类目标名容易和仓库里的真实文件或目录撞上；撞上后 make 见目标存在、无更新依赖，直接报「已是最新」什么都不做。</p>
 <p>仓库里有个 <code>test/</code> 目录导致 <code>make test</code> 静默跳过，是这个坑最常见的形态。</p>
-<p>二是<strong>性能</strong>。对非伪目标，make 会遍历所有隐式规则，尝试 <code>clean.c</code>、<code>clean.o</code>、<code>clean.sh</code>、RCS 与 SCCS 路径等一长串候选。声明为伪目标后这些搜索全部跳过，大项目里 <code>make -d</code> 的输出能少掉几千行。想彻底关掉，在 Makefile 顶部加 <code>MAKEFLAGS += --no-builtin-rules --no-builtin-variables</code>。</p>
-<p>三是<strong>传染性</strong>，这条最容易反噬。伪目标永远被视为过期，所以<strong>任何以伪目标为依赖的真实文件目标，也会每次都被重建</strong>。把 <code>version</code> 之类的伪目标塞进 <code>.o</code> 的依赖里，增量构建就彻底失效了。</p>
+<p>二是<strong>性能</strong>。非伪目标会走隐式规则搜索，逐个试 <code>clean.c</code>、<code>clean.o</code>、<code>clean.sh</code>、RCS 与 SCCS；声明为伪目标后全部跳过，大项目里 <code>make -d</code> 输出能少几千行。彻底关掉可在 Makefile 顶部加 <code>MAKEFLAGS += --no-builtin-rules --no-builtin-variables</code>。</p>
+<p>三是<strong>传染性</strong>。伪目标永远被视为过期，<strong>以它为依赖的真实文件目标也每次重建</strong>。把 <code>version</code> 这类伪目标塞进 <code>.o</code> 的依赖，增量构建就彻底失效。</p>
 <p>需要「每次都检查但内容不常变」的语义时，正确做法是生成一个 stamp 文件，内容不变就不更新它的 mtime。</p>
 
 <h2>变量的四种赋值与展开时机</h2>
-<p>make 的执行分成两个阶段：<strong>读取阶段</strong>读入所有 Makefile、求值立即赋值的变量、记录规则（recipe 原文暂不展开）；<strong>执行阶段</strong>做时间戳判定，并在真的要执行某个 recipe 时才展开其中的变量和函数。</p>
+<p>make 分两个阶段：<strong>读取阶段</strong>读入所有 Makefile、求值立即赋值的变量、记录规则（recipe 暂不展开）；<strong>执行阶段</strong>做时间戳判定，执行 recipe 时才展开其变量和函数。</p>
 <p>各赋值运算符的区别，就是展开发生在哪个阶段。</p>
 <table>
 <thead><tr><th>运算符</th><th>求值时机</th><th>能否引用后面才定义的变量</th><th>右侧含 shell 函数时执行几次</th><th>该用在哪</th></tr></thead>
@@ -180,7 +180,7 @@ flowchart TB
 <tr><td><code>!=</code> shell 赋值</td><td>读到该行时执行 shell 一次</td><td>不能</td><td>一次</td><td>等价于 <code>:= $(shell ...)</code>，GNU make 4.0 起</td></tr>
 </tbody>
 </table>
-<p>最实际的影响是性能。把 <code>SRCS = $(shell find src -name '*.c')</code> 写成递归赋值，之后每次引用 <code>$(SRCS)</code> 都会真的 fork 一个 <code>find</code>；在一个引用了十几次的 Makefile 里，这就是 <code>make</code> 明明什么都不做却要等两秒的原因。规则很简单：<strong>默认用 <code>:=</code>，只有确实需要延迟求值时才用 <code>=</code></strong>。</p>
+<p>更实际的是性能。<code>SRCS = $(shell find src -name '*.c')</code> 写成递归赋值后，每次引用 <code>$(SRCS)</code> 都会 fork 一个 <code>find</code>；在引用十几次的 Makefile 里，这就是 <code>make</code> 什么都不做也要等两秒的原因。默认用 <code>:=</code>，需要延迟求值才用 <code>=</code>。</p>
 <table>
 <thead><tr><th>变量来源</th><th>优先级</th><th>能否被 Makefile 内的赋值覆盖</th><th>需要注意的地方</th></tr></thead>
 <tbody>
@@ -247,7 +247,7 @@ demo:
 	@echo "greeting : $(GREETING)"</code></pre>
 
 <h2>自动变量与模式规则</h2>
-<p>模式规则用 <code>%</code> 做通配：<code>$(BUILD)/%.o: src/%.c</code> 一条顶一百条。更安全的写法是静态模式规则 <code>$(OBJS): $(BUILD)/%.o: src/%.c</code>，它把规则的作用域限定在 <code>$(OBJS)</code> 这个明确的目标集合上，不会意外命中其他同后缀文件。</p>
+<p>模式规则用 <code>%</code> 做通配：<code>$(BUILD)/%.o: src/%.c</code> 一条顶一百条。更安全的写法是静态模式规则 <code>$(OBJS): $(BUILD)/%.o: src/%.c</code>，作用域限定在 <code>$(OBJS)</code> 集合内，不会意外命中其他同后缀文件。</p>
 <p>模式规则链还会产生中间文件，make 默认在构建结束后删掉它们，需要保留就声明 <code>.SECONDARY</code>，否则每次都重建。</p>
 <table>
 <thead><tr><th>自动变量</th><th>含义</th><th>在规则 <code>build/app: build/main.o build/net.o build/net.o</code> 中的值</th><th>常见误用</th></tr></thead>
@@ -262,7 +262,7 @@ demo:
 </tbody>
 </table>
 <p>头文件依赖不要手写，交给编译器：加 <code>-MMD</code> 让它在生成 <code>.o</code> 的同时输出一份 <code>.d</code> 文件（里面就是一条 make 规则），再用 <code>-include</code> 把这些 <code>.d</code> 引进来。</p>
-<p><code>-MP</code> 会额外为每个头文件生成一个空的伪目标，这样删掉某个头文件时不会报「没有规则可以制作目标」而是直接重建。这一组参数是并行构建不出偶发失败的前提。</p>
+<p><code>-MP</code> 为每个头文件生成一个空伪目标，删头文件时不会报「没有规则可以制作目标」而是重建。这组参数是并行不出偶发失败的前提。</p>
 
 <pre><code class="language-make"># ---- 这五行决定整个 Makefile 的可靠性，值得逐条抄走 ----
 SHELL := /bin/bash
@@ -322,11 +322,11 @@ clean:                                  ## 删除全部构建产物
 <tr><td>行首写 <code>@</code></td><td>不回显命令本身</td><td>调试时用 <code>make -n</code> 仍能看到完整命令</td></tr>
 </tbody>
 </table>
-<p>补一个平台差异：macOS 系统自带的是 GNU make 3.81（因为许可证原因没有跟进），<code>.ONESHELL</code> 要 3.82、<code>--output-sync</code> 要 4.0、<code>.WAIT</code> 和 <code>--shuffle</code> 要 4.4。团队里有 macOS 开发机时，要么单独安装新版并统一用 <code>gmake</code>，要么在 Makefile 顶部检查 <code>$(MAKE_VERSION)</code> 直接报错，不要指望「本地能跑」。</p>
+<p>还有平台差异：macOS 因许可证停留在自带的 GNU make 3.81，而 <code>.ONESHELL</code> 要 3.82、<code>--output-sync</code> 要 4.0、<code>.WAIT</code> 和 <code>--shuffle</code> 要 4.4。团队里有 macOS 开发机，要么装新版用 <code>gmake</code>，要么在 Makefile 顶部检查 <code>$(MAKE_VERSION)</code> 直接报错，别指望「本地能跑」。</p>
 
 <h2>并行 -j 与依赖声明不全</h2>
 <p>并行构建暴露的从来不是 make 的 bug，而是 Makefile 里本来就写错的依赖。串行执行时目标顺序由书写顺序隐式决定，恰好「先生成头文件再编译」；</p>
-<p><code>-j</code> 打开后调度器只遵守显式声明的依赖，没声明的就可能并发，于是编译器读到一个只写了一半的生成文件。这类失败在 CI 里偶发、在本地永不复现，是最难查的一类构建问题。</p>
+<p><code>-j</code> 打开后调度器只遵守显式依赖，没声明的可能并发，编译器于是读到半写的生成文件；这类失败 CI 偶发、本地永不复现，最难查。</p>
 
 <div class="mermaid">
 sequenceDiagram

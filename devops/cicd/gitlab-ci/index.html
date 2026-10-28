@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="GitLab CI 机制：needs 的 DAG、executor 选型、cache 与 artifacts 分工、手动部署门禁与变量体系。">
+        <meta name="description" content="讲 GitLab CI 的执行模型与 needs DAG、executor 和 dind 的代价、cache 与 artifacts 的边界、rules 与父子流水线，附常见错配清单。">
     <meta name="keywords" content="GitLab CI,GitLab Runner,.gitlab-ci.yml,持续部署,DevOps">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/cicd/gitlab-ci/">
     <!-- Open Graph -->
     <meta property="og:title" content="GitLab CI/CD 机制与实战：needs DAG、executor 选型、cache 与 artifacts 的本质差异 - 资深码农">
-    <meta property="og:description" content="GitLab CI 机制：needs 的 DAG、executor 选型、cache 与 artifacts 分工、手动部署门禁与变量体系。">
+    <meta property="og:description" content="讲 GitLab CI 的执行模型与 needs DAG、executor 和 dind 的代价、cache 与 artifacts 的边界、rules 与父子流水线，附常见错配清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/cicd/gitlab-ci/">
     <meta property="og:site_name" content="资深码农">
@@ -39,7 +39,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="GitLab CI/CD 机制与实战：needs DAG、executor 选型、cache 与 artifacts 的本质差异 - 资深码农">
-    <meta name="twitter:description" content="GitLab CI 机制：needs 的 DAG、executor 选型、cache 与 artifacts 分工、手动部署门禁与变量体系。">
+    <meta name="twitter:description" content="讲 GitLab CI 的执行模型与 needs DAG、executor 和 dind 的代价、cache 与 artifacts 的边界、rules 与父子流水线，附常见错配清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
@@ -90,15 +90,15 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>GitLab CI 的 YAML 看着比 GitHub Actions 简单，但它把两件事藏得很深：<strong>job 到底跑在什么东西里（executor）</strong>，以及 <strong>cache 和 artifacts 是两套完全不同的机制</strong>。绝大多数「在我机器上能跑、在 CI 里就挂」和「流水线越来越慢」的问题都来自这两点。</p>
-<p>这篇只讲 GitLab CI 自己的机制与可直接抄的配置；流水线设计原则与部署策略详见站内《CI/CD 工具选型》与《容器化部署策略》。</p>
+<p>GitLab CI 的 YAML 看着比 GitHub Actions 简单，但两件事藏得深：<strong>job 到底跑在什么里（executor）</strong>、<strong>cache 和 artifacts 是两套不同机制</strong>。「在我机器上能跑、在 CI 里就挂」「流水线越来越慢」多半出自这两点。</p>
+<p>GitLab CI 的机制与配置写法到此为止；设计原则与部署策略见《CI/CD 工具选型》与《容器化部署策略》。</p>
 
 <h2>执行模型：stage 串行、同 stage 并行、needs 打破 stage</h2>
 
-<p>默认模型是：<code>stages</code> 按声明顺序串行，同一 stage 内的 job 并行，上一个 stage 全部成功才进入下一个。这套模型的代价是<strong>木桶效应</strong>——每个 stage 的耗时等于该 stage 最慢的 job，总耗时是各 stage 最慢值之和。</p>
+<p>默认是：<code>stages</code> 按声明顺序串行，同 stage 内并行，上一个全成功才进下一个。代价是<strong>木桶效应</strong>：每个 stage 耗时等于最慢 job，总耗时是各 stage 最慢值之和。</p>
 <p>一个只依赖 <code>build-api</code> 的集成测试，会被同 stage 里慢 5 分钟的前端构建拖住。</p>
 
-<p><code>needs</code> 是解药，它让 job 只等真正的上游，从而把流水线从「阶段串行」变成 DAG。两个细节值得记住：<code>needs: []</code>（空数组）表示不等任何人，流水线一创建就调度，lint、格式检查这类 job 一律该这么写；</p>
+<p><code>needs</code> 让 job 只等真正的上游，把流水线从「阶段串行」变成 DAG。<code>needs: []</code>（空数组）是不等任何人，一创建就调度，lint、格式检查这类 job 该这么写；</p>
 <p><code>needs</code> 同时隐含了 artifacts 传递，默认会下载列出的上游 job 的 artifacts（不想下载要写 <code>artifacts: false</code>）。单个 job 的 <code>needs</code> 上限一般是 50 个，DAG 里也不允许出现环。</p>
 
 <div class="mermaid">
@@ -137,7 +137,7 @@ flowchart TB
 
 <h2>Runner 与 executor：GitLab CI 最该先搞懂的部分</h2>
 
-<p>GitLab Runner 是一个独立进程，它主动向 GitLab 的 <code>/api/v4/jobs/request</code> 长轮询领活，领到后交给配置好的 <strong>executor</strong> 执行。同一台机器上可以注册多个 runner，<code>concurrent</code> 控制这台机器同时跑几个 job，而每个 runner 的 <code>limit</code> 控制它自己的上限——两者取小。</p>
+<p>GitLab Runner 是独立进程，向 GitLab 的 <code>/api/v4/jobs/request</code> 长轮询领活，领到后交给 <strong>executor</strong> 执行。同一台机器能注册多个 runner，<code>concurrent</code> 管本机同时跑几个 job，<code>limit</code> 管单个 runner 的上限，两者取小。</p>
 <p>job 一直 pending 最常见的原因不是没资源，而是 <code>tags</code> 和 runner 的 tag 对不上，或者 runner 没勾选「运行未打 tag 的 job」。</p>
 
 <div class="mermaid">
@@ -203,7 +203,7 @@ sequenceDiagram
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">dind 的代价比多数人以为的大</div>
-    <p>用 <code>docker:dind</code> 构建镜像需要 runner 开 <code>privileged = true</code>，这等于让任意流水线脚本能突破容器边界拿到宿主机——在多租户共享 runner 上这就是提权漏洞。其次 dind 每个 job 都是全新 daemon，<strong>镜像层缓存默认全丢</strong>，构建反而更慢。</p>
+    <p>用 <code>docker:dind</code> 构建镜像要 runner 开 <code>privileged = true</code>，等于让任意流水线脚本拿到宿主机，共享 runner 上就是提权漏洞。dind 每个 job 都是全新 daemon，<strong>镜像层缓存默认全丢</strong>，构建更慢。</p>
 <p>挂宿主机 <code>docker.sock</code> 更快但更糟：容器里能看到并操作宿主机上所有容器。Kaniko 或 Buildah 不需要 daemon、不需要 privileged，并且能用 <code>--cache-repo</code> 把层缓存放到 registry 里跨 runner 复用，是当下的默认答案。</p>
 </div>
 
@@ -222,7 +222,7 @@ flowchart TB
 
 <h2>cache 与 artifacts：这是 GitLab CI 的核心考点</h2>
 
-<p>两者都是「把文件从一处搬到另一处」，但设计目标完全相反。<strong>cache 是性能优化</strong>：跨流水线复用可重建的内容，允许 miss，按 key 在多个 job 甚至多个流水线之间共享，默认存在 runner 本机。</p>
+<p>都在「把文件从一处搬到另一处」，目标相反。<strong>cache 是性能优化</strong>：跨流水线复用可重建内容，允许 miss，按 key 跨 job 和流水线共享，默认存 runner 本机。</p>
 <p><strong>artifacts 是数据契约</strong>：同一条流水线内从上游 job 传到下游 job，一定存在，存在 GitLab 侧，有过期时间，并且能被下载、能作为报告解析。</p>
 
 <table>
@@ -238,7 +238,7 @@ flowchart TB
 </tbody></table>
 
 <p>调优要点有三个。一是 <code>cache:key:files</code>：把 key 绑定到锁文件哈希，锁文件不变必定复用、变了自动换 key，比手写 <code>key: $CI_COMMIT_REF_SLUG</code> 靠谱得多（后者会让每个分支各存一份，很快撑爆磁盘）。</p>
-<p>二是 <code>policy</code>：绝大多数消费缓存的 job 应设 <code>policy: pull</code>，只有一个专门的 job 用 <code>pull-push</code> 负责更新，能省掉每个 job 结束时的压缩与上传时间。三是 <code>artifacts:when: always</code>：测试失败时的报告才是最需要看的，默认的 <code>on_success</code> 会把它丢掉。</p>
+<p><code>policy</code> 也要配：绝大多数消费缓存的 job 设 <code>policy: pull</code>，只留一个专门 job 用 <code>pull-push</code> 更新，省下每个 job 结束时的压缩上传。报告要配 <code>artifacts:when: always</code>，失败时的报告最需要看，默认 <code>on_success</code> 会丢掉。</p>
 
 <pre><code class="language-yaml"># .gitlab-ci.yml —— 一份可直接改用的完整配置
 stages: [build, test, package, deploy]
@@ -363,7 +363,7 @@ deploy-prod:
 <p><code>only/except</code> 在 GitLab 12.3 之后就处于事实弃用状态，新配置一律用 <code>rules</code>。<code>rules</code> 的语义是<strong>自上而下取第一个匹配项</strong>，命中后用该项的 <code>when</code>、<code>variables</code>、<code>allow_failure</code>；全都不匹配则该 job 不被创建。</p>
 <p>理解「不被创建」和「被创建但跳过」的区别很关键：<code>when: never</code> 是不创建，下游 <code>needs</code> 它的 job 会因为找不到依赖而让<strong>整条流水线创建失败</strong>，除非下游写了 <code>needs: [{job: x, optional: true}]</code>。</p>
 
-<p><code>workflow:rules</code> 是全局开关，决定这次事件<strong>要不要创建流水线</strong>。它最常用来消除「同一次 push 既跑分支流水线又跑 MR 流水线」的重复计费问题——只允许 MR 事件、默认分支与 tag 三种来源即可。</p>
+<p><code>workflow:rules</code> 是全局开关，决定这次<strong>要不要创建流水线</strong>。常用来消除「同一次 push 既跑分支流水线又跑 MR 流水线」的重复计费：只放 MR、默认分支和 tag。</p>
 
 <table>
 <thead><tr><th>需求</th><th>rules 写法要点</th><th>常见错误</th></tr></thead>
@@ -418,7 +418,7 @@ rules:
 
 <h2>父子流水线与多项目流水线：monorepo 的拆分手段</h2>
 
-<p>单仓多服务的 monorepo 如果把所有服务写进一个 <code>.gitlab-ci.yml</code>，很快会变成上千行且每次提交全量构建。<code>trigger</code> 关键字提供两种拆法：<strong>父子流水线</strong>（<code>trigger:include</code>）让每个服务维护自己的 CI 文件，父流水线按 <code>changes</code> 决定触发哪些子流水线；</p>
+<p>monorepo 把所有服务写进一个 <code>.gitlab-ci.yml</code>，很快上千行，每次提交还全量构建。<code>trigger</code> 的<strong>父子流水线</strong>（<code>trigger:include</code>）让每个服务自维护 CI 文件，父流水线按 <code>changes</code> 决定触发哪些子流水线；</p>
 <p><strong>多项目流水线</strong>（<code>trigger:project</code>）跨仓库触发，适合代码仓与部署仓分离的结构。</p>
 
 <p>这里有个必须写的参数：<code>strategy: depend</code>。不写它时，触发 job 的语义是「触发成功就算成功」，子流水线失败父流水线依然是绿的——这个默认值坑过很多团队的发布门禁。</p>
@@ -467,7 +467,7 @@ deploy-via-infra:
 
 <h2>环境、手动部署与变量体系</h2>
 
-<p><code>environment</code> 不只是一个标签：声明后 GitLab 会记录部署历史、在 MR 上显示「已部署到 staging」、支持一键回滚到之前的部署、并且可以给环境配<strong>保护规则</strong>（只有特定角色能部署、需要审批）。<code>deployment_tier</code> 告诉 GitLab 这个环境属于哪一层，DORA 指标统计依赖它。</p>
+<p><code>environment</code> 不只是标签。声明后 GitLab 记部署历史、在 MR 上显示「已部署到 staging」、支持回滚旧部署。环境还能配<strong>保护规则</strong>，谁能部署、要不要审批都能限定。<code>deployment_tier</code> 说明环境属于哪一层，DORA 指标靠它统计。</p>
 <p>生产部署建议再配 <code>resource_group</code>，把同一环境的部署 job 串行化，避免两个流水线同时往生产推。</p>
 
 <p><code>when: manual</code> 的手动 job 默认 <code>allow_failure: true</code>，<strong>你不点它，流水线照样显示成功</strong>。手动 job 是生产发布门禁时，必须显式写 <code>allow_failure: false</code>，否则流水线绿了但什么都没部署。</p>
@@ -541,22 +541,22 @@ docker volume ls | grep runner-cache
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">最容易踩的坑</div>
-    <p>1）以为 cache 能在多台 runner 间共享：没配分布式缓存后端时它就在 runner 本机，换机器必 miss。<br/>
-    2）拿 cache 传部署产物：key 一变或缓存被清，发布 job 凭空找不到文件；产物只能走 artifacts 或 registry。<br/>
-    3）拿 artifacts 传 <code>node_modules</code>：每个 job 全量上传下载，比重装还慢，并且吃满存储配额。</p>
+    <p>1）以为 cache 跨 runner 共享：没配分布式后端只在本机，换机器必 miss。<br/>
+    2）拿 cache 传部署产物：key 一变或缓存被清，发布 job 找不到文件；产物只能走 artifacts 或 registry。<br/>
+    3）拿 artifacts 传 <code>node_modules</code>：全量上传下载，比重装还慢，还吃配额。</p>
 <p><br/>
-    4）<code>cache:key</code> 写成 <code>$CI_COMMIT_REF_SLUG</code>：每个分支各存一份，磁盘很快爆；应按锁文件哈希。<br/>
-    5）同一 job 里 <code>only</code> 和 <code>rules</code> 混用：直接语法错误，迁移必须整段替换。<br/>
-    6）不配 <code>workflow:rules</code>：一次 push 同时跑分支流水线与 MR 流水线，额度翻倍。<br/>
-    7）<code>when: manual</code> 不写 <code>allow_failure: false</code>：没人点生产发布，流水线照样显示成功。</p>
+    4）<code>cache:key</code> 用 <code>$CI_COMMIT_REF_SLUG</code>：分支各存一份，磁盘很快爆；按锁文件哈希。<br/>
+    5）同一 job 里 <code>only</code> 和 <code>rules</code> 混用：直接语法错误，要整段替换。<br/>
+    6）不配 <code>workflow:rules</code>：一次 push 分支与 MR 流水线都跑，额度翻倍。<br/>
+    7）<code>when: manual</code> 不写 <code>allow_failure: false</code>：没人点生产发布也算成功。</p>
 <p><br/>
-    8）<code>trigger</code> 不写 <code>strategy: depend</code>：子流水线失败被吞，父流水线一片绿。<br/>
-    9）默认 <code>GIT_DEPTH</code> 为 20：拿不到 tag、跨分支 diff 不全，<code>changes</code> 判断跟着出错。<br/>
-    10）集成测试用 <code>localhost</code> 连 service：必须用 <code>alias</code> 主机名，且要自己等服务 ready。<br/>
-    11）为了 dind 给共享 runner 开 <code>privileged</code>：等于把宿主机交给任何能提 MR 的人，改用 Kaniko。</p>
+    8）<code>trigger</code> 漏写 <code>strategy: depend</code>：子流水线失败被吞，父级一片绿。<br/>
+    9）默认 <code>GIT_DEPTH</code> 为 20：拿不到 tag、跨分支 diff 不全，<code>changes</code> 也判错。<br/>
+    10）集成测试用 <code>localhost</code> 连 service：要用 <code>alias</code> 主机名，自己等 ready。<br/>
+    11）共享 runner 开 <code>privileged</code> 跑 dind：宿主机交给任何提 MR 的人，改用 Kaniko。</p>
 <p><br/>
-    12）以为 <code>masked</code> 等于安全：它只做日志文本替换，base64 或写进 artifacts 都能绕过；生产凭证必须同时勾 <code>protected</code> 并限制在受保护分支。<br/>
-    13）<code>include:project</code> 写 <code>ref: main</code>：平台团队一改模板，所有项目的流水线当天一起变。</p>
+    12）以为 <code>masked</code> 只替换日志文本，base64 或写进 artifacts 就能绕过；生产凭证要同时勾 <code>protected</code> 并限在受保护分支。<br/>
+    13）<code>include:project</code> 写 <code>ref: main</code>：平台一改模板，所有流水线当天一起变。</p>
 </div>
 
                     </div>

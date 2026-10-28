@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 并发：标准定式、channel 五种状态、关闭与发送的 panic、timer 复用、race 检测的局限、锁复制陷阱与内存模型。">
+        <meta name="description" content="goroutine 退出、channel 与锁的选型定式，select 随机性、timer 泄漏、race 检测边界与内存模型的可见性规则。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/concurrency/">
     <!-- Open Graph -->
     <meta property="og:title" content="Go 并发原语与常见并发 bug - 资深码农">
-    <meta property="og:description" content="Go 并发：标准定式、channel 五种状态、关闭与发送的 panic、timer 复用、race 检测的局限、锁复制陷阱与内存模型。">
+    <meta property="og:description" content="goroutine 退出、channel 与锁的选型定式，select 随机性、timer 泄漏、race 检测边界与内存模型的可见性规则。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/concurrency/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Go 并发原语与常见并发 bug - 资深码农">
-    <meta name="twitter:description" content="Go 并发：标准定式、channel 五种状态、关闭与发送的 panic、timer 复用、race 检测的局限、锁复制陷阱与内存模型。">
+    <meta name="twitter:description" content="goroutine 退出、channel 与锁的选型定式，select 随机性、timer 泄漏、race 检测边界与内存模型的可见性规则。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 并发原语与常见并发 bug","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Go 并发：标准定式、channel 五种状态、关闭与发送的 panic、timer 复用、race 检测的局限、锁复制陷阱与内存模型。","url":"https://www.yijunjun.asia/programming/go/concurrency/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/concurrency/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go 并发原语与常见并发 bug","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"goroutine 退出、channel 与锁的选型定式，select 随机性、timer 泄漏、race 检测边界与内存模型的可见性规则。","url":"https://www.yijunjun.asia/programming/go/concurrency/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/go/concurrency/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go 代码片段", "item": "https://www.yijunjun.asia/programming/go/concurrency/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,9 +91,9 @@
                     </header>
                     <div class="article-content">
 <p>Go 的并发难点从来不在 <code>go</code> 这个关键字，而在三件事：goroutine 起来之后谁负责让它停、共享状态该用哪个原语保护、以及怎么让偶发的竞争在 CI 里稳定复现。</p>
-<p>这篇按这三件事组织——先给工程上已经收敛的几个标准定式，再展开 channel 与锁的语义细节，最后收拢选型判断。调度器与内存分配的运行时机制在 <a href="../">Go 运行时模型</a>，取消信号怎么一路传下去在 <a href="../context/">Context 篇</a>。</p>
+<p>三件事：先给工程上已经收敛的标准定式，再展开 channel 与锁的语义细节，最后收拢选型判断。调度器与内存分配在 <a href="../">Go 运行时模型</a>，取消信号怎么一路传下去在 <a href="../context/">Context 篇</a>。</p>
 <h2>四个标准定式与并发测试的正确跑法</h2>
-<p>会写 Go 的人缺的不是语法，是「这类问题的标准写法长什么样」。下面四段是生产代码里反复出现、且已经没有争议的形态，注释只说明为什么要这么写，机制解释见原理层。</p>
+<p>缺的不是语法，是这类问题的标准写法。下面四段形态生产代码里反复出现、没有争议，注释只说为什么要这么写，机制见原理层。</p>
 <pre><code class="language-go">// 定式一：并发调多个下游并收敛错误 —— 永远配 SetLimit
 func fanOut(parent context.Context, urls []string) error {
     g, ctx := errgroup.WithContext(parent) // 任一任务返回错误就取消这个 ctx
@@ -233,7 +233,7 @@ go build -race -o myapp_race ./cmd/server</code></pre>
 
 <h2>channel 的语义矩阵：一张表解释大多数死锁与 panic</h2>
 <p>搞清这张表能直接定位绝大多数 channel 相关的线上事故：send on closed channel 的 panic、莫名其妙的永久阻塞、以及接收方提前退出导致的泄漏。</p>
-<p>channel 的行为不是「发送方塞值、接收方取值」这么简单。它在五种状态下的表现各不相同，而绝大多数 channel 相关的 bug——死锁、panic、泄漏——都可以在这张表里直接定位到对应的格子。</p>
+<p>channel 不是发送方塞值、接收方取值这么简单。五种状态下表现各不相同，绝大多数死锁、panic、泄漏都能在这张表里定位到对应的格子。</p>
 <table>
     <thead>
         <tr><th>channel 状态</th><th>send</th><th>recv</th><th>close</th></tr>
@@ -268,12 +268,12 @@ stateDiagram-v2
         多个发送方时用额外的 done channel 协调而不是各自 close
     end note
 </div>
-<p>最高频的事故是<strong>往已关闭的 channel 发送</strong>：这不是死锁，是直接 panic，而且无法 recover（runtime 直接报 send on closed channel）。典型场景：一个生产者还在跑，消费者那边觉得够了关了 channel，生产者下一次 send 就炸。</p>
+<p>最高频事故是<strong>往已关闭的 channel 发送</strong>：不是死锁，直接 panic 且无法 recover，runtime 报 send on closed channel。一个生产者还在跑，消费者觉得够了就关 channel，生产者下一次 send 就炸。</p>
 <p>正确做法是<strong>只让发送方关闭 channel</strong>，接收方通过 <code>range</code> 或检查 <code>ok</code> 来感知关闭。</p>
 <p>第二高频的是<strong>对 nil channel 操作</strong>：<code>var ch chan int</code> 声明但没 make，send 和 recv 都永久阻塞。在 select 里这其实是个有用的技巧——把某个 case 的 channel 设为 nil 就等于禁用了它，不会被选中。</p>
 
 <h2>select 的随机性与 time.After 的内存泄漏</h2>
-<p>这一节解释两个现象：想用 case 顺序表达优先级却发现不生效，以及一个高频循环把内存吃到只涨不跌。</p>
+<p>case 顺序表达不了优先级，高频循环还能把内存吃到只涨不跌。</p>
 <p>select 多个 case 同时就绪时，Go 运行时<strong>随机选一个</strong>，不是按书写顺序。这意味着你不能用 case 的排列来表达优先级——想要优先级必须嵌套 select 或在外层做显式判断。</p>
 <p><code>default</code> 把 select 变成非阻塞的尝试：所有 case 都不就绪就走 default，常用于「试着从 channel 取值，没有就做别的事」。</p>
 <p>但 <code>time.After</code> 在循环里是典型的内存泄漏模式：</p>
@@ -308,7 +308,7 @@ for {
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">timer.Stop 返回 false 的含义</div>
-    <p>返回 false 说明 timer 已经到期或者已经被 Stop 过了。如果是到期了，它的 channel 上有一个待读的信号，必须排掉才能安全 Reset，否则下一轮 select 会在 Reset 后立即选中 timer case。这是 timer 复用最常出错的细节。</p>
+    <p>返回 false 说明 timer 到期或已被 Stop 过。到期时 channel 上有一个待读信号必须排掉，才能安全 Reset，否则下一轮 select 会在 Reset 后立即选中 timer case，复用最常错在这一步。</p>
 </div>
 
 <h2>五类最常见的并发 bug</h2>
@@ -460,7 +460,7 @@ for i := 0; i &lt; 100; i++ {
 <p>所以必须写有并发的测试（多个 goroutine 同时调同一个函数），并在 CI 里带 <code>-race</code> 跑。性能开销大约 2 到 10 倍，不适合在生产开。</p>
 
 <h2>锁的选择与常见陷阱</h2>
-<p>用法层的对照表给了结论，这一节说清依据：为什么默认选 <code>Mutex</code>、<code>RWMutex</code> 在什么读写比下才有收益、<code>sync.Map</code> 为什么常常更慢。</p>
+<p>用法层的对照表给了结论，依据是：为什么默认选 <code>Mutex</code>、<code>RWMutex</code> 在什么读写比下才有收益、<code>sync.Map</code> 为什么常常更慢。</p>
 <p>先用决策图收敛选项，再看细节：</p>
 <div class="mermaid">
 flowchart TB
@@ -488,7 +488,7 @@ flowchart TB
     </tbody>
 </table>
 <p><strong>RWMutex 不可重入</strong>：持有读锁时再调一个也拿读锁的函数不会死锁（因为多个读锁共存），但持有写锁时再拿读锁或写锁就直接死锁，Go 不会检测递归锁。</p>
-<p><strong>锁的复制陷阱</strong>：<code>sync.Mutex</code> 和 <code>sync.WaitGroup</code> 等同步原语不能被复制。把包含锁的结构体按值传递给函数或赋值给另一个变量，锁的状态不会跟着过去，两边各有一把独立的锁，不再互斥。</p>
+<p><strong>锁的复制陷阱</strong>：<code>sync.Mutex</code> 和 <code>sync.WaitGroup</code> 等同步原语不能被复制。含锁的结构体按值传参或赋值给另一个变量，锁状态不跟着走，两边各一把，不再互斥。</p>
 <p>用 <code>go vet</code> 能检出这个问题（<code>copylocks</code> 检查器）。解法是始终用指针传递包含锁的结构体。</p>
 
 <h2>sync.Once、errgroup 与 singleflight 的关键细节</h2>
@@ -505,7 +505,7 @@ flowchart TB
 </table>
 
 <h2>race 检测器的能力边界与内存模型</h2>
-<p>搞清这一节能回答一个关键问题：CI 里 <code>-race</code> 全绿，到底能不能说明代码没有数据竞争。</p>
+<p>CI 里 <code>-race</code> 全绿，到底能不能说明代码没有数据竞争。</p>
 <p><code>-race</code> 编译选项在运行时拦截所有内存访问并检查 happens-before 关系。它<strong>只能发现实际执行路径上的竞争</strong>，所以测试覆盖率和并发测试的质量直接决定它的效果。</p>
 <pre><code class="language-bash"># 测试时开 race
 go test -race -count=1 ./...
@@ -527,7 +527,7 @@ go build -race -o myapp_race ./cmd/server
         <tr><td>block 与 mutex profile</td><td>谁在等锁、等了多久、哪把锁争用最严重</td><td>不发生争用的锁；默认关闭需先打开采样</td><td>压测与线上排障</td></tr>
     </tbody>
 </table>
-<p>Go 的<strong>内存模型</strong>有一条核心规则：<strong>没有同步操作就没有可见性保证</strong>。你不能靠「感觉」推断一个 goroutine 写入的值对另一个 goroutine 可见——必须通过 channel 的发送与接收、sync 包的锁操作、atomic 包的函数来建立 happens-before 关系。</p>
+<p>Go <strong>内存模型</strong>的核心规则是<strong>没有同步就没有可见性保证</strong>：不能凭感觉推断一个 goroutine 写入的值另一个 goroutine 看得见，要靠 channel 收发、sync 锁操作、atomic 函数建立 happens-before。</p>
 <p>特别是 <code>atomic</code>：它保证操作本身是原子的，但<strong>不提供排序保证之外的互斥</strong>——两个 atomic 操作之间的非 atomic 访问仍然可能竞争。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -559,9 +559,9 @@ sequenceDiagram
     </tbody>
 </table>
 <p><strong>不适用边界</strong>：并发原语解决不了「取消信号没传下去」——请求悬挂、超时不生效、连接池被慢请求耗尽都在 <a href="../context/">Go Context 的传播、取消与误用</a>。</p>
-<p>单个接口本身慢、GC 毛刺、线程数异常增长属于运行时层面，在 <a href="../">Go 运行时模型</a> 与 <a href="../../../observability/">可观测系列</a>。共享数据结构选错导致的复杂度问题（用切片线性查找当索引）在 <a href="../../algorithms/">算法与数据结构</a>。</p>
+<p>接口本身慢、GC 毛刺、线程数异常增长属于运行时，在 <a href="../">Go 运行时模型</a> 与 <a href="../../../observability/">可观测系列</a>；切片线性查找当索引这类复杂度问题，在 <a href="../../algorithms/">算法与数据结构</a>。</p>
 <p>高并发下日志的分配与写入顺序见 <a href="../slog/">结构化日志与 log/slog</a>；Web 框架每请求一个 goroutine 的模型与中间件里的并发约束见 <a href="../iris/">Go Web 框架选型方法论</a>。</p>
-<p>这条路径上，上一篇讲的是运行时替你管的那部分，本篇讲你自己要管的并发结构，下一篇把范围收窄到「取消与超时怎么一路传下去」——它是并发正确性的另一半。</p>
+<p>运行时管的那部分上一篇讲过了，剩下的并发结构要自己管；取消与超时怎么一路传下去，是并发正确性的另一半。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../">← 上一步：Go 运行时模型：GMP 调度、内存分配与 GC</a> · <a href="../context/">下一步：Go Context 的传播、取消与误用 →</a></p>
 

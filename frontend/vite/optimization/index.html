@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Vite 生产构建优化：体积图判读、按更新频率分包、分包过细的三个代价、新旧资源共存的白屏、体积卡口。">
+    <meta name="description" content="从产物分析开始的 Vite 构建优化：按更新频率分包做长缓存、懒加载 404 白屏的修法、target 降级与体积预算 CI 卡口。">
     <meta name="keywords" content="Vite,构建优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/frontend/vite/optimization/">
     <meta property="og:title" content="生产构建优化：分包、体积预算与产物分析 - Vite - 资深码农">
-    <meta property="og:description" content="Vite 生产构建优化：体积图判读、按更新频率分包、分包过细的三个代价、新旧资源共存的白屏、体积卡口。">
+    <meta property="og:description" content="从产物分析开始的 Vite 构建优化：按更新频率分包做长缓存、懒加载 404 白屏的修法、target 降级与体积预算 CI 卡口。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/frontend/vite/optimization/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="生产构建优化：分包、体积预算与产物分析 - Vite">
-    <meta name="twitter:description" content="Vite 生产构建优化：体积图判读、按更新频率分包、分包过细的三个代价、新旧资源共存的白屏、体积卡口。">
+    <meta name="twitter:description" content="从产物分析开始的 Vite 构建优化：按更新频率分包做长缓存、懒加载 404 白屏的修法、target 降级与体积预算 CI 卡口。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,12 +68,12 @@
                     </header>
                     <div class="article-content">
 
-<p>构建优化最常见的错误不是配错参数，而是<strong>没看产物就开始优化</strong>。凭感觉加 <code>manualChunks</code>、凭感觉开压缩选项，忙了一天体积没降多少，甚至因为分包过细让首屏更慢了。</p>
-<p>这一篇按真实的排查顺序来：先看清产物，再决定改什么。开发期与生产期走两条构建路径这件事见 <a href="../">架构篇</a>，配置项与插件钩子见 <a href="../config/">配置与插件机制</a>。</p>
+<p>最常见的错误不是配错参数，而是<strong>没看产物就开始优化</strong>：凭感觉加 <code>manualChunks</code>，体积没降多少，甚至因分包过细让首屏更慢。</p>
+<p>先看清产物，再决定改什么。开发期与生产期走两条构建路径，见 <a href="../">架构篇</a>；配置项与插件钩子见 <a href="../config/">配置与插件机制</a>。</p>
 
 <h2>产物分析是起点</h2>
 
-<p>先装 <code>rollup-plugin-visualizer</code>，构建后会生成一张可交互的体积图。<strong>务必看 gzip 或 brotli 之后的数字</strong>——未压缩体积会把你引向错误的优化点，因为重复文本的压缩率极高，一个未压缩 200KB 的文件压完可能只有 15KB。</p>
+<p>先装 <code>rollup-plugin-visualizer</code>，构建后生成可交互体积图。<strong>务必看 gzip 或 brotli 之后的数字</strong>：未压缩体积会误导优化方向，重复文本压缩率极高，未压缩 200KB 的文件压完可能只有 15KB。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -105,7 +105,7 @@ flowchart TB
 
 <h2>分包策略与长缓存</h2>
 
-<p>分包的唯一目的是<strong>让用户下次访问时尽可能多地命中缓存</strong>。因为文件名带内容哈希，内容不变哈希就不变，浏览器直接用本地副本。所以分包的原则是按「更新频率」切，而不是按「代码类型」切。</p>
+<p>分包的唯一目的是<strong>让用户下次访问尽可能多命中缓存</strong>：文件名带内容哈希，内容不变哈希不变，浏览器直接用本地副本。按「更新频率」切，不按「代码类型」切。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -206,7 +206,7 @@ export default defineConfig({
     <div class="callout-title">过度分包的三个代价</div>
     <p>一是<strong>请求数</strong>：HTTP/2 的多路复用缓解了队头阻塞，但每个请求仍有头部与优先级调度成本，几十上百个小 chunk 会把首屏瀑布拉长。</p>
 <p>二是<strong>重复依赖</strong>：切得太碎时被多处引用的模块可能被复制进多个 chunk，总体积反而上升。</p>
-<p>三是<strong>压缩率下降</strong>：小文件各自压缩明显不如合并后压缩，几十个几 KB 的文件加起来常比一个大文件更大。缓存头、压缩与 HTTP/2 的细节见站内 <a href="../../performance/web-vitals/">前端性能优化</a>。</p>
+<p>三是<strong>压缩率下降</strong>：小文件各自压缩不如合并，几十个几 KB 加起来常比一个大文件更大。缓存头、压缩与 HTTP/2 见 <a href="../../performance/web-vitals/">前端性能优化</a>。</p>
 </div>
 
 <h2>tree shaking 的前提与失效原因</h2>
@@ -225,7 +225,7 @@ export default defineConfig({
 <h2>懒加载与加载失败：一个真实事故</h2>
 
 <p>按路由懒加载是首屏优化的基础，但它有一个必须处理的失败路径，而绝大多数项目都漏了。</p>
-<p><strong>用户打开页面时加载的是旧版本入口，里面记着旧版本 chunk 的文件名；部署新版本后旧 chunk 被清理，用户点进一个未访问过的路由，请求到 404，动态导入的 Promise 被拒绝，没有捕获就是整页白屏。</strong></p>
+<p><strong>用户打开页面拿到旧版本入口，记着旧 chunk 文件名；新版本部署后旧 chunk 被清理，点进一个未访问的路由请求 404，动态导入的 Promise 被拒绝，没捕获就整页白屏。</strong></p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -295,11 +295,11 @@ const ReportPage = lazyWithRetry(() =&gt; import('../pages/Report'), 'report')
 </tbody></table>
 
 <p><strong>把 target 设成 es5 却并不需要，是一种很常见的无意义膨胀</strong>：可选链、空值合并、async 这些语法一旦降级，会引入辅助函数和状态机代码，还会让压缩效果变差。</p>
-<p>判断依据应该是真实访问数据里的浏览器分布，而不是「保险一点」。如果确实有少量老设备，更合理的做法是给它们单独产出一份降级包，而不是让全部用户承担。</p>
+<p>判断依据是真实访问数据里的浏览器分布，不是「保险一点」。确实有少量老设备，就给它们单独产出一份降级包，别让全部用户承担。</p>
 
 <h2>体积预算做成 CI 卡口</h2>
 
-<p>这是<strong>唯一能真正阻止体积缓慢膨胀的手段</strong>。原因很简单：每次需求只多几十 KB，没有任何人会因此拒绝合并，但一年下来首屏就翻倍了。人工 review 拦不住这种渐变，只有自动化卡口能拦。</p>
+<p>这是<strong>唯一真正阻止体积缓慢膨胀的手段</strong>：每次需求只多几十 KB，没人因此拒绝合并，一年下来首屏翻倍。人工 review 拦不住这种渐变，只有自动化卡口能拦。</p>
 
 <pre><code class="language-javascript">// scripts/size-budget.mjs —— 构建后执行，超预算则退出码非零让 CI 失败
 import { readdir, readFile, stat } from 'node:fs/promises'
@@ -360,7 +360,7 @@ if (failed) {
 <tr><td>sourcemap</td><td>生产建议产出但不部署到公开路径，上传给错误监控平台</td><td>直接部署到 CDN，等于公开源码</td></tr>
 </tbody></table>
 
-<p>产物文件名哈希与缓存头的配合方式（不可变资源用长 max-age、HTML 用协商缓存）结论明确，细节见站内 <a href="../../performance/web-vitals/">前端性能优化</a>；发布期新旧资源共存的部署策略见 <a href="../../frameworks/engineering/">前端工程化</a>。</p>
+<p>文件名哈希与缓存头的配合（不可变资源长 max-age、HTML 协商缓存）见 <a href="../../performance/web-vitals/">前端性能优化</a>；发布期新旧资源共存的部署策略见 <a href="../../frameworks/engineering/">前端工程化</a>。</p>
 
 <h2>反模式对照</h2>
 

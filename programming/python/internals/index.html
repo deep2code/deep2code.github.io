@@ -90,7 +90,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>站内《Python 语言核心》一篇已经讲过对象模型、引用计数与分代 GC、<code>__slots__</code> 与属性查找的语义，这篇只讲<strong>执行机制</strong>：一行 Python 被编译成什么、解释器怎么跑它、3.11 之后快在哪里、以及由此推出的热路径优化手法。</p>
+<p>《Python 语言核心》讲过对象模型、引用计数与分代 GC、<code>__slots__</code> 与属性查找语义；下一层是<strong>执行机制</strong>：一行 Python 编译成什么、解释器怎么跑、3.11 之后快在哪、热路径怎么优化。</p>
 <p>目标是让你在看到一段慢代码时，能说出它慢在哪条指令上，而不是只会说「Python 就是慢」。</p>
 <h2>量一段代码真实开销的动手顺序</h2>
 <p>「这段代码慢」不是一个能直接动手的结论。下面四步有依赖关系：跳过第 1 步直接 profile，最常见的结果是花半天优化了一段只占总耗时 5% 的循环。</p>
@@ -172,7 +172,7 @@ print(no_gc, with_gc)                 # 两者差得多，说明这段代码的�
 <p>这一层不解释为什么，比如「为什么 <code>LOAD_ATTR</code> 比 <code>LOAD_FAST</code> 贵这么多」「为什么 <code>adaptive=True</code> 才看得到真实指令」，都在下面的原理层。</p>
 
 <h2>字节码：能看见，但不是优化手段</h2>
-<p>搞清这一节能解决的现象是：有人拿「指令条数少」当性能证据，或者以为预编译 <code>.pyc</code> 和加 <code>-O</code> 就算做了优化。Python 源码先被编译成字节码（code object），再由解释器逐条执行。</p>
+<p>有人拿「指令条数少」当性能证据，或者以为预编译 <code>.pyc</code> 和加 <code>-O</code> 就算做了优化。Python 源码先被编译成字节码（code object），再由解释器逐条执行。</p>
 <p><code>dis</code> 模块能把这层完全摊开，这是判断「两种写法到底有没有区别」的唯一可靠手段。</p>
 
 <pre><code class="language-python">import dis
@@ -207,13 +207,13 @@ dis.dis(f)
 </table>
 
 <p><code>__pycache__</code> 里的文件名带上了魔数与版本号（如 <code>mod.cpython-312.pyc</code>），所以不同小版本互不复用。</p>
-<p>默认失效判据是「源文件的 mtime 加大小」，这意味着两个坑：容器构建时如果重置了文件时间戳、或者部署工具只改内容不改 mtime，都可能让旧字节码继续生效。</p>
+<p>默认失效判据是「源文件的 mtime 加大小」，有两个坑：容器构建重置文件时间戳、部署工具只改内容不改 mtime，旧字节码都会继续生效。</p>
 <p>生产镜像里可以用 <code>python -m compileall --invalidation-mode checked-hash</code> 改成按内容哈希判断，或者干脆在构建期预编译好。</p>
 
 <h2>3.11 之后解释器快在哪：自适应专门化</h2>
-<p>搞清这一节能解决的现象是：升级版本白拿的性能到底从哪来，以及为什么同一个函数处理多种类型时这份收益会消失。3.11 起 CPython 引入了<strong>自适应专门化解释器</strong>（specializing adaptive interpreter）。</p>
-<p>思路是：同一条泛型指令（比如 <code>BINARY_OP</code> 加法）在真实代码里绝大多数时候操作的是同一种类型，于是解释器先观察几次，确认类型稳定后，把这条指令原地替换成专门化版本。</p>
-<p>（例如「两个小整数相加」），跳过类型分发与通用协议查找。类型一旦变了就去优化回泛型版本。这也解释了用法层那条：不加 <code>adaptive=True</code>，<code>dis</code> 给你看的是替换之前的形态。</p>
+<p>升级版本白拿的性能到底从哪来，以及为什么同一个函数处理多种类型时这份收益会消失。3.11 起 CPython 引入了<strong>自适应专门化解释器</strong>（specializing adaptive interpreter）。</p>
+<p>思路是：同一条泛型指令（如 <code>BINARY_OP</code> 加法）真实代码里绝大多数时候操作同一种类型，解释器先观察几次，稳定后就地替换成专门化版本。</p>
+<p>专门化版本比如「两个小整数相加」，跳过类型分发与通用协议查找；类型一变就退回泛型版本。不加 <code>adaptive=True</code>，<code>dis</code> 显示替换前的形态。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -248,13 +248,13 @@ stateDiagram-v2
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">最省力的性能优化往往是升级版本</div>
-    <p>从 3.9 或 3.10 升到 3.12，同一份代码在 CPU 侧通常能白拿 20% 到 40%，成本只是跑一遍 CI 和确认几个 C 扩展的 wheel。相比之下，花两周重写热点函数换来 30% 的收益，还引入了新 bug。先做这件事，再谈别的优化。</p>
+    <p>从 3.9 或 3.10 升到 3.12，同一份代码 CPU 侧通常白拿 20% 到 40%，成本只是跑 CI 和确认几个 C 扩展的 wheel。花两周重写热点函数只换来 30%，还引入新 bug，顺序应当相反。</p>
 <p>要注意的是异常处理与 frame 相关的行为在 3.11 有变化，依赖 <code>sys._getframe</code> 或自己拼帧栈的框架代码需要单独回归。升级本身的可行性验证顺序见<a href="../ecosystem/">Python 生态的选型与演进</a>。</p>
 </div>
 
 <h2>属性访问与方法调用为什么慢</h2>
-<p>搞清这一节能解决的现象是：profile 指着一个「什么都没干」的函数，耗时却排在前列。「Python 慢」的具体成本大多花在这里。</p>
-<p><code>obj.attr</code> 不是一次内存偏移读取，而是一整套协议：先看类型的 MRO 上有没有数据描述符，再看实例字典，再看类字典里的非数据描述符（函数就是非数据描述符），最后才轮到 <code>__getattr__</code>。</p>
+<p>profile 指着一个「什么都没干」的函数，耗时却排在前列。「Python 慢」的具体成本大多花在这里。</p>
+<p><code>obj.attr</code> 不是内存偏移读取，走整套协议：先看类型 MRO 上的数据描述符，再看实例字典、类字典的非数据描述符（函数是非数据描述符），最后到 <code>__getattr__</code>。</p>
 <p>方法调用还要额外创建一个绑定方法对象把 <code>self</code> 绑上去。</p>
 
 <div class="mermaid">
@@ -315,8 +315,8 @@ class Acc:
 </table>
 
 <h2>容器的实现决定了复杂度</h2>
-<p>搞清这一节能解决的现象是：算法复杂度算的是 O(n)，实测却随数据量平方增长。dict 自 3.6 起用<strong>紧凑布局</strong>：一个小的索引数组加一个按插入顺序追加的 entries 数组。</p>
-<p>这带来两个结果——内存比旧实现省 20% 到 25%，以及<strong>插入顺序被保留</strong>。注意这在 3.6 只是实现细节，<strong>3.7 起才写进语言规范</strong>，所以在 3.7 及以上依赖顺序是安全的，而 <code>set</code> 从来没有顺序保证。</p>
+<p>算法复杂度算的是 O(n)，实测却随数据量平方增长。dict 自 3.6 起用<strong>紧凑布局</strong>：一个小的索引数组加一个按插入顺序追加的 entries 数组。</p>
+<p>内存比旧实现省 20% 到 25%，且插入顺序被保留。3.6 时只是实现细节，3.7 起才写进语言规范，3.7 及以上依赖顺序安全，<code>set</code> 则从来没有顺序保证。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -353,13 +353,13 @@ flowchart TB
 </tbody>
 </table>
 
-<p>「从 list 头部 pop」是线上最常见的隐形二次复杂度：一个十万元素的队列用 <code>lst.pop(0)</code> 消费，总搬移量是五十亿次元素移动，而换成 <code>collections.deque</code> 的 <code>popleft()</code> 就是 O(1)。同理，判断成员是否存在时把 list 换成 set，通常是一行改动换来一到三个数量级。</p>
+<p>「从 list 头部 pop」是最常见的隐形二次复杂度：一个十万元素的队列用 <code>lst.pop(0)</code> 消费要搬移五十亿次，换成 <code>collections.deque</code> 的 <code>popleft()</code> 即 O(1)。同理，查成员存在时把 list 换成 set，一行改动换来一到三个数量级。</p>
 <p>这类问题在 cProfile 里只表现为一个不起眼的 <code>pop</code>，所以用法层第 2 步之后还要对着这张表回看一遍数据结构选型。</p>
 
 <h2>字符串：不可变带来的代价</h2>
-<p>搞清这一节能解决的现象是：同一段拼接代码在开发环境线性、在生产上突然退化。字符串不可变，所以每次拼接都产生新对象。循环里用 <code>+=</code> 拼接在理论上是 O(n²)：第 k 次要复制已有的 k 个字符。</p>
+<p>拼接代码在开发环境线性、生产上退化：字符串不可变，每次拼接产生新对象。循环里 <code>+=</code> 拼接理论上是 O(n²)：第 k 次要复制前 k 个字符。</p>
 <p>CPython 对「引用计数为 1 的 str 做原地扩展」有一个特殊优化，让这种写法在很多情况下看起来是线性的，但<strong>这个优化不可依赖</strong>。</p>
-<p>只要那个字符串还被别处引用（比如存进了列表、传给了函数、在调试器里被观察），优化就失效，性能断崖式下跌，而且只在生产的大数据量下才暴露。</p>
+<p>那个字符串只要还被别处引用（存进列表、传给函数、调试器里观察），优化就失效，性能骤降，只在生产大数据量下才暴露。</p>
 
 <pre><code class="language-python">import timeit
 
@@ -398,14 +398,14 @@ print(timeit.timeit(lambda: concat_good(parts), number=10))
 </tbody>
 </table>
 
-<p>日志是唯一该保留百分号风格的地方：<code>logger.debug("x=%s", x)</code> 在日志级别不够时不会执行格式化，而 <code>logger.debug(f"x={x}")</code> 无论级别都会先把字符串拼出来。热路径上的 debug 日志用 f-string，等于白付全量格式化成本。</p>
+<p>日志是唯一该保留百分号风格的地方：<code>logger.debug("x=%s", x)</code> 级别不够时不执行格式化，<code>logger.debug(f"x={x}")</code> 无论级别都会拼出字符串。热路径 debug 用 f-string 白付全量格式化成本。</p>
 
 <p>另外，短的、看起来像标识符的字符串字面量会被 interning（驻留），于是 <code>"abc" is "abc"</code> 可能为 True。</p>
 <p>这只是实现细节，永远不要用 <code>is</code> 比较字符串或数字——语义比较一律用 <code>==</code>，<code>is</code> 只用于 <code>None</code> 这类单例（这条与其他语义陷阱一起整理在<a href="../pitfalls/">Python 的语义陷阱清单</a>）。</p>
 <p>需要高频比较大量重复字符串时，可以用 <code>sys.intern</code> 主动驻留，让比较退化成指针比较。</p>
 
 <h2>为什么 numpy 能快一两个数量级</h2>
-<p>搞清这一节能解决的现象是：换了 numpy 却更慢。numpy 快不是因为「C 比 Python 快」这么笼统，而是它同时省掉了三样东西：每个元素的对象头与装箱、每次运算的解释器分发、以及计算期间的 GIL。</p>
+<p>换了 numpy 却更慢。numpy 快不是因为「C 比 Python 快」这么笼统，而是它同时省掉了三样东西：每个元素的对象头与装箱、每次运算的解释器分发、以及计算期间的 GIL。</p>
 <p>一次 <code>arr * 2</code> 只穿过解释器一次，剩下全在 C 层的连续内存上跑循环。</p>
 
 <div class="mermaid">
@@ -423,7 +423,7 @@ sequenceDiagram
     Note over PY,NP: 释放 GIL 期间其他线程可以真正并行执行
 </div>
 
-<p>反过来也解释了 numpy 的失效条件：<strong>逐元素用 Python 循环访问数组</strong>时，每次索引都要把 C 里的标量装箱成 Python 对象，比原生 list 更慢；dtype 是 <code>object</code> 时所有优化全部失效；小数组（几十个元素）上的固定开销可能盖过收益。</p>
+<p>反过来看，<strong>逐元素用 Python 循环访问数组</strong>时，每次索引把 C 标量装箱成 Python 对象，比原生 list 更慢；dtype 是 <code>object</code> 时优化全失效；几十个元素的小数组上固定开销可能盖过收益。</p>
 
 <h2>加速路线的取舍与 free-threaded 现状</h2>
 <p>下表的前提是你已经走完用法层那四步、手里有 profile 数据。没有数据就选路线，结果几乎总是「付了全部代价，拿到 1.1 倍」。</p>
@@ -441,7 +441,7 @@ sequenceDiagram
 </table>
 
 <p>free-threaded 的含义要说准：它是一个<strong>独立的构建变体</strong>（可执行文件带 t 后缀），不是默认发行版的开关。</p>
-<p>用它跑的进程里 GIL 被移除，多线程可以真并行执行字节码，代价是单线程性能下降、以及所有 C 扩展都需要重新适配并声明兼容。在它稳定之前，CPU 密集仍然走多进程或下沉到 C 层。</p>
+<p>这种构建移除 GIL，多线程真并行执行字节码，代价是单线程性能下降、所有 C 扩展要重新适配并声明兼容。稳定之前，CPU 密集仍走多进程或下沉 C 层。</p>
 <p>怎么验证某个扩展是否真的支持、轮子矩阵怎么盘点，见<a href="../ecosystem/">Python 生态的选型与演进</a>。</p>
 
 <h2>反模式速查与不适用边界</h2>
@@ -459,10 +459,10 @@ sequenceDiagram
 <tr><td>拿微基准的倍数当服务收益汇报</td><td>基准里没有 GC、没有连接池、数据全在缓存里</td><td>用真实负载量端到端的 p99，微基准只用来在两种写法之间做选择</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：内存占用、引用计数与 GC、<code>__slots__</code> 与属性协议的语义在<a href="../core/">Python 运行时机制</a>；语义层面的坑（作用域、可变默认参数、相等与哈希）在<a href="../pitfalls/">Python 的语义陷阱清单</a>；GIL 与三条并发路线在<a href="../concurrency/">Python 并发的三条路线与选择</a>；</p>
-<p>版本升级的可行性验证、解释器与构建变体的选择在<a href="../ecosystem/">Python 生态的选型与演进</a>；worker 数量与进程模型属于部署层，在<a href="../web/">Python Web 服务的部署形态</a>；跨服务的耗时拆解与容量评估见站内<a href="../../../observability/performance/">后端性能优化专题</a>。</p>
-<p>如果你的结论是「解释器层面已经没得优化了」，那就不是这一篇能解决的问题。</p>
-<p>这条路径上，上一篇讲对象与内存的开销从哪来，本篇再往下一层解释「同一段逻辑为什么在解释器里要付这么多」，下一篇转向语义正确性——那些不影响性能、但会直接给出错误结果的写法。</p>
+<p><strong>不适用边界</strong>：内存占用、引用计数与 GC、<code>__slots__</code> 属性协议在<a href="../core/">Python 运行时机制</a>；作用域、可变默认参数、相等与哈希在<a href="../pitfalls/">Python 语义陷阱清单</a>；GIL 与三条并发路线在<a href="../concurrency/">Python 并发的三条路线</a>；</p>
+<p>版本升级可行性验证、解释器与构建变体选择在<a href="../ecosystem/">Python 生态的选型与演进</a>；worker 数量与进程模型在<a href="../web/">部署形态</a>；跨服务耗时拆解、容量评估见<a href="../../../observability/performance/">性能优化专题</a>。</p>
+<p>结论若是解释器层面已无优化空间，就不在这一层的范围内。</p>
+<p>这条路径上，前一篇讲开销从哪来，这里往下一层解释同一段逻辑为什么要付这么多，最后是不影响性能但直接给出错误结果的语义陷阱。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../core/">← 上一步：Python 运行时机制：对象模型、内存与 GIL</a> · <a href="../pitfalls/">下一步：Python 的语义陷阱清单 →</a></p>
 

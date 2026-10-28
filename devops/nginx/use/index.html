@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Nginx 反代与重写的配置要点：forward-headers 策略、rewrite 阶段顺序、CORS 与 CSRF 边界、$request_id 打通链路。">
+        <meta name="description" content="反代请求头四件套、rewrite 执行顺序、CORS 与 CSRF 边界、auth_request 鉴权、灰度分流与降级。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/nginx/use/">
     <!-- Open Graph -->
     <meta property="og:title" content="Nginx 典型场景配置手册：反代、重写、跨域、鉴权、灰度 - 资深码农">
-    <meta property="og:description" content="Nginx 反代与重写的配置要点：forward-headers 策略、rewrite 阶段顺序、CORS 与 CSRF 边界、$request_id 打通链路。">
+    <meta property="og:description" content="反代请求头四件套、rewrite 执行顺序、CORS 与 CSRF 边界、auth_request 鉴权、灰度分流与降级。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/nginx/use/">
     <meta property="og:site_name" content="资深码农">
@@ -38,7 +38,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Nginx 典型场景配置手册：反代、重写、跨域、鉴权、灰度 - 资深码农">
-    <meta name="twitter:description" content="Nginx 反代与重写的配置要点：forward-headers 策略、rewrite 阶段顺序、CORS 与 CSRF 边界、$request_id 打通链路。">
+    <meta name="twitter:description" content="反代请求头四件套、rewrite 执行顺序、CORS 与 CSRF 边界、auth_request 鉴权、灰度分流与降级。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
@@ -91,12 +91,12 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这一篇是配置片段集：每个场景给出可以直接抄进生产的写法，同时说清「为什么这么写」和「大多数人是怎么写错的」。</p>
+<p>配置片段集：每个场景给可直接抄进生产的写法，说清为什么这么写、大多数人怎么写错。</p>
 <p>请求处理的 11 个阶段、location 匹配优先级、<code>proxy_pass</code> 尾斜杠语义、缓冲与超时参数、限流与缓存，都在 <code>../</code> 主干篇，这里只引用结论。</p>
 
 <h2>反向代理的必备请求头</h2>
 
-<p>Nginx 终止 TLS 后用明文回源，后端因此丢掉了三样信息：客户端真实 IP、客户端请求的域名、客户端用的协议。四个头是最小完备集，少一个就会出一类特定故障。</p>
+<p>Nginx 终止 TLS 后明文回源，后端丢掉三样信息：客户端真实 IP、请求的域名、所用协议。四个头是最小完备集，少一个就出一类特定故障。</p>
 
 <table>
 <thead><tr><th>请求头</th><th>建议值</th><th>不传会发生什么</th></tr></thead>
@@ -141,7 +141,7 @@ proxy_set_header X-Request-Id      $request_id;
 proxy_set_header X-Auth-User       "";
 proxy_set_header X-Auth-Roles      "";</code></pre>
 
-<p>后端侧也要配合：Spring Boot 要设 <code>server.forward-headers-strategy=framework</code>，Django 要设 <code>SECURE_PROXY_SSL_HEADER</code>，Node 的 Express 要 <code>app.set('trust proxy', 1)</code>。<strong>只在 Nginx 侧传头、后端不信任，等于没传。</strong>反过来，如果后端无条件信任 <code>X-Forwarded-For</code> 的最左值，攻击者可以随意伪造来源 IP 绕过基于 IP 的限制。</p>
+<p>后端也要配合：Spring Boot 设 <code>server.forward-headers-strategy=framework</code>，Django 设 <code>SECURE_PROXY_SSL_HEADER</code>，Node 的 Express 设 <code>app.set('trust proxy', 1)</code>。<strong>只在 Nginx 侧传头、后端不信任，等于没传。</strong>后端若无条件信 <code>X-Forwarded-For</code> 最左值，来源 IP 可被随意伪造，绕过基于 IP 的限制。</p>
 
 <h2>URL 重写：四个 flag 与循环重定向</h2>
 
@@ -256,7 +256,7 @@ location /api/ {
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">CORS 不是 CSRF 防御</div>
-    <p>CORS 是<strong>放宽</strong>同源策略的机制，它决定「别的站点的 JS 能不能读到你的响应」，而 CSRF 利用的是浏览器自动携带 Cookie 发起的写操作，这类请求根本不需要读响应。把 CORS 配严了不等于防住了 CSRF；</p>
+    <p>CORS 是<strong>放宽</strong>同源策略的机制，决定别的站点 JS 能否读你的响应；CSRF 利用浏览器自动带 Cookie 的写请求，这类请求根本不需要读响应。配严 CORS 不等于防住 CSRF；</p>
 <p>反过来，把 CORS 配松（回显任意 Origin 加允许凭证）会把原本读不到的数据也暴露出去。CSRF 要靠 <code>SameSite</code> 与 Token，见站内 <code>../../security/</code> 的 CSRF 篇。</p>
 </div>
 
@@ -331,7 +331,8 @@ location @login {
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">auth_request 的三个硬限制</div>
-    <p>第一，子请求<strong>不携带请求体</strong>，鉴权服务无法基于 body 做判断（比如按订单号鉴权），只能用 URI、方法和头。第二，鉴权服务成为全链路串行依赖，它的 P99 会直接叠加到每个请求上，超时必须配成毫秒级并加缓存。</p>
+    <p>第一，子请求<strong>不带请求体</strong>，鉴权服务判断不了 body（如按订单号鉴权），只能用 URI、方法、头。</p>
+<p>第二，它成了全链路串行依赖，P99 直接叠加到每个请求，超时必须毫秒级并加缓存。</p>
 <p>第三，<code>auth_request</code> 属于 access 阶段，它<strong>晚于 rewrite 阶段</strong>，所以无法用它决定要不要改写 URI。</p>
 </div>
 
@@ -390,7 +391,7 @@ location /api/ {
     add_header X-Canary $canary_bucket always;
 }</code></pre>
 
-<p>静态资源与 API 共存的路由设计有一条省心的规则：<strong>用 <code>^~</code> 给 API 前缀挡住后面的正则 location</strong>，这样 <code>/api/xxx.js</code> 这类路径不会被「按扩展名匹配静态资源」的正则抢走。前缀与正则的优先级细节见主干篇。</p>
+<p>静态资源与 API 共存的路由有一条省心规则：<strong>用 <code>^~</code> 给 API 前缀挡住后面的正则 location</strong>，这样 <code>/api/xxx.js</code> 不会被「按扩展名匹配静态资源」的正则抢走。优先级细节见主干篇。</p>
 
 <p>灰度的回滚能力比放量能力更重要。百分比必须能一条命令改回 0 并 reload，这意味着<strong>比例不要散落在多处</strong>，最好集中在一个单独 <code>include</code> 进来的片段里。</p>
 <p>同时日志一定要带上命中的桶名，否则放量后错误率上升时，没法判断是新版本引起的还是恰好赶上业务高峰。</p>
@@ -468,7 +469,7 @@ upstream backend {
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">proxy_intercept_errors 是双刃剑</div>
-    <p>打开它之后，<strong>后端返回的 404、403 也会被 Nginx 的 <code>error_page</code> 接管</strong>。如果后端是 API，它原本返回的 JSON 错误体会被替换成 HTML，前端解析直接失败。所以要么只在纯页面的 location 上开，要么用 <code>error_page</code> 精确列出只接管 5xx。</p>
+    <p>打开后，<strong>后端返回的 404、403 也会被 Nginx 的 <code>error_page</code> 接管</strong>。后端是 API 时，原本的 JSON 错误体被换成 HTML，前端解析失败。所以要么只在纯页面 location 开，要么用 <code>error_page</code> 精确列出只接管 5xx。</p>
 </div>
 
 <h2>调试手段</h2>

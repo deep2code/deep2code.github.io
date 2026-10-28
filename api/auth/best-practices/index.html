@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="认证实践清单：多端登录的会话状态下限、单点登出为何难、RBAC 与数据范围、按风险分级登录、认证故障的可观测与降级。">
+    <meta name="description" content="认证系统上线后的工程问题：刷新令牌并发复用、多端会话记录、账号主键与身份表拆分、权限点与角色的取舍、风险分级登录与监控降级。">
     <meta name="keywords" content="认证授权,认证授权最佳实践,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/auth/best-practices/">
     <meta property="og:title" content="认证系统的工程实践 - 认证授权 - 资深码农">
-    <meta property="og:description" content="认证实践清单：多端登录的会话状态下限、单点登出为何难、RBAC 与数据范围、按风险分级登录、认证故障的可观测与降级。">
+    <meta property="og:description" content="认证系统上线后的工程问题：刷新令牌并发复用、多端会话记录、账号主键与身份表拆分、权限点与角色的取舍、风险分级登录与监控降级。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/auth/best-practices/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="认证系统的工程实践 - 认证授权">
-    <meta name="twitter:description" content="认证实践清单：多端登录的会话状态下限、单点登出为何难、RBAC 与数据范围、按风险分级登录、认证故障的可观测与降级。">
+    <meta name="twitter:description" content="认证系统上线后的工程问题：刷新令牌并发复用、多端会话记录、账号主键与身份表拆分、权限点与角色的取舍、风险分级登录与监控降级。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -67,7 +67,7 @@
                         <h1 class="article-title">认证系统的工程实践</h1>
                     </header>
                     <div class="article-content">
-<p>认证的问题都是工程设计问题，不是协议知识。本篇讲令牌续期并发、多端会话管理、账号表结构、权限模型取舍；协议细节见 <a href="../oauth2/">OAuth 2.0 与 OIDC 的协议细节</a> 与 <a href="../jwt/">JWT 的结构与验签机制</a>，安全机理见 <a href="../../security/auth-security/">越权与鉴权安全</a>。</p>
+<p>认证问题多是工程设计，不靠协议知识：令牌续期并发、会话管理、账号表结构、权限模型。协议见 <a href="../oauth2/">OAuth 2.0 与 OIDC 的协议细节</a>、<a href="../jwt/">JWT 的结构与验签机制</a>，安全见 <a href="../../security/auth-security/">越权与鉴权安全</a>。</p>
 <h2>上线前的认证自检清单：每条都给验证方法</h2>
 <p>认证系统的问题有个共同特征：<strong>功能测试全过，问题只在真实流量里出现</strong>。所以清单每一条都不是「要注意」，而是「用什么命令确认它在线上是对的」。</p>
 <p>按五组来查：凭证存储、会话与令牌生命周期、令牌存放位置、限流维度、越权检查落在哪一层。为什么这些地方会出问题，见下一节起的原理部分。</p>
@@ -265,7 +265,7 @@ SELECT length(refresh_hash) AS len, count(*) FROM user_sessions GROUP BY 1;
 
 <h2>令牌续期的并发问题：最容易带上线的坑</h2>
 <p>搞清这条链路，能解决一类几乎无法复现的客服问题：用户说自己「莫名被登出」，而日志里只有一次 <code>invalid_grant</code>。</p>
-<p>本地几乎复现不出，需要多个请求<strong>同时</strong>撞上令牌过期，线上却常见。每个请求各自 401 后刷新，而刷新令牌一次性——第一个换走新令牌，后面的用旧令牌换，服务端判为<strong>令牌复用</strong>，作废家族并登出用户。</p>
+<p>要多个请求<strong>同时</strong>撞上令牌过期，线上却常见：各自 401 后刷新，刷新令牌一次性，第一个换走新令牌，其余用旧令牌换，服务端判为<strong>令牌复用</strong>，作废家族并登出。</p>
 <div class="mermaid">
 sequenceDiagram
     participant R1 as 请求 1
@@ -354,8 +354,8 @@ async function request(input: string, init: RequestInit = {}, retried = false) {
 
 <h2>多端登录与会话管理</h2>
 <p>无状态令牌撑不起「登出其他设备」，卡在会话状态的下限上。</p>
-<p>「同一账号能不能在多个设备上登录」是产品决策，却决定技术实现的下限：只要产品要展示会话列表或提供「登出其他设备」，就必须有<strong>服务端会话记录</strong>，纯无状态令牌做不到。</p>
-<p>折中方案是只给刷新令牌建记录——一条记录代表一个设备会话，访问令牌仍是短有效期自包含令牌，踢设备即删记录，最长一个访问令牌有效期后彻底生效。</p>
+<p>「同一账号能不能在多个设备上登录」是产品决策，也定下技术下限：要会话列表或「登出其他设备」，就得存<strong>服务端会话记录</strong>，无状态令牌做不到。</p>
+<p>只给刷新令牌建记录，一条代表一个设备会话，访问令牌仍取短有效期自包含。踢设备删记录，最长一个访问令牌有效期后生效。</p>
 <table>
     <thead>
         <tr>
@@ -395,7 +395,7 @@ async function request(input: string, init: RequestInit = {}, retried = false) {
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">设备识别不要指望完全准确</div>
-    <p>会话列表要显示「小米手机、上海、两小时前活跃」这类信息，靠的是 User-Agent、上报的设备型号和 IP 归属库，三者都不可靠：UA 可伪造、重装应用会产生新设备标识、IP 归属在移动网络下常偏差几百公里。</p>
+    <p>列表里「小米手机、上海、两小时前活跃」靠 User-Agent、设备型号、IP 归属库，都不可靠：UA 可伪造，重装应用会生成新设备标识，移动网络下 IP 常偏差几百公里。</p>
 <p>设计时要接受同一台设备出现多条记录，并给用户「登出全部其他设备」这个一键选项作为兜底，而不是指望他逐条辨认。</p>
 </div>
 
@@ -462,7 +462,7 @@ flowchart TB
 <h2>账号体系设计：把可变的东西挪出主键</h2>
 <p>搞清这层结构，能解决两个迟早会来的需求：换绑邮箱手机号，以及同一个人绑多个身份源。</p>
 <p>最常见的设计错误是用邮箱或手机号当用户主键。它们都会变：换手机号、换公司邮箱、号码被运营商回收后重新分配给别人。</p>
-<p>一旦作为主键，所有引用它的表都要跟着迁移，历史数据归属也会错乱。正确结构是<strong>内部不可变 ID 做主键，登录标识放进独立的身份表</strong>，一个用户可绑定多个身份源。</p>
+<p>当主键后，引用表要迁移，数据归属会错乱。结构应为<strong>内部不可变 ID 做主键，登录标识放进独立的身份表</strong>，一个用户可绑多个身份源。</p>
 <pre><code class="language-sql">-- 用户主表：只放稳定不变的东西，主键无业务含义
 CREATE TABLE users (
     id            BIGINT PRIMARY KEY,            -- 雪花或序列，不可变，对外可再包一层不可枚举的外部 ID
@@ -573,7 +573,7 @@ CREATE UNIQUE INDEX ON user_sessions (refresh_hash);</code></pre>
         </tr>
     </tbody>
 </table>
-<p>实践建议很明确：<strong>代码里只判断权限点，不判断角色</strong>。角色是权限点的容器，属配置数据。判断角色会让每次新增角色都要改代码发版，还容易写出「管理员例外」这种散落各处的特判。</p>
+<p><strong>代码里只判断权限点，不判断角色</strong>。角色是权限点的容器，属配置数据。判断角色会让新增角色改代码发版，还散落「管理员例外」这类特判。</p>
 <p>数据范围（能看哪些记录）不要硬塞进 RBAC，它本质是资源归属判断，应该落在查询条件里。</p>
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
@@ -585,7 +585,7 @@ CREATE UNIQUE INDEX ON user_sessions (refresh_hash);</code></pre>
 
 <h2>登录体验与安全的平衡：按风险分级</h2>
 <p>「加强安全就一定掉转化」是假两难，按风险分级就解开了。</p>
-<p>把所有用户都按最高风险对待会直接降低转化，正确做法是<strong>按风险分级触发额外验证</strong>。风险信号来自设备是否可信、IP 与常用地的偏离、行为频率、本次操作的敏感度。</p>
+<p>全部用户按最高风险对待会掉转化，做法是<strong>按风险分级触发额外验证</strong>。信号取自设备可信度、IP 与常用地偏离、行为频率、操作敏感度。</p>
 <table>
     <thead>
         <tr>
@@ -687,7 +687,7 @@ sum(rate(jwks_fetch_total{result="error"}[5m])) &gt; 0</code></pre>
 </table>
 
 <h2>不同阶段的系统该做到哪一步</h2>
-<p>上面的清单是完整形态，但一次做完既不现实也不必要。<strong>判断依据是「你有几种客户端、封禁的生效延迟容忍度、有没有外部身份源」</strong>，这三条决定该停在哪一档。</p>
+<p>清单是完整形态，不必一次做完。<strong>判断依据是「你有几种客户端、封禁的生效延迟容忍度、有没有外部身份源」</strong>，三条决定停在哪一档。</p>
 <table>
     <thead>
         <tr>
@@ -742,9 +742,9 @@ sum(rate(jwks_fetch_total{result="error"}[5m])) &gt; 0</code></pre>
         </tr>
     </tbody>
 </table>
-<p><strong>不适用边界：</strong>本篇只覆盖认证系统自己的工程问题。三类相邻问题不在这里解决——<strong>攻防参数与漏洞机理</strong>（口令哈希、多因素、越权分类、令牌存放位置的攻击面）见 <a href="../../security/auth-security/">越权与鉴权安全</a> 与 <a href="../../security/csrf-clickjacking/">CSRF 与点击劫持</a>；</p>
+<p><strong>不适用边界：</strong>工程问题之外，三类问题在别处：<strong>攻防参数与漏洞机理</strong>（口令哈希、多因素、越权分类、令牌存放位置的攻击面）见 <a href="../../security/auth-security/">越权与鉴权安全</a>、<a href="../../security/csrf-clickjacking/">CSRF 与点击劫持</a>；</p>
 <p><strong>协议报文层面</strong>的参数与校验点见 <a href="../oauth2/">OAuth 2.0 与 OIDC 的协议细节</a> 与 <a href="../jwt/">JWT 的结构与验签机制</a>；<strong>指标采集与告警落地</strong>见 <a href="../../../observability/metrics/">指标与监控</a>，网关侧限流与超时参数见 <a href="../../../devops/nginx/">Nginx 实践</a>。</p>
-<p>整条路径的选型与分层回到 <a href="../">认证与授权的协议全景</a>，本篇是这条路径的最后一环。</p>
+<p>整条路径的选型与分层回到 <a href="../">认证与授权的协议全景</a>，到这里就是最后一环。</p>
 
 <h2>自建还是用托管</h2>
 <div class="mermaid">
@@ -800,7 +800,7 @@ flowchart TB
         </tr>
     </tbody>
 </table>
-<p>无论哪条路，都要在第一天就<strong>把认证收敛到一个服务</strong>，业务代码只依赖内部统一的身份接口。将来更换实现时改动就集中在一处，而不是散落在各业务服务的登录逻辑里。</p>
+<p>无论哪条路，<strong>把认证收敛到一个服务</strong>，第一天就做，业务代码只依赖统一身份接口。换实现时改动集中一处，不散在各业务服务的登录逻辑里。</p>
 
 <h2>反模式对照：每条都对应一次真实事故</h2>
 <table>

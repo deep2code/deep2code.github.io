@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="分片落地判断：先分清总量与活跃数据，按聚合根定归属，买家卖家二选一，跨片关联三种替代，共享表防越权与租户倾斜。">
+    <meta name="description" content="数据归属与多租户的分片建模：聚合根与从表冗余分片键、买家卖家两种归属、映射表字段设计、租户键与分片键的区分、共享表越权防线。">
     <meta name="keywords" content="数据库设计,分库分表策略,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/design/sharding-strategy/">
     <meta property="og:title" content="数据归属与多租户：分片的数据模型策略 - 资深码农">
-    <meta property="og:description" content="分片落地判断：先分清总量与活跃数据，按聚合根定归属，买家卖家二选一，跨片关联三种替代，共享表防越权与租户倾斜。">
+    <meta property="og:description" content="数据归属与多租户的分片建模：聚合根与从表冗余分片键、买家卖家两种归属、映射表字段设计、租户键与分片键的区分、共享表越权防线。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/design/sharding-strategy/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="数据归属与多租户：分片的数据模型策略">
-    <meta name="twitter:description" content="分片落地判断：先分清总量与活跃数据，按聚合根定归属，买家卖家二选一，跨片关联三种替代，共享表防越权与租户倾斜。">
+    <meta name="twitter:description" content="数据归属与多租户的分片建模：聚合根与从表冗余分片键、买家卖家两种归属、映射表字段设计、租户键与分片键的区分、共享表越权防线。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,12 +71,12 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>分片有两层问题。一层是工程层面的：分片键怎么选、用什么分片算法、怎么生成全局 ID、中间件选谁、扩容迁移怎么不停机——《分库分表》篇已完整讲过决策与落地流程。</p>
+<p>分片有两层问题。工程层：分片键、分片算法、全局 ID 生成、中间件选型、扩容迁移怎么不停机，《分库分表》篇讲过决策与落地流程。</p>
 <p>另一层是<strong>数据模型层面的</strong>：哪些数据属于同一个归属单元、主表和从表怎么一起分、两种查询维度冲突时怎么办、多租户怎么隔离。</p>
-<p>这一层决定了分片方案的上限，而且一旦定错，后期只能靠整表迁移来纠正。这篇只讲第二层。</p>
+<p>这一层决定分片方案的上限，一旦定错，后期只能靠整表迁移纠正。</p>
 <h2>多租户数据归属：四步判断</h2>
 
-<p>数据归属要在第一天定对，因为它决定后面所有事：唯一索引怎么建、能否按客户单独备份、大客户能否被搬走。下面四步按顺序问，<strong>第一步答「是」就直接结束</strong>。每一步背后的机制见原理层。</p>
+<p>数据归属要在第一天定对，它决定唯一索引怎么建、能否按客户单独备份、大客户能否被搬走。<strong>第一步答「是」就直接结束</strong>，每步机制见原理层。</p>
 
 <table>
 <thead><tr><th>步骤</th><th>怎么确认</th><th>结论</th></tr></thead>
@@ -148,7 +148,8 @@ SELECT id, biz_no, status FROM orders
 
 <p>真实问题只是历史数据太多，分完片才发现，就是白付复杂度。</p>
 
-<p>「单表几亿行，必须分库分表」这个判断多数情况下是错的，因为它把两件事混在一起：<strong>数据总量大</strong>和<strong>活跃数据量大</strong>。如果几亿行里只有最近三个月的几千万行被查询，需要的不是分片，是归档。</p>
+<p>「单表几亿行，必须分库分表」多半是错的，它混淆了<strong>数据总量大</strong>和<strong>活跃数据量大</strong>。</p>
+<p>几亿行里只有最近三个月的几千万行被查询，要的不是分片，是归档。</p>
 <p>归档的复杂度比分片低一个数量级，而且不会引入跨片查询和分布式事务。</p>
 
 <div class="mermaid">
@@ -198,15 +199,15 @@ flowchart TB
 <div class="callout callout-danger">
 <div class="callout-icon">❌</div>
 <div class="callout-title">最常见也最难补救的错误</div>
-<p>从表按自己的主键散列。<code>order_item</code> 按 <code>id</code> 取模、<code>order_status_log</code> 按 <code>id</code> 取模，看似「分布均匀」，实际把一次订单详情查询变成 N 次全分片广播，且订单主表和明细无法在同一个本地事务提交，必须引入分布式事务。</p>
-<p><strong>从表的分片键必须冗余父表的分片键列</strong>，即明细表上除了 <code>order_id</code> 还要带一列 <code>buyer_id</code>，路由按 <code>buyer_id</code> 算。这一列在插入时确定、此后永不变化。纠正这个错误意味着整表重新迁移，所以必须第一天定对。</p>
+<p>从表按自己主键散列：<code>order_item</code> 按 <code>id</code> 取模、<code>order_status_log</code> 按 <code>id</code> 取模，一次订单详情查询变成 N 次全分片广播，主表和明细无法在同一个本地事务提交，只能上分布式事务。</p>
+<p><strong>从表的分片键必须冗余父表的分片键列</strong>：明细表除 <code>order_id</code> 还要带 <code>buyer_id</code>，路由按 <code>buyer_id</code> 算，插入时确定、此后不变。定错要整表重迁，必须第一天定对。</p>
 </div>
 
 <h2>按买家还是按卖家：同一系统两种归属的后果</h2>
 
 <p>买家侧和商家侧总有一边查询必然跨片：主数据只能归属一边。</p>
 
-<p>电商系统里订单同时属于买家和卖家，这让「数据归属」出现根本性的二选一。下图对比同一套数据在两种划分下，哪些查询能单片完成、哪些必然跨片。</p>
+<p>电商订单同时属于买家和卖家，数据归属因此要二选一。同一套数据在两种划分下，哪些查询能单片完成、哪些必然跨片。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -305,8 +306,8 @@ SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H') AS h, COUNT(*) FROM orders
 <div class="callout callout-warning">
 <div class="callout-icon">⚠️</div>
 <div class="callout-title">异构索引表最容易被漏掉的一点</div>
-<p><strong>排序和筛选字段必须完整冗余进映射表</strong>。只存 <code>shop_id</code> 和 <code>order_id</code> 的映射表，在「按金额倒序」或「按状态筛选」时会退化成：先取出全部 order_id，回主表查详情，再在应用内存里排序分页。</p>
-<p>数据量一大就直接超时，且分页结果在数据变动时会漂移。所以映射表的字段集合应由<strong>列表页的排序项和筛选项</strong>决定，而不是「先存两列以后再说」。</p>
+<p><strong>排序和筛选字段必须完整冗余进映射表</strong>。只存 <code>shop_id</code> 和 <code>order_id</code> 时，「按金额倒序」「按状态筛选」会退化成取全部 order_id、回主表查详情、内存里排序分页。</p>
+<p>数据量一大就超时，分页结果也会漂移。映射表字段集合应由<strong>列表页的排序项和筛选项</strong>决定，而不是「先存两列以后再说」。</p>
 <p>这也意味着列表页新增一个筛选项时，映射表要走一次完整的加列加回填流程。</p>
 </div>
 
@@ -380,7 +381,7 @@ flowchart TB
 
 <p>共享表最严重的事故：一条漏带租户条件的查询，把别人数据返回给了客户。</p>
 
-<p>共享表模型真正的风险不是性能，是<strong>越权</strong>。一条漏带 <code>tenant_id</code> 的查询就是一次跨租户数据泄露，这种漏写在代码评审里极难发现。靠开发自觉不成立，必须在框架层强制。</p>
+<p>共享表的风险不是性能，是<strong>越权</strong>。漏带 <code>tenant_id</code> 的一条查询就是一次跨租户泄露，代码评审极难发现，靠开发自觉不成立，要在框架层强制。</p>
 
 <pre><code class="language-go">package tenantscope
 
@@ -524,13 +525,13 @@ CREATE TABLE tenant_location (
 <p>最后是生命周期。<strong>按时间分区加归档往往比分片更省事</strong>：主表只保留活跃窗口的数据，过期分区整体搬到归档库、对象存储或分析型数据库。</p>
 <p>这条路径不引入跨片查询和分布式事务，恢复和验证都容易得多。很多「必须分库分表」的需求其实归档就能解决，值得在分片前认真评估。</p>
 
-<p><strong>不适用边界</strong>：本篇只讲数据模型层——数据归属、租户键与分片键的关系、隔离模型与越权防线。</p>
-<p>分片算法（取模、范围、一致性哈希、基因法）、全局 ID 生成、中间件选型、扩容迁移的状态流转与不停机切流在 <a href="../../optimization/sharding/">分库分表</a>；冗余列与快照列的维护义务在 <a href="../">范式与反范式：数据库设计的取舍</a>；</p>
-<p>实体与关系怎么定在 <a href="../modeling/">业务建模：从需求到表结构</a>；给已分片的表加列改类型的顺序在上一篇 <a href="../index-design/">模式演进与约束设计：表结构上线之后怎么改</a>；单片内的索引与执行计划在 <a href="../../optimization/index/">索引设计与优化</a>；</p>
-<p>跨分片查询本身慢在 <a href="../../optimization/slow-query/">慢查询治理</a>；异构索引表的最终一致靠本地消息表落地，幂等与补偿见 <a href="../../cache/problems/">缓存一致性与失效</a>里的同类推演；PostgreSQL 行级安全与连接池交互在 <a href="../../postgresql/mvcc-transaction/">PostgreSQL MVCC 与事务</a>。</p>
+<p><strong>不适用边界</strong>：只到数据模型层：数据归属、租户键与分片键、隔离与越权防线。</p>
+<p>分片算法、全局 ID、中间件选型、扩容迁移的状态流转与不停机切流在 <a href="../../optimization/sharding/">分库分表</a>；冗余列与快照列的维护义务在 <a href="../">范式与反范式：数据库设计的取舍</a>；</p>
+<p>实体与关系在 <a href="../modeling/">业务建模：从需求到表结构</a>；分片表改结构在 <a href="../index-design/">模式演进与约束设计：表结构上线之后怎么改</a>；单片内索引与执行计划在 <a href="../../optimization/index/">索引设计与优化</a>；</p>
+<p>跨分片查询慢在 <a href="../../optimization/slow-query/">慢查询治理</a>；异构索引表靠本地消息表最终一致，幂等与补偿见 <a href="../../cache/problems/">缓存一致性与失效</a>；PostgreSQL 行级安全与连接池在 <a href="../../postgresql/mvcc-transaction/">PostgreSQL MVCC 与事务</a>。</p>
 
-<p>这条路径到这里结束：前面解决「一份事实存几遍」、实体与关系、上线之后怎么改，本篇回答数据长大之后归谁。</p>
-<p>四篇里只有本篇的决定几乎无法用前一篇的流程纠正——分片键定错要重迁全表，所以它必须在第一天就定对。</p>
+<p>定完事实存几遍、实体与关系、上线后怎么改，还剩数据归属这一层。</p>
+<p>四篇里只有这一步几乎无法用前一篇的流程纠正——分片键定错要重迁全表，所以它必须在第一天就定对。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../index-design/">← 上一步：模式演进与约束设计：表结构上线之后怎么改</a></p>
 

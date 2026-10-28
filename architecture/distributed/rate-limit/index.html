@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="限流的分布式实现与多维配额：Lua 原子脚本、fail-open 与 fail-close 取舍、多维边判边扣、429 与 Retry-After 响应、阈值压测反推与复核。">
+    <meta name="description" content="先定保护对象：单机阈值为何随集群漂移、Lua 脚本怎么写才原子、多维配额怎么一次判完、自适应与配额叠加、阈值靠压测并定期复核。">
     <meta name="keywords" content="分布式系统,限流、熔断、降级,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/distributed/rate-limit/">
     <meta property="og:title" content="限流的分布式实现与多维配额 - 分布式系统 - 资深码农">
-    <meta property="og:description" content="限流的分布式实现与多维配额：Lua 原子脚本、fail-open 与 fail-close 取舍、多维边判边扣、429 与 Retry-After 响应、阈值压测反推与复核。">
+    <meta property="og:description" content="先定保护对象：单机阈值为何随集群漂移、Lua 脚本怎么写才原子、多维配额怎么一次判完、自适应与配额叠加、阈值靠压测并定期复核。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/distributed/rate-limit/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="限流的分布式实现与多维配额">
-    <meta name="twitter:description" content="限流的分布式实现与多维配额：Lua 原子脚本、fail-open 与 fail-close 取舍、多维边判边扣、429 与 Retry-After 响应、阈值压测反推与复核。">
+    <meta name="twitter:description" content="先定保护对象：单机阈值为何随集群漂移、Lua 脚本怎么写才原子、多维配额怎么一次判完、自适应与配额叠加、阈值靠压测并定期复核。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -70,10 +70,10 @@
         </div>
     </header>
     <p>固定窗口、滑动窗口、令牌桶、漏桶四种算法的原理与对照，以及熔断状态机、舱壁隔离、容量反推阈值，站内<a href="../../governance/circuit-breaker/">熔断与限流篇</a>已讲透。</p>
-<p>本篇只讲算法之外难落地的部分：先给可直接贴进项目的 Lua 与多维配额组合，再讲<strong>集群阈值为什么不准、脚本怎么写才原子、Redis 挂了怎么办、多维度怎么一次判完、限流之外还有什么手段</strong>。</p>
+<p>算法之外的落地难点：<strong>集群阈值为什么不准、脚本怎么写才原子、Redis 挂了怎么办、多维度怎么一次判完、限流之外还有什么手段</strong>。</p>
 <h2>第一步：这个限流在保护谁</h2>
 
-    <p>限流配不对，九成是跳过了这一步。<strong>保护对象决定实现形态，实现形态决定阈值怎么算、故障时怎么降级</strong>。把不同保护对象的需求塞进同一个限流器，阈值永远配不准：</p>
+    <p>九成限流配不对是跳过这一步：<strong>保护对象决定实现形态，实现形态决定阈值怎么算、故障时怎么降级</strong>。不同保护对象不要共用限流器：</p>
 
     <table>
     <thead><tr><th>要保护什么</th><th>怎么做</th><th>注意什么</th></tr></thead>
@@ -224,8 +224,8 @@ return {1, 0, 0}
 
     <h2>单机限流在集群下会漂移</h2>
 
-    <p>搞清这一节，能解释一个常见现象：配置文件从没改过，限流却「突然不管用了」。最常见的实现是每个实例用本地令牌桶限流。</p>
-<p>它在单实例时完全正确，但扩容成 N 个实例后，实际总阈值变成 <code>N × 单机阈值</code>，而 N 会随扩缩容、滚动发布、实例故障不停变化——<strong>你真正的限流阈值是一个你并不掌握的数字</strong>。</p>
+    <p>配置文件从没改过，限流却「突然不管用了」。最常见的实现是每个实例用本地令牌桶限流。</p>
+<p>单实例时正确，扩容成 N 个实例后总阈值变成 <code>N × 单机阈值</code>，N 随扩缩容、滚动发布、实例故障变化，<strong>真正的阈值成了一个不掌握的数字</strong>。</p>
 
     <div class="mermaid">
 flowchart TB
@@ -256,13 +256,13 @@ flowchart TB
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
         <div class="callout-title">先问一句：这个限流到底在保护谁</div>
-        <p>保护本实例不被打垮（线程池、内存、CPU）的限流<strong>应该</strong>做在单机，因为约束本就是每实例的；保护共享下游（数据库、第三方接口）或分配用户配额的限流<strong>必须</strong>集中式，因为约束是全局的。</p>
+        <p>保护本实例不被打垮（线程池、内存、CPU）<strong>应该</strong>在单机，约束按实例算；保护共享下游（数据库、第三方接口）或用户配额<strong>必须</strong>集中式，约束是全局的。</p>
 <p>把这两类需求混在一个限流器里配置，是阈值永远配不对的根源——这也是用法层第一张表的依据。</p>
     </div>
 
     <h2>为什么必须用 Lua，以及脚本里的六个必守细节</h2>
 
-    <p>限流的本质是「读当前状态、判断、写回新状态」三步。用多条 Redis 命令实现时，两个并发请求可能都读到剩余 1 个令牌、都判定放行、都扣成 0，实际放过了 2 个。单条命令原子，但多条命令之间不原子。</p>
+    <p>限流是「读状态、判断、写回」三步。单条命令原子，多条 Redis 命令之间不原子：两个请求可能都读到剩余 1 个令牌、都判定放行、都扣成 0，实际放过 2 个。</p>
 <p>用 WATCH 加事务虽然正确，但高并发下冲突重试率极高。Lua 脚本整体执行不被打断，且只要一次网络往返。</p>
 
     <table>
@@ -377,7 +377,7 @@ func (l *Limiter) fallback(cost int) (bool, time.Duration) {
     <tr><td>资源粒度</td><td>热点资源的承载能力</td><td>单个热点商品或文档被打爆</td><td><code>rl:res:{resourceId}</code></td></tr>
     </tbody></table>
 
-    <p>维度一多就有两个问题。第一是<strong>往返开销</strong>：五个维度分别调用就是五次往返，同机房也要 2 到 5 毫秒，网关这种位置不能接受，解法是用法层那段合并脚本。第二是<strong>扣减顺序</strong>：</p>
+    <p>维度一多有两个问题。一是<strong>往返开销</strong>：五个维度分别调用就是五次往返，同机房 2 到 5 毫秒不能接受，解法见合并脚本。二是<strong>扣减顺序</strong>：</p>
 
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
@@ -415,7 +415,7 @@ Content-Type: application/json
 
     <h2>准入控制与自适应限流</h2>
 
-    <p>搞清这一节，能解释为什么「阈值配好就不用管了」这个假设一定会失效。</p>
+    <p>为什么「阈值配好就不用管了」这个假设一定会失效。</p>
 <p>固定阈值最大的问题是它<strong>一定会过时</strong>：代码变更、依赖升级、机器规格调整、缓存命中率变化都会改变真实容量，而阈值往往几个月无人复核。</p>
 <p>自适应方案不设固定数值，而是根据实时信号动态调整并发上限。</p>
 
@@ -448,7 +448,7 @@ stateDiagram-v2
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
         <div class="callout-title">自适应不能替代配额</div>
-        <p>自适应限流保护的是<strong>本服务不被压垮</strong>，不关心这些流量属于哪个客户。按用户、按应用的配额分配必须单独做，两者叠加：先用配额保证公平，再用自适应兜住整体过载。</p>
+        <p>自适应限流保护<strong>本服务不被压垮</strong>，不管流量属于哪个客户。按用户、按应用的配额单独做，叠加后配额管公平、自适应兜住过载。</p>
 <p>只上自适应的系统，会在一个大客户突增时对所有人一起降速。</p>
     </div>
 
@@ -477,7 +477,7 @@ flowchart TB
     </tbody></table>
 
     <p>队列深度的估算方式很简单：<code>深度 = 下游每秒处理能力 × 可接受等待秒数</code>。下游能跑 500 QPS、可接受等待 1 秒，队列就只能放 500 个，多了立刻拒。</p>
-<p>另外<strong>出队时要先检查请求是否过期</strong>（比较入队时间与客户端超时），过期的直接丢弃，否则系统会花全部算力处理没人等结果的请求——雪崩里最典型的无效功。</p>
+<p>另外<strong>出队时要先检查请求是否过期</strong>（比较入队时间和客户端超时），过期直接丢弃，否则算力全花在没人等结果的请求上。</p>
 
     <h2>热点与公平性</h2>
 
@@ -494,7 +494,7 @@ flowchart TB
 
     <h2>阈值怎么定，以及必须定期复核</h2>
 
-    <p>阈值只能来自压测：阶梯加压，观察延迟随并发上升的曲线，找到延迟明显拐头的点，取其安全余量作为阈值（方法与容量反推见<a href="../../governance/circuit-breaker/">熔断与限流篇</a>）。这里要强调<strong>复核</strong>：</p>
+    <p>阈值只能来自压测：阶梯加压，找延迟明显拐头的点，取其安全余量作阈值（方法与容量反推见<a href="../../governance/circuit-breaker/">熔断与限流篇</a>）。这里要强调<strong>复核</strong>：</p>
 
     <table>
     <thead><tr><th>触发复核的事件</th><th>为什么影响容量</th><th>复核动作</th></tr></thead>
@@ -523,8 +523,8 @@ flowchart TB
     </tbody></table>
 
     <p><strong>不适用边界</strong>：限流只解决「进来的量太多」。下游已在故障、需要快速失败与自动恢复，那是熔断与降级的事。</p>
-<p>四种算法原理、熔断状态机、舱壁隔离与容量反推都在 <a href="../../governance/circuit-breaker/">熔断与限流</a>，网关挂限流插件见 <a href="../../governance/api-gateway/">API 网关</a>。重复请求的放大不该靠限流压住，要靠 <a href="../idempotency/">幂等的完整工程实现</a>。</p>
-<p>重试策略的退避与上限在 <a href="../transaction/">柔性事务的实现细节与失败处理</a>；限流该返回什么错误码与响应头属接口契约，见 <a href="../../../api/">接口设计</a>；Lua 脚本的执行模型、主从复制语义、内存淘汰与 ZSet 编码在 <a href="../../../database/redis/">Redis 深度原理</a>。</p>
+<p>四种算法原理、熔断状态机、舱壁隔离、容量反推见 <a href="../../governance/circuit-breaker/">熔断与限流</a>，限流插件见 <a href="../../governance/api-gateway/">API 网关</a>。重复请求放大要靠 <a href="../idempotency/">幂等的完整工程实现</a>。</p>
+<p>重试的退避与上限在 <a href="../transaction/">柔性事务的实现细节与失败处理</a>；错误码与响应头见 <a href="../../../api/">接口设计</a>；Lua 脚本执行模型、主从复制语义、内存淘汰与 ZSet 编码见 <a href="../../../database/redis/">Redis 深度原理</a>。</p>
 <p>限流率、触发维度、降级次数必须成为指标，见 <a href="../../../observability/metrics/">指标与监控</a>；阈值来自压测，压测方法与容量评估见 <a href="../../../observability/performance/">性能分析</a>。容器层面的 CPU 配额与限流是另一回事，见 <a href="../../../devops/kubernetes/">Kubernetes</a>。</p>
 
     <p>这条路径到这里已经把无状态服务的正确性与自我保护讲完。</p>

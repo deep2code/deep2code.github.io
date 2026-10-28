@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="消息队列的价值与代价：三问自查该不该引入 MQ，四个核心价值与具体故障、积压处理、本地消息表与 MQ 的分工。">
+    <meta name="description" content="消息队列主干：该不该引入的判断、三问自查、削峰与积压处理，以及本地消息表分工和选型入口。">
     <meta name="keywords" content="消息队列深入,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/messaging/">
     <meta property="og:title" content="消息队列到底解决什么问题，又带来什么问题 - 资深码农">
-    <meta property="og:description" content="消息队列的价值与代价：三问自查该不该引入 MQ，四个核心价值与具体故障、积压处理、本地消息表与 MQ 的分工。">
+    <meta property="og:description" content="消息队列主干：该不该引入的判断、三问自查、削峰与积压处理，以及本地消息表分工和选型入口。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/messaging/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="消息队列到底解决什么问题，又带来什么问题">
-    <meta name="twitter:description" content="消息队列的价值与代价：三问自查该不该引入 MQ，四个核心价值与具体故障、积压处理、本地消息表与 MQ 的分工。">
+    <meta name="twitter:description" content="消息队列主干：该不该引入的判断、三问自查、削峰与积压处理，以及本地消息表分工和选型入口。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -70,10 +70,10 @@
         </div>
     </header>
     <p>消息队列的价值不是「快」，而是同时切断两种耦合：<strong>时间耦合</strong>（调用方必须等下游处理完）和<strong>空间耦合</strong>（调用方必须知道下游是谁、有几个、在哪）。</p>
-<p>这笔交易换来故障隔离和削峰能力，赔进去的是重复投递、乱序、积压、链路可观测性下降，以及一个新增的强依赖中间件。这篇只谈架构决策：什么时候值得做，什么时候是纯亏损。</p>
+<p>换来故障隔离和削峰，代价是重复投递、乱序、积压、链路可观测性下降，还新增一个强依赖的中间件。这里只谈架构决策：何时值得，何时是纯亏损。</p>
 <p>具体产品的机制见<a href="compare/">MQ 选型与 RabbitMQ / RocketMQ 机制</a>，可靠投递见<a href="reliable/">可靠投递与消费</a>，Kafka 的内部实现见站内 Kafka 专题。</p>
 <h2>三问自查：该不该给这条链路加 MQ</h2>
-    <p>这一步的产出应是<strong>三个数字加一张清单</strong>，不是「我们该解耦了」这种会议共识。顺序固定：先量当前痛点，再判断同步调用哪里不行，最后列全引入 MQ 后必须多做的事。</p>
+    <p>产出应是<strong>三个数字加一张清单</strong>，不是会议共识。按固定顺序：量当前痛点、判断同步调用哪里不行、列全引入 MQ 后要补做的事。</p>
 <p>任何一问拿不到依据就停在这一步，为什么是这个顺序见原理层。</p>
 
     <p><strong>第一问：当前痛点是什么。</strong>要拿到四个数：主链路 P99 里非核心下游占多少毫秒、失败中由非核心下游引起的比例、峰值与均值之比、峰值能持续多久。</p>
@@ -99,10 +99,10 @@ max_over_time(sum(rate(rpc_server_requests_total{service="order"}[1m]))[1d:1m])
 count_over_time((sum(rate(rpc_server_requests_total{service="order"}[1m])) &gt; 2000)[1d:1m])
 </code></pre>
 
-    <p><strong>第二问：同步调用到底哪里不行。</strong>把主链路每一步写成一行，逐行回答「调用方本次请求是否必须看到这一步的结果」。回答必须的留同步链路，不必须的才是候选。</p>
+    <p><strong>第二问：同步调用哪里不行。</strong>主链路每步一行，逐行问「调用方本次请求是否必须看到这步结果」。必须的留同步，不必须的才是候选。</p>
 <p>这一问经常给出「一步都挪不走」的结论——那说明问题不在耦合，在那个下游自己慢，异步化只会把慢藏起来。</p>
 
-    <p><strong>第三问：引入之后必须多做哪些事。</strong>第二张表里的九项没有一项可选，它们是 MQ 的入场费。把入场费和第一问量出的收益摆在一起，结论可能是「不引入」，这也是合格结论。</p>
+    <p><strong>第三问：引入后必须多做哪些事。</strong>第二张表九项都不可选，是 MQ 的入场费。与第一问的收益对比后，结论可以是「不引入」。</p>
 
     <p>三问答完对着下表落地。第三列是关键：<strong>结论不是「上不上 MQ」，是「先做哪一件事」</strong>。</p>
 
@@ -232,10 +232,10 @@ count_over_time((sum(rate(rpc_server_requests_total{service="order"}[1m])) &gt; 
         </tbody>
     </table>
 
-    <p>三问的结论压成一页纸：同步保留哪几步、异步承接哪几步、消息契约长什么样、积压阈值划在哪、谁值班。这页纸是后面所有争论的裁判，每项背后的机制下面几节展开。</p>
+    <p>三问结论压成一页纸：同步保留哪几步、异步承接哪几步、消息契约、积压阈值、值班人。后面所有争论以它为准，机制下面几节展开。</p>
 
     <h2>四个核心价值，以及不用它的具体后果</h2>
-    <p>「解耦、异步、削峰」这三个词被说烂了，但很少有人说清每条对应什么具体故障。下面这张表的第二列才是重点——系统里找不到第二列描述的场景，那就不需要 MQ。</p>
+    <p>「解耦、异步、削峰」常被提，却少有人讲清各自对应什么故障。下表第二列才是重点：找不到第二列描述的场景，就不需要 MQ。</p>
     <table>
         <thead>
             <tr>
@@ -536,7 +536,7 @@ func (s *OrderService) Create(ctx context.Context, req CreateReq) (*Order, error
         <div class="callout-title">积压时最危险的操作是重置位点</div>
         <p>把位点重置到最新（跳过积压）等于<strong>永久丢弃</strong>中间所有消息：不进死信、没有任何记录、事后无法追回，而这批消息里可能有支付回调和退款通知。</p>
 <p>把位点往前重置则会让已处理的消息全部重放，非幂等的消费逻辑立刻造成重复发券、重复扣款。</p>
-<p>唯一可接受的用法：先用独立消费组把待跳过区间的消息<strong>全量转存</strong>到备份主题，记录清楚起止位点和条数，再重置。只要现场还在犹豫，就不要动位点。</p>
+<p>唯一可用做法：先用独立消费组把待跳过区间消息<strong>全量转存</strong>到备份主题，记录起止位点与条数再重置。犹豫就别动位点。</p>
     </div>
     <pre><code class="language-bash"># 积压现场第一步：先量清楚"积了多少、斜率多大、有没有活跃消费者"
 # 三种 MQ 的字段含义不同，别用同一套经验去读
@@ -559,7 +559,7 @@ kafka-consumer-groups.sh --bootstrap-server 127.0.0.1:9092 \
 
 # 隔 60 秒再跑一次，算斜率：稳定下降就别动了，等它消化完
 </code></pre>
-    <p>扩容消费者时有个容易被忽略的前提：<strong>提高并发度会破坏顺序</strong>。如果业务依赖同一订单的消息有序，不能简单丢给协程池，必须按业务键哈希到固定 worker。</p>
+    <p>扩容前有个常被忽略的前提：<strong>提高并发度会破坏顺序</strong>。同一订单需有序时不能丢给协程池，必须按业务键哈希到固定 worker。</p>
     <pre><code class="language-go">// 积压应急：提升消费并发度，同时保证"同一业务键"仍然串行
 // 反例是直接 go handle(msg)，那样同一订单的"创建"和"取消"可能并发执行
 type Pool struct {
@@ -631,7 +631,7 @@ func (p *Pool) Submit(m Message) {
             </tr>
         </tbody>
     </table>
-    <p>本地消息表、事务消息、TCC / Saga 与幂等的四种落地写法，站内分布式一致性篇已展开，这里不重复。本站的<a href="reliable/">可靠投递与消费</a>接着讲消息进入链路后每一环怎么不丢。</p>
+    <p>本地消息表、事务消息、TCC / Saga 与幂等的四种落地写法见分布式一致性篇。消息进入链路后每一环怎么不丢，见<a href="reliable/">可靠投递与消费</a>。</p>
 
     <h2>八类典型场景的做法与代价</h2>
     <p>前面几节的机制落到具体场景上就是下面这张表。第四列必须一起看——每种做法都有代价，只看第二列会得出「MQ 万能」的错觉。</p>
@@ -776,10 +776,10 @@ func (p *Pool) Submit(m Message) {
     </table>
     <p>这六项和具体产品的能力映射、以及 RabbitMQ 的 Exchange 路由模型与 RocketMQ 的事务消息机制，见<a href="compare/">MQ 选型与机制对比</a>。</p>
 
-    <p><strong>不适用边界</strong>：这篇不解决具体产品怎么配——按投递语义、顺序、吞吐、运维能力四步筛产品见 <a href="compare/">MQ 选型方法论</a>；消息契约与三种通信模式见 <a href="patterns/">消息通信模式</a>；五个丢失点逐个验证见 <a href="reliable/">消息可靠投递</a>；</p>
-<p>幂等与柔性事务的落地写法见 <a href="../distributed/idempotency/">幂等的完整工程实现</a> 与 <a href="../distributed/transaction/">柔性事务</a>；Kafka 的存储、副本与 Rebalance 见 <a href="../kafka/">Kafka 专题</a>。需要强一致、本次请求内拿结果、或数据几秒后就失效的链路，不要用 MQ。</p>
+    <p><strong>不适用边界</strong>：按投递语义、顺序、吞吐、运维能力四步筛产品见 <a href="compare/">MQ 选型方法论</a>；契约与通信模式见 <a href="patterns/">消息通信模式</a>；五个丢失点见 <a href="reliable/">消息可靠投递</a>；</p>
+<p>幂等与柔性事务见 <a href="../distributed/idempotency/">幂等的完整工程实现</a>、<a href="../distributed/transaction/">柔性事务</a>；Kafka 机制见 <a href="../kafka/">Kafka 专题</a>。强一致、本次请求内拿结果、数据几秒后失效的链路不要用 MQ。</p>
 
-    <p>本篇是这条路径的第一环，只回答「要不要引入」。答案是要之后，下一步是把每个交互定成命令还是事件——这一步定错，后面所有可靠性工作都在给错误的契约打补丁。</p>
+    <p>路径第一环回答「要不要引入」。定成命令还是事件是下一步，这一步定错，后面所有可靠性工作都在给错的契约打补丁。</p>
 
     <p class="cluster-nav">同主题路径：<a href="patterns/">下一步：消息通信模式：命令、事件与编排协同 →</a></p>
 

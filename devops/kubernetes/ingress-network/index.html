@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="K8s 网络与流量入口：Overlay 与路由两大 CNI 流派选型、MTU 造成的小包通大包挂、CoreDNS 与 ndots 放大、Ingress 本质与 Gateway API、NetworkPolicy、分层排查。">
+        <meta name="description" content="集群网络分层与排查：CNI 的封装还是路由、MTU 与 ICMP 被丢、eBPF 与 Cilium 何时值得上、CoreDNS 与 ndots、Ingress 注解私有的代价、NetworkPolicy 边界与东西向加密。">
     <meta name="keywords" content="Ingress 与网络策略,Kubernetes,云原生,Kubernetes">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/kubernetes/ingress-network/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kubernetes Pod 网络模型、Ingress 与网络策略 - 资深码农">
-    <meta property="og:description" content="K8s 网络与流量入口：Overlay 与路由两大 CNI 流派选型、MTU 造成的小包通大包挂、CoreDNS 与 ndots 放大、Ingress 本质与 Gateway API、NetworkPolicy、分层排查。">
+    <meta property="og:description" content="集群网络分层与排查：CNI 的封装还是路由、MTU 与 ICMP 被丢、eBPF 与 Cilium 何时值得上、CoreDNS 与 ndots、Ingress 注解私有的代价、NetworkPolicy 边界与东西向加密。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/kubernetes/ingress-network/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kubernetes Pod 网络模型、Ingress 与网络策略">
-    <meta name="twitter:description" content="K8s 网络与流量入口：Overlay 与路由两大 CNI 流派选型、MTU 造成的小包通大包挂、CoreDNS 与 ndots 放大、Ingress 本质与 Gateway API、NetworkPolicy、分层排查。">
+    <meta name="twitter:description" content="集群网络分层与排查：CNI 的封装还是路由、MTU 与 ICMP 被丢、eBPF 与 Cilium 何时值得上、CoreDNS 与 ndots、Ingress 注解私有的代价、NetworkPolicy 边界与东西向加密。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
     <meta property="article:tag" content="Kubernetes,云原生">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kubernetes Pod 网络模型、Ingress 与网络策略","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"K8s 网络与流量入口：Overlay 与路由两大 CNI 流派选型、MTU 造成的小包通大包挂、CoreDNS 与 ndots 放大、Ingress 本质与 Gateway API、NetworkPolicy、分层排查。","url":"https://www.yijunjun.asia/devops/kubernetes/ingress-network/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/kubernetes/ingress-network/"},"articleSection":"运维与云原生"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kubernetes Pod 网络模型、Ingress 与网络策略","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"集群网络分层与排查：CNI 的封装还是路由、MTU 与 ICMP 被丢、eBPF 与 Cilium 何时值得上、CoreDNS 与 ndots、Ingress 注解私有的代价、NetworkPolicy 边界与东西向加密。","url":"https://www.yijunjun.asia/devops/kubernetes/ingress-network/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/kubernetes/ingress-network/"},"articleSection":"运维与云原生"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "Ingress 与网络策略", "item": "https://www.yijunjun.asia/devops/kubernetes/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,8 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>集群网络出问题时最贵的动作是「随机试」：改注解、重启 Pod、换 CNI，然后祈祷。真正能收敛问题的办法是认清层次——暴露一个服务只需两个对象，而包从 Pod A 走到 Pod B 要穿过五层。</p>
-<p>这篇先给能直接 apply 的最小暴露清单与一条从里往外的排查序列，再往下拆 CNI、DNS、Ingress 与 NetworkPolicy 的机制，最后回答「该用哪种暴露方式」。</p>
+<p>集群网络出问题，最贵的是「随机试」：改注解、重启 Pod、换 CNI 再祈祷。想收敛只能认清层次：暴露一个服务只要两个对象，包从 Pod A 到 Pod B 穿过五层。</p>
+<p>先给能直接 apply 的最小暴露清单与一条从里往外的排查序列，再往下拆 CNI、DNS、Ingress 与 NetworkPolicy 的机制，最后回答「该用哪种暴露方式」。</p>
 <p>Service 的虚拟 IP 机制、kube-proxy 的 iptables 与 IPVS 实现对照、Service 四种类型的实现细节，主干篇 <a href="../">Kubernetes 架构与核心机制</a> 已经写透，这里不重复。</p>
 <h2>最小可用的暴露清单与六步排查序列</h2>
 
@@ -194,7 +194,7 @@ kubectl -n prod get netpol
 <li>任意两个 Pod 之间可以用这个 IP <strong>直接互通，中间不做 NAT</strong>——即 A 看到的源地址就是 B 的真实 Pod IP；</li>
 <li>节点上的进程（含 kubelet、DaemonSet）能直接访问本节点与其他节点的 Pod。</li>
 </ol>
-<p>注意：<strong>Kubernetes 自己一行代码都不实现这三条</strong>。它只定义 CNI 接口，分 IP、建虚拟设备、跨节点转发全由插件完成。这解释了上面两个现象：kubelet 等 CNI 就绪才报 Ready，而 Pod 网段、封装方式、策略能力全是插件的私有决策。</p>
+<p><strong>Kubernetes 自己一行代码都不实现这三条</strong>，只定义 CNI 接口：分 IP、建虚拟设备、跨节点转发全在插件。kubelet 等 CNI 就绪才报 Ready，Pod 网段、封装方式、策略能力全是插件的私有决策。</p>
 <p>下面这张图是「包是怎么从一个 Pod 真正走到另一个节点的 Pod 的」：</p>
 
 <div class="mermaid">
@@ -243,14 +243,14 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">MTU 配错：小包全通、大包全挂</div>
-    <p>Overlay 封装要吃掉有效载荷：VXLAN 占 50 字节、IPIP 占 20 字节、再叠 WireGuard 更多。若物理链路 MTU 是 1500 而 Pod 网卡仍是 1500，封装后超限，要分片或依赖「需要分片」的 ICMP 做路径 MTU 发现，<strong>而云环境和防火墙经常把这类 ICMP 丢掉</strong>。</p>
+    <p>Overlay 封装要吃载荷：VXLAN 占 50 字节、IPIP 占 20 字节，叠 WireGuard 更多。物理 MTU 1500、Pod 网卡也 1500 时封装超限。只能分片、靠「需要分片」的 ICMP 做路径 MTU 发现，<strong>云环境和防火墙常丢这类 ICMP</strong>。</p>
 <p>结果是：ping 通、TCP 握手通、小接口正常，一旦返回大 JSON、上传文件、或 TLS 证书链偏大，连接就永久挂住不返回。</p>
-    <p>对照关系：物理 1500 时，VXLAN 下 Pod MTU 取 1450、IPIP 下取 1480、VXLAN 叠 WireGuard 取 1370 左右；底层支持巨帧 9000 则相应放大。定位用禁止分片的定长 ping 二分：<code>ping -M do -s 1422 对端PodIP</code>（1422 加 28 字节头等于 1450），能通说明 1450 以内没问题，换成 1472 不通就确认是 MTU 问题。</p>
+    <p>物理 1500 时，VXLAN 下 Pod MTU 取 1450、IPIP 取 1480、VXLAN 叠 WireGuard 取 1370 左右，底层支持 9000 巨帧则相应放大。<code>ping -M do -s 1422 对端PodIP</code>（1422 加 28 字节头等于 1450）能通即 1450 以内没问题，换 1472 不通就确认是 MTU。</p>
 </div>
 
 <h2>Cilium 与 eBPF 为什么成了趋势</h2>
-<p>搞清这一节能解释一个规模化之后才出现的现象：Service 数量涨到几千之后，kube-proxy 同步延迟能到几十秒，新 Pod 起来了流量却半分钟才切过去。</p>
-<p>传统数据平面把规则写进 iptables，Service 与策略数量一多，规则链线性增长，变更时要整表替换。eBPF 把转发与策略逻辑作为程序挂在内核钩子上，用哈希表查目标，<strong>查找复杂度与 Service 数量基本无关</strong>。</p>
+<p>Service 数量涨到几千之后，kube-proxy 同步延迟能到几十秒，新 Pod 起来了流量却半分钟才切过去。</p>
+<p>传统 iptables 数据平面，Service 与策略一多，规则链线性增长、变更时整表替换。eBPF 把转发与策略写成内核钩子程序，哈希表查目标，<strong>查找复杂度与 Service 数量基本无关</strong>。</p>
 <table>
 <thead><tr><th>能力</th><th>iptables 系数据平面</th><th>eBPF（Cilium）</th></tr></thead>
 <tbody>
@@ -262,10 +262,10 @@ flowchart TB
 <tr><td>代价</td><td>成熟、人人会看</td><td>要求较新内核，排障需要新工具链，团队学习成本真实存在</td></tr>
 </tbody>
 </table>
-<p>务实结论：<strong>新集群且团队愿意学，直接上 Cilium 收益最大</strong>（尤其需要七层策略与流量可观测性时）；已有集群跑着 Calico 且无具体痛点，不必为架构时髦做高风险替换。iptables 与 IPVS 两种 kube-proxy 模式的差异见主干篇。</p>
+<p>务实结论：<strong>新集群且团队愿意学，直接上 Cilium 收益最大</strong>，特别是七层策略与流量可观测性；Calico 集群无痛点就别为时髦做高风险替换。iptables 与 IPVS 两种 kube-proxy 见主干篇。</p>
 
 <h2>DNS 是集群里最高频的故障源</h2>
-<p>搞清这节能解决那类最难归因的现象：全站偶发 5 秒超时，业务代码与数据库都查不出问题。集群内所有服务发现都走 CoreDNS，它的负载与集群 QPS 成正比，而默认配置里藏着一个放大器。</p>
+<p>全站偶发 5 秒超时，业务代码与数据库都查不出问题。集群内所有服务发现都走 CoreDNS，它的负载与集群 QPS 成正比，而默认配置里藏着一个放大器。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -361,7 +361,7 @@ data:
 <p>「Ingress 创建成功但访问不通」与「换控制器等于重写路由」，根子在控制器。</p>
 <p>必须先说清楚：<strong>Ingress 对象本身什么也不做</strong>，它是一份声明式的路由规则表，真正干活的是 Ingress Controller——一个跑在集群里的 Pod（或云侧 LB），它 watch Ingress 对象，把规则翻译成自己的配置。</p>
 <p>所以「Ingress 创建成功但访问不通」的第一反应应该是「有没有控制器、<code>ingressClassName</code> 是否匹配」，而不是检查 YAML 语法。</p>
-<p>Ingress 的标准字段只覆盖 host 与 path。<strong>其余一切能力都靠注解</strong>：重写、限流、超时、灰度、认证、CORS、body 大小。而注解是各控制器私有的，ingress-nginx 的注解在 Traefik 上完全无效。这就是 Ingress 可移植性差的根因，也是 Gateway API 诞生的理由。</p>
+<p><strong>Ingress 标准字段只覆盖 host 与 path</strong>，其余靠注解：重写、限流、超时、灰度、认证、CORS、body 大小。注解是各控制器私有的，ingress-nginx 的注解在 Traefik 上无效，这是可移植性差的根因，也催生了 Gateway API。</p>
 <p>ingress-nginx 背后那层 Nginx 自身的缓冲、超时与上游长连接参数在 <a href="../../nginx/">Nginx 深度原理</a>，网关的容量规划与流量治理在 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>。</p>
 
 <div class="mermaid">
@@ -457,7 +457,7 @@ spec:
 </code></pre>
 
 <h2>NetworkPolicy：默认全通，不写等于没有边界</h2>
-<p>搞清这一节能解决最危险的一类问题：策略配了、审计过了、实际零防护。NetworkPolicy 的语义有四条必须记牢，每一条都对应一类「配了却没用」的事故：</p>
+<p>策略配了、审计过了、实际零防护。NetworkPolicy 的语义有四条必须记牢，每一条都对应一类「配了却没用」的事故：</p>
 <table>
 <thead><tr><th>语义</th><th>准确含义</th><th>配错的后果</th></tr></thead>
 <tbody>
@@ -565,8 +565,8 @@ hubble observe --namespace prod --verdict DROPPED --last 50
 </code></pre>
 
 <h2>东西向与南北向的加密</h2>
-<p>搞清这一节能避免一个常见的错觉：以为配了 NetworkPolicy 就等于链路安全。只讲要点：NetworkPolicy 管的是「谁能连谁」，不管「链路上的数据有没有被看到」。</p>
-<p>要做传输加密有三条路——CNI 层透明加密（Cilium 或 Calico 的 WireGuard，对应用零侵入，但只加密节点间流量）、服务网格 mTLS（sidecar 或 ambient 模式，附带身份、细粒度授权与可观测性，代价是延迟与运维复杂度）、应用自己做 TLS（控制力最强、改造量最大）。</p>
+<p>以为配了 NetworkPolicy 就等于链路安全。只讲要点：NetworkPolicy 管的是「谁能连谁」，不管「链路上的数据有没有被看到」。</p>
+<p>传输加密三条路：CNI 层透明加密（Cilium 或 Calico 的 WireGuard），零侵入、只加密节点间；服务网格 mTLS（sidecar 或 ambient），附身份、细粒度授权、可观测性，代价是延迟与运维复杂度；应用自己做 TLS，控制最强、改造最大。</p>
 <p>南北向的 TLS 终止位置与证书自动化（cert-manager）属于网关职责，网关选型与容量规划见 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>，TLS 握手与证书信任链见 <a href="../../../api/auth/">认证授权与加密基础</a>。</p>
 
 <h2>暴露方式与 CNI 的场景决策</h2>
@@ -586,7 +586,7 @@ hubble observe --namespace prod --verdict DROPPED --last 50
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：这篇不回答 Service 的虚拟 IP 是怎么实现的、kube-proxy 的 iptables 与 IPVS 差异、<code>externalTrafficPolicy</code> 的取舍，这些在 <a href="../">主干篇</a>；ingress-nginx 背后的 Nginx 参数全景（缓冲、超时、长连接、限流）在 <a href="../../nginx/">Nginx 深度原理</a>；网关的鉴权、限流与多租户治理在 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>；</p>
+<p><strong>不适用边界</strong>：Service 虚拟 IP 的实现、kube-proxy 的 iptables 与 IPVS 差异、<code>externalTrafficPolicy</code> 的取舍在 <a href="../">主干篇</a>；ingress-nginx 背后的 Nginx 参数（缓冲、超时、长连接、限流）在 <a href="../../nginx/">Nginx 深度原理</a>；鉴权、限流与多租户治理在 <a href="../../../architecture/governance/gateway/">API 网关选型与流量治理</a>；</p>
 <p>DNS 与入口的指标该怎么采、告警怎么定在 <a href="../../../observability/">可观测性系列</a>；容器自身的网络命名空间与端口发布机制在 <a href="../../docker/">Docker</a>；Ingress 与证书的多环境版本化交付在 <a href="../../gitops/">GitOps 系列</a>。</p>
 
 <h2>网络不通时的分层定位</h2>
@@ -639,8 +639,8 @@ flowchart TB
 </tbody>
 </table>
 
-<p>集群网络的层次很清晰：<strong>CNI 保证三条硬要求成立</strong>，Service 与 kube-proxy 在它上面做虚拟 IP 与负载均衡（详见 <a href="../">主干篇</a>），DNS 让这些虚拟 IP 变成可读的名字，Ingress 或 Gateway 负责南北向入口，NetworkPolicy 负责东西向边界。</p>
-<p>落地时最该先做的三件事：确认 CNI 支不支持策略并下默认拒绝、把 MTU 与 ndots 这两个默认值核对一遍、给 CoreDNS 做容量规划。本篇在这条路径上负责把流量送到对的 Pod；</p>
+<p>集群网络分层：<strong>CNI 保证三条硬要求成立</strong>，Service 与 kube-proxy 做虚拟 IP 与负载均衡（见 <a href="../">主干篇</a>）。DNS 把虚拟 IP 变成可读名字，Ingress 或 Gateway 管南北向入口，NetworkPolicy 管东西向边界。</p>
+<p>落地先做三件事：确认 CNI 支不支持策略、下默认拒绝，核对 MTU 与 ndots 两个默认值，给 CoreDNS 做容量规划。Helm 负责把流量送到对的 Pod；</p>
 <p>流量通了之后，下一步的问题是这几十份清单怎么复用和版本化。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../storage/">← 上一步：Kubernetes 存储抽象与有状态服务的现实</a> · <a href="../helm/">下一步：Helm 的模板机制与它的适用边界 →</a></p>

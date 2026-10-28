@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Shell 执行机制：fork、execve、dup2、pipe、wait、kill 的编排顺序，交互与脚本差异、重定向方向、信号处理的坑。">
+        <meta name="description" content="从 fork、execve、dup2、pipe、wait、kill 组合讲 Shell 执行机制：查找顺序、内建与外部、重定向、管道缓冲、信号与容器 PID 1。">
     <meta name="keywords" content="Shell原理,fork,exec,pipe,dup2,内置命令,子shell,性能优化,xargs并行">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/tools/shell/internals/">
     <!-- Open Graph -->
     <meta property="og:title" content="Shell 的执行机制：进程、重定向与信号 - 资深码农">
-    <meta property="og:description" content="Shell 执行机制：fork、execve、dup2、pipe、wait、kill 的编排顺序，交互与脚本差异、重定向方向、信号处理的坑。">
+    <meta property="og:description" content="从 fork、execve、dup2、pipe、wait、kill 组合讲 Shell 执行机制：查找顺序、内建与外部、重定向、管道缓冲、信号与容器 PID 1。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/tools/shell/internals/">
     <meta property="og:site_name" content="资深码农">
@@ -39,7 +39,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Shell 的执行机制：进程、重定向与信号 - 资深码农">
-    <meta name="twitter:description" content="Shell 执行机制：fork、execve、dup2、pipe、wait、kill 的编排顺序，交互与脚本差异、重定向方向、信号处理的坑。">
+    <meta name="twitter:description" content="从 fork、execve、dup2、pipe、wait、kill 组合讲 Shell 执行机制：查找顺序、内建与外部、重定向、管道缓冲、信号与容器 PID 1。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="开发工具与工程效率">
@@ -91,9 +91,9 @@
                     </header>
                     <div class="article-content">
 
-<p>同一行命令，敲在交互终端里和写进脚本里，行为可能完全不同；同一段重定向，把两个方向调换位置，结果正好相反；同一个 <code>kill</code>，在裸机上能停掉服务，在容器里却只是把连接硬断。</p>
+<p>同一行命令，交互终端与脚本里行为可能完全不同；重定向调换两个方向，结果正好相反；同一个 <code>kill</code>，裸机能停服务，容器里只把连接硬断。</p>
 <p>同一件事的不同侧面：<strong>Shell 是一个进程编排器</strong>，把 <code>fork</code>、<code>execve</code>、<code>dup2</code>、<code>pipe</code>、<code>wait</code>、<code>kill</code> 这几个系统调用按脚本顺序组合起来。</p>
-<p>理解这层机制的直接收益是：你能预测命令的行为，而不是靠试。本篇只讲执行机制。语法层面的参数展开、数组、<code>[[</code> 与 <code>((</code>、函数作用域在 <code>../core/</code>；严格模式、<code>trap</code> 做清理、幂等与原子替换在 <code>../</code>，这里涉及时只给结论并指路。</p>
+<p>懂这层机制，你能预测命令行为，不用靠试。参数展开、数组、<code>[[</code> 与 <code>((</code>、函数作用域属语法，在 <code>../core/</code>；严格模式、<code>trap</code> 清理、幂等与原子替换在 <code>../</code>，这里只给结论并指路。</p>
 
 <h2>一条命令是怎么跑起来的</h2>
 <p>你敲下一个名字，Bash 并不会直接去 <code>$PATH</code> 里找。它有一个<strong>固定的六级查找顺序</strong>，前四级都在当前进程内完成、不产生任何新进程；只有落到后两级才需要 <code>fork</code> 加 <code>execve</code>。</p>
@@ -117,7 +117,7 @@ flowchart TB
     A1 --> A2 --> A3 --> A4 --> B1 --> B2 --> C1
     C1 --> C2 --> C3
 </div>
-<p>这个顺序解释了几个常见现象。脚本里 <code>alias</code> 默认不展开，所以文档里写 <code>ll</code> 别人照抄进脚本一定报错；函数优先于内建，所以有人定义了 <code>cd()</code> 做日志，后面所有 <code>cd</code> 都会走那个函数；</p>
+<p>这个顺序解释了几个现象：脚本里 <code>alias</code> 默认不展开，文档里的 <code>ll</code> 抄进脚本必报错；函数优先于内建，定义 <code>cd()</code> 做日志后，之后所有 <code>cd</code> 都走它；</p>
 <p>而哈希表位于 <code>PATH</code> 之前，就是「我明明改了 PATH，怎么还在跑旧版本」的全部真相。</p>
 <table>
 <thead><tr><th>维度</th><th>内建命令</th><th>外部命令</th></tr></thead>
@@ -130,7 +130,7 @@ flowchart TB
 <tr><td>强制指定</td><td><code>builtin x</code></td><td><code>command x</code> 或写绝对路径</td></tr>
 </tbody>
 </table>
-<p><code>cd</code> <strong>必须</strong>是内建命令，这不是性能优化而是逻辑必然：工作目录是进程的属性，子进程改自己的工作目录对父进程毫无影响。如果 <code>cd</code> 是 <code>/bin/cd</code>，那它一定在子进程里执行，退出后你还在原地。</p>
+<p><code>cd</code> <strong>必须</strong>是内建命令，属逻辑必然而非性能优化：工作目录是进程属性，子进程改它，父进程毫无影响。<code>cd</code> 若是 <code>/bin/cd</code>，一定在子进程执行，退出后你还在原地。</p>
 <p>同理 <code>export</code>、<code>ulimit</code>、<code>umask</code>、<code>trap</code> 也只能是内建的。这也顺带解释了为什么 <code>./setenv.sh</code> 里的 <code>export</code> 出不来，必须 <code>source</code>。</p>
 <pre><code class="language-bash"># 判断一个名字究竟走哪条路，是排障第一步
 type -a cd          # cd is a shell builtin
@@ -152,7 +152,7 @@ command ls          # 忽略 alias 与函数，按正常查找顺序找
 enable -n echo      # 临时禁用内建 echo，让它落到 /usr/bin/echo（测跨平台行为时有用）</code></pre>
 
 <h2>重定向的本质是文件描述符复制</h2>
-<p>每个进程都有一张文件描述符表，0、1、2 分别约定为标准输入、标准输出、标准错误。重定向做的事只有一件：<strong>在 <code>execve</code> 之前，把表里某个槽位改指向别处</strong>，底层就是 <code>dup2</code>。</p>
+<p>每个进程都有一张文件描述符表，0、1、2 即标准输入、输出、错误。重定向只做一件事：<strong>在 <code>execve</code> 之前，把表里某个槽位改指向别处</strong>，底层是 <code>dup2</code>。</p>
 <p>程序自己完全不知道这件事发生过，它照样往 1 号描述符写。</p>
 <p>由此得到一条必须记住的规则：<strong>重定向从左到右依次生效，每一步复制的是「执行到这一步时」的指向，而不是最终指向</strong>。这就是 <code>cmd &gt;file 2&gt;&amp;1</code> 和 <code>cmd 2&gt;&amp;1 &gt;file</code> 天差地别的原因。</p>
 <div class="mermaid">
@@ -226,7 +226,7 @@ join -t, &lt;(sort -t, -k1,1 users.csv) &lt;(sort -t, -k1,1 orders.csv)
 curl -sS https://example.com/ids.txt | grep -Fxvf /etc/allowlist /dev/stdin</code></pre>
 
 <h2>管道：每一段都是独立子进程</h2>
-<p><code>a | b | c</code> 不是「a 跑完给 b」，而是 Bash 先用 <code>pipe</code> 建好两对描述符，然后 fork 出<strong>三个子进程同时运行</strong>，靠内核管道缓冲区（Linux 默认 64KB）做流控：写满了写端阻塞，读空了读端阻塞。所以 <code>tail -f | grep</code> 能持续输出，而不是等 <code>tail</code> 结束。</p>
+<p><code>a | b | c</code> 不是「a 跑完给 b」：Bash 先用 <code>pipe</code> 建两对描述符，fork 出<strong>三个子进程同时运行</strong>，靠管道缓冲区（Linux 默认 64KB）流控：写满写端阻塞，读空读端阻塞。<code>tail -f | grep</code> 因此持续输出，不等 <code>tail</code> 结束。</p>
 <p>但「每段都是子进程」立刻带来一个必须知道的后果：<strong>管道里的变量赋值，外面看不到</strong>。这是 Shell 排错里最常被误判为「Bash 有 bug」的现象。</p>
 <div class="mermaid">
 flowchart TB
@@ -259,9 +259,9 @@ flowchart TB
 <tr><td>压根不用 shell 变量</td><td>把统计整个交给 <code>awk</code> 或 <code>grep -c</code></td><td>无</td><td>最快也最可靠，能这样就这样</td></tr>
 </tbody>
 </table>
-<p>第二个高频困惑是<strong>加了管道就看不到实时输出</strong>。这不是 Shell 的问题，是 C 标准库的行为：程序检测到 stdout 不是终端时，会从行缓冲切成 4KB 全缓冲，攒满才吐。解决办法是让上游改回行缓冲：<code>grep --line-buffered</code>、<code>sed -u</code>、<code>awk</code> 里调 <code>fflush()</code>，或者通用地套 <code>stdbuf -oL</code>。</p>
+<p>第二个高频困惑是<strong>加管道后看不到实时输出</strong>。问题不在 Shell，在 C 标准库：stdout 不是终端时，程序从行缓冲切成 4KB 全缓冲，攒满才吐。让上游改回行缓冲：<code>grep --line-buffered</code>、<code>sed -u</code>、<code>awk</code> 调 <code>fflush()</code>，或通用套 <code>stdbuf -oL</code>。</p>
 <p>注意 <code>stdbuf</code> 靠 <code>LD_PRELOAD</code> 改 libc，对自己管缓冲的程序（比如 Go 写的工具）无效，这时只能用 <code>unbuffer</code> 伪造一个伪终端。</p>
-<p>管道的退出码默认只取最后一段，这也是 <code>set -e</code> 失效的经典场景之一；要取各段退出码用 <code>PIPESTATUS</code> 数组，而 <code>set -o pipefail</code> 的精确语义与其他五种 <code>set -e</code> 例外在 <code>../</code> 有完整推演，这里不重复。</p>
+<p>管道退出码默认只取最后一段，这是 <code>set -e</code> 失效的经典场景；取各段退出码用 <code>PIPESTATUS</code> 数组。<code>set -o pipefail</code> 的语义与其余五种 <code>set -e</code> 例外在 <code>../</code> 有推演，不重复。</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -312,8 +312,8 @@ stdbuf -oL -eL myapp | tee run.log                # 通用做法：强制上游�
 <tr><td><code>exec cmd</code></td><td>否，替换当前进程映像</td><td>不再返回</td><td>—</td><td>entrypoint 末尾把 PID 交给应用</td></tr>
 </tbody>
 </table>
-<p>两个容易忽略的细节。第一，<code>source</code> 的隔离性为零：被 source 的脚本里一个 <code>exit</code> 会把你当前的 shell 一起关掉，一个 <code>set -e</code> 会改变你后续所有命令的行为，所以函数库文件里不要写 <code>set</code> 和 <code>exit</code>。</p>
-<p>第二，<strong>环境变量的继承是单向的一次性快照</strong>：子进程拿到的是父进程 <code>export</code> 过的变量的副本，之后双方各改各的，互不影响；没 <code>export</code> 的普通 shell 变量根本不会进这份副本。</p>
+<p>两个易忽略的细节。第一，<code>source</code> 隔离性为零：被 source 的脚本里，<code>exit</code> 会关掉当前 shell，<code>set -e</code> 会改变后续所有命令的行为，所以函数库文件里别写 <code>set</code> 和 <code>exit</code>。</p>
+<p>第二，<strong>环境变量继承是单向的一次性快照</strong>：子进程拿到父进程 <code>export</code> 过的变量副本，各改各的，互不影响；没 <code>export</code> 的 shell 变量根本不进副本。</p>
 <p>还有一条：<code>trap ... EXIT</code> 不会被 <code>( ... )</code> 子 shell 继承，子 shell 内创建的临时文件不会被外层清理逻辑带走。</p>
 
 <h2>信号、进程组与 trap 的边界</h2>
@@ -329,8 +329,8 @@ stdbuf -oL -eL myapp | tee run.log                # 通用做法：强制上游�
 <tr><td><code>SIGSTOP</code></td><td>19</td><td>暂停</td><td><strong>不能</strong></td><td>作业控制</td><td>进程停在 T 状态，占着资源不释放</td></tr>
 </tbody>
 </table>
-<p>关于 <code>trap</code>，有一条限制必须知道：<strong>Bash 只在两条命令的间隙检查待处理信号</strong>。脚本正阻塞在一个外部命令上时收到 <code>SIGTERM</code>，handler 不会立刻执行，Bash 要等那个外部命令自己结束。</p>
-<p>所以「<code>kill</code> 了半分钟没反应」通常不是 trap 写错，而是它在等一个 <code>rsync</code>。可靠做法有两条：长阻塞命令一律套 <code>timeout</code>；需要能被中断的地方，让命令后台跑再 <code>wait</code>，因为 <code>wait</code> 是可被信号打断的内建命令。</p>
+<p><code>trap</code> 有条限制：<strong>Bash 只在两条命令的间隙检查待处理信号</strong>。脚本阻塞在外部命令上时收到 <code>SIGTERM</code>，handler 不会立刻执行，要等那个命令自己结束。</p>
+<p>「<code>kill</code> 了半分钟没反应」多半不是 trap 写错，是它在等 <code>rsync</code>。做法两条：长阻塞命令一律套 <code>timeout</code>；要可中断的地方，命令后台跑再 <code>wait</code>——<code>wait</code> 是可被信号打断的内建命令。</p>
 <p>另一个更隐蔽的坑是<strong>进程组</strong>。<code>kill $pid</code> 只发给那一个进程，它 fork 出的孙子进程会变成孤儿继续跑——这就是「脚本杀掉了但 java 进程还在占端口」的成因。</p>
 <p>要收掉一整棵树，得对<strong>进程组</strong>发信号，也就是 <code>kill -TERM -- -$pgid</code> 里那个负号；配合 <code>setsid</code> 让子进程自成进程组，这条路才走得通。</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
@@ -390,7 +390,7 @@ flowchart TB
     Q4 -- 是 --> SET["setsid 启动 并自行重定向输出"]
     Q4 -- 否 --> N["nohup 启动 并显式写明输出去向"]
 </div>
-<p>一个实践建议：用 <code>nohup</code> 时别指望 <code>nohup.out</code>，它会落在当前目录、没有轮转、也没有时间戳。正确写法是自己指明去向，把标准输出与标准错误一起追加到带时间戳的日志文件里，并把日志路径打到终端上。</p>
+<p>用 <code>nohup</code> 别指望 <code>nohup.out</code>：它落在当前目录，无轮转、无时间戳。正确写法是自己指明去向——标准输出与标准错误一起追加进带时间戳的日志文件，并把路径打到终端。</p>
 
 <h2>容器里的 PID 1：优雅关闭为什么从来没生效</h2>
 <p>这是执行机制在真实生产里最值钱的一条推论。容器里的第一个进程拿到 PID 1，它有两项特殊职责：<strong>接收编排器发来的停机信号</strong>，以及<strong>回收孤儿进程</strong>。</p>
@@ -439,9 +439,9 @@ envsubst &lt; /etc/app/config.tmpl &gt; /etc/app/config.yaml
 # 漏掉 exec 的话 shell 会留在 PID 1 上 wait，信号被吞，优雅关闭彻底失效。
 exec "$@"</code></pre>
 <p>第二项职责是僵尸回收。子进程退出后要由父进程 <code>wait</code> 才能释放内核里的进程表项，而孤儿进程会被托孤给 PID 1。</p>
-<p>真正的 init 会不断回收它们，但你的应用进程通常不实现这个循环，于是<strong>僵尸进程会在多进程模型下持续堆积，最终耗尽 pid 上限</strong>，表现是「跑几天以后就 fork 失败」。</p>
+<p>init 会不断回收，应用进程通常不实现这个循环，于是<strong>僵尸进程在多进程模型下持续堆积，最终耗尽 pid 上限</strong>，表现是「跑几天后 fork 失败」。</p>
 <p>判断方法是进容器看进程状态里有没有大量 Z 状态。解决办法是加一层极小 init：<code>docker run --init</code> 会注入 tini，Kubernetes 里没有这个开关，需要自己把 tini 打进镜像当 ENTRYPOINT。</p>
-<p>再往上一层，宽限期设置、<code>preStop</code> 钩子与就绪探针摘流量的先后顺序属于编排器语义，本站 <code>devops/kubernetes/</code> 有专篇推演，这里不展开；精简镜像里缺少排障命令该怎么办，见 <code>../modern-unix/</code>。</p>
+<p>再往上一层，宽限期设置、<code>preStop</code> 钩子与就绪探针摘流量的顺序属于编排器语义，<code>devops/kubernetes/</code> 有专篇推演；精简镜像缺排障命令怎么办，见 <code>../modern-unix/</code>。</p>
 
 <h2>反模式清单</h2>
 <table>

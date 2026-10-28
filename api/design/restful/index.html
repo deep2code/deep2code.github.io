@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="REST 落地细节：Richardson 成熟度模型与为何停在 Level 2、资源层级不超过两层、非 CRUD 动作的三种建模、方法与安全性幂等可缓存性的精确组合、PUT 与 PATCH 差异、状态码选择、ETag 与条件请求防丢失更新、批量操作部分失败。">
+    <meta name="description" content="REST 落地细节：资源命名与层级深度、非 CRUD 动作建模、方法与幂等语义、ETag 乐观并发、批量部分失败怎么返回。">
     <meta name="keywords" content="API 设计与架构,RESTful API 设计规范,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/design/restful/">
     <meta property="og:title" content="RESTful 落地细节：资源建模、方法语义、状态码与条件请求 - API 设计与架构 - 资深码农">
-    <meta property="og:description" content="REST 落地细节：Richardson 成熟度模型与为何停在 Level 2、资源层级不超过两层、非 CRUD 动作的三种建模、方法与安全性幂等可缓存性的精确组合、PUT 与 PATCH 差异、状态码选择、ETag 与条件请求防丢失更新、批量操作部分失败。">
+    <meta property="og:description" content="REST 落地细节：资源命名与层级深度、非 CRUD 动作建模、方法与幂等语义、ETag 乐观并发、批量部分失败怎么返回。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/design/restful/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="RESTful 落地细节：资源建模、方法语义、状态码与条件请求">
-    <meta name="twitter:description" content="REST 落地细节：Richardson 成熟度模型与为何停在 Level 2、资源层级不超过两层、非 CRUD 动作的三种建模、方法与安全性幂等可缓存性的精确组合、PUT 与 PATCH 差异、状态码选择、ETag 与条件请求防丢失更新、批量操作部分失败。">
+    <meta name="twitter:description" content="REST 落地细节：资源命名与层级深度、非 CRUD 动作建模、方法与幂等语义、ETag 乐观并发、批量部分失败怎么返回。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,7 +71,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>REST 入门只有三句话：URL 表示资源、方法表示动作、状态码表示结果。难的从来不是这三句，而是落地时真会吵架的细节：PATCH 幂等不幂等、校验失败该 400 还是 422、批量操作一半成功该返回什么。</p>
+<p>REST 三句话没有分歧：URL 表示资源、方法表示动作、状态码表示结果。分歧都在落地：PATCH 幂等不幂等、校验失败该 400 还是 422、批量操作一半成功返回什么。</p>
 
 <h2>成熟度模型：为什么大家都停在 Level 2</h2>
 <p>Richardson 成熟度模型把 REST 分成四级，它的价值不是让你追求满级，而是让你知道自己在哪一级、以及再上一级要付什么代价。</p>
@@ -91,11 +91,12 @@ flowchart TB
     end
     L0 --> L1 --> L2 --> L3
 </div>
-<p><strong>Level 2 通常就够了，对多数团队是性价比最高的位置</strong>。HATEOAS 极少落地：客户端几乎一定硬编码 URL；服务端为了「可随时改 URL」这个自由度，要在每个响应里维护一堆 links；而真正的发现能力用 OpenAPI 加代码生成已解决得更好。</p>
+<p><strong>Level 2 通常就够了，多数团队性价比最高的位置</strong>。HATEOAS 极少落地：客户端都硬编码 URL，服务端要为「可随时改 URL」在每个响应维护一堆 links；发现能力用 OpenAPI 加代码生成更好解决。</p>
 
 <h2>资源建模：名词、复数、层级不超过两层</h2>
-<p>基本约定不多：<strong>URL 用名词复数</strong>（<code>/users</code> 而不是 <code>/user</code>，集合与单体语义一致）、<strong>路径段用小写加连字符</strong>（<code>/order-items</code> 而不是 <code>/orderItems</code>，因为部分服务器大小写敏感、部分不敏感，全小写最省事）、<strong>不把技术细节写进 URL</strong>（<code>.php</code>、<code>.do</code>、<code>list</code>、<code>query</code> 都不该出现）。</p>
-<p>真正需要纪律的是<strong>层级深度</strong>。<code>/users/1/orders</code> 很自然，但 <code>/users/1/orders/1001/items/5/reviews</code> 就出问题：中间 ID 大多冗余，每加一层就多一处要校验的归属关系（order 1001 未必属于 user 1），客户端拼 URL 也容易出错。<strong>层级不超过两层，更深的关系用查询参数表达</strong>：<code>/users/1/orders/1001/items</code> 改成 <code>/order-items?order_id=1001</code>，保留 <code>/orders/1001</code>。</p>
+<p><strong>URL 用名词复数</strong>（<code>/users</code> 而不是 <code>/user</code>，集合与单体语义一致）、<strong>路径段用小写加连字符</strong>（<code>/order-items</code> 而不是 <code>/orderItems</code>，服务器大小写敏感性不一）、<strong>不把技术细节写进 URL</strong>（<code>.php</code>、<code>.do</code>、<code>list</code>、<code>query</code> 都不该出现）。</p>
+<p>守纪律的是<strong>层级深度</strong>。<code>/users/1/orders</code> 没问题，<code>/users/1/orders/1001/items/5/reviews</code> 出问题：中间 ID 冗余，每加一层多一处归属校验（order 1001 未必属于 user 1），拼 URL 易错。</p>
+<p><strong>层级不超过两层，更深的关系用查询参数</strong>：<code>/users/1/orders/1001/items</code> 改成 <code>/order-items?order_id=1001</code>，保留 <code>/orders/1001</code>。</p>
 
 <h2>非 CRUD 动作怎么建模：最常见的争论</h2>
 <p>取消订单、审批通过、重发验证码、解锁账号、重置密码这类动作不是资源的增删改查，它们是 REST 建模里最容易卡住的地方。三种做法各有代价。</p>
@@ -136,12 +137,12 @@ flowchart TB
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">推荐</div>
-    <p>需要留痕和重试的资金类、审批类动作用「动作即资源」；其余用动词端点，并写进规范：<strong>动词端点必须用 POST、动词必须祈使式、状态机必须在服务端而不能让客户端直接写 status</strong>。</p>
+    <p>要留痕重试的资金、审批动作走动作即资源，其余用动词端点加规范：<strong>动词端点用 POST、动词用祈使式、状态机在服务端，不让客户端写 status</strong>。</p>
 <p>不要为了看起来 RESTful 而把带副作用的复杂动作压成一个 PATCH status，那会让状态机彻底失控。</p>
 </div>
 
 <h2>方法语义的精确表：安全性、幂等性、可缓存性</h2>
-<p>这三个属性独立，不是一回事。<strong>安全</strong>指不改变服务器状态（可被爬虫和预取随意触发）；<strong>幂等</strong>指执行一次和执行 N 次对服务器状态的影响相同（只约束状态，不要求响应码相同）；<strong>可缓存</strong>指响应可存储复用。</p>
+<p>三者独立。<strong>安全</strong>指不改服务器状态，爬虫、预取可随意触发；<strong>幂等</strong>指执行一次和 N 次对状态影响相同，只约束状态，不要求响应码相同；<strong>可缓存</strong>指响应可存储复用。</p>
 <table>
     <thead>
         <tr>
@@ -216,7 +217,7 @@ flowchart TB
     <div class="callout-icon">❌</div>
     <div class="callout-title">用 PUT 做局部更新是真实的数据丢失源</div>
     <p>前端表单只回填了它关心的三个字段，PUT 上来之后服务端老老实实按全量替换执行，用户的备注、标签、扩展字段全被置空。</p>
-<p>更糟的是这类事故没有错误日志，往往要等用户几天后发现数据不见才暴露。要么严格按全量替换实现，要求客户端先 GET 再改再 PUT（配合 If-Match 防丢失更新），要么老实用 PATCH。</p>
+<p>这类事故没有错误日志，等用户几天后才发现数据丢了。要么按全量替换实现，客户端先 GET 再改再 PUT，配 If-Match 防丢失更新；要么改用 PATCH。</p>
 </div>
 
 <h2>状态码怎么选：一棵能直接照用的判断树</h2>
@@ -493,7 +494,7 @@ func (h *ArticleHandler) Update(w http.ResponseWriter, r *http.Request) {
 <p><strong>内容协商</strong>上，请求用 <code>Content-Type</code> 声明发的是什么、用 <code>Accept</code> 声明想收什么；服务端不认识请求体类型时回 415，无法满足 Accept 时回 406。真实项目里 JSON 之外最常见的是导出场景（<code>Accept: text/csv</code>）。</p>
 <p>用 Accept 头做版本协商在技术上可行，取舍留给版本篇讨论。</p>
 <p><strong>批量操作</strong>的核心问题是部分失败。两种做法：用 207 Multi-Status 表达里面各项结果不同，或者统一返回 200 并在响应体里逐项给出结果。</p>
-<p>207 语义更准确，但绝大多数客户端库、网关和监控会把它当陌生状态码处理，收益有限。更实用的是<strong>返回 200 加逐项结果，并给出成功与失败计数</strong>，让调用方一眼判断是否需要重试。</p>
+<p>207 语义更准，但客户端库、网关和监控把它当陌生状态码，收益小。<strong>返回 200 加逐项结果，给出成功与失败计数</strong>，调用方好判断要不要重试。</p>
 <p>无论哪种，都要明确这个批量是不是事务性的：如果不是原子的，就必须支持按项重试，因此每一项都要有自己的幂等键。</p>
 <pre><code class="language-json">{
   "summary": { "total": 4, "succeeded": 2, "failed": 2 },

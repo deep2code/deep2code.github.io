@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="应用侧日志工程：三类日志的读者与保留期、级别判据、记录与抛出、敏感信息与权限、日志注入、性能开销与去重。">
+    <meta name="description" content="按读者把日志分三类、ERROR 与 WARN 的判据是有没有人要做动作、同一异常只记一次的边界、绝不能写进日志的东西、异步与采样的开销账。">
     <meta name="keywords" content="日志与监控,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/observability/logging/">
     <meta property="og:title" content="应用侧日志工程：记什么、分级判据与性能开销 - 资深码农">
-    <meta property="og:description" content="应用侧日志工程：三类日志的读者与保留期、级别判据、记录与抛出、敏感信息与权限、日志注入、性能开销与去重。">
+    <meta property="og:description" content="按读者把日志分三类、ERROR 与 WARN 的判据是有没有人要做动作、同一异常只记一次的边界、绝不能写进日志的东西、异步与采样的开销账。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/observability/logging/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="应用侧日志工程：记什么、分级判据与性能开销 - 资深码农">
-    <meta name="twitter:description" content="应用侧日志工程：三类日志的读者与保留期、级别判据、记录与抛出、敏感信息与权限、日志注入、性能开销与去重。">
+    <meta name="twitter:description" content="按读者把日志分三类、ERROR 与 WARN 的判据是有没有人要做动作、同一异常只记一次的边界、绝不能写进日志的东西、异步与采样的开销账。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -69,14 +69,14 @@
             <span class="meta-item">🏷️ 日志</span>
         </div>
     </header>
-    <p><strong>本篇只讲应用侧的日志工程</strong>：一行 <code>log.info</code> 该不该写、写成什么级别、会花掉多少 CPU 和多少钱。</p>
-<p>采集链路与 ELK/EFK 架构选型、索引分片与 ILM、mapping 的 text 与 keyword 之争、容量估算乘法链，都在站内 <a href="elk/">日志平台架构取舍与容量规划</a> 里写过，本篇不重复；告警方法论、SLI/SLO 与 on-call 见 <a href="../metrics/">监控入门</a>。</p>
+    <p><strong>应用侧日志工程</strong>只管：一行 <code>log.info</code> 该不该写、什么级别、花多少 CPU 和多少钱。</p>
+<p>采集链路与 ELK/EFK 选型、索引分片与 ILM、mapping 的 text 与 keyword 之争、容量估算乘法链见 <a href="elk/">日志平台架构取舍与容量规划</a>；告警方法论、SLI/SLO 与 on-call 见 <a href="../metrics/">监控入门</a>。</p>
 <p>落地细节分三篇：<a href="structured/">结构化日志</a> 讲字段与各语言库，<a href="log-metrics/">从日志派生指标</a> 讲日志出告警，<a href="../tracing/correlation/">三者关联</a> 讲 traceID 串联。</p>
 
     <h2>日志有三种读者，于是必须是三种日志</h2>
-    <p>大多数团队的日志治理失败，根因是把三类用途完全不同的日志混在一个文件、一个索引、一套权限里。它们的读者不同：诊断日志给人看，出事时一个人盯着屏幕翻；</p>
+    <p>多数团队日志治理失败，根因是把三类用途不同的日志混在一个文件、一个索引、一套权限里。它们读者不同：诊断日志给人看；</p>
 <p>事件日志给机器看，聚合成计数和分位数；审计日志给合规和安全看，可能几年后才被调阅一次。</p>
-<p>读者不同，对格式、保留期、权限、能否包含用户数据的要求就完全相反——诊断日志希望尽可能详细，审计日志希望不可篡改，事件日志希望字段稳定到可以按 msg 聚合。</p>
+<p>读者不同，格式、保留期、权限、能否含用户数据的要求完全相反：诊断要尽可能详细，审计要不可篡改，事件要字段稳定到能按 msg 聚合。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -164,9 +164,9 @@ flowchart TB
     </div>
 
     <h2>日志分级：把判据从「感觉」换成「有没有人要做动作」</h2>
-    <p>级别定义人人会背，但落地时全靠感觉，结果是两个极端。第一个极端是<strong>全打 INFO</strong>：所有人怕漏信息，于是每个方法进出都 INFO，日志量里 90% 是噪声，真正的状态变迁被埋掉，排障时搜出两万行。</p>
-<p>第二个极端更危险，叫<strong>ERROR 满天飞导致告警免疫</strong>：参数校验失败打 ERROR、用户输错密码打 ERROR、第三方返回业务失败打 ERROR，于是 ERROR 曲线常年在高位，真出事时曲线从 3000 涨到 3200，没人看得出来，也没人再相信 ERROR 告警。</p>
-    <p>可操作的判据只有一句：<strong>这条日志出现之后，有没有人需要为它做一个动作</strong>。有，且要立刻做，是 ERROR；有异常但系统已经自己兜住了（重试成功、降级生效、缓存回源），是 WARN；</p>
+    <p>级别定义人人会背，落地全靠感觉，结果两个极端。第一个是<strong>全打 INFO</strong>：怕漏信息，每个方法进出都 INFO，日志量 90% 是噪声，状态变迁被埋掉，排障搜出两万行。</p>
+<p>第二个更危险：<strong>ERROR 满天飞导致告警免疫</strong>。参数校验失败、用户输错密码、第三方业务失败都打 ERROR，曲线常年高位，真出事时 3000 涨到 3200 没人看得出，没人再信 ERROR 告警。</p>
+    <p>判据一句：<strong>日志出现后，有没有人要为它做一个动作</strong>。有且要立刻做，是 ERROR；异常但系统自己兜住了（重试成功、降级生效、缓存回源），是 WARN；</p>
 <p>没有异常，只是关键状态变迁或跨进程交互，是 INFO；其余一切排障细节是 DEBUG，生产默认关闭。</p>
 
 <div class="mermaid">
@@ -232,8 +232,8 @@ flowchart TB
     </table>
 
     <h2>日志与异常处理：同一个异常被记录了五遍</h2>
-    <p>这是应用侧日志最容易做错、也最容易被当成风格问题忽视的地方，而它直接导致告警数量失真和日志成本翻倍。三种典型错法：<strong>每层都 catch、记录、再抛出</strong>，一次数据库死锁在 DAO、Service、Controller 各留一条带完整堆栈的 ERROR；</p>
-<p><strong>catch 住只记录不处理</strong>，异常被吞掉但流程继续往下走，最后在几十行之后以 NPE 的形式爆炸，真正的根因埋在前面某条日志里；<strong>记录时丢了堆栈</strong>，写成 <code>log.error(e.getMessage())</code>，线上只看到一行「null」或者「Connection reset」，完全无法定位。</p>
+    <p>应用侧最容易做错、也常被当成风格问题，直接让告警数量失真、日志成本翻倍。典型错法是<strong>每层都 catch、记录、再抛出</strong>：一次数据库死锁在 DAO、Service、Controller 各留一条完整堆栈的 ERROR；</p>
+<p><strong>catch 住只记录不处理</strong>，异常被吞掉流程继续走，几十行之后以 NPE 爆炸，根因埋在前面某条日志里；<strong>记录时丢了堆栈</strong>，写成 <code>log.error(e.getMessage())</code>，线上只看到一行「null」或「Connection reset」，无法定位。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -256,7 +256,7 @@ sequenceDiagram
 </div>
 
     <p>正确原则两句话：<strong>要么处理，要么抛出，不要「记录并抛出」</strong>；<strong>在请求边界统一记录一次，带完整堆栈</strong>。</p>
-<p>边界指全局异常处理器、消息消费者的最外层、定时任务入口、线程池任务 run 方法的最外层——这些地方是异常真正「停下来」的位置，只有这里知道它最终被怎么处理了。</p>
+<p>边界指全局异常处理器、消息消费者最外层、定时任务入口、线程池任务 run 的最外层：异常真正停在这里，只有这里知道最终怎么处理。</p>
 <p>底层要做的不是记日志，而是给异常补充业务上下文（哪个订单、哪个 SKU），让边界那一条日志足够定位。</p>
 
     <pre><code class="language-java">// 反例：每层都记录，一次故障产生 N 条 ERROR，堆栈重复 N 份
@@ -310,7 +310,7 @@ public class GlobalExceptionHandler {
     <div class="callout callout-tip">
         <div class="callout-icon">✅</div>
         <div class="callout-title">一条 lint 规则就能拦住 80% 的重复日志</div>
-        <p>规则内容：同一个 catch 块中同时出现日志调用和 throw 语句就报错。实现成本极低，却能直接消灭「记录并抛出」。配套再加一条：catch 块内的日志调用，最后一个参数必须是 Throwable，避免 <code>e.getMessage()</code> 式的堆栈丢失。</p>
+        <p>规则：同一个 catch 块同时有日志调用和 throw 就报错，实现成本极低，却能消灭「记录并抛出」。再加一条：catch 块内日志调用，最后一个参数必须是 Throwable，避免 <code>e.getMessage()</code> 丢堆栈。</p>
     </div>
 
     <h2>该记什么：以「跨边界」为单位，不是以方法为单位</h2>
@@ -379,9 +379,9 @@ public class GlobalExceptionHandler {
     </table>
 
     <h2>绝不能记什么：日志是绕过所有存储层加密的旁路</h2>
-    <p>这一节的核心不是「敏感信息要脱敏」这句人人会说的话，而是一个很少被讲透的事实：<strong>日志的访问权限通常远宽于数据库</strong>。数据库有字段级加密、脱敏视图、行级权限、访问审计；</p>
+    <p>脱敏人人会说，很少被讲透的事实是：<strong>日志的访问权限通常远宽于数据库</strong>。数据库有字段级加密、脱敏视图、行级权限、访问审计；</p>
 <p>而 Kibana 往往整个研发团队都能登录、能全文检索、能导出 CSV，还常常给外包和乙方开了只读账号。</p>
-<p>把身份证号打进日志，等于把数据库上所有安全措施一次性绕过，而且留存副本会跟着索引快照扩散到备份存储里。合规检查真正会追的就是这条路径。</p>
+<p>身份证号打进日志，等于一次绕过数据库所有安全措施，副本随索引快照扩散到备份存储。合规检查真正追的就是这条路。</p>
 
     <table>
         <thead>
@@ -432,11 +432,11 @@ public class GlobalExceptionHandler {
 
     <p><strong>日志注入</strong>值得单独说。如果日志是纯文本行式的，用户在昵称里放一个换行加一段伪造前缀，就能在日志里凭空「造出」一行看起来合法的记录。</p>
 <p>用来掩盖自己的行为、污染统计，甚至骗过基于关键词的告警规则。</p>
-<p>纯文本日志必须过滤输入中的 CR 与 LF 并限制长度。JSON 结构化日志天然免疫：换行在序列化时被转义成两个可见字符，一条日志永远只占一行，行边界不可能被用户数据破坏。</p>
+<p>纯文本日志必须过滤 CR 与 LF 并限长。JSON 结构化日志天然免疫：换行转义成两个可见字符，一条日志只占一行，用户数据破坏不了行边界。</p>
 <p>这是选择结构化日志被严重低估的一个安全收益，落地细节见 <a href="structured/">结构化日志</a>。</p>
 
     <h2>性能开销：日志是少数能把业务拖垮的「辅助功能」</h2>
-    <p>「打日志能有多慢」是普遍的低估。开销分四块：<strong>字符串拼接与序列化</strong>发生在调用点，即使级别被关掉，参数表达式也已经执行完了；<strong>格式化与写出</strong>要占 CPU，一条带十几个字段的 JSON 日志在百微秒量级；</p>
+    <p>打日志有多慢常被低估。开销分四块：<strong>字符串拼接与序列化</strong>在调用点，级别关掉，参数表达式也执行完；<strong>格式化与写出</strong>占 CPU，一条十几个字段的 JSON 日志百微秒量级；</p>
 <p><strong>同步写盘</strong>会把业务线程卡在 write 上，容器里写 stdout 还要经过运行时的日志驱动，后者的处理能力常常先成为瓶颈；</p>
 <p><strong>磁盘 IO 争抢</strong>最阴——一个服务把日志量打上去，同机其他容器的 IO 延迟一起劣化，排查时根本想不到根因在别人的 DEBUG 开关上。</p>
     <p><code>if (log.isDebugEnabled())</code> 的意义就在第一块：它不是防止日志被写出（级别判断本来就会拦住），而是<strong>防止参数表达式被求值</strong>。<code>log.debug("order=" + order.toJson())</code> 里的 <code>toJson()</code> 在 DEBUG 关闭时依然会执行。</p>
@@ -555,7 +555,7 @@ log4j2.discardThreshold = INFO</code></pre>
 <p>下游挂掉时，每秒一万次调用各打一条 ERROR，五分钟三百万条，日志平台的写入队列先崩，然后磁盘满，然后这个服务连同同机的邻居一起挂。</p>
 <p>这是典型的故障放大：日志本该帮你看清故障，结果成了故障的一部分。</p>
     <p>防护手段是采样和聚合，而且要做在应用侧——等到采集侧或平台侧限流，机器上的磁盘已经在写满了。</p>
-<p>原则是<strong>相同的 key 在时间窗内只记录前 N 条，其余只累加计数</strong>，窗口结束时补一条「本窗口同类日志被抑制 M 条」。同时把重复失败转成指标：错误计数应该是 counter，而不是十万行日志。</p>
+<p>原则是<strong>相同 key 在时间窗内只记前 N 条，其余只累加计数</strong>，窗口结束补一条「同类被抑制 M 条」。重复失败转成指标：错误计数该是 counter，不是十万行日志。</p>
 
     <pre><code class="language-go">// zap 的采样器：以 (level, message) 为 key 做每秒限流
 // First=100 表示每秒前 100 条正常输出，Thereafter=1000 表示之后每 1000 条采样 1 条
@@ -603,7 +603,7 @@ func onUpstreamFail(log *zap.Logger, target string, err error) {
 }</code></pre>
 
     <h2>日志量与成本：先算一遍再决定规范</h2>
-    <p>规范之争往往停留在口味上，算一遍量级就没什么可争的了。单条结构化日志按 600 字节到 1 KB 估（带 trace_id、服务名，尤其带堆栈时远超这个数），乘以每请求条数、乘以 QPS、乘以副本数与保留天数，再乘以索引膨胀系数。</p>
+    <p>规范之争算一遍量级就没得争。单条结构化日志按 600 字节到 1 KB 估（带 trace_id、服务名，带堆栈远超这个数），乘每请求条数、QPS、副本数与保留天数，再乘索引膨胀系数。</p>
 <p>详细的容量估算乘法链在 <a href="elk/">日志平台架构取舍与容量规划</a> 里，这里只给应用侧最该记住的对照（按单条 1 KB、1000 QPS、单副本估算）。</p>
 
     <table>

@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Drizzle 查询实操：链式调用与 SQL 映射、条件构造器组合、join 返回扁平元组、db.query 嵌套、sql 模板注入面与游标分页。">
+    <meta name="description" content="链式 select 与 SQL 一对一映射、条件构造器怎么组合、join 返回扁平元组；db.query 给嵌套结果但不产生 N+1，sql 模板要防注入面，分页优先游标。">
     <meta name="keywords" content="Drizzle ORM,查询与操作,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/drizzle/queries/">
     <meta property="og:title" content="查询构建：关系查询、join 与事务 - Drizzle ORM - 资深码农">
-    <meta property="og:description" content="Drizzle 查询实操：链式调用与 SQL 映射、条件构造器组合、join 返回扁平元组、db.query 嵌套、sql 模板注入面与游标分页。">
+    <meta property="og:description" content="链式 select 与 SQL 一对一映射、条件构造器怎么组合、join 返回扁平元组；db.query 给嵌套结果但不产生 N+1，sql 模板要防注入面，分页优先游标。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/drizzle/queries/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="查询构建：关系查询、join 与事务 - Drizzle ORM">
-    <meta name="twitter:description" content="Drizzle 查询实操：链式调用与 SQL 映射、条件构造器组合、join 返回扁平元组、db.query 嵌套、sql 模板注入面与游标分页。">
+    <meta name="twitter:description" content="链式 select 与 SQL 一对一映射、条件构造器怎么组合、join 返回扁平元组；db.query 给嵌套结果但不产生 N+1，sql 模板要防注入面，分页优先游标。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -72,10 +72,10 @@
                     </header>
                     <div class="article-content">
 <p>Drizzle 的查询构建器几乎是 SQL 的逐词映射。好处是你不用在脑子里维护「ORM 语法 → SQL」的翻译表；陷阱是<strong>join 的返回形状是 SQL 的形状，不是 ORM 的形状</strong>。</p>
-<p>这篇把查询构建、关系查询、原生片段、事务四块讲清。</p>
+<p>这里讲查询构建、关系查询、原生片段、事务四块。</p>
 <h2>四类查询的标准写法</h2>
 
-<p>日常查询几乎都能归到下面四类。<strong>先按类型选形态，再抠细节</strong>：要嵌套对象就别用 join，要聚合统计就别用 <code>db.query</code>，要写多表就一定进事务。每种写法背后的机制见原理层。</p>
+<p>日常查询几乎都能归到四类。<strong>先按类型选形态，再抠细节</strong>：嵌套对象别用 join，聚合统计别用 <code>db.query</code>，多表写入一定进事务。机制见原理层。</p>
 
 <table>
 <thead><tr><th>要做什么</th><th>标准写法</th><th>注意什么</th></tr></thead>
@@ -371,7 +371,7 @@ const detail = await db
 
 <p><code>db.query</code> 是 Drizzle 的关系查询 API，它需要初始化时传入 <code>schema</code> 且表定义了 <code>relations()</code>。它的价值在于：<strong>返回嵌套的对象结构，但生成的是单条带 json 聚合的 SQL，不是 N+1</strong>。</p>
 
-<p>PostgreSQL 下它用 <code>json_agg</code> 配合 lateral join，在数据库内部把一对多聚合成 JSON 数组，一次往返返回完整嵌套数据。这是它相比手写 join 的核心优势：既拿到 ORM 风格的结果形状，又不付 N+1 的代价，也不用手动 reduce。</p>
+<p>PostgreSQL 下它用 <code>json_agg</code> 配合 lateral join，在数据库内把一对多聚合成 JSON 数组，一次往返返回完整嵌套数据：ORM 风格的结果形状给得全，N+1 代价不用付，手动 reduce 也省掉。</p>
 
 <table>
 <thead><tr><th>方案</th><th>往返次数</th><th>结果形状</th><th>SQL 可控性</th><th>适用场景</th></tr></thead>
@@ -423,7 +423,7 @@ const one = await db.query.users.findFirst({
 
 <p>哪种写法是参数化的、哪种把注入面暴露出去，分界在模板插值。</p>
 
-<p>查询构建器覆盖不了的场景（窗口函数、数据库特有函数、复杂表达式）用 <code>sql</code> 模板。<strong>模板插值 <code>${}</code> 会转成占位符参数，是安全的</strong>；但 <code>sql.raw()</code> 完全绕过参数化，绝不能传用户输入。</p>
+<p>构建器覆盖不了的（窗口函数、数据库特有函数、复杂表达式）用 <code>sql</code> 模板：<strong>插值 <code>${}</code> 会转成占位符，安全</strong>；<code>sql.raw()</code> 绕过参数化，绝不能传用户输入。</p>
 
 <table>
 <thead><tr><th>写法</th><th>是否参数化</th><th>安全性</th><th>用途</th></tr></thead>
@@ -632,11 +632,11 @@ const u2 = await findByEmail.execute({ email: 'c@d.com' });  // 复用计划
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：本篇只讲怎么用 Drizzle 把查询写对。表和类型怎么定义见上一篇 <a href="../intro/">Drizzle 上手：schema 定义与类型推导</a>；迁移怎么生成与在生产怎么应用见下一篇 <a href="../migrations/">迁移管理：生成、应用与生产流程</a>；</p>
-<p>该不该用 Drizzle 见 <a href="../">Drizzle 的设计：SQL-first 的类型安全 ORM</a>；<code>sql.raw</code> 的注入面、参数化的真实边界与绕过手法见 <a href="../../../api/security/sql-injection/">SQL 注入</a>；这条查询为什么走不上索引、执行计划怎么判读见 <a href="../../optimization/index/">索引设计与优化</a> 与 <a href="../../optimization/slow-query/">慢查询治理</a>；</p>
-<p>隔离级别、行锁范围与 MVCC 可见性见 <a href="../../postgresql/mvcc-transaction/">PostgreSQL MVCC 与事务</a>（MySQL 侧见 <a href="../../mysql/">MySQL 深度原理</a>）；游标对外怎么编码、分页接口怎么设计见 <a href="../../../api/design/restful/">RESTful 接口设计</a>；跨服务的事务与幂等见站内分布式事务相关文章。</p>
+<p><strong>不适用边界</strong>：这里只管查询写对。表和类型怎么定义见 <a href="../intro/">Drizzle 上手：schema 定义与类型推导</a>；迁移怎么生成与生产应用见 <a href="../migrations/">迁移管理：生成、应用与生产流程</a>；</p>
+<p>该不该用 Drizzle 见 <a href="../">Drizzle 的设计：SQL-first 的类型安全 ORM</a>；<code>sql.raw</code> 注入面、参数化边界与绕过手法见 <a href="../../../api/security/sql-injection/">SQL 注入</a>；走不上索引、执行计划判读见 <a href="../../optimization/index/">索引设计与优化</a>、<a href="../../optimization/slow-query/">慢查询治理</a>；</p>
+<p>隔离级别、行锁范围与可见性见 <a href="../../postgresql/mvcc-transaction/">PostgreSQL MVCC 与事务</a>（MySQL 侧见 <a href="../../mysql/">MySQL 深度原理</a>）；游标编码、分页设计见 <a href="../../../api/design/restful/">RESTful 接口设计</a>；跨服务事务与幂等见站内分布式事务篇。</p>
 
-<p>这条路径上，上一篇把结构与类型定好，本篇把读写写对，下一篇解决「schema 改了之后怎么安全地让生产库跟上」。</p>
+<p>这条路径上，上一篇把结构与类型定好，这里把读写写对，下一篇解决「schema 改了之后怎么安全地让生产库跟上」。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../intro/">← 上一步：Drizzle 上手：schema 定义与类型推导</a> · <a href="../migrations/">下一步：迁移管理：生成、应用与生产流程 →</a></p>
 

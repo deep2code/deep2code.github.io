@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 运行时模型：GMP 队列与 handoff 的线程代价、goroutine 为何便宜、抢占演进、netpoller、内存分配与 GC。">
+        <meta name="description" content="Go 运行时机制：GMP 调度、抢占演进、netpoller、内存分配与 GC 代价，容器里 GOMAXPROCS 与 GOMEMLIMIT 怎么设、profiling 怎么判读。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/">
     <!-- Open Graph -->
     <meta property="og:title" content="Go 运行时模型：GMP 调度、内存分配与 GC - 资深码农">
-    <meta property="og:description" content="Go 运行时模型：GMP 队列与 handoff 的线程代价、goroutine 为何便宜、抢占演进、netpoller、内存分配与 GC。">
+    <meta property="og:description" content="Go 运行时机制：GMP 调度、抢占演进、netpoller、内存分配与 GC 代价，容器里 GOMAXPROCS 与 GOMEMLIMIT 怎么设、profiling 怎么判读。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/">
     <meta property="og:site_name" content="资深码农">
@@ -39,7 +39,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Go 运行时模型：GMP 调度、内存分配与 GC - 资深码农">
-    <meta name="twitter:description" content="Go 运行时模型：GMP 队列与 handoff 的线程代价、goroutine 为何便宜、抢占演进、netpoller、内存分配与 GC。">
+    <meta name="twitter:description" content="Go 运行时机制：GMP 调度、抢占演进、netpoller、内存分配与 GC 代价，容器里 GOMAXPROCS 与 GOMEMLIMIT 怎么设、profiling 怎么判读。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
@@ -91,7 +91,7 @@
     </header>
     <p>Docker、Kubernetes、etcd、Prometheus、Istio 都是 Go 写的，这件事常被归因为「Go 并发好写」。但真正让 Go 在这个位置站住的不是 <code>go</code> 关键字，而是运行时替你干掉的那几件脏活。</p>
 <p>把 M:N 调度做进用户态、把 epoll 藏在同步 API 后面、把内存分配拆成每个 P 一份的无锁缓存、把 GC 停顿压到几十微秒。</p>
-<p>这篇把这四件事拆开讲，重点放在<strong>它们各自在什么条件下会失效</strong>——因为线上出问题的地方从来不是正常路径。</p>
+<p>这四件事要拆开看，重点放在<strong>它们各自在什么条件下会失效</strong>——因为线上出问题的地方从来不是正常路径。</p>
 <h2>出现性能或内存问题时的动手顺序</h2>
     <p>线上一慢就去调 <code>GOGC</code>，是最常见的无效动作。正确的顺序是<strong>先采一份数据把问题归类，再判断要不要碰旋钮</strong>——大多数时候结论是「不是运行时的问题」。</p>
 <p>下表左列是你手上的任务，查表照抄即可，为什么是这个结论见下面的原理层。</p>
@@ -249,8 +249,9 @@ flowchart TB
     M2 -.->|"syscall 返回后重新抢 P<br/>抢不到就把 G 塞进全局队列"| GQ
     </div>
     <p>两个机制决定了这套结构不会退化成「一核有难八核围观」：</p>
-    <p><strong>work stealing</strong>：某个 P 的本地队列空了，它不会闲着，而是随机挑另一个 P 偷走它队列里的一半 G。偷之前会先看全局队列和 netpoller，都没有才去偷。这让负载在 P 之间自动均衡，代价是偷取时的原子操作开销和缓存局部性损失。</p>
-    <p><strong>handoff</strong>：M 陷入系统调用（read 一个普通文件、调一次 cgo 函数）时会阻塞在内核里。此时 sysmon 监控线程发现这个 M 已经超过约 20 微秒没回来，就把它身上的 P 摘下来交给另一个 M（有空闲 M 就复用，没有就新建）。</p>
+    <p><strong>work stealing</strong>：某个 P 本地队列空了，挑另一个 P 偷走其队列一半 G；偷前先看全局队列和 netpoller，都没有才偷。</p>
+<p>负载因此在 P 间自动均衡，代价是偷取时的原子操作开销和缓存局部性损失。</p>
+    <p><strong>handoff</strong>：M 陷入系统调用（read 一个普通文件、调一次 cgo 函数）时阻塞在内核。sysmon 发现这个 M 超过约 20 微秒没回来，就把它身上的 P 摘给另一个 M（有空闲就复用，没有就新建）。</p>
 <p><strong>一次阻塞的 cgo 调用不会卡住整个程序</strong>。代价是 handoff 创建 OS 线程：大量并发的阻塞调用会让线程数暴涨，Go 默认线程上限是 10000，撞到就直接崩。</p>
 
     <h2>goroutine 为什么便宜：量级对照</h2>
@@ -269,14 +270,14 @@ flowchart TB
             <tr><td>调度者</td><td>内核 CFS，看不见应用语义</td><td>Go 运行时，知道 channel、锁、GC 的状态</td><td>调度决策能结合语言语义</td></tr>
         </tbody>
     </table>
-    <p>需要主动纠正一个流传很广的说法：<strong>goroutine 栈不是「无限增长」也不是「只增不减」</strong>。它的增长方式是检测到栈空间不足时分配两倍大的新栈并整体拷贝，GC 期间也会做栈收缩，把用不到的空间还回去。</p>
+    <p><strong>goroutine 栈不是「无限增长」也不是「只增不减」</strong>：栈空间不足时分配两倍大的新栈并整体拷贝，GC 期间也做栈收缩，把用不到的空间还回去。</p>
 <p>所以一个曾经递归很深的 goroutine，空闲下来后内存会降回去——但拷贝本身有成本，深递归热路径会反复触发栈增长。</p>
 
 <div class="echart-container" id="go-perf-compare"></div>
 
     <h2>抢占式调度的演进：1.14 是分界线</h2>
-    <p>这一节解释两个现象：老版本上一段纯计算死循环能拖死整个运行时，而新版本上 cgo 密集的程序会冒出莫名其妙的「系统调用被中断」错误。</p>
-    <p>Go 1.14 之前的抢占是<strong>协作式</strong>的：编译器只在函数调用、channel 操作、内存分配等位置插入抢占检查点，运行时想抢占某个 G，只能设一个标志位，等它自己走到检查点。</p>
+    <p>老版本里一段纯计算死循环能拖死整个运行时，新版本里 cgo 密集的程序会冒出「系统调用被中断」错误。</p>
+    <p>Go 1.14 之前抢占是<strong>协作式</strong>的：编译器只在函数调用、channel、内存分配处插检查点，想抢占某个 G 只能设一个标志位，等它走到检查点。</p>
 <p>后果是——一段没有函数调用的纯计算循环可以永久占着 P 不放：</p>
     <pre><code class="language-go">// Go 1.13 及之前：这段代码在 GOMAXPROCS=1 时会永久卡死
 // 因为循环体内没有任何抢占检查点，GC 需要的 STW 永远等不到这个 P 停下
@@ -291,7 +292,7 @@ func main() {
     runtime.GC() // 1.14 之前在这里挂死
     fmt.Println("done")
 }</code></pre>
-    <p>1.14 引入<strong>基于信号的异步抢占</strong>：sysmon 发现某个 G 已经连续运行超过 10 毫秒，就给它所在的 M 发一个 <code>SIGURG</code>；信号处理函数保存现场，插入一次 <code>asyncPreempt</code> 调用，强制进入调度器。所以上面那段代码在 1.14 之后能正常跑完。</p>
+    <p>1.14 引入<strong>基于信号的异步抢占</strong>：sysmon 发现某个 G 连续运行超 10 毫秒，就给它的 M 发一个 <code>SIGURG</code>，信号处理保存现场、插入一次 <code>asyncPreempt</code>，强制进调度器。那段代码在 1.14 后能跑完。</p>
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
         <div class="callout-title">这个改动的副作用</div>
@@ -319,11 +320,11 @@ sequenceDiagram
     G->>G: 从原来的 Read 调用处继续 对业务代码完全透明
     Note over G,K: 一万个连接对应一万个 goroutine 但只需要 GOMAXPROCS 个线程
     </div>
-    <p>这个设计的边界很明确：<strong>只有网络 fd 和 unix socket 走 netpoller，普通磁盘文件 IO 不走</strong>。<code>os.File</code> 的读写是真实的阻塞系统调用，会触发 handoff 并可能创建新线程。所以大量并发读小文件的程序，线程数会比你预期的高得多；</p>
+    <p><strong>只有网络 fd 和 unix socket 走 netpoller，普通磁盘文件 IO 不走</strong>。<code>os.File</code> 读写是真实阻塞系统调用，触发 handoff 并可能建新线程，所以大量并发读小文件的程序线程数远高于预期。</p>
 <p>真要做高并发磁盘 IO，得自己上工作池限制并发，或者用 <code>io_uring</code> 这类第三方封装。</p>
 
     <h2>内存分配：三级缓存与逃逸分析</h2>
-    <p>用法层说「多数问题要降分配速率」，具体怎么降就在这一节：搞清哪些写法会把对象送上堆。</p>
+    <p>用法层说「多数问题要降分配速率」，具体怎么降看逃逸分析：搞清哪些写法会把对象送上堆。</p>
     <p>Go 的堆分配器脱胎于 TCMalloc，核心思路是<strong>用每个 P 独占的缓存换掉全局锁</strong>。对象按大小走三条不同路径：</p>
     <div class="mermaid">
 flowchart TB
@@ -344,7 +345,7 @@ flowchart TB
     MCE -->|"没有可用 span 了"| MH
     LARGE --> MH
     </div>
-    <p>因为 mcache 绑定 P 而 P 在执行 Go 代码时被 M 独占，<strong>小对象分配路径上没有任何锁</strong>，这也是 Go 敢在热路径上随手 <code>make</code> 的底气。但 size class 向上取整会带来内部碎片：分配 33 字节实际占 48 字节，浪费 45%。</p>
+    <p>mcache 绑定 P、P 执行 Go 代码时被 M 独占，<strong>小对象分配路径没有锁</strong>，这是 Go 热路径随手 <code>make</code> 的底气。但 size class 向上取整致内部碎片：分配 33 字节实际占 48 字节，浪费 45%。</p>
 <p>批量分配定长结构体时，把字段按大小重排（大字段在前）能减少 padding，有时能直接落到更小的 size class。</p>
     <p>真正的性能杠杆在<strong>不进堆</strong>。逃逸分析决定对象在栈还是堆，它的判定规则比大多数人想的严格：</p>
     <table>
@@ -379,10 +380,10 @@ go test -bench=. -benchmem -count=8 ./... &gt; new.txt
 benchstat old.txt new.txt</code></pre>
 
     <h2>GC：停顿很短，但代价不在停顿上</h2>
-    <p>搞清这一节能解释最让人困惑的一类现象：GC 停顿指标只有几十微秒，接口 P99 却跳到几十毫秒。</p>
+    <p>GC 停顿指标只有几十微秒，接口 P99 却跳到几十毫秒。</p>
     <p>Go 用的是<strong>非分代、非压缩、并发的三色标记清除</strong>。三色是抽象描述：白色为未访问（回收候选），灰色为已发现但引用还没扫完，黑色为自身与引用都扫完。</p>
 <p>标记从根对象（全局变量、各 goroutine 栈、寄存器）出发，把灰色队列不断推进到空。</p>
-    <p>难点在于标记与业务代码并发跑，业务代码随时可能改指针。Go 用<strong>混合写屏障</strong>（1.8 引入，把删除屏障与插入屏障组合起来）保证不漏标：被覆盖的旧指针和新写入的指针都会被着色。</p>
+    <p>标记与业务代码并发跑，业务代码随时改指针。Go 用<strong>混合写屏障</strong>（1.8 引入，组合删除与插入屏障）保证不漏标：被覆盖旧指针和新写入指针都被着色。</p>
 <p>代价是写屏障开启期间，每次指针写入都多几条指令。</p>
     <div class="mermaid">
 stateDiagram-v2
@@ -404,8 +405,8 @@ stateDiagram-v2
         所以延迟毛刺和 GC 停顿指标经常是两回事
     end note
     </div>
-    <p><strong>这是本节最该记住的结论</strong>：Go 的 STW 已经压到几十微秒量级，你在监控上看到的 GC 停顿几乎永远是健康的。真正吃延迟的是两处并发成本——后台标记 worker 固定占用约 25% 的 P 时间。</p>
-<p>以及 <strong>mark assist</strong>：当某个 goroutine 的分配速率超过标记推进速度，运行时会罚它去帮忙标记一批对象，这部分耗时直接体现在业务函数里。症状就是「P99 有毛刺，但 GC 停顿指标正常，CPU 也没打满」。</p>
+    <p><strong>Go 的 STW 已压到几十微秒量级，监控上的 GC 停顿几乎总健康</strong>。真正吃延迟的是两处并发成本：后台标记 worker 固定占约 25% 的 P 时间。</p>
+<p>以及 <strong>mark assist</strong>：goroutine 分配速率超过标记推进速度时，运行时会罚它标记一批对象，耗时落在业务函数里。症状是「P99 有毛刺，但 GC 停顿指标正常，CPU 也没打满」。</p>
     <p>解法不是调 GOGC，而是降低分配速率——回到上一节的逃逸分析。把 GOGC 调大只是让 GC 跑得更少但每轮标记的对象更多、堆更大，毛刺变稀疏而单次更重。</p>
     <table>
         <thead>
@@ -422,19 +423,19 @@ stateDiagram-v2
     </table>
 
     <h2>容器里为什么必须显式设这两个值</h2>
-    <p>用法层已经给了该设成什么，这一节说清不设的后果是怎么产生的——Go 服务上容器最高频的两个事故，根因都是运行时对 cgroup 无感知。</p>
-    <p><strong>第一个是 GOMAXPROCS 读宿主机核数</strong>。宿主机 64 核、Pod 的 CPU limit 只有 2 核时，Go 建 64 个 P，于是有 64 条执行流去争 2 核的时间片。CFS 在每个 100ms 周期内发完配额就把整个 cgroup 冻结到下一周期，表现为周期性延迟尖刺加上很高的限流计数。</p>
+    <p>用法层已经给了该设成什么，再说清不设的后果怎么产生——Go 服务上容器最高频的两个事故，根因都是运行时对 cgroup 无感知。</p>
+    <p><strong>GOMAXPROCS 读宿主机核数</strong>：宿主机 64 核、Pod CPU limit 只有 2 核时，Go 建 64 个 P，64 条执行流争 2 核时间片。CFS 每个 100ms 周期发完配额就把 cgroup 冻结到下一周期，表现为周期性延迟尖刺与高限流计数。</p>
 <p>K8s 侧的 CFS 限流与 QoS 细节详见站内 Kubernetes 篇，这里只给 Go 侧的修法。</p>
-    <p><strong>第二个是不设 GOMEMLIMIT 就没有内存刹车</strong>。GOGC 是相对值，它只关心「存活堆翻倍了没」，完全不知道容器 limit 在哪。流量尖峰下存活堆涨一倍，堆再翻倍才触发 GC，等 GC 跑完时 RSS 已经超过 limit 被内核 kill 了——和 JVM 不设最大堆是一个道理。</p>
+    <p><strong>不设 GOMEMLIMIT 就没有内存刹车</strong>：GOGC 是相对值，只盯「存活堆翻倍了没」，不知道容器 limit 在哪。流量尖峰下存活堆涨一倍，堆再翻倍才触发 GC，跑完时 RSS 已超 limit 被内核 kill，和 JVM 不设最大堆同理。</p>
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">GOMEMLIMIT 用 Downward API 注入时的坑</div>
-        <p><code>divisor: 1Mi</code> 拿到的是纯数字 <code>2048</code>，而 <code>GOMEMLIMIT</code> 需要带单位（<code>2048MiB</code>）或者是纯字节数。直接把 <code>2048</code> 赋给它会被理解成 2048 字节，进程一启动就陷入 GC 死亡螺旋：CPU 打满、业务完全跑不动、看日志还以为是死锁。</p>
+        <p><code>divisor: 1Mi</code> 拿到纯数字 <code>2048</code>，而 <code>GOMEMLIMIT</code> 要带单位（<code>2048MiB</code>）或纯字节数。直接赋 <code>2048</code> 会被当成 2048 字节，进程一启动就陷入 GC 死亡螺旋：CPU 打满、业务跑不动，看日志还以为死锁。</p>
 <p>所以要么像上面那样在启动脚本里拼上单位，要么改用代码里 <code>debug.SetMemoryLimit</code> 的方式。另外一定按 limit 的 80% 设而不是 100%，因为它只约束堆，goroutine 栈和运行时元数据不在其中。</p>
     </div>
 
     <h2>六种 profile 各自回答什么，采回来怎么判读</h2>
-    <p>采集命令在用法层，这一节解决的是「数据拿到了却不知道该看什么」。各种 profile 回答的是完全不同的问题，用错了就会得出「CPU profile 里 <code>runtime.mallocgc</code> 最高，所以要调 GC」这种似是而非的结论。</p>
+    <p>profile 回答的是完全不同的问题，用错就得出似是而非的结论：比如「CPU profile 里 <code>runtime.mallocgc</code> 最高，所以要调 GC」。</p>
     <div class="mermaid">
 flowchart TB
     S["线上出现性能问题"] --> D1{"CPU 使用率是否接近打满"}
@@ -467,7 +468,7 @@ flowchart TB
     <p>关于服务整体的延迟度量方法、如何把一次请求耗时拆到各个下游、连接池与 ORM 层面的调优，站内性能专题已有四篇展开，这里不重复。</p>
 
     <h2>什么现象该调哪个旋钮，什么现象根本不是运行时问题</h2>
-    <p>运行时旋钮能解决的问题其实很窄：只有「运行时对环境的认知与真实环境不一致」这一类。其余大部分性能问题得改代码或改架构。下表按线上真实能看到的现象分类。</p>
+    <p>运行时旋钮用处很窄，只解决「运行时对环境的认知与真实环境不一致」这类问题，其余得改代码或架构。下表按线上现象分类。</p>
     <table>
         <thead>
             <tr><th>现象</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr>
@@ -483,10 +484,10 @@ flowchart TB
             <tr><td>压测吞吐上不去，mutex profile 有明显争用</td><td>改数据结构或做分片，不是调运行时</td><td>锁争用与 P 的数量无关，加大并行度只会让争用更重</td><td>锁的选型与分片做法见 <a href="concurrency/">并发原语篇</a></td></tr>
         </tbody>
     </table>
-    <p><strong>不适用边界</strong>：运行时旋钮治不了算法复杂度选错（量级判断见 <a href="../algorithms/">算法与数据结构</a>），也治不了并发设计错误——无界 fan-out、goroutine 泄漏、锁争用都在 <a href="concurrency/">Go 并发原语与常见并发 bug</a>，请求悬挂与超时不生效在 <a href="context/">Go Context 的传播、取消与误用</a>。</p>
-<p>日志本身的分配与序列化开销见 <a href="slog/">结构化日志与 log/slog</a>；Web 框架层的开销与选型见 <a href="iris/">Iris 的定位与 Go Web 框架选型方法论</a>；基准测试与并发测试该写在哪一层见 <a href="../testing/">测试策略与可测性设计</a>。</p>
-<p>容器侧的 CFS 限流、QoS 分级与驱逐顺序在 <a href="../../devops/kubernetes/">Kubernetes 篇</a>，本篇只负责 Go 侧的那一半。</p>
-    <p>本篇是这条语言机制路径的第一站：先弄清运行时替你接过去了什么，再往下看你自己要负责的那部分——并发结构、取消传播与类型抽象。</p>
+    <p><strong>不适用边界</strong>：旋钮治不了复杂度选错（量级见 <a href="../algorithms/">算法与数据结构</a>）、并发设计错误（无界 fan-out、goroutine 泄漏、锁争用见 <a href="concurrency/">Go 并发原语与常见并发 bug</a>）、悬挂与超时不生效（<a href="context/">Go Context 的传播、取消与误用</a>）。</p>
+<p>日志分配序列化开销见 <a href="slog/">结构化日志与 log/slog</a>；Web 框架层开销与选型见 <a href="iris/">Iris 的定位与 Go Web 框架选型方法论</a>；基准与并发测试见 <a href="../testing/">测试策略与可测性设计</a>。</p>
+<p>容器侧的 CFS 限流、QoS 分级与驱逐顺序在 <a href="../../devops/kubernetes/">Kubernetes 篇</a>，Go 侧的修法在这里。</p>
+    <p>语言机制这条路径从运行时开始：先弄清运行时替你接过去了什么，再往下看你自己要负责的那部分——并发结构、取消传播与类型抽象。</p>
 
     <p class="cluster-nav">同主题路径：<a href="concurrency/">下一步：Go 并发原语与常见并发 bug →</a></p>
 

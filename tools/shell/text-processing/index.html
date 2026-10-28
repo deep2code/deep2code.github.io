@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="grep 选行与退出码：1 表示没匹配、2 才是出错，与 set -e 和管道组合时的静默退出事故及对策。">
+        <meta name="description" content="grep、sed、awk 三件套的任务分工与边界：退出码语义、跨平台 sed -i 地雷、多行处理限制，以及生产里一定出错的写法。">
     <meta name="keywords" content="grep,sed,awk,文本处理,xargs,find,sort,uniq,Nginx日志分析,并行">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/tools/shell/text-processing/">
     <!-- Open Graph -->
     <meta property="og:title" content="文本处理三件套的正确用法 - 资深码农">
-    <meta property="og:description" content="grep 选行与退出码：1 表示没匹配、2 才是出错，与 set -e 和管道组合时的静默退出事故及对策。">
+    <meta property="og:description" content="grep、sed、awk 三件套的任务分工与边界：退出码语义、跨平台 sed -i 地雷、多行处理限制，以及生产里一定出错的写法。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/tools/shell/text-processing/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="文本处理三件套的正确用法 - 资深码农">
-    <meta name="twitter:description" content="grep 选行与退出码：1 表示没匹配、2 才是出错，与 set -e 和管道组合时的静默退出事故及对策。">
+    <meta name="twitter:description" content="grep、sed、awk 三件套的任务分工与边界：退出码语义、跨平台 sed -i 地雷、多行处理限制，以及生产里一定出错的写法。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="开发工具与工程效率">
     <meta property="article:tag" content="文本处理,grep,sed,awk">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"文本处理三件套的正确用法","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"grep 选行与退出码：1 表示没匹配、2 才是出错，与 set -e 和管道组合时的静默退出事故及对策。","url":"https://www.yijunjun.asia/tools/shell/text-processing/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/shell/text-processing/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"文本处理三件套的正确用法","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"grep、sed、awk 三件套的任务分工与边界：退出码语义、跨平台 sed -i 地雷、多行处理限制，以及生产里一定出错的写法。","url":"https://www.yijunjun.asia/tools/shell/text-processing/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/shell/text-processing/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "开发工具与工程效率", "item": "https://www.yijunjun.asia/tools/"}, {"position": 3, "name": "文本处理", "item": "https://www.yijunjun.asia/tools/shell/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,12 +92,12 @@
                     <div class="article-content">
 
 <p>文本处理是命令行里最容易「会用」但最难「用对」的一块。</p>
-<p>能跑出结果不难，难的是让它在日志格式变了、字段里出现空格、机器从 Linux 换成 macOS、某天一条都没匹配上的时候，仍然给出正确结果而不是静默的错误答案。</p>
-<p>这篇不复述选项手册，只讲三件事：<strong>什么任务该交给哪个工具</strong>、<strong>每个工具的边界在哪里</strong>、<strong>哪些写法在生产里一定会出事</strong>。</p>
+<p>能跑出结果不难，难的是日志格式变了、字段里有空格、从 Linux 换到 macOS、某天一条没匹配上时，仍给出正确结果，而非静默的错误答案。</p>
+<p>不列选项手册，只说三件事：<strong>什么任务用哪个工具</strong>、<strong>各工具边界在哪</strong>、<strong>哪些写法在生产里一定出事</strong>。</p>
 <p>管道与重定向的机制、变量在子进程里丢失这类问题在 <code>../internals/</code>；引号与分词、参数展开在 <code>../core/</code>。</p>
 
 <h2>先定选择原则：越简单的工具越该优先</h2>
-<p>一条经验法则，按它选工具几乎不会错：<strong>能用 <code>grep</code> 就不用 <code>sed</code>，能用 <code>sed</code> 就不用 <code>awk</code>，超过十行的 <code>awk</code> 就该换 Python</strong>。理由不是性能洁癖，而是可读性与可维护性：越简单的工具，语义越窄，别人接手时误读的空间越小。</p>
+<p>按这条选工具几乎不会错：<strong>能用 <code>grep</code> 就不用 <code>sed</code>，能用 <code>sed</code> 就不用 <code>awk</code>，超过十行的 <code>awk</code> 就换 Python</strong>。理由不是性能，是可读可维护：越简单的工具语义越窄，别人接手时误读越少。</p>
 <div class="mermaid">
 flowchart TB
     S["要从文本里拿到某个结果"] --> Q0{"数据是 JSON YAML 或带引号的 CSV"}
@@ -155,7 +155,7 @@ flowchart TB
 
 <h2>grep：选行，以及那个会让脚本静默退出的返回码</h2>
 <p><code>grep</code> 值得记的是<strong>退出码语义</strong>：找到至少一行返回 0，一行都没找到返回 1，真出错（文件不存在、正则非法）返回 2。「没匹配」对 grep 是正常结果，对 <code>set -e</code> 是失败。</p>
-<p>这条规则制造了一类极难发现的事故：统计脚本平时都对，某天日志里恰好没有 <code>ERROR</code>，脚本在 <code>count=$(grep -c ERROR app.log)</code> 这一行悄无声息地退出，后面的汇总和告警全都没跑，而退出码看起来「就是失败了」，没人知道失败在哪。</p>
+<p>这条规则制造了一类极难发现的事故：统计脚本平时都对，某天日志恰好没有 <code>ERROR</code>，就在 <code>count=$(grep -c ERROR app.log)</code> 这行静悄悄退出，汇总告警全没跑，退出码看着像失败，没人知道败在哪。</p>
 <table>
 <thead><tr><th>选项</th><th>作用</th><th>什么时候必须用</th><th>注意</th></tr></thead>
 <tbody>
@@ -203,7 +203,7 @@ grep -rl 'DeprecatedAPI' src/            # 只列文件名，不打内容
 LC_ALL=C grep -F 'ERROR' huge.log</code></pre>
 
 <h2>sed：流编辑，以及跨平台脚本第一大地雷</h2>
-<p><code>sed</code> 的模型很简单：逐行读入<strong>模式空间</strong>，对它执行脚本里的命令，默认在行末自动打印，然后读下一行。另有一个<strong>保持空间</strong>可以暂存内容，这是它能做少量跨行处理的原因——但也仅止于「少量」。</p>
+<p><code>sed</code> 的模型很简单：逐行读入<strong>模式空间</strong>，执行脚本命令，默认行末自动打印，再读下一行。另有<strong>保持空间</strong>暂存内容，所以能做少量跨行处理——但仅限「少量」。</p>
 <div class="mermaid">
 sequenceDiagram
     participant IN as 输入流
@@ -219,7 +219,7 @@ sequenceDiagram
     PS->>OUT: 一轮结束自动打印 加了 -n 则只有 p 才输出
     Note over PS,OUT: d 删除模式空间并立刻开始下一轮 后面的命令不再执行
 </div>
-<p>真正的坑不在语法，在<strong>实现差异</strong>。<code>sed -i</code> 是我见过最高频的跨平台事故：同一行命令在 Linux 的 CI 上跑得好好的，同事在 macOS 上执行会把文件改成一团糟，或者莫名多出一堆备份文件。</p>
+<p>真正的坑不在语法，在<strong>实现差异</strong>。<code>sed -i</code> 是最高频的跨平台事故：同一行命令在 Linux 的 CI 上跑得好，同事在 macOS 上执行会把文件改乱或多出一堆备份。</p>
 <table>
 <thead><tr><th>能力</th><th>GNU sed（多数 Linux）</th><th>BSD sed（macOS）</th><th>兼容写法</th></tr></thead>
 <tbody>
@@ -328,7 +328,7 @@ awk -F'\t' -v OFS=, '{print $2, $1}' in.tsv &gt; out.csv</code></pre>
 <p>一行到三行的提取与聚合它无可替代，写成几十行的报表程序则是纯粹的负债。</p>
 
 <h2>绝不要用正则解析结构化数据</h2>
-<p>这是本篇最该记住的一条。JSON、YAML、带引号的 CSV 都是<strong>嵌套或有转义规则的格式</strong>，而正则是线性的，能力上根本不匹配。</p>
+<p>这一条最该记住。JSON、YAML、带引号的 CSV 都是<strong>嵌套或有转义规则的格式</strong>，而正则是线性的，能力上根本不匹配。</p>
 <p>危险之处在于它<strong>不会报错</strong>：管道照样返回 0，只是值错了，而错值往往会被当成真实数据送进下游。</p>
 <table>
 <thead><tr><th>格式</th><th>用正则会死在哪里</th><th>正确工具</th><th>最小可用命令</th></tr></thead>
@@ -359,7 +359,7 @@ yq -i '.spec.replicas = 5' deploy.yaml
 # curl -s /api/v1/status | grep -o '"ready":[a-z]*' | cut -d: -f2</code></pre>
 
 <h2>常见任务对照表</h2>
-<p>下面这些是我实际会敲的命令，每条都可以直接抄。日志的采集、结构化与集中查询属于另一个话题，本站 <code>devops/logging/</code> 有专篇；这里只讲「手上有一个文件，怎么最快拿到答案」。</p>
+<p>下面是我实际会敲、可直接抄的命令。日志采集、结构化与集中查询是另一话题，见 <code>devops/logging/</code>；这里只讲有一个文件怎么最快拿到答案。</p>
 <table>
 <thead><tr><th>任务</th><th>命令</th><th>要点</th></tr></thead>
 <tbody>

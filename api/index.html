@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="API 契约总览：REST 与 RPC 的世界观差异、GraphQL 真正解决的问题与五张账单、三种契约在缓存、鉴权、可观测性上的能力对比与选型。">
+    <meta name="description" content="REST、GraphQL、gRPC、SSE 与 WebSocket 的选型边界：四步判断顺序、上线前该实测什么、四种风格对照、RPC 伪装成 REST 的代价、GraphQL 查询放大、混用形态与不适用边界。">
     <meta name="keywords" content="API 设计与架构,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/">
     <meta property="og:title" content="API 风格选型：REST、GraphQL、gRPC 与流式推送的适用边界 - 资深码农">
-    <meta property="og:description" content="API 契约总览：REST 与 RPC 的世界观差异、GraphQL 真正解决的问题与五张账单、三种契约在缓存、鉴权、可观测性上的能力对比与选型。">
+    <meta property="og:description" content="REST、GraphQL、gRPC、SSE 与 WebSocket 的选型边界：四步判断顺序、上线前该实测什么、四种风格对照、RPC 伪装成 REST 的代价、GraphQL 查询放大、混用形态与不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="API 风格选型：REST、GraphQL、gRPC 与流式推送的适用边界 - 资深码农">
-    <meta name="twitter:description" content="API 契约总览：REST 与 RPC 的世界观差异、GraphQL 真正解决的问题与五张账单、三种契约在缓存、鉴权、可观测性上的能力对比与选型。">
+    <meta name="twitter:description" content="REST、GraphQL、gRPC、SSE 与 WebSocket 的选型边界：四步判断顺序、上线前该实测什么、四种风格对照、RPC 伪装成 REST 的代价、GraphQL 查询放大、混用形态与不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../atom.xml">
@@ -69,13 +69,13 @@
             <span class="meta-item">🏷️ API 设计</span>
         </div>
     </header>
-    <p>「REST 还是 GraphQL」这个问题被问了十年，但它本身问错了。这两者不在同一个决策层：REST 是资源接口风格，GraphQL 是查询聚合层，gRPC 是内部方法调用，SSE 与 WebSocket 是推送通道。一个真实系统几乎必然同时用到三种以上。</p>
-<p>这篇只讲选型：每种风格真正解决什么问题、代价是什么、在什么边界上失效，以及混用时怎么分层。REST 的落地细节、版本演进、错误与分页等横切规范，分别在本目录另外三篇里展开。</p>
+    <p>「REST 还是 GraphQL」被问了十年，两者不在同一个决策层。REST 是资源接口风格，GraphQL 是查询聚合层，gRPC 是内部方法调用，SSE 与 WebSocket 是推送通道。真实系统几乎必然用到三种以上。</p>
+<p>只讲选型：每种风格解决什么问题、代价是什么、在什么边界失效、混用时怎么分层。REST 落地细节、版本演进、错误与分页等横切规范见另外三篇。</p>
 <h2>给一个接口选风格：四步判断与上线前先验证什么</h2>
-    <p>这一层不解释机制，只给可执行的判断顺序。<strong>四步走完，绝大多数接口的风格就定了</strong>：一，<strong>调用方是谁</strong>——不可控的公网客户端与第三方、可协同发布的内部服务、还是浏览器要接服务端推送；</p>
+    <p><strong>四步走完，绝大多数接口的风格就定了</strong>：一，<strong>调用方是谁</strong>：不可控的公网客户端与第三方、可协同发布的内部服务、还是浏览器要接服务端推送；</p>
 <p>二，<strong>数据形状是否多变</strong>——字段组合是不是每上一个新页面就要动一次后端；三，<strong>是否需要流式</strong>——单向推、双向高频、还是一次性响应就够；</p>
 <p>四，<strong>跨语言与浏览器可达性</strong>——调用方里有没有浏览器、有没有你管不到的语言栈。每一步背后的原因见下一节起的原理部分。</p>
-    <p>比选型更容易被跳过的是<strong>验证</strong>：很多团队选 REST 的理由是「可以被 CDN 缓存」，但接口没返回 <code>ETag</code>；选 SSE 的理由是「简单」，但中间某一跳把流缓冲住。下面四组命令是对着选型理由做的实测，上线前各跑一次。</p>
+    <p><strong>验证</strong>常被跳过：选 REST 的理由是「可以被 CDN 缓存」，接口却没返回 <code>ETag</code>；选 SSE 的理由是「简单」，中间某一跳把流缓冲住。四组命令对着这些理由实测，上线前各跑一次。</p>
     <pre><code class="language-bash"># 1) 如果选 REST 的理由是「可缓存」：先确认条件请求真的生效
 curl -sI https://api.example.com/v1/articles/1001 | grep -iE 'etag|cache-control|age|vary'
 ETAG=$(curl -sI https://api.example.com/v1/articles/1001 | awk -F': ' '/[Ee]tag/{print $2}' | tr -d '\r')
@@ -208,7 +208,7 @@ grpcurl -plaintext -max-time 2 -d '{"order_id":"1001"}' 10.0.1.20:9090 order.v1.
 
     <h2>先分清定位，再谈优劣</h2>
     <p>搞清定位，能解决最常见的一类无效争论：把根本不在同一决策层的东西摆在一起比优劣。</p>
-    <p>把四种风格摊在同一张架构图上，会发现它们的位置完全不同。对外接入层面对的是<strong>不可控客户端</strong>——第三方系统、装了三年前版本的 App、别人写的爬虫，你无法要求它们跟着你升级；</p>
+    <p>四种风格在同一张架构图上位置完全不同。对外接入层面对<strong>不可控客户端</strong>：第三方系统、装了三年前版本的 App、爬虫，无法要求它们跟着升级；</p>
 <p>内部调用层面对的是<strong>可控客户端</strong>——同一个发布流水线里的服务，可以约定同时升级。</p>
 <p>这一条差异决定了几乎所有后续取舍：契约能不能强制、能不能用二进制、能不能随时改字段、版本要不要长期共存。</p>
     <div class="mermaid">
@@ -328,8 +328,8 @@ flowchart TB
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">「gRPC 比 REST 快很多」是被滥用的结论</div>
-        <p>压测里 gRPC 领先，主要来自三件事：HTTP/2 多路复用省掉队头阻塞、Protobuf 序列化更省 CPU、长连接省掉 TCP 与 TLS 握手。但典型业务接口里，端到端耗时的大头是数据库查询和下游调用，序列化通常只占几百微秒。</p>
-<p><strong>如果你的接口 P99 是 200ms，换 gRPC 大概率看不到肉眼可见的收益</strong>。真正值得为之切换的是：调用量极大的内部链路（省的是 CPU 和带宽成本）、需要跨语言强契约、需要双向流。</p>
+        <p>压测里 gRPC 领先来自三件事：HTTP/2 多路复用省掉队头阻塞、Protobuf 序列化更省 CPU、长连接省掉 TCP/TLS 握手。耗时大头在数据库和下游调用，序列化通常只占几百微秒。</p>
+<p><strong>接口 P99 是 200ms 时，换 gRPC 大概率看不到肉眼可见的收益</strong>。值得切换的是：调用量极大的内部链路（省 CPU 和带宽成本）、跨语言强契约、双向流。</p>
     </div>
 
     <h2>REST 与 RPC 的哲学差异，以及那些「披着 REST 外衣的 RPC」</h2>
@@ -378,14 +378,15 @@ flowchart TB
             </tr>
         </tbody>
     </table>
-    <p>现实里大量接口是 <code>POST /order/cancel</code> 这种「REST 外衣下的 RPC」。教条主义者说它错，但从工程角度看，真实代价只有一个：<strong>丢掉了 HTTP 的缓存与幂等语义</strong>。而取消订单本来就不可缓存、本就需要幂等键，损失接近于零。</p>
-<p>真正致命的是不一致：同一个系统里一半接口用名词资源、一半用动词端点，新人每次都要翻文档猜；或者 <code>GET /order/delete?id=1</code> 这种 GET 带副作用的写法，会被浏览器预取、被 CDN 缓存、被爬虫触发。</p>
+    <p>大量接口是 <code>POST /order/cancel</code> 这类「REST 外衣下的 RPC」，代价只有一个：<strong>丢掉了 HTTP 的缓存与幂等语义</strong>。</p>
+<p>取消订单本来就不可缓存、需要幂等键，所以这部分损失接近于零。</p>
+<p>致命的是不一致：同一系统里一半接口用名词资源、一半用动词端点，新人要翻文档猜；<code>GET /order/delete?id=1</code> 这种 GET 带副作用，会被浏览器预取、CDN 缓存、爬虫触发。</p>
 <p><strong>一致性的收益远大于符合教条的收益</strong>，但一致性本身不能豁免 HTTP 方法语义。</p>
 
     <h2>GraphQL 真正解决的问题，和它带来的五张账单</h2>
     <p>前端快了、数据库更累了，是 GraphQL 那五张账单的典型样子。</p>
     <p>把 GraphQL 说成「解决过度获取」是把它讲小了。字段多传几个，gzip 之后成本极低，没人会为这个重构架构。它真正解决的是<strong>前端字段需求多变导致的接口膨胀</strong>。</p>
-<p>首页要用户名加头像，个人中心要全量资料，订单列表页要用户名加等级加优惠券，于是后端出现 <code>/users/1/profile</code>、<code>/users/1/summary</code>、<code>/users/1/brief</code> 三个接口，改一次字段要动三处。GraphQL 把「字段组合」的决策权交给前端，后端只维护一张图。</p>
+<p>首页要用户名加头像，个人中心要全量资料，列表页要用户名加等级，出现 <code>/users/1/profile</code>、<code>/users/1/summary</code>、<code>/users/1/brief</code> 三个接口，改一次字段动三处。GraphQL 把字段决策权交给前端，后端只维护一张图。</p>
     <p>代价不是「学习成本高」这种笼统说法，而是五件必须自己补的事：</p>
     <table>
         <thead>
@@ -459,7 +460,7 @@ sequenceDiagram
     Note over GQL,DB: 这里就是 N+1 风险点 10 条订单触发 11 次查询<br/>上 DataLoader 后合并为 1 次 IN 查询
     GQL-->>FE: 一次响应 字段精确匹配
     </div>
-    <p>上图右半部分值得盯住：<strong>GraphQL 把前端的往返次数问题，转化成了后端的查询放大问题</strong>。前端体验变好了，但压力从网络转移到了数据库，如果不上 DataLoader，整体资源消耗可能比 REST 更差。</p>
+    <p><strong>GraphQL 把前端的往返次数问题，转化成了后端的查询放大问题</strong>。压力从网络转到数据库，不上 DataLoader，整体资源消耗可能比 REST 更差。</p>
     <pre><code class="language-javascript">// Apollo Server 上线前必须加的三道闸；缺任何一道都等于把 DoS 面暴露出去
 import { ApolloServer } from '@apollo/server';
 import { createComplexityRule, simpleEstimator } from 'graphql-query-complexity';
@@ -510,7 +511,7 @@ def build_context(request, user):
 
     <h2>gRPC 的适用边界与四种流式模式</h2>
     <p>搞清这些边界，能解决三个很具体的现象：扩容后新实例没有流量、浏览器连不上、下游一抖动上游线程全堆积。</p>
-    <p>gRPC 在内部服务间通信上几乎没有对手，理由按重要性排序：<strong>proto 文件是唯一事实来源且能编译出双端代码</strong>（改错字段名编译就红，不用等联调）、跨语言一致（Go 服务和 Java 服务共用一份契约）。</p>
+    <p>服务间通信上 gRPC 几乎没有对手，<strong>proto 文件是唯一事实来源且能编译出双端代码</strong>，字段名写错编译就红，不用等联调。跨语言一致，Go、Java 共用一份契约。</p>
 <p>其次是 HTTP/2 多路复用加长连接、Protobuf 体积小、原生支持四种流式模式。它的边界也很清楚。</p>
     <table>
         <thead>
@@ -548,7 +549,7 @@ def build_context(request, user):
             </tr>
         </tbody>
     </table>
-    <p>另外三个常被忽略的运维成本：<strong>负载均衡</strong>——gRPC 用长连接，四层负载均衡会把一个客户端的所有请求钉在同一个后端上，必须做客户端侧负载均衡或经支持 HTTP/2 的七层代理；</p>
+    <p><strong>负载均衡</strong>：gRPC 用长连接，四层负载均衡会把一个客户端的所有请求钉在同一后端上，要做客户端侧负载均衡或经支持 HTTP/2 的七层代理；</p>
 <p><strong>中间件生态</strong>——HTTP 世界里现成的 WAF、限流、鉴权插件大多不认 gRPC 帧；<strong>可观测性</strong>——抓包看不到明文，排查要靠日志和 grpcurl。</p>
     <pre><code class="language-bash"># gRPC 的调试体验只要开了 reflection，和 curl 的差距就不大了
 # 服务端需注册反射服务（Go 里是 reflection.Register(s)，生产环境建议只在内网开）
@@ -639,7 +640,7 @@ flowchart TB
     Q6 -->|"只需服务端推"| SSE["SSE<br/>自动重连 复用 HTTP 中间件"]
     Q6 -->|"双向高频"| WS["WebSocket<br/>自己实现心跳 重连 鉴权续期"]
     </div>
-    <p>决策树的输出往往不是单一答案。一个成熟系统的典型形态是<strong>外层 REST 或 GraphQL、内层 gRPC、旁路 SSE</strong>：外层要的是可缓存、可调试、对不可控客户端友好；内层要的是强契约、低开销、可流式。</p>
+    <p>决策树常给不出单一答案。典型形态是<strong>外层 REST 或 GraphQL、内层 gRPC、旁路 SSE</strong>：外层要可缓存、可调试、对不可控客户端友好；内层要强契约、低开销、可流式。</p>
     <div class="mermaid">
 flowchart TB
     subgraph OUT["公网边界"]
@@ -679,13 +680,13 @@ flowchart TB
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
         <div class="callout-title">这四篇的分工</div>
-        <p>本篇只管风格选型。选定 REST 之后的落地细节（资源建模、方法语义、状态码、ETag 条件请求、异步与批量模式）见「RESTful 落地」篇。</p>
-<p>接口改动怎么不破坏客户端、版本怎么承载与下线见「版本与兼容性演进」篇；统一响应结构、错误格式、分页、幂等、限流这些跨风格横切规范见「最佳实践」篇。</p>
+        <p>风格选型之外，选定 REST 之后的落地细节（资源建模、方法语义、状态码、ETag 条件请求、异步与批量模式）见「RESTful 落地」篇。</p>
+<p>接口改动的兼容性与版本下线见「版本与兼容性演进」篇；响应结构、错误格式、分页、幂等、限流等横切规范见「最佳实践」篇。</p>
 <p>幂等的四种落地方式、CAP 与 TCC/Saga 详见站内分布式一致性篇；网关限流与超时参数详见站内 Nginx 篇；认证授权、越权、注入与 HTTPS 部署详见站内 Web 安全系列。</p>
     </div>
 
     <h2>典型系统的组合方式、代价与不适用边界</h2>
-    <p>上一节给的是判断路径，这一节给已经成型的组合。<strong>看表时先找自己那一行，然后把「代价」一列当成付款单来看</strong>——选型翻车大多不是风格选错了，而是没准备为它的代价付钱。</p>
+    <p><strong>看表时先找到自己那一行，把「代价」一列当成付款单</strong>。选型翻车多不是风格选错，而是没准备为代价付钱。</p>
     <table>
         <thead>
             <tr>
@@ -746,9 +747,9 @@ flowchart TB
             </tr>
         </tbody>
     </table>
-    <p><strong>不适用边界要说在明处。</strong>四种风格都解决不了的问题有三类，硬套会得到很难拆的架构：<strong>跨服务的最终一致与削峰</strong>不是接口风格问题，该用消息队列与本地消息表（见 <a href="../architecture/distributed/">分布式一致性</a>）；</p>
-<p><strong>长耗时任务</strong>不要用同步接口硬等，该做成「提交返回任务 ID + 查询进度或 SSE 推送」；<strong>报表与批量导出</strong>不要走在线接口分页硬拉，该走异步导出加对象存储下载。</p>
-<p>另外，选型只决定风格，<strong>响应结构、错误契约、分页、幂等、限流这些横切规范与风格无关</strong>，四种风格都要各自落一遍，见 <a href="design/best-practices/">API 横切规范</a>、<a href="design/restful/">RESTful 落地细节</a> 与 <a href="design/frontend-contract/">前后端协作的契约与边界</a>；</p>
+    <p><strong>不适用边界要说在明处。</strong>三类问题四种风格都解决不了，硬套难拆：<strong>跨服务的最终一致与削峰</strong>该用消息队列与本地消息表（见 <a href="../architecture/distributed/">分布式一致性</a>）；</p>
+<p><strong>长耗时任务</strong>别同步硬等，做成「提交返回任务 ID + 查询进度或 SSE 推送」；<strong>报表与批量导出</strong>别在线分页，改异步导出加对象存储下载。</p>
+<p><strong>响应结构、错误契约、分页、幂等、限流这些横切规范与风格无关</strong>，四种风格各落一遍，见 <a href="design/best-practices/">API 横切规范</a>、<a href="design/restful/">RESTful 落地细节</a>、<a href="design/frontend-contract/">前后端协作的契约与边界</a>；</p>
 <p>认证授权与注入、越权等安全面见 <a href="security/">Web 安全总览</a> 与 <a href="auth/">认证与授权的协议全景</a>。</p>
 
     <h2>最容易踩的坑</h2>

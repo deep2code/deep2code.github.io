@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="日志平台架构与容量规划：Filebeat 与 Logstash 的分工、按时间分索引、mapping 与 ILM、成本抓手、日志注入与容量估算。">
+        <meta name="description" content="讲 Kafka 缓冲层值不值、Filebeat 与 Logstash 分工、按时间滚动的索引设计与分片算法、ILM 参数、容量乘法链和四类降本抓手。">
     <meta name="keywords" content="ELK 日志栈,监控,可观测性,Prometheus,Grafana,监控与可观测性">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/observability/logging/elk/">
     <!-- Open Graph -->
     <meta property="og:title" content="日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM - 资深码农">
-    <meta property="og:description" content="日志平台架构与容量规划：Filebeat 与 Logstash 的分工、按时间分索引、mapping 与 ILM、成本抓手、日志注入与容量估算。">
+    <meta property="og:description" content="讲 Kafka 缓冲层值不值、Filebeat 与 Logstash 分工、按时间滚动的索引设计与分片算法、ILM 参数、容量乘法链和四类降本抓手。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/observability/logging/elk/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM">
-    <meta name="twitter:description" content="日志平台架构与容量规划：Filebeat 与 Logstash 的分工、按时间分索引、mapping 与 ILM、成本抓手、日志注入与容量估算。">
+    <meta name="twitter:description" content="讲 Kafka 缓冲层值不值、Filebeat 与 Logstash 分工、按时间滚动的索引设计与分片算法、ILM 参数、容量乘法链和四类降本抓手。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="可观测性与性能">
     <meta property="article:tag" content="监控,可观测性,Prometheus,Grafana">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"日志平台架构与容量规划：Filebeat 与 Logstash 的分工、按时间分索引、mapping 与 ILM、成本抓手、日志注入与容量估算。","url":"https://www.yijunjun.asia/observability/logging/elk/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/observability/logging/elk/"},"articleSection":"运维与云原生"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"日志平台架构取舍与容量规划：Kafka 缓冲、索引分片与 ILM","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"讲 Kafka 缓冲层值不值、Filebeat 与 Logstash 分工、按时间滚动的索引设计与分片算法、ILM 参数、容量乘法链和四类降本抓手。","url":"https://www.yijunjun.asia/observability/logging/elk/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/observability/logging/elk/"},"articleSection":"运维与云原生"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "可观测性与性能", "item": "https://www.yijunjun.asia/observability/"}, {"position": 3, "name": "ELK 日志栈", "item": "https://www.yijunjun.asia/observability/logging/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,8 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>日志平台上线容易，活得久很难。装完 Filebeat 加 Elasticsearch 加 Kibana 只需要一个下午，但三个月后你会遇到：磁盘写满后索引被自动置成只读、字段数量爆到上限导致写入直接报错。</p>
-<p>一次大促把写入队列打满丢了一整段日志、某个字段想做聚合却发现类型选错了改不了。<strong>这些问题的根源全部在架构取舍和索引设计上，而不是在安装步骤上。</strong>这篇讲这两件事。</p>
+<p>日志平台上线容易，活得久很难。Filebeat、Elasticsearch、Kibana 装完只要一个下午，三个月后会遇到磁盘写满索引自动置只读、字段数爆上限，写入报错。</p>
+<p>一次大促打满写入队列、丢一整段日志，某字段想聚合才发现类型选错改不了。<strong>根源全部在架构取舍和索引设计上，不在安装步骤。</strong></p>
 
 <h2>三种架构形态与它们的适用规模</h2>
 <p>ELK 这个词现在指代的其实是三种不同复杂度的架构。选错的代价很直接：小规模上 Kafka 是浪费，大规模不上 Kafka 是等着丢数据。</p>
@@ -187,7 +187,7 @@ flowchart TB
 </div>
 
 <h2>采集与处理的分工：谁该干什么</h2>
-<p>一个常见误解是「Filebeat 只是简化版 Logstash」。它们的定位完全不同：<strong>Filebeat 负责可靠采集与背压，Logstash 负责重解析与富化</strong>。Filebeat 用 Go 写、内存占用几十 MB，可以在每台机器上跑；Logstash 跑在 JVM 上，堆内存通常要 1GB 以上，只适合集中部署几个实例。</p>
+<p>Filebeat 不是简化版 Logstash，定位完全不同：<strong>Filebeat 负责可靠采集与背压，Logstash 负责重解析与富化</strong>。Filebeat 用 Go 写、内存几十 MB，每台机器可跑；Logstash 在 JVM 上，堆内存通常要 1GB 以上，只适合集中部署几个实例。</p>
 <table>
     <thead>
         <tr>
@@ -281,7 +281,7 @@ processors:
 
 <h2>索引设计：这套系统真正的核心</h2>
 <p>日志平台的成败几乎全部由索引设计决定。要点有四个：按时间滚动、用模板统一、用 ILM 自动分层、把分片数算对。</p>
-<p><strong>按时间分索引</strong>的理由不是「好看」，而是：删除整个索引是常数时间操作，而按条件删除文档要走一遍查询加标记删除，代价高且不回收空间；同时时间范围查询可以直接跳过整个索引。</p>
+<p><strong>按时间分索引</strong>不为好看：删整个索引是常数时间，按条件删文档要查询加标记删除，代价高且不回收空间；时间范围查询还能跳过整个索引。</p>
 <p>日均 100GB 以下按天分，超过就按小时分或者用 rollover 按大小滚动。</p>
 <p><strong>分片数怎么定</strong>：目标是单个主分片落在 20 到 50GB，日志这种写入后几乎不更新、以时间过滤为主的数据可以取上限。</p>
 <p>计算方式是「单索引预估主数据量 ÷ 目标分片大小」向上取整，并尽量取数据节点数的整数倍以便均衡分布。</p>
@@ -472,7 +472,7 @@ curl -X PUT "localhost:9200/_index_template/logs-template" -H 'Content-Type: app
     }
   }
 }'</code></pre>
-<p>两个参数值得单独解释。<code>refresh_interval</code> 默认是 1 秒，意思是写入后最多 1 秒可被搜索到，代价是频繁生成新段；日志场景把它放宽到 30 秒，写入吞吐通常能提升三成以上，而「日志晚 30 秒能搜到」完全可以接受。</p>
+<p><code>refresh_interval</code> 默认 1 秒，即写入后最多 1 秒能被搜到，代价是频繁生成新段；日志场景放宽到 30 秒，写入吞吐通常能提升三成以上，日志晚 30 秒能搜到，可以接受。</p>
 <p><code>index.codec</code> 设成 <code>best_compression</code> 会换用压缩率更高的算法，存储能省两到三成，代价是取原文时 CPU 略高——日志是典型的写多读少，这笔交易很划算。</p>
 
 <h2>mapping 的坑：字段爆炸与 text/keyword</h2>
@@ -661,7 +661,7 @@ curl -X PUT "localhost:9200/logs-*/_settings" -H 'Content-Type: application/json
         </tr>
     </tbody>
 </table>
-<p>成本控制的四个抓手，按性价比排：<strong>按用途分索引并设不同保留期</strong>（调试日志留 3 天、业务日志 15 天、审计日志 180 天，比统一 30 天省一半以上）；<strong>冷热分层</strong>（只有 hot 层需要 SSD）；<strong>关掉不需要检索的大字段的索引</strong>；</p>
+<p>降成本的抓手按性价比排：<strong>按用途分索引设保留期</strong>（调试 3 天、业务 15 天、审计 180 天，比统一 30 天省一半以上）；<strong>冷热分层</strong>（只有 hot 层要 SSD）；<strong>关掉不检索的大字段索引</strong>；</p>
 <p><strong>采样低价值日志</strong>（比如健康检查的访问日志按 1% 采样，或者干脆在采集层丢掉）。</p>
 
 <h2>结构化日志是前提，日志规范是底线</h2>
@@ -690,7 +690,7 @@ curl -X PUT "localhost:9200/logs-*/_settings" -H 'Content-Type: application/json
     { "set": { "field": "_index", "value": "logs-failed" } }
   ]
 }'</code></pre>
-<p>第二条 <code>gsub</code> 不只是为了好看。<strong>日志注入</strong>是真实存在的风险：用户输入里带换行符时，一条日志会被采集端切成两条，攻击者可以伪造出一行「看起来像系统日志」的内容。</p>
+<p>第二条 <code>gsub</code> 不只为好看，防的是<strong>日志注入</strong>：用户输入带换行时，一条日志被采集端切成两条，攻击者能伪造一行像系统日志的假记录。</p>
 <p>比如伪造一条登录成功记录来污染审计。</p>
 <p>防御要做两层——应用侧对写进日志的用户输入做转义，采集或处理侧再把残留的换行替换掉。</p>
 <div class="mermaid">

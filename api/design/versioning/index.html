@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="API 版本与兼容性演进：版本升级与兼容性演进的判定标准、URL 与查询参数与自定义头与 Accept 四种版本承载方式、整体版本加兼容性演进、Deprecation 与 Sunset 下线流程、内部服务用 Protobuf 编号规则、数据库扩展迁移收缩三阶段。">
+    <meta name="description" content="API 版本与兼容演进：兼容判定标准、URL 路径版本取舍、版本粒度、内部服务靠 Protobuf 编号规则、数据库扩展迁移收缩与 CI 卡口。">
     <meta name="keywords" content="API 设计与架构,版本管理与错误处理,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/design/versioning/">
     <meta property="og:title" content="API 版本与兼容性演进：兼容判定、版本承载、废弃与下线 - API 设计与架构 - 资深码农">
-    <meta property="og:description" content="API 版本与兼容性演进：版本升级与兼容性演进的判定标准、URL 与查询参数与自定义头与 Accept 四种版本承载方式、整体版本加兼容性演进、Deprecation 与 Sunset 下线流程、内部服务用 Protobuf 编号规则、数据库扩展迁移收缩三阶段。">
+    <meta property="og:description" content="API 版本与兼容演进：兼容判定标准、URL 路径版本取舍、版本粒度、内部服务靠 Protobuf 编号规则、数据库扩展迁移收缩与 CI 卡口。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/design/versioning/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="API 版本与兼容性演进：兼容判定、版本承载、废弃与下线">
-    <meta name="twitter:description" content="API 版本与兼容性演进：版本升级与兼容性演进的判定标准、URL 与查询参数与自定义头与 Accept 四种版本承载方式、整体版本加兼容性演进、Deprecation 与 Sunset 下线流程、内部服务用 Protobuf 编号规则、数据库扩展迁移收缩三阶段。">
+    <meta name="twitter:description" content="API 版本与兼容演进：兼容判定标准、URL 路径版本取舍、版本粒度、内部服务靠 Protobuf 编号规则、数据库扩展迁移收缩与 CI 卡口。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,12 +71,12 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇只回答一个问题：<strong>怎么在不破坏现有客户端的前提下改接口</strong>。</p>
-<p>「不破坏客户端」和「开新版本」是两件不同的事——大部分团队一遇改动就想开 v2，结果三年后同时维护 v1、v2、v3，每个需求改三遍，而真正的原因只是当初那个改动本可做成兼容的。</p>
+<p>一个问题：<strong>怎么在不破坏现有客户端的前提下改接口</strong>。</p>
+<p>「不破坏客户端」和「开新版本」是两回事。一遇改动就想开 v2，三年后要同时维护 v1、v2、v3，每个需求改三遍，而当初那个改动本可做成兼容。</p>
 <p>REST 的落地细节见本目录 RESTful 篇，错误结构与分页约定见最佳实践篇。</p>
 
 <h2>先分清两件事：版本升级与兼容性演进</h2>
-<p>判断标准只有一句话：<strong>一个完全不改代码的老客户端，在你的改动上线后还能不能正常工作</strong>。能，就是兼容性演进，在当前版本直接改；不能，才是版本升级。</p>
+<p>判断标准：<strong>一个不改代码的老客户端，改动上线后还能不能正常工作</strong>。能就是兼容演进，当前版本直接改；不能就要升版本。</p>
 <div class="mermaid">
 flowchart TB
     C{"这次改动老客户端还能正常跑吗"}
@@ -88,7 +88,7 @@ flowchart TB
     CHECK -->|"有数据支撑 确认零调用"| DROP["走下线流程直接改<br/>仍要发通知并保留回滚开关"]
     CHECK -->|"没有数据 只是感觉没人用"| NEVER["不许改<br/>按不兼容处理 先补监控"]
 </div>
-<p>最后那条分支最值得强调：<strong>「这个字段应该没人用」是线上事故的标准开场白</strong>。没有调用方维度的监控数据，任何删除都是赌博，赌输的代价是第三方系统在无告知下集体报错。</p>
+<p><strong>「这个字段应该没人用」是线上事故的标准开场白</strong>。缺调用方监控，删除就是赌博，赌输的代价是第三方系统在无人告知下集体报错。</p>
 
 <h2>兼容与不兼容变更的判定表</h2>
 <table>
@@ -289,7 +289,7 @@ flowchart TB
         </tr>
     </tbody>
 </table>
-<p>实践中最省事的组合是<strong>整体版本加兼容性演进</strong>：URL 上只有一个 v1，绝大多数改动做成兼容，只有真正的整体语义重构才开 v2，且开 v2 的同一天就要写好 v1 的日落时间。</p>
+<p>省事的组合是<strong>整体版本加兼容性演进</strong>：URL 上只留一个 v1，多数改动走兼容，只有整体语义重构才开 v2，开 v2 同一天定好 v1 日落时间。</p>
 
 <h2>版本生命周期与两个必须发的响应头</h2>
 <div class="mermaid">
@@ -410,7 +410,7 @@ sequenceDiagram
 </table>
 
 <h2>内部服务：靠 Protobuf 的编号规则而不是版本号</h2>
-<p>内部服务的调用方可控，但「可控」不等于「可以同时发布」。灰度期间必然出现新服务端对老客户端、老服务端对新客户端两种组合，契约必须<strong>双向兼容</strong>。Protobuf 的兼容规则明确，照做就不会出问题。</p>
+<p>内部服务调用方可控，不等于可同时发布。灰度期出现新服务端对老客户端、老服务端对新客户端两种组合，契约必须<strong>双向兼容</strong>。Protobuf 兼容规则明确，照做。</p>
 <pre><code class="language-go">syntax = "proto3";
 package order.v1; // 只在整体语义重构时才升到 order.v2，日常演进不动它
 
@@ -451,7 +451,7 @@ enum Status {
 </code></pre>
 
 <h2>数据库联动演进与 CI 卡口</h2>
-<p>API 的不兼容变更往往源自数据库改动。直接 <code>ALTER TABLE ... RENAME COLUMN</code> 意味着代码和表结构必须同时切换，而滚动发布期间新旧代码并存，必有一方报错。正确做法是扩展、迁移、收缩三阶段。</p>
+<p>不兼容变更常源自数据库。直接 <code>ALTER TABLE ... RENAME COLUMN</code> 要求代码和表结构同时切换，滚动发布期新旧代码并存必有一方报错。按扩展、迁移、收缩三阶段做。</p>
 <div class="mermaid">
 flowchart TB
     subgraph EXPAND["阶段一 扩展 只做加法"]

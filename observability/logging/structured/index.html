@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="结构化日志：grok 正则静默失配的连锁故障、解析成本搬回应用侧、字段规范与脱敏出口。">
+    <meta name="description" content="讲应用侧落地：字段表与命名约定、msg 用稳定模板、上下文透传与 MDC 风险、encoder 层脱敏、多行堆栈与输出目标。">
     <meta name="keywords" content="日志与监控,结构化日志,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/observability/logging/structured/">
     <meta property="og:title" content="结构化日志落地：字段规范、各语言库与上下文透传 - 日志与监控 - 资深码农">
-    <meta property="og:description" content="结构化日志：grok 正则静默失配的连锁故障、解析成本搬回应用侧、字段规范与脱敏出口。">
+    <meta property="og:description" content="讲应用侧落地：字段表与命名约定、msg 用稳定模板、上下文透传与 MDC 风险、encoder 层脱敏、多行堆栈与输出目标。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/observability/logging/structured/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="结构化日志落地：字段规范、各语言库与上下文透传 - 日志与监控">
-    <meta name="twitter:description" content="结构化日志：grok 正则静默失配的连锁故障、解析成本搬回应用侧、字段规范与脱敏出口。">
+    <meta name="twitter:description" content="讲应用侧落地：字段表与命名约定、msg 用稳定模板、上下文透传与 MDC 风险、encoder 层脱敏、多行堆栈与输出目标。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,14 +71,14 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p><strong>本篇只讲结构化日志在应用侧怎么落地</strong>：字段怎么定、各语言库怎么配、上下文怎么自动带上、脱敏在哪一层做。</p>
-<p>平台侧的索引 mapping、text 与 keyword 的取舍、grok 解析的性能成本论证、ILM 与容量规划都在站内 <a href="../elk/">日志平台架构取舍与容量规划</a> 里；日志该记什么、分级判据、性能开销见 <a href="../">应用侧日志工程</a>。</p>
+<p><strong>结构化日志的应用侧落地</strong>：字段定义、各语言库配置、上下文自动带上、脱敏在哪一层做。</p>
+<p>索引 mapping、text 与 keyword 的取舍、grok 解析成本、ILM 与容量规划见 <a href="../elk/">日志平台架构取舍与容量规划</a>；日志记什么、分级判据、性能开销见 <a href="../">应用侧日志工程</a>。</p>
 
 <h2>为什么必须结构化：把解析成本从平台侧搬回应用侧</h2>
 <p>「结构化日志便于搜索」只是结果，真正的理由是<strong>成本归属</strong>。</p>
-<p>非结构化日志把解析工作推给了管道：Logstash 或 Ingest Pipeline 要对每一条日志跑 grok 正则，而 grok 本质是多个正则的顺序尝试，一条复杂 pattern 单条处理成本在几十到上百微秒，乘上每天几十亿条就是一整批常驻的解析节点。</p>
+<p>非结构化日志把解析推给管道。Logstash 或 Ingest Pipeline 要对每条日志跑 grok 正则。grok 是多个正则顺序尝试，复杂 pattern 单条几十到上百微秒。乘上每天几十亿条，就是一整批常驻解析节点。</p>
 <p><strong>脆</strong>：开发改一句日志文案，解析规则静默失配，字段变成 <code>_grokparsefailure</code>。依赖这些字段的看板和告警一起哑掉，几天后才被发现。</p>
-<p>结构化日志把这一步前移到应用进程内：序列化一次 JSON，平台侧只要 <code>json</code> 解码。应用侧多花的 CPU 是微秒级且分摊在成百上千个实例上，平台侧省掉的是集中式的解析集群和它的运维。</p>
+<p>结构化日志把解析前移到进程内：序列化一次 JSON，平台侧只要 <code>json</code> 解码。应用侧多出的 CPU 是微秒级、摊在成百上千实例上，集中解析集群和运维省掉了。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -117,11 +117,11 @@ flowchart TB
 <div class="callout callout-info">
 <div class="callout-icon">💡</div>
 <div class="callout-title">本地开发不要用 JSON 输出</div>
-<p>JSON 日志对人不友好，逼着开发在本地也读 JSON 只会让人开始用 <code>System.out.println</code>。正确做法是按环境切 encoder：本地用彩色文本单行输出，测试与生产用 JSON。字段定义不变，只换序列化方式，这样规范不打折、体验也不受损。</p>
+<p>JSON 日志对人不友好，逼开发本地也读 JSON 只会让人改用 <code>System.out.println</code>。做法是按环境切 encoder：本地彩色文本单行，测试与生产用 JSON，字段定义不变、只换序列化方式。</p>
 </div>
 
 <h2>字段规范：一份可以直接抄的字段表</h2>
-<p>字段规范的价值在于<strong>跨服务可比</strong>。只要全公司的服务名字段都叫 <code>service</code>、trace 字段都叫 <code>trace_id</code>，一条查询就能跨所有索引用；一旦一半服务叫 <code>traceId</code>、一半叫 <code>trace_id</code>、还有一半叫 <code>tid</code>，就得为每个服务单独建看板。</p>
+<p>字段规范的价值是<strong>跨服务可比</strong>。服务名都叫 <code>service</code>、trace 都叫 <code>trace_id</code>，一条查询能跨所有索引用；一半叫 <code>traceId</code>、一半叫 <code>trace_id</code>、一半叫 <code>tid</code>，就得每个服务单独建看板。</p>
 <p>这件事必须在第一天定死，它的迁移成本随服务数量线性增长。</p>
 
 <table>
@@ -144,7 +144,7 @@ flowchart TB
 </tbody>
 </table>
 
-<p>业务字段的命名约定：<strong>大小写风格全公司选一种并写进 lint</strong>（<code>snake_case</code> 在日志生态里更通用，ECS 与多数 Handler 默认输出也是这个风格）；<strong>同名必须同义</strong>，<code>user_id</code> 在任何服务里都只能是内部用户主键，不能在某个服务里塞成第三方 openid；</p>
+<p>命名约定：<strong>大小写风格全公司选一种并写进 lint</strong>（<code>snake_case</code> 在日志生态更通用，ECS 与多数 Handler 默认如此）；<strong>同名必须同义</strong>，<code>user_id</code> 只能是内部用户主键，不能塞成第三方 openid；</p>
 <p><strong>高基数字段不要进索引</strong>，订单号、请求体摘要这类字段在 ES 里可以存但应设为不索引或只放 <code>keyword</code> 且 <code>doc_values: false</code>，具体取舍见 <a href="../elk/">ELK 篇</a>。</p>
 
 <pre><code class="language-json">{
@@ -170,7 +170,7 @@ flowchart TB
 }</code></pre>
 
 <h2>msg 必须是稳定模板，变量全部进字段</h2>
-<p>这是结构化日志里收益最高、也最常被忽略的一条。<code>msg="order created" order_id=123</code> 和 <code>msg="order 123 created"</code> 在人眼里差别不大，在机器眼里差别是天壤：后者的 msg 基数等于订单数量，任何按 msg 的聚合都退化成「每条一个桶」。</p>
+<p>结构化日志里收益最高、也最常被忽略的一条：<code>msg="order created" order_id=123</code> 和 <code>msg="order 123 created"</code> 人看着差不多，机器看着差很多。后者 msg 基数等于订单数量，按 msg 聚合退化成「每条一个桶」。</p>
 
 <table>
 <thead>
@@ -287,7 +287,7 @@ func createOrder(ctx context.Context, orderID string, amount int64) {
 <p>让每条日志自动带上 <code>trace_id</code> 和 <code>user_id</code>，听起来是配置问题，实际是运行模型问题。Go 靠显式传 <code>context</code>，代价是函数签名污染但绝不会串；Java 靠 <code>MDC</code>，写起来最舒服但埋着最大的雷；</p>
 <p>Python 的 <code>contextvars</code> 和 Node 的 <code>AsyncLocalStorage</code> 是语言层为异步场景提供的「隐式 context」，行为正确但都有边界。</p>
 <p><strong>Java 的 MDC 必须单独讲</strong>。MDC 底层是 <code>ThreadLocal</code>，而线程池的线程是复用的，于是有两个方向的故障：主线程提交异步任务，任务在池线程里执行，<strong>拿不到 MDC，日志里 trace_id 为空</strong>；</p>
-<p>请求 A 结束时没清理 MDC，线程被请求 B 复用，<strong>B 的日志带上了 A 的 trace_id</strong>——这一类问题比空值危险得多，因为它会把两个请求的日志错误地串成一条链路，排障时得出完全错误的结论。</p>
+<p>请求 A 结束没清理 MDC，线程被请求 B 复用，<strong>B 的日志带上 A 的 trace_id</strong>。这比空值危险得多：它把两个请求错误串成一条链路，排障结论直接错。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -450,8 +450,9 @@ flowchart TB
 </div>
 
 <h2>脱敏放在 encoder 层，不靠调用方自觉</h2>
-<p>把脱敏写成一个工具方法然后要求大家调用，是注定失败的方案：新人不知道、老代码没人改、第三方库打印的日志你根本控制不了。唯一可靠的位置是<strong>序列化的统一出口</strong>——Go 的 <code>ReplaceAttr</code>、pino 的 <code>redact</code>、structlog 的 processor、Logback 的自定义 <code>JsonProvider</code> 或 <code>MessageConverter</code>。</p>
-<p>判定用两层：<strong>字段名白名单/黑名单</strong>（<code>password</code>、<code>token</code>、<code>id_card</code> 命中即整体替换）加<strong>值正则</strong>（手机号、卡号、身份证格式命中即掩码）。两层都要，因为字段名靠不住（有人会叫 <code>pwd2</code>），正则也靠不住（纯数字订单号可能误判成手机号）。</p>
+<p>脱敏写成工具方法要求大家调用，注定失败。新人不知道、老代码没人改、第三方库日志控制不了。唯一可靠位置是<strong>序列化的统一出口</strong>——Go 的 <code>ReplaceAttr</code>、pino 的 <code>redact</code>、structlog 的 processor、Logback 的自定义 <code>JsonProvider</code> 或 <code>MessageConverter</code>。</p>
+<p>分两层：<strong>字段名白名单/黑名单</strong>（<code>password</code>、<code>token</code>、<code>id_card</code> 命中即整体替换）与<strong>值正则</strong>（手机号、卡号、身份证格式命中即掩码）。</p>
+<p>字段名靠不住，如 <code>pwd2</code>；正则也靠不住，数字订单号会误判。</p>
 
 <table>
 <thead>
@@ -477,7 +478,7 @@ flowchart TB
 
 <h2>多行堆栈与输出目标</h2>
 <p>纯文本日志里异常堆栈是几十行，采集器必须用 <code>multiline</code> 规则把后续行拼回上一条日志（Filebeat 的 <code>multiline.pattern</code>、Fluent Bit 的 <code>multiline.parser</code>）。</p>
-<p>这个规则的失效方式很讨厌：换一个框架、换一种语言、堆栈里出现 <code>Caused by</code> 之外的格式，正则就配不上，一个堆栈被拆成几十条孤立日志，而且通常在故障时才暴露。</p>
+<p>这个规则失效很讨厌：换框架、换语言、堆栈里出现 <code>Caused by</code> 之外的格式，正则就配不上。一个堆栈被拆成几十条孤立日志，故障时才暴露。</p>
 <p>结构化之后这个问题直接消失——堆栈作为 <code>error.stack</code> 一个字符串字段，JSON 里换行被转义，永远单行。</p>
 
 <table>

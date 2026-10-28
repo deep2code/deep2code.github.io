@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="ClickHouse 深度原理：列存三重收益、向量化执行、MergeTree 与 part 生命周期、稀疏索引、分区与跳数索引。">
+        <meta name="description" content="列存三重收益与向量化执行原理，part 生命周期、稀疏主键索引、ORDER BY 与分区的取舍代价、跳数索引的边界。">
     <meta name="keywords" content="ClickHouse,OLAP,列式存储,数据库,数据仓库,日志分析,Kafka,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/clickhouse/">
     <!-- Open Graph -->
     <meta property="og:title" content="ClickHouse 深度原理：列存、向量化与 MergeTree - 资深码农">
-    <meta property="og:description" content="ClickHouse 深度原理：列存三重收益、向量化执行、MergeTree 与 part 生命周期、稀疏索引、分区与跳数索引。">
+    <meta property="og:description" content="列存三重收益与向量化执行原理，part 生命周期、稀疏主键索引、ORDER BY 与分区的取舍代价、跳数索引的边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/clickhouse/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="ClickHouse 深度原理：列存、向量化与 MergeTree - 资深码农">
-    <meta name="twitter:description" content="ClickHouse 深度原理：列存三重收益、向量化执行、MergeTree 与 part 生命周期、稀疏索引、分区与跳数索引。">
+    <meta name="twitter:description" content="列存三重收益与向量化执行原理，part 生命周期、稀疏主键索引、ORDER BY 与分区的取舍代价、跳数索引的边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="article:author" content="资深码农">
     <meta name="article:section" content="数据库与缓存">
     <meta name="article:tag" content="ClickHouse,OLAP,列式存储">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 深度原理：列存、向量化与 MergeTree","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"ClickHouse 深度原理：列存三重收益、向量化执行、MergeTree 与 part 生命周期、稀疏索引、分区与跳数索引。","url":"https://www.yijunjun.asia/database/clickhouse/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/"},"articleSection":"数据库与缓存"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"ClickHouse 深度原理：列存、向量化与 MergeTree","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"列存三重收益与向量化执行原理，part 生命周期、稀疏主键索引、ORDER BY 与分区的取舍代价、跳数索引的边界。","url":"https://www.yijunjun.asia/database/clickhouse/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/clickhouse/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "ClickHouse 总览", "item": "https://www.yijunjun.asia/database/clickhouse/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -88,10 +88,10 @@
         </div>
     </header>
     <p>「ClickHouse 比 MySQL 快 100 倍」这句话本身没错，但它是结论不是原因，而且换个场景就会反过来——同一张表，按主键查一条记录 MySQL 能比 ClickHouse 快几十倍。</p>
-<p>真正值得搞清楚的是：OLAP 的访问模式长什么样，ClickHouse 为了这种访问模式做了哪些取舍，以及这些取舍在什么情况下会反过来咬你一口。这篇从存储布局讲到向量化执行，再讲 MergeTree 与稀疏索引的设计代价。</p>
+<p>值得搞清的是 OLAP 的访问模式长什么样、ClickHouse 为此做了哪些取舍、这些取舍何时反过来咬人；存储布局、向量化执行、MergeTree 与稀疏索引的设计代价都挂在这条线上。</p>
 <h2>接手一套 ClickHouse 先看这几件事</h2>
 
-    <p>无论是接手别人的集群还是自己刚建完第一张表，第一步都不是调参数，而是把三件事看清楚：<strong>数据是怎么摊成 part 的、哪些查询在烧 CPU、一条查询到底扫了多少 granule</strong>。</p>
+    <p>接手别人的集群、或刚建完第一张表，第一步不是调参数，而是看清三件事：<strong>数据怎么摊成 part、哪些查询烧 CPU、一条查询扫多少 granule</strong>。</p>
 <p>ClickHouse 把这些全部暴露成普通表，用 SQL 就能查，不需要任何外部工具。下面这张表可以直接当值班手册用，为什么是这几张表见下面的原理层。</p>
 
     <table>
@@ -179,7 +179,7 @@ clickhouse-client --send_logs_level=trace \
     <h2>OLAP 和 OLTP 要的是两种完全不同的存储布局</h2>
 
     <p>OLTP 的典型访问是「按主键或唯一键取出一条完整记录，改其中几个字段」，一次只碰一行，但要碰这一行的所有列；</p>
-<p>OLAP 的典型访问是「扫过去三个月上亿行，只用其中三四个列做聚合」，一次碰海量行，但每行只要极少数列。这两种模式对存储布局的要求正好相反：前者希望一行的所有列挨在一起，一次 IO 就把整行拿到；</p>
+<p>OLAP 典型访问是「扫过去三个月上亿行，只用其中三四个列做聚合」：一次碰海量行、每行只要极少数列。两者要的存储布局相反：前者要整行的列挨着，一次 IO 拿整行；</p>
 <p>后者希望一列的所有值挨在一起，好让不需要的列连读都不用读。</p>
 
 <div class="mermaid">
@@ -203,8 +203,8 @@ flowchart TB
     CR --> CZ["同类型值连续 压缩率再高一个档<br/>连续内存又让 SIMD 成为可能"]
 </div>
 
-    <p>算一笔具体的账：一张 100 列、平均每列 8 字节、共 10 亿行的表，总原始数据 800 GB。查 3 个列时，行存必须把 800 GB 全部从磁盘读出来再丢掉 97%（行存无法只读一行的一部分，最小读取单位是页）；</p>
-<p>列存只读这 3 个列文件，原始 24 GB，再叠加列存本身更高的压缩比，实际落盘 IO 可能只有 3~5 GB。这就是「快 100 倍」的第一层来源，和 CPU 有多快没关系，纯粹是少读了两个数量级的数据。</p>
+    <p>100 列、每列平均 8 字节、共 10 亿行的表，原始数据 800 GB。查 3 列时，行存要把 800 GB 全部从磁盘读出来再丢掉 97%（行存无法只读一行的一部分，最小读取单位是页）；</p>
+<p>列存只读 3 个列文件，原始 24 GB，叠加更高压缩比，实际落盘 IO 可能只有 3~5 GB。这是「快 100 倍」的第一层来源，和 CPU 多快无关，纯粹少读两个数量级。</p>
 
     <table>
         <thead>
@@ -222,11 +222,11 @@ flowchart TB
 
     <h2>列存的三重收益：少读、高压缩、可向量化</h2>
 
-    <p>很多介绍只讲「只读需要的列」，这其实只是三重收益里最浅的一层。第二层是压缩：同一列的值类型相同、取值分布集中、往往还单调或重复，压缩算法能吃得非常饱。</p>
+    <p>很多介绍只讲「只读需要的列」，这是三重收益最浅一层。第二层：压缩——同一列值类型相同、分布集中、常单调或重复，压缩算法吃得饱。</p>
 <p>时间戳这类单调递增的列用 <code>DoubleDelta</code> 先做二阶差分，差分后全是 0 和小整数，再套 LZ4 就能压到几十分之一；</p>
-<p><code>LowCardinality(String)</code> 会把字符串做字典编码，一个平均 20 字节的国家名在列里只占 1~2 字节的字典下标，这才是「低基数列能压到几十分之一」的真正原因——不是压缩算法神奇，而是字典编码把宽的值换成了窄的整数。</p>
+<p><code>LowCardinality(String)</code> 把字符串换成字典下标：平均 20 字节的国家名只占 1~2 字节。这就是「低基数列能压到几十分之一」的原因——不是压缩算法神奇，是字典编码把宽的值换成窄的整数。</p>
 
-    <p>第三层收益最容易被忽略：列存让一列的值在内存里是定长、连续、无间隔的数组，这正是 SIMD 指令要求的输入形态。行存里同一列的值被其他列隔开，间隔还可能不固定，编译器没法自动向量化。</p>
+    <p>第三层最容易被忽略：内存中一列值是定长、连续、无间隔数组，这正是 SIMD 要求的形态。行存里同列值被其他列隔开、间隔不定，编译器没法自动向量化。</p>
 <p>所以「列存」和「向量化执行」不是两个独立的优化，后者依赖前者才能成立。</p>
 
     <table>
@@ -269,8 +269,8 @@ ALTER TABLE events MATERIALIZE INDEX idx_user;   -- 存量数据必须显式物�
 
     <h2>向量化执行：把每行的虚函数开销摊薄到几乎为零</h2>
 
-    <p>传统数据库执行引擎是火山模型（Volcano，也叫迭代器模型）：每个算子实现一个 <code>next()</code>，每次调用返回一行，上层算子不断向下层拉数据。它的优点是模型极其干净、内存占用极小、首行能立刻返回；</p>
-<p>缺点是每返回一行都要穿过整条算子链的虚函数调用，1 亿行经过 5 个算子就是 5 亿次虚函数调用，加上每行都要重新判断类型、重新走一遍分支，真正用于计算的指令占比可能不到 10%。</p>
+    <p>传统数据库执行引擎是火山模型（Volcano，迭代器模型）：各算子实现 <code>next()</code>，调用返回一行，上层不断向下层拉数据。优点：模型干净、内存占用极小、首行立刻返回；</p>
+<p>缺点是每返回一行都穿过算子链的虚函数调用，1 亿行过 5 个算子即 5 亿次调用；每行重新判断类型、重新走分支，用于计算的指令占比可能不到 10%。</p>
 
     <p>ClickHouse 换成了向量化执行：<code>next()</code> 一次返回一个 block，默认 <code>max_block_size = 65536</code> 行。1 亿行只需要约 1526 个 block，5 个算子加起来不到八千次函数调用，框架开销直接被摊平到可以忽略。</p>
 <p>更关键的是 block 内部是按列组织的连续数组，算子对一整列做循环，编译器能自动生成 SSE / AVX2 指令一次处理 4~8 个值，CPU 流水线也不会被频繁的间接跳转打断。</p>
@@ -294,13 +294,13 @@ ALTER TABLE events MATERIALIZE INDEX idx_user;   -- 存量数据必须显式物�
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
         <div class="callout-title">向量化不等于并行</div>
-        <p>常见误解是把向量化和多线程混为一谈。向量化解决的是单核内「一条指令处理多个数据」和「摊薄框架开销」；多线程并行是另一套机制，由 <code>max_threads</code>（默认等于 CPU 核数）控制读取与计算的并发度。</p>
+        <p>常混淆向量化与多线程。向量化解决单核内「一条指令处理多个数据」和「摊薄框架开销」；多线程是另一套，由 <code>max_threads</code>（默认即 CPU 核数）控制读取与计算并发度。</p>
 <p>两者叠加才是 ClickHouse 的实际吞吐。<code>max_threads</code> 调大能压低单查询延迟，但会让高并发场景互相抢核——这也是它「单查询猛、高并发弱」的直接原因。</p>
     </div>
 
     <h2>MergeTree：part 的一生决定了写入姿势</h2>
 
-    <p>MergeTree 是理解 ClickHouse 的核心。一次 INSERT 的动作是：把这批数据按 ORDER BY 排序，按列切成文件，写成一个独立的目录，这个目录就是一个 part；写完后原子改名让它变成 active，查询立刻可见。</p>
+    <p>MergeTree 是理解 ClickHouse 的核心。一次 INSERT：按 ORDER BY 排序、按列切文件、写成一个独立目录，目录是 part；原子改名转 active，查询立刻可见。</p>
 <p>注意 part 之间是不排序的，只有 part 内部有序，所以查询要同时扫多个 part 再做归并——这就是 part 数量必须被控制的根本原因。</p>
 <p>后台 merge 线程会不断挑选相邻的小 part 合并成更大的 part，思路和 LSM Tree 一致：写入只追加，排序整理推迟到后台做。</p>
 
@@ -317,8 +317,8 @@ stateDiagram-v2
     Deleting --> [*]: 目录删除 磁盘空间才真正释放
 </div>
 
-    <p>这个生命周期解释了几件让人困惑的事。第一，删掉数据后磁盘没变小：旧 part 要先变 outdated，等过了 <code>old_parts_lifetime</code> 才删目录，期间空间是双份的。第二，<code>system.parts</code> 查出来的行数是实际的两倍：因为没加 <code>WHERE active</code>，把 outdated part 也算进去了。</p>
-<p>第三，merge 期间磁盘占用会临时翻倍，所以磁盘水位长期超过 70% 的集群在大 merge 时非常危险。第四，<code>OPTIMIZE TABLE FINAL</code> 会强行把一个分区合成一个 part，几百 GB 的分区执行一次可能跑几小时并把 IO 打满——它不是「优化命令」而是重写命令。</p>
+    <p>生命周期解释了几件怪事。第一，删数据后磁盘没变小：旧 part 要先变 outdated，过了 <code>old_parts_lifetime</code> 才删目录，期间空间是双份。第二，<code>system.parts</code> 查出行数是实际两倍：没加 <code>WHERE active</code>，outdated 也算进去了。</p>
+<p>第三，merge 期间磁盘占用临时翻倍，水位长期超 70% 的集群大 merge 时危险。第四，<code>OPTIMIZE TABLE FINAL</code> 强行把分区合成一个 part，几百 GB 分区跑一次可能几小时并打满 IO——不是「优化命令」，是重写命令。</p>
 
 <pre><code class="language-sql">-- 1. part 数量与压缩效果：ratio 就是这张表真实的列存压缩比
 SELECT database, table,
@@ -353,7 +353,7 @@ WHERE name IN ('parts_to_delay_insert', 'parts_to_throw_insert',
                'max_parts_in_total', 'old_parts_lifetime', 'index_granularity');
 </code></pre>
 
-    <p><code>parts_to_delay_insert</code>（常见默认 150）到了就开始给 INSERT 人为加延迟，<code>parts_to_throw_insert</code> 到了直接抛 <code>Too many parts</code>——这个阈值旧版本是 300，新版本放宽了不少，但含义没变：它几乎总是在说「你的写入批次太小、太频繁」，而不是「ClickHouse 扛不住」。</p>
+    <p><code>parts_to_delay_insert</code>（常见默认 150）到数后给 INSERT 人为加延迟，<code>parts_to_throw_insert</code> 到数直接抛 <code>Too many parts</code>——旧版阈值 300，新版放宽不少，含义没变：几乎总在说「写入批次太小、太频繁」，不是「ClickHouse 扛不住」。</p>
 
 <pre><code class="language-sql">-- 反面教材：单条 INSERT 循环，每条至少生成一个 part
 -- for row in rows: INSERT INTO events VALUES (...)      -- 10 万次 = 10 万个 part
@@ -373,7 +373,7 @@ SET async_insert = 1,
 
     <h2>稀疏主键索引：8192 行一个标记的取舍</h2>
 
-    <p>ClickHouse 的主键索引是稀疏的：每 <code>index_granularity</code>（默认 8192）行取一个标记，记下这个 granule 起始行的主键值，写进 <code>primary.idx</code>。10 亿行的表只有约 12.2 万个标记，假设主键三列合计 20 字节，整个索引不到 3 MB，可以常驻内存。</p>
+    <p>主键索引是稀疏的：每 <code>index_granularity</code>（默认 8192）行取一个标记，记 granule 起始行主键值，写进 <code>primary.idx</code>。10 亿行约 12.2 万个标记，若主键三列合计 20 字节，索引不到 3 MB，常驻内存。</p>
 <p>查询时对 <code>primary.idx</code> 做二分，定位出可能命中的 granule 区间，再通过 <code>.mrk</code> 标记文件换算成每个列文件里的偏移，只解压那几个压缩块。</p>
 
     <p>代价也很直接：索引只能定位到 granule，不能定位到行。哪怕只要一行，也必须把那个 granule 的相关列段完整读出来再逐行过滤，最小读取放大就是 8192 行。</p>
@@ -391,7 +391,7 @@ SET async_insert = 1,
             <tr><td>数据物理顺序</td><td>必须等于 ORDER BY</td><td>聚簇索引有序，二级索引另存一份</td></tr>
             <tr><td>二级索引</td><td>没有真正的二级索引，只有「只能加速不能保证」的跳数索引</td><td>可建多个，各自完整有序，代价是回表</td></tr>
             <tr><td>单行更新</td><td>重写整个 part 的相关列文件</td><td>就地更新 + undo / redo</td></tr>
-            <tr><td>深入阅读</td><td>本文</td><td>B+树树高推演、回表与 MVCC 详见站内 MySQL 篇</td></tr>
+            <tr><td>深入阅读</td><td>本页</td><td>B+树树高推演、回表与 MVCC 详见站内 MySQL 篇</td></tr>
         </tbody>
     </table>
 
@@ -438,7 +438,7 @@ WHERE app_id = 'shop'
     <h2>ORDER BY 是最重要的设计决策，而且与 OLTP 直觉相反</h2>
 
     <p>在 MySQL 里建错索引可以补建一个，数据物理顺序不受影响。</p>
-<p>ClickHouse 不行：ORDER BY 决定的是数据在磁盘上的物理排列，它直接决定了能裁掉多少 granule，而改动它基本等于重建表（新版本支持给 ORDER BY 末尾追加列，但不能改前缀、不能重排）。所以它是建表时最贵的一个决定。</p>
+<p>ClickHouse 不行：ORDER BY 决定数据的磁盘物理排列，直接决定能裁掉多少 granule。改它基本等于重建表，新版最多给 ORDER BY 末尾追加列，前缀不能改、不能重排，是建表最贵的决定。</p>
 
     <p>原则是<strong>低基数、高频过滤的列放在前面</strong>，最后再跟一个用于范围过滤的列（通常是时间）。</p>
 <p>这和 OLTP 的索引直觉正好相反：在 MySQL 里我们被反复教育「选择性高、基数大的列放前面」，因为那样一次树搜索就能把结果集缩到很小；</p>
@@ -461,10 +461,10 @@ flowchart TB
 
     <h2>分区与跳数索引：粗粒度裁剪和只能加速的二级过滤</h2>
 
-    <p>PARTITION BY 和 ORDER BY 分工明确：分区是目录级的物理隔离，负责粗粒度裁剪和数据生命周期管理（按分区 DROP 一整月数据是元数据操作，秒级完成，而 DELETE 是重写）；ORDER BY 负责分区内部的细粒度排序。</p>
-<p><strong>分区绝对不能按高基数列分</strong>：按 user_id 分区会产生上亿个目录，每个目录里只有几行数据，part 数量瞬间爆炸，merge 永远追不上，写入直接被 Too many parts 打死。分区总数控制在几十到几百个是健康的，单个分区 10~50 GB 比较合适。</p>
+    <p>PARTITION BY 和 ORDER BY 分工明确：分区是目录级物理隔离，管粗粒度裁剪和生命周期（按分区 DROP 整月数据是秒级的元数据操作，DELETE 是重写）；ORDER BY 管分区内细粒度排序。</p>
+<p><strong>分区绝对不能按高基数列分</strong>：按 user_id 会上亿个目录、每个只剩几行，part 数量瞬间爆炸，merge 永远追不上，写入直接被 Too many parts 打死。总数几十到几百算健康，单分区 10~50 GB 合适。</p>
 
-    <p>跳数索引（data skipping index）是唯一的二级过滤手段，它的定位必须说清楚：<strong>它只能加速，不能保证</strong>。它不是倒排索引，不能告诉你数据在哪，只能回答「这个 granule 有没有可能包含目标值」。回答「没有」就跳过，回答「可能有」就照常读。</p>
+    <p>跳数索引（data skipping index）是唯一的二级过滤，<strong>它只能加速，不能保证</strong>：不是倒排索引，说不出数据在哪，只能回答「这个 granule 有没有可能包含目标值」——「没有」就跳过，「可能有」就照常读。</p>
 <p>所以它在最坏情况下是纯开销——索引读了，一个 granule 也没排除掉。</p>
 
     <table>
@@ -479,7 +479,7 @@ flowchart TB
         </tbody>
     </table>
 
-    <p>GRANULARITY 参数容易理解错：<code>GRANULARITY 4</code> 指的是「每 4 个 granule 聚成一个索引块」，也就是索引粒度是 4 × 8192 = 32768 行。值越大索引越小但过滤越粗，值为 1 时索引最细也最占空间。默认值是 1，实践中高基数列的 bloom_filter 常用 2~4。</p>
+    <p>GRANULARITY 容易理解错：<code>GRANULARITY 4</code> 指「每 4 个 granule 聚成一个索引块」，索引粒度 4 × 8192 = 32768 行。值越大索引越小、过滤越粗，值为 1 最细也最占空间。默认 1，实践中高基数列的 bloom_filter 常用 2~4。</p>
 
     <h2>ClickHouse 不擅长什么，以及和 MySQL / PostgreSQL 的分工</h2>
 
@@ -518,7 +518,7 @@ flowchart TB
 
     <h2>从需求到这条路径的下一步</h2>
 
-    <p>把上面的取舍换成「手上这个需求该怎么落」，就是下面这张表。它不追求覆盖全部场景，只覆盖最容易做错方向的那几类——注意每一行的「代价」列，那是选了这条路之后必须一起接受的东西。</p>
+    <p>这些取舍换成「手上这个需求该怎么落」，这张表只覆盖最容易做错方向的几类、不追求全部；每行「代价」列是选了之后必须一起接受的。</p>
 
     <table>
         <thead>
@@ -535,8 +535,8 @@ flowchart TB
         </tbody>
     </table>
 
-    <p><strong>不适用边界</strong>：本篇只负责讲清引擎为什么这样设计，不负责具体落地。引擎与 Doris、Trino、云数仓的横向选型在下一篇；建表 DDL、codec 与批量导入在建表与写入篇；慢查询的判读顺序在查询优化篇；</p>
-<p>星型模型、大宽表与 SCD 在 OLAP 建模篇；分片、副本与 Distributed 表在集群架构篇。如果你现在的问题是「这套需求该不该用 ClickHouse」，直接看下一步；如果已经确定用它，可以跳到建表与写入篇。</p>
+    <p><strong>不适用边界</strong>：只讲引擎为什么这样设计，不管具体落地。Doris、Trino、云数仓横向选型在下一篇；DDL、codec 与批量导入在建表与写入篇；慢查询判读顺序在查询优化篇；</p>
+<p>星型模型、大宽表与 SCD 在 OLAP 建模篇；分片、副本与 Distributed 表在集群架构篇。问题还是「这套需求该不该用 ClickHouse」就看下一步；已定用它的，跳建表与写入篇。</p>
 
     <p class="cluster-nav">同主题路径：<a href="compare/">下一步：OLAP 引擎选型：ClickHouse vs Doris vs Trino vs 云数仓 →</a></p>
 

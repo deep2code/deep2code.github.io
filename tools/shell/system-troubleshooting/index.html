@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="系统排障的分层顺序：CPU 与负载、内存与 RSS 口径、磁盘与 IO、网络与连接状态，以及一份现场快照脚本。">
+        <meta name="description" content="按资源分层给单机排障顺序与判读字段：CPU、内存 RSS/PSS、磁盘 IO、连接，加一份告警后五分钟的分诊快照脚本。">
     <meta name="keywords" content="systemd,systemctl,进程管理,网络诊断,包管理,磁盘,自动化脚本,备份,部署">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/tools/shell/system-troubleshooting/">
     <!-- Open Graph -->
     <meta property="og:title" content="系统排查的命令与判读 - 资深码农">
-    <meta property="og:description" content="系统排障的分层顺序：CPU 与负载、内存与 RSS 口径、磁盘与 IO、网络与连接状态，以及一份现场快照脚本。">
+    <meta property="og:description" content="按资源分层给单机排障顺序与判读字段：CPU、内存 RSS/PSS、磁盘 IO、连接，加一份告警后五分钟的分诊快照脚本。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/tools/shell/system-troubleshooting/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="系统排查的命令与判读 - 资深码农">
-    <meta name="twitter:description" content="系统排障的分层顺序：CPU 与负载、内存与 RSS 口径、磁盘与 IO、网络与连接状态，以及一份现场快照脚本。">
+    <meta name="twitter:description" content="按资源分层给单机排障顺序与判读字段：CPU、内存 RSS/PSS、磁盘 IO、连接，加一份告警后五分钟的分诊快照脚本。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="开发工具与工程效率">
     <meta property="article:tag" content="systemd,系统管理,自动化脚本">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"系统排查的命令与判读","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"系统排障的分层顺序：CPU 与负载、内存与 RSS 口径、磁盘与 IO、网络与连接状态，以及一份现场快照脚本。","url":"https://www.yijunjun.asia/tools/shell/system-troubleshooting/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/shell/system-troubleshooting/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"系统排查的命令与判读","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"按资源分层给单机排障顺序与判读字段：CPU、内存 RSS/PSS、磁盘 IO、连接，加一份告警后五分钟的分诊快照脚本。","url":"https://www.yijunjun.asia/tools/shell/system-troubleshooting/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/shell/system-troubleshooting/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "开发工具与工程效率", "item": "https://www.yijunjun.asia/tools/"}, {"position": 3, "name": "Linux 系统管理", "item": "https://www.yijunjun.asia/tools/shell/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,8 +91,8 @@
                     </header>
                     <div class="article-content">
 
-<p>排障最怕的不是不会敲命令，而是<strong>顺序错了</strong>——一上来就看 CPU 使用率，或者看到 <code>free</code> 的 free 列很小就断定内存不够。这篇按资源分层给出排查顺序，每层都写清「先跑什么、看哪个字段、什么值算异常」。</p>
-<p>需要说明边界：本篇只讲<strong>单机上用命令做现场判读</strong>。告警规则与指标体系见本站 <code>devops/monitoring/</code>，日志采集与检索见 <code>devops/logging/</code>，容器与 K8s 场景的排障入口见 <code>devops/kubernetes/</code>。</p>
+<p>排障最怕的不是不会敲命令，而是<strong>顺序错了</strong>——只盯 CPU 使用率，或见 <code>free</code> 的 free 列很小就说内存不够。按资源分层来排查，每层写清跑什么、看哪个字段、何值异常。</p>
+<p>边界：只讲<strong>单机上用命令做现场判读</strong>。告警规则与指标体系见 <code>devops/monitoring/</code>，日志采集与检索见 <code>devops/logging/</code>，容器与 K8s 排障入口见 <code>devops/kubernetes/</code>。</p>
 
 <h2>按资源分层的排查顺序</h2>
 <div class="mermaid">
@@ -190,7 +190,7 @@ flowchart TB
 <tr><td>Swap 的 <code>used</code></td><td>已用交换区</td><td>只要换页速率为 0，历史遗留的已用交换不代表当前有问题</td></tr>
 </tbody>
 </table>
-<p>关于 RSS：它<strong>包含共享库和共享内存映射</strong>，多个进程共享同一份物理页时每个都完整计入自己的 RSS。所以把 <code>ps aux</code> 的 RSS 列加起来常常超过物理内存总量，多进程模型（写时复制出一堆 worker）尤其明显。</p>
+<p>RSS <strong>包含共享库和共享内存映射</strong>，多个进程共享同一份物理页时每个都完整计入。所以 <code>ps aux</code> 的 RSS 列相加常超物理内存总量，写时复制出一堆 worker 时尤其明显。</p>
 <p>要估真实占用得看 PSS，也就是共享页按共享进程数均摊后的值。</p>
 <pre><code class="language-bash"># 真实占用看 Pss，不看 Rss。smaps_rollup 是内核帮你汇总好的，比解析 smaps 快很多
 awk '/^(Rss|Pss|Private_Dirty|Swap):/ { printf "%-16s %8d kB\n", $1, $2 }' /proc/1234/smaps_rollup
@@ -363,7 +363,7 @@ perf top -p 1234                       # 采样热点函数
 perf stat -p 1234 -- sleep 5           # 看指令数 缓存缺失 上下文切换</code></pre>
 
 <h2>接到告警后五分钟内跑完的分诊脚本</h2>
-<p>值班时最缺的不是知识而是时间。下面这份脚本按前面的分层顺序把一次现场快照打出来，可以直接粘进工单——<strong>注意它故意不加 <code>-e</code></strong>，任何一段命令缺失或失败都不该中断整份快照。</p>
+<p>值班最缺的不是知识而是时间。这份脚本按分层顺序打出一次现场快照，可粘进工单——注意它故意不加 <code>-e</code>：命令缺失或失败都不该中断整份快照。</p>
 <pre><code class="language-bash">#!/usr/bin/env bash
 # triage.sh —— 值班分诊快照。故意只用 -u 不用 -e：缺工具也要把剩下的采完
 set -uo pipefail

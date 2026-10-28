@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="索引设计四步流程与治理五步清理：区分度与倾斜、列序规则、前缀索引、不可见索引与索引预算。">
+    <meta name="description" content="从查询模式推导索引、管住索引数量，覆盖列序取舍、前缀索引与函数索引、invisible 与按表角色定预算">
     <meta name="keywords" content="数据库性能优化,索引优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/optimization/index/">
     <meta property="og:title" content="索引设计与治理：从查询模式推导索引，并管住索引数量 - 数据库性能优化 - 资深码农">
-    <meta property="og:description" content="索引设计四步流程与治理五步清理：区分度与倾斜、列序规则、前缀索引、不可见索引与索引预算。">
+    <meta property="og:description" content="从查询模式推导索引、管住索引数量，覆盖列序取舍、前缀索引与函数索引、invisible 与按表角色定预算">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/optimization/index/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="索引设计与治理：从查询模式推导索引，并管住索引数量">
-    <meta name="twitter:description" content="索引设计四步流程与治理五步清理：区分度与倾斜、列序规则、前缀索引、不可见索引与索引预算。">
+    <meta name="twitter:description" content="从查询模式推导索引、管住索引数量，覆盖列序取舍、前缀索引与函数索引、invisible 与按表角色定预算">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -67,9 +67,9 @@
                         <h1 class="article-title">索引设计与治理：从查询模式推导索引，并管住索引数量</h1>
                     </header>
                     <div class="article-content">
-<p>「哪条查询慢就给它加个索引」是索引失控的起点。这样做出来的表最后会有十几个索引，一半从没被用过，另一半互相冗余，写入被拖慢，优化器还时不时选错。</p>
+<p>「哪条查询慢就给它加个索引」是索引失控的起点：表里十几个索引一半没用过，另一半互相冗余，拖慢写入，优化器还时不时选错。</p>
 <p>索引应该是从<strong>一张表的全部查询模式</strong>反推出来的一组设计，而不是一条条查询的补丁。</p>
-<p>B+ 树结构、回表与覆盖索引、最左前缀判定、索引失效场景这些原理详见站内 MySQL 深度原理篇，这篇只讲设计方法和治理手段。</p>
+<p>B+ 树、回表与覆盖索引、最左前缀、索引失效场景等原理见站内 MySQL 深度原理篇，这里只讲设计与治理。</p>
 <h2>从查询模式推导索引的四步，与索引数量的清理流程</h2>
 
 <p>索引设计是<strong>一张表一次做完</strong>的事，不是一条慢查询做一次。四步动手流程：先把这张表真实跑过的语句全部捞出来，再量候选列的区分度与倾斜。</p>
@@ -130,7 +130,7 @@ ORDER BY count_read DESC;
 </tbody>
 </table>
 
-<p>设计之外的另一半工作是<strong>把数量管住</strong>。一个跑了两年的库里通常躺着一批从没被用过的索引，它们不产生收益，却持续收写入税。清理流程固定五步，顺序不能乱：</p>
+<p>另一半工作是<strong>把数量管住</strong>。跑了两年的库里躺着一批从未用过的索引，不产生收益，却持续收写入税。清理流程固定五步，顺序不能乱：</p>
 
 <pre><code class="language-sql">-- 第 0 步：先确认统计周期够不够长。MySQL 的索引使用统计从实例上次启动起累计
 SELECT variable_value AS uptime_sec
@@ -232,7 +232,7 @@ flowchart TB
 
 <p>推演的关键分歧在 Q2。它单独最优的索引是 <code>(user_id, status, create_time)</code>，而 Q1、Q3 要的是 <code>(user_id, create_time)</code>，两者<strong>无法互相覆盖</strong>：把 <code>status</code> 插在中间，Q1 没有 <code>status</code> 条件，就没法用后面的 <code>create_time</code> 提供有序性，会退化成额外排序。</p>
 
-<p>取舍依据是频次和选择性：<code>status</code> 只有几个取值，区分度极低，Q2 用 <code>(user_id, create_time)</code> 按时间倒序扫描、边扫边过滤 <code>status</code>，只要单个用户的订单数不大（这是业务事实），代价完全可接受，还省掉一个索引。所以最终只建两个：</p>
+<p>取舍看频次和选择性：<code>status</code> 只有几个取值，Q2 用 <code>(user_id, create_time)</code> 按时间倒序扫描、边扫边过滤 <code>status</code>；只要单用户订单数不大（业务事实），代价可接受，还省一个索引。最终只建两个：</p>
 
 <pre><code class="language-sql">-- 索引一：服务 Q1 / Q2 / Q3。前导列 user_id 是所有 C 端查询的必带条件
 -- create_time 紧跟其后，让「按时间倒序」直接由索引提供，消除额外排序
@@ -253,7 +253,7 @@ EXPLAIN SELECT id, user_id, amount FROM orders
     <div class="callout-icon">💡</div>
     <div class="callout-title">为什么不是五个索引</div>
     <p>给五条查询各建一个「单独最优索引」，写入成本会是两个索引方案的两倍以上，而收益只体现在 Q2 的一次排序上。</p>
-<p>索引设计的本质是<strong>在有限的索引预算内覆盖尽可能多的查询</strong>，不是让每条查询都跑在理论最优路径上。判断一个索引方案好不好，要同时看它服务了几条查询、以及被迫牺牲了什么。</p>
+<p>索引设计要<strong>在有限预算内覆盖尽可能多的查询</strong>，不必每条查询都走理论最优路径。评估方案要同时看它服务几条查询、牺牲了什么。</p>
 </div>
 
 <h2>索引列顺序的决策原则与例外</h2>
@@ -303,7 +303,7 @@ flowchart TB
 
 <h2>前缀索引、函数索引与虚拟列</h2>
 
-<p>长字符串列直接建索引会让索引很宽。前缀索引只取前 n 个字符，代价是<strong>不能用于覆盖索引，也不能用于排序</strong>——索引里存的是截断值，取完整值必须回表，前缀相同的行内部顺序也不确定。</p>
+<p>长字符串列直接建索引会很宽，前缀索引只取前 n 个字符，代价是<strong>不能覆盖索引、不能排序</strong>：存的是截断值，取完整值必须回表，同前缀的行顺序不定。</p>
 <p>选 n 的方法是逐个试算区分度，找到能达到完整区分度九成以上的最小值。</p>
 
 <pre><code class="language-sql">-- 一次算出多个候选长度的区分度，和不截断时的区分度做对比
@@ -373,11 +373,11 @@ SELECT COUNT(DISTINCT user_id) AS real_user_card FROM orders;</code></pre>
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">删索引前必须确认统计周期</div>
-    <p><code>sys.schema_unused_indexes</code> 的统计是从实例上次启动开始累计的。刚重启两天就去删「从未使用」的索引，极可能删掉月末结算、季度对账、年度报表的唯一支撑索引，等到月底那条任务跑成全表扫才发现。</p>
+    <p><code>sys.schema_unused_indexes</code> 从实例上次启动累计。刚重启两天就删「从未使用」的索引，容易删掉月末结算、季度对账、年度报表这类低频任务的索引，等月底全表扫才暴露。</p>
 <p>安全的判断标准是：统计周期至少覆盖一个完整业务周期（含月末与大促），并且人工确认过低频批量任务清单。</p>
 </div>
 
-<p>MySQL 8.0 提供了比「直接删」安全得多的路径：把索引设为不可见（invisible），优化器不再使用它但索引仍然被维护，观察一段时间没有语句恶化再真正删除，中间任何时刻都能一秒钟恢复。</p>
+<p>MySQL 8.0 有比「直接删」安全的路径：把索引设为不可见（invisible），优化器不再用它但仍被维护；观察一段时间无语句恶化再删，期间随时能一秒钟恢复。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -467,7 +467,7 @@ gh-ost \
 
 <h2>按表在业务里的角色定索引预算</h2>
 
-<p>「一张表最多几个索引」没有统一答案，因为<strong>索引预算取决于这张表在业务里承担什么角色</strong>：被多少种形态的查询访问、写入有多密集、能不能把一部分查询分流出去。</p>
+<p>「一张表最多几个索引」没有统一答案，<strong>索引预算取决于这张表在业务里的角色</strong>：被多少种查询访问、写入多密集、能否分流查询。</p>
 <p>下表按常见角色给出预算与方案。</p>
 
 <table>
@@ -503,13 +503,13 @@ gh-ost \
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：索引不是万能的，也不是这条路径的全部。B+ 树结构与树高推演、回表与覆盖索引、最左前缀判定、change buffer 的工作机制、索引失效的各种场景在 <a href="../../mysql/">MySQL 深度原理</a>；</p>
+<p><strong>不适用边界</strong>：B+ 树结构与树高推演、回表与覆盖索引、最左前缀判定、change buffer 机制、索引失效场景在 <a href="../../mysql/">MySQL 深度原理</a>；</p>
 <p>PostgreSQL 的 GIN 与 GiST 与 BRIN 选型、部分索引与表达式索引、<code>EXPLAIN</code> 逐字段判读在 <a href="../../postgresql/index-optimize/">索引选型与执行计划判读</a>，建索引会取什么锁在 <a href="../../postgresql/mvcc-transaction/">并发控制</a>；</p>
-<p>「问题到底是不是索引」这一层判断在 <a href="../">数据库性能优化：瓶颈定位顺序</a>，<strong>先做完那一步再回来</strong>；单条慢语句从发现到根治的完整闭环在 <a href="../slow-query/">慢查询治理</a>；索引解决不了容量与写入上限，那一层在 <a href="../sharding/">分库分表</a>；</p>
-<p>表结构与字段类型本身选得对不对在 <a href="../../design/">范式与反范式</a>，上线之后怎么改在 <a href="../../design/index-design/">模式演进与约束设计</a>；读压力用缓存挡掉之后索引压力也会下降，取舍在 <a href="../../cache/">缓存的收益与代价</a>；</p>
+<p>「问题是不是索引」见 <a href="../">数据库性能优化：瓶颈定位顺序</a>，<strong>先做完那一步再回来</strong>；单条慢语句从发现到根治在 <a href="../slow-query/">慢查询治理</a>；容量与写入上限索引解决不了，归 <a href="../sharding/">分库分表</a>；</p>
+<p>表结构与字段类型对不对在 <a href="../../design/">范式与反范式</a>，上线后改在 <a href="../../design/index-design/">模式演进与约束设计</a>；缓存挡读压力降索引压力，取舍在 <a href="../../cache/">缓存的收益与代价</a>；</p>
 <p>索引使用率与扫描行数怎么长期采集在 <a href="../../../observability/metrics/">指标与监控</a>。</p>
 
-<p>在这条路径上，上一篇负责判断瓶颈在哪、该不该动索引，本篇把索引这一项做完整（设计加治理），下一篇处理那些索引已经建对、却依然慢的单条语句。</p>
+<p>索引篇负责设计与治理；慢查询篇处理索引建对却依然慢的单条语句。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../">← 上一步：数据库性能优化：瓶颈定位顺序与优化手段的投入产出</a> · <a href="../slow-query/">下一步：慢查询治理：从发现到根治的完整闭环 →</a></p>
 

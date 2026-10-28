@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="JWS 三段结构与逐字段校验；签名算法按信任关系选，对称密钥不宜交给第二个验签方；jti 吊销三条路的代价与令牌体积对网关的影响。">
+    <meta name="description" content="JWT 验签的必校验项、kid 与 JWKS 公钥轮换、jti 吊销的三档代价，以及令牌体积开销与适用边界。">
     <meta name="keywords" content="认证授权,JWT 实战,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/auth/jwt/">
     <meta property="og:title" content="JWT 的结构与验签机制 - 认证授权 - 资深码农">
-    <meta property="og:description" content="JWS 三段结构与逐字段校验；签名算法按信任关系选，对称密钥不宜交给第二个验签方；jti 吊销三条路的代价与令牌体积对网关的影响。">
+    <meta property="og:description" content="JWT 验签的必校验项、kid 与 JWKS 公钥轮换、jti 吊销的三档代价，以及令牌体积开销与适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/auth/jwt/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="JWT 的结构与验签机制 - 认证授权">
-    <meta name="twitter:description" content="JWS 三段结构与逐字段校验；签名算法按信任关系选，对称密钥不宜交给第二个验签方；jti 吊销三条路的代价与令牌体积对网关的影响。">
+    <meta name="twitter:description" content="JWT 验签的必校验项、kid 与 JWKS 公钥轮换、jti 吊销的三档代价，以及令牌体积开销与适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,11 +71,11 @@
     </header>
     <p>JWT 的麻烦之处在于它太容易「用起来」：引一个库、调一次 sign、调一次 verify，功能就通了。</p>
 <p>真正的问题全藏在细节里——验签通过不代表令牌是发给你的，header 里的算法字段是攻击者可控输入，密钥轮换步骤顺序颠倒就是一次全站 401。</p>
-<p>这篇只讲格式与验签机制本身：JWS 与 JWE 的区别、每个字段的语义、必须校验哪些声明、公钥怎么分发与轮换、以及令牌体积的真实代价。</p>
+<p>格式与验签机制本身：JWS 与 JWE 的区别、每个字段的语义、必须校验哪些声明、公钥怎么分发与轮换、以及令牌体积的真实代价。</p>
 <p>至于算法混淆与无签名攻击的利用细节、令牌该存在浏览器哪里，见站内 <a href="../../security/auth-security/">越权与鉴权安全</a>。</p>
 <h2>验签的正确写法：必校验项、kid 轮换与撤销的落点</h2>
     <p>验签代码里真正决定安全性的不是「调了 verify」这一行，而是<strong>传进去的那几个参数</strong>。</p>
-<p>绝大多数线上缺陷都长成同一个样子：签名校验通过就放行，没人问过令牌是不是发给本服务的、是否还在有效期内、算法是不是本服务期望的那种。</p>
+<p>线上缺陷多是签名校验通过就放行：没人问令牌是不是发给本服务的、是否还在有效期内、算法是不是本服务期望的。</p>
 <p>下面这段可以直接抄进项目，六个参数一个都不能少，原因见下一节起的原理部分。</p>
     <pre><code class="language-typescript">// 验签中间件（Node + jose）：算法白名单 + 全部必校验声明 + JWKS 缓存 + 撤销落点
 import { createRemoteJWKSet, jwtVerify } from 'jose'
@@ -174,9 +174,9 @@ curl -s https://idp.example.com/.well-known/jwks.json | jq '[.keys[] | {kid, kty
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">JWT 做不到即时失效，撤销必须另外落地</div>
-        <p>自包含令牌的定义是「验签方不联系任何人即可确认有效」，所以它<strong>天然不具备吊销能力</strong>——「登出接口清掉前端存储」不是吊销，令牌在有效期内仍可用。</p>
+        <p>自包含令牌指验签方不联系任何人即可确认有效，所以<strong>不具备吊销能力</strong>：清掉前端存储不算吊销，令牌有效期内仍可用。</p>
 <p>可选的落点只有三个，按生效延迟从宽到严：<strong>一，短有效期加刷新令牌轮换</strong>，访问令牌 5 到 15 分钟，封禁时让刷新失败，延迟最长一个有效期，零额外开销；</p>
-<p><strong>二，用户级失效时间点</strong>，缓存记 <code>userID</code> 到 <code>invalidBefore</code> 的映射，验签后比较令牌 <code>iat</code>，一条记录顶掉该用户全部在途令牌，改密码与封禁首选；<strong>三，按 <code>jti</code> 维护吊销名单</strong>，粒度最细但存储量与令牌数同阶。</p>
+<p><strong>二，用户级失效时间点</strong>，缓存记 <code>userID</code> 到 <code>invalidBefore</code>，验签后比 <code>iat</code>，一条记录顶掉该用户在途令牌，改密码与封禁首选；<strong>三，按 <code>jti</code> 维护吊销名单</strong>，存储量与令牌数同阶。</p>
 <p>后两者都要付一次缓存查询（同机房约 0.2 到 1 毫秒）并承认自己需要服务端状态，各自的适用范围见下文原理层的对照表。</p>
     </div>
     <table>
@@ -243,7 +243,7 @@ curl -s https://idp.example.com/.well-known/jwks.json | jq '[.keys[] | {kid, kty
     <h2>JWT 只是容器：先分清 JWS 与 JWE</h2>
     <p>搞清这两者的分工，能解决一个很常见的误解引发的事故：把敏感字段写进 payload，以为签名等于加密。</p>
     <p>JWT 是一种声明的传递格式，它的具体承载有两种形态：<strong>JWS 是签名</strong>，内容公开可读但不可篡改；<strong>JWE 是加密</strong>，内容对持有者以外不可读。</p>
-<p>绝大多数人说「JWT」时指的是 JWS，这带来一个必须记住的结论：<strong>payload 只是 base64url 编码，不是加密</strong>。拿到令牌的人都能一行命令解出全部内容，手机号、证件号、内部角色描述、金额这类东西不能放进去。</p>
+<p>说「JWT」时大多指 JWS，<strong>payload 只是 base64url 编码，不是加密</strong>。拿到令牌的人一行命令就能解出全部内容，手机号、证件号、内部角色、金额都不该放进去。</p>
     <div class="mermaid">
 flowchart TB
     subgraph JOSE["JOSE 规范家族"]
@@ -368,8 +368,8 @@ curl -s https://idp.example.com/.well-known/jwks.json | jq '.keys[] | {kid, kty,
     </table>
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
-        <div class="callout-title">本篇最重要的一条</div>
-        <p>大量实现只做「签名对不对」这一步就放行。签名正确只说明令牌来自持有签名密钥的一方，<strong>不说明它是发给当前这个服务的、也不说明它还在有效期内</strong>。</p>
+        <div class="callout-title">最容易做错的一条</div>
+        <p>大量实现只验「签名对不对」就放行。签名正确只说明令牌出自持密钥方，<strong>不说明它发给本服务、也不说明还在有效期内</strong>。</p>
 <p>在同一个授权服务器下有多个资源服务时，缺少 <code>aud</code> 校验等价于所有服务共用一张通行证，一个低敏感服务的令牌泄露会直接扩散到核心服务。</p>
     </div>
 
@@ -452,7 +452,7 @@ flowchart TB
 
     <h2>密钥分发与轮换：工程上最容易出事的一环</h2>
     <p>搞清轮换的步骤顺序，能解决两种自伤型故障：切换瞬间全量 401，以及旧公钥删太早导致在线用户集体掉线。</p>
-    <p>非对称方案下验签方需要公钥。标准做法是授权服务器暴露一个 <strong>JWKS 端点</strong>（通常是 <code>/.well-known/jwks.json</code>），里面是一组 JWK，每个带 <code>kid</code>。验签方读令牌 header 的 <code>kid</code>，从本地缓存取对应公钥，未命中才回源拉取。</p>
+    <p>非对称方案下验签方要公钥。授权服务器暴露一个 <strong>JWKS 端点</strong>（通常是 <code>/.well-known/jwks.json</code>），内含一组带 <code>kid</code> 的 JWK。验签方读令牌 header 的 <code>kid</code>，从本地缓存取公钥，未命中才回源。</p>
 <p>这里有两个必须做的保护：<strong>回源要限流</strong>（否则伪造随机 kid 就能让授权服务器被自家网关打挂），<strong>缓存要有 TTL</strong>（否则轮换后永远拿不到新公钥）。</p>
     <div class="mermaid">
 sequenceDiagram
@@ -535,7 +535,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 
     <h2>jti 与吊销：三条路都要付代价</h2>
     <p>要不要为封禁放弃无状态，取决于吊销补救各自的代价。</p>
-    <p>自包含令牌按设计不可吊销：验签方不需联系任何人就能确认令牌有效，这既是优点也是上限。补救只有三条路，选择标准是<strong>业务能容忍多长的生效延迟</strong>。</p>
+    <p>自包含令牌按设计不可吊销：验签方不联系任何人即可确认有效。补救只有三条路，看<strong>业务能容忍多长的生效延迟</strong>。</p>
     <table>
         <thead>
             <tr>
@@ -570,7 +570,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
             </tr>
         </tbody>
     </table>
-    <p>第三种做法最划算：缓存只存 <code>userID</code> 到 <code>invalidBefore</code> 的映射，验签后比较令牌 <code>iat</code> 是否早于该时间点，一条记录顶掉该用户全部在途令牌，存储量和用户数同阶而非令牌数同阶。</p>
+    <p>第三种最划算：缓存存 <code>userID</code> 到 <code>invalidBefore</code> 映射，验签后比 <code>iat</code> 是否早于该时间点，一条记录顶掉该用户全部在途令牌，存储量与用户数同阶。</p>
 
     <h2>令牌体积的真实代价</h2>
     <p>令牌体积过大时，接口会返回 400 或 431，网关内存随并发上涨。</p>
@@ -616,12 +616,12 @@ func AuthMiddleware(next http.Handler) http.Handler {
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
         <div class="callout-title">payload 的取舍原则</div>
-        <p>只放<strong>身份标识与授权判断必需的最小集合</strong>：不可变的用户 ID、租户 ID、粗粒度角色、协议要求的标准声明。用户资料由前端单独调接口取（可缓存），细粒度权限由资源服务现查。</p>
+        <p>只放<strong>身份标识与授权判断必需的最小集合</strong>：不可变的用户 ID、租户 ID、粗粒度角色、标准声明。用户资料前端单独取，细粒度权限资源服务现查。</p>
 <p>判断标准是问一句：这个字段变更后，能容忍它在令牌里保持旧值到过期吗？不能，就不该放进去。</p>
     </div>
 
     <h2>不同系统形态该验到哪一步、吊销做到哪一档</h2>
-    <p>前面几节给的是机制，这一节给投入顺序。<strong>判断依据只有两条：有几方需要验签，封禁的生效延迟容忍度是多少。</strong>这两条定下来，算法、公钥分发方式、吊销档位基本没有自由度。</p>
+    <p><strong>判断依据只有两条：有几方需要验签，封禁的生效延迟容忍度是多少。</strong>两条定下来，算法、公钥分发方式、吊销档位就没有自由度。</p>
     <table>
         <thead>
             <tr>
@@ -677,7 +677,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
         </tbody>
     </table>
     <p><strong>JWT 解决不了的事要说清楚</strong>，否则容易把它当万能容器：它不管<strong>会话管理</strong>（设备列表、登出其他设备、刷新并发），要靠服务端记录，见 <a href="../best-practices/">认证系统的工程实践</a>；</p>
-<p>它不管<strong>授权范围怎么设计</strong>（scope 与权限的区别、授权码与 PKCE 的流程），见 <a href="../oauth2/">OAuth 2.0 与 OIDC 的协议细节</a>；也不管<strong>令牌该存在浏览器哪里</strong>与算法混淆的利用条件，见 <a href="../../security/auth-security/">越权与鉴权安全</a>；</p>
+<p>它不管<strong>授权范围怎么设计</strong>，见 <a href="../oauth2/">OAuth 2.0 与 OIDC 的协议细节</a>；也不管<strong>令牌该存浏览器哪里</strong>与算法混淆的利用条件，见 <a href="../../security/auth-security/">越权与鉴权安全</a>；</p>
 <p>放请求头免疫 CSRF 的前提与 <code>SameSite</code> 语义见 <a href="../../security/csrf-clickjacking/">CSRF 与点击劫持</a>。另外它<strong>不是缓存</strong>：用户资料、权限明细、业务状态塞进 payload 换来的只是体积与过期失真。</p>
 
     <h2>反模式对照：每条都对应一次真实故障</h2>

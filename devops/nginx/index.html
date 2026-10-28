@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Nginx 原理对应线上表现：master/worker 与 epoll、惊群与 reuseport、11 个处理阶段与 location 优先级、proxy_buffering 卡住 SSE、超时与 502/504 归因、限流三种形态、缓存防击穿与调优基线。">
+        <meta name="description" content="反向代理缓冲与 keepalive 长连接、location 匹配、限流与缓存、静态资源调优基线与 reload 机制。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/nginx/">
     <!-- Open Graph -->
     <meta property="og:title" content="Nginx 深度原理：进程模型、代理缓冲、限流与调优 - 资深码农">
-    <meta property="og:description" content="Nginx 原理对应线上表现：master/worker 与 epoll、惊群与 reuseport、11 个处理阶段与 location 优先级、proxy_buffering 卡住 SSE、超时与 502/504 归因、限流三种形态、缓存防击穿与调优基线。">
+    <meta property="og:description" content="反向代理缓冲与 keepalive 长连接、location 匹配、限流与缓存、静态资源调优基线与 reload 机制。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/nginx/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Nginx 深度原理：进程模型、代理缓冲、限流与调优">
-    <meta name="twitter:description" content="Nginx 原理对应线上表现：master/worker 与 epoll、惊群与 reuseport、11 个处理阶段与 location 优先级、proxy_buffering 卡住 SSE、超时与 502/504 归因、限流三种形态、缓存防击穿与调优基线。">
+    <meta name="twitter:description" content="反向代理缓冲与 keepalive 长连接、location 匹配、限流与缓存、静态资源调优基线与 reload 机制。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
     <meta property="article:tag" content="运维与云原生">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 深度原理：为什么能扛 10 万并发？","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Nginx 原理对应线上表现：master/worker 与 epoll、惊群与 reuseport、11 个处理阶段与 location 优先级、proxy_buffering 卡住 SSE、超时与 502/504 归因、限流三种形态、缓存防击穿与调优基线。","url":"https://www.yijunjun.asia/devops/nginx/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/"},"articleSection":"运维与云原生"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 深度原理：为什么能扛 10 万并发？","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"反向代理缓冲与 keepalive 长连接、location 匹配、限流与缓存、静态资源调优基线与 reload 机制。","url":"https://www.yijunjun.asia/devops/nginx/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/"},"articleSection":"运维与云原生"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "Nginx 概述", "item": "https://www.yijunjun.asia/devops/nginx/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -338,7 +338,7 @@ location /api/stream {
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">上游长连接的「三件套」，缺一个都等于没配</div>
-        <p>默认情况下 Nginx 到上游用的是 HTTP/1.0 短连接，每个请求都要重新 TCP 握手 —— 高 QPS 下光握手就吃掉可观的延迟，还会大量消耗本地端口（可能撞上 <code>TIME_WAIT</code> 耗尽）。开启长连接必须同时写三行：</p>
+        <p>默认 Nginx 到上游是 HTTP/1.0 短连接，每个请求都要重新 TCP 握手：高 QPS 下握手延迟可观、本地端口消耗大（可能 <code>TIME_WAIT</code> 耗尽）。开长连接必须同时写三行：</p>
         <pre><code class="language-nginx">upstream backend {
     server 10.0.0.1:8080;
     server 10.0.0.2:8080;
@@ -632,7 +632,7 @@ worker_shutdown_timeout 30s;   # reload 时老 worker 最多再等 30 秒</code>
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
         <div class="callout-title">reload 为什么是「无损」的</div>
-        <p><code>nginx -s reload</code> 的过程：master 校验并加载新配置 → 用新配置 fork 出<strong>新的 worker</strong> → 向老 worker 发送优雅关闭信号 → 老 worker 停止接受新连接，但<strong>继续处理完手上的存量请求</strong>后才退出。所以整个过程没有连接被强杀。</p>
+        <p><code>nginx -s reload</code> 的过程：master 校验加载新配置 → fork 出<strong>新的 worker</strong> → 通知老 worker 优雅关闭 → 老 worker 拒绝新连接，但<strong>继续处理完手上的存量请求</strong>才退出。全程没有连接被强杀。</p>
         <p>两个前提：① 先用 <code>nginx -t</code> 验证配置，配置有语法错误时 master 会拒绝加载并保持原样运行（这也是它比 restart 安全的地方）；② <code>worker_shutdown_timeout</code> 要够长，否则长连接和流式请求会被强制掐断。</p>
 <p>频繁 reload 时如果老 worker 迟迟不退出，会看到 worker 进程数远超 <code>worker_processes</code>，这是有长连接没结束的信号。</p>
     </div>

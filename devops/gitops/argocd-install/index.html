@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Argo CD 部署与生产化：组件与仓库结构、ApplicationSet 风险、sync 即发布的权限分离、健康检查与 sync-wave 排序。">
+        <meta name="description" content="Argo CD 从装完到能生产用：三个 CRD 与五个组件的职责、ApplicationSet 的 generator 选择、RBAC 切分、sync-wave 与 hooks、规模化调参和反模式。">
     <meta name="keywords" content="ArgoCD,Kubernetes,安装,架构,Ingress,RBAC,SSO,高可用">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/gitops/argocd-install/">
     <!-- Open Graph -->
     <meta property="og:title" content="Argo CD 部署与生产化：对象模型、RBAC 与规模化调参 - 资深码农">
-    <meta property="og:description" content="Argo CD 部署与生产化：组件与仓库结构、ApplicationSet 风险、sync 即发布的权限分离、健康检查与 sync-wave 排序。">
+    <meta property="og:description" content="Argo CD 从装完到能生产用：三个 CRD 与五个组件的职责、ApplicationSet 的 generator 选择、RBAC 切分、sync-wave 与 hooks、规模化调参和反模式。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/gitops/argocd-install/">
     <meta property="og:site_name" content="资深码农">
@@ -39,7 +39,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Argo CD 部署与生产化：对象模型、RBAC 与规模化调参 - 资深码农">
-    <meta name="twitter:description" content="Argo CD 部署与生产化：组件与仓库结构、ApplicationSet 风险、sync 即发布的权限分离、健康检查与 sync-wave 排序。">
+    <meta name="twitter:description" content="Argo CD 从装完到能生产用：三个 CRD 与五个组件的职责、ApplicationSet 的 generator 选择、RBAC 切分、sync-wave 与 hooks、规模化调参和反模式。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
@@ -92,7 +92,7 @@
                     <div class="article-content">
 <p>装 Argo CD 本身是一条命令的事：<code>kubectl apply</code> 官方清单，端口转发，用初始密码登进去。</p>
 <p>真正的工作量在「装完」到「能生产用」之间——默认配置里有一个全权限的 admin 账号、没有 TLS、任何登录者都能对任意应用点 sync、自身配置完全脱离 GitOps 管理。</p>
-<p>这篇只讲这段距离：对象模型怎么设计、装完立刻要改什么、RBAC 怎么切、哪些字段开错会直接删掉线上资源、以及规模化之后会在哪里撞墙。</p>
+<p>这段距离要回答：对象模型怎么设计、装完先改什么、RBAC 怎么切、哪些字段开错会删线上资源、规模化后哪里撞墙。</p>
 <p>GitOps 的原理见 <a href="../index.html">GitOps 的模型与纪律</a>，从现有流水线迁过来的路径见 <a href="../intro/index.html">从 CI/CD 迁移到 GitOps</a>。</p>
 
 <h2>核心对象模型：三个 CRD 与五个组件</h2>
@@ -140,7 +140,7 @@ flowchart TB
     AC --> K8S
 </div>
 
-<p>组件划分里有两处值得注意：<strong>repo-server 是无状态的渲染器</strong>，它不碰目标集群，所有克隆和模板渲染都在这里发生，因此它是大仓库场景下第一个被压垮的组件；</p>
+<p><strong>repo-server 是无状态的渲染器</strong>：所有克隆和模板渲染都在这里发生，它不碰目标集群，也因此是大仓库场景下第一个被压垮的组件。</p>
 <p><strong>Redis 里全是缓存</strong>，丢了只会导致一次全量重新渲染，不会丢数据，所以它不需要持久化和主从复制的严格保证。</p>
 
 <div class="mermaid">
@@ -246,7 +246,7 @@ spec:
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">Git Directory generator 加通配符是一把快刀</div>
-    <p>它的好处是新增服务目录就自动多一个应用，不用改任何定义。风险是反过来也成立：有人误删或改名了 <code>apps/</code> 下的目录，对应的 Application 就消失了，而 Application 消失会带走它管理的线上资源。</p>
+    <p>新增服务目录就自动多一个应用，不用改任何定义。误删或改名 <code>apps/</code> 下的目录，对应的 Application 同样会消失，而 Application 消失会带走它管理的线上资源。</p>
 <p>生产环境务必配 <code>preserveResourcesOnDeletion</code>，并给 <code>apps/</code> 目录加保护规则。</p>
 </div>
 
@@ -345,7 +345,7 @@ data:
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">给了 update 权限等于给了全部权限</div>
-    <p>能改 Application 定义的人，可以把 <code>targetRevision</code> 指向自己的分支、把 <code>path</code> 指向任意目录、把 <code>destination</code> 换成别的命名空间。所以「能 sync 生产」和「能改生产应用定义」必须分开：发布者只拿 sync，定义的变更走配置仓库的 PR。</p>
+    <p>改 Application 定义就能把 <code>targetRevision</code> 指到自己分支、<code>path</code> 指到任意目录、<code>destination</code> 换到别的命名空间。「能 sync 生产」和「能改生产应用定义」要分开：发布者只拿 sync，改定义走配置仓库 PR。</p>
 <p>另外 <code>exec</code> 权限意味着能进生产容器执行命令，它绕过了 Git 审计链，默认应当拒绝。</p>
 </div>
 
@@ -424,7 +424,7 @@ spec:
 <tr><td>Synced</td><td>Unknown</td><td>自定义资源没有健康判定逻辑，控制器不知道它算不算好</td><td>为该 CRD 写 Lua 健康检查，否则整个应用的健康状态永远是未知</td></tr>
 </tbody></table>
 
-<p>最后一行是接入 Operator 之后必然会遇到的问题。内置健康检查只覆盖常见的内置资源，自定义资源默认返回未知状态，而应用的整体健康是各资源健康的聚合。</p>
+<p>接入 Operator 后必然撞上最后一行：内置健康检查只覆盖常见内置资源，自定义资源默认返回未知状态，整体健康由各资源健康聚合。</p>
 <p>一个未知就会让整体判定失去意义，通知也就无从触发。解决办法是在 <code>argocd-cm</code> 里为该资源类型注册一段 Lua 脚本。</p>
 
 <pre><code class="language-yaml"># argocd-cm 片段：给自定义资源补健康判定，否则它永远是 Unknown
@@ -456,7 +456,7 @@ data:
 <h2>同步波次与 hooks：把顺序声明出来</h2>
 
 <p>一次同步默认是并发应用所有资源的，顺序不确定。</p>
-<p>当资源之间有真实依赖（CRD 必须先于使用它的自定义资源、数据库迁移必须先于新版本代码、配置必须先于消费它的工作负载），就要用 sync-wave 注解显式排序。</p>
+<p>资源间有真实依赖时，CRD 必须先于自定义资源、数据库迁移先于新版本代码、配置先于消费它的工作负载，用 sync-wave 注解显式排序。</p>
 <p><strong>波次值从小到大依次应用，前一波全部健康之后才进入下一波</strong>，未标注的默认为 0，允许负数。</p>
 
 <div class="mermaid">
@@ -482,14 +482,14 @@ stateDiagram-v2
     end note
 </div>
 
-<p>典型的波次安排是：负数波放 CRD 与命名空间级资源，0 波放 ConfigMap 与 Secret 引用，1 波放工作负载，2 波放 Ingress 与对外暴露。hook 则挂在同步生命周期上：PreSync 在所有波次之前跑，PostSync 在全部完成后跑，SyncFail 只在失败时跑。</p>
+<p>负数波放 CRD、命名空间级资源，0 波放 ConfigMap、Secret 引用，1 波放工作负载，2 波放 Ingress、对外暴露。hook 挂在同步生命周期上：PreSync 先于所有波次跑，PostSync 全部完成后跑，SyncFail 只在失败时跑。</p>
 
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">把数据库迁移放进 PreSync 之前，先确认三件事</div>
     <p>一是<strong>幂等性</strong>：hook 会在每次同步时重跑，包括自愈触发的同步，所以迁移必须用版本表记录已执行变更，重复执行是常态而非异常。</p>
 <p>二是<strong>失败会阻塞整次同步</strong>：新版本代码上不去，而旧版本仍在服务，如果迁移已部分执行，数据库会处于中间状态。</p>
-<p>三是<strong>必须向后兼容</strong>：从迁移完成到新版本 Pod 全部就绪之间有一个窗口，旧代码还在读写新结构，加字段安全，删字段和改类型必须拆成多次发布。数据库兼容演进的详细做法见站内 <a href="../../cicd/deployment/index.html">部署策略</a> 篇。</p>
+<p>三是<strong>必须向后兼容</strong>：迁移完成到新版本 Pod 就绪之间有一个窗口，旧代码仍读写新结构；加字段安全，删字段、改类型要分多次发布。数据库兼容演进见 <a href="../../cicd/deployment/index.html">部署策略</a>。</p>
 </div>
 
 <h2>规模化之后会在哪里撞墙</h2>
@@ -538,7 +538,7 @@ stateDiagram-v2
 <tr><td>所有应用都丢进 default 项目</td><td>不建 AppProject</td><td>没有仓库与目标命名空间白名单，任何应用能往任意位置写任意资源</td><td>按团队或业务域建 Project，限定仓库、目标与资源类型</td></tr>
 </tbody></table>
 
-<p>同步策略各开关的更细语义与自愈行为，见同专题 <a href="../application-sync/index.html">Application 管理与同步策略</a>；多环境的仓库结构与环境差异管理，见 <a href="../multi-env/index.html">多环境与 K8s</a>；探针、滚动更新参数与 PDB 这些健康判定背后的 Kubernetes 机制，见站内 <a href="../../kubernetes/index.html">Kubernetes 专题</a>。</p>
+<p>同步开关的语义与自愈行为见同专题 <a href="../application-sync/index.html">Application 管理与同步策略</a>；仓库结构与环境差异见 <a href="../multi-env/index.html">多环境与 K8s</a>；探针、滚动更新参数、PDB 这些健康判定背后的机制见 <a href="../../kubernetes/index.html">Kubernetes 专题</a>。</p>
 
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>

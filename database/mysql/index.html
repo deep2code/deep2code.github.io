@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="MySQL 索引原理与 SQL 优化：聚簇索引与回表的代价、覆盖索引、索引失效的常见条件。">
+        <meta name="description" content="InnoDB 页结构与 B+ 树、Buffer Pool 分段 LRU、三大日志与两阶段提交、MVCC 可见性判定、加锁范围与死锁推演，配排查命令和深分页改法。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/mysql/">
     <!-- Open Graph -->
     <meta property="og:title" content="MySQL 深度原理：B+树、MVCC、加锁范围 - 资深码农">
-    <meta property="og:description" content="MySQL 索引原理与 SQL 优化：聚簇索引与回表的代价、覆盖索引、索引失效的常见条件。">
+    <meta property="og:description" content="InnoDB 页结构与 B+ 树、Buffer Pool 分段 LRU、三大日志与两阶段提交、MVCC 可见性判定、加锁范围与死锁推演，配排查命令和深分页改法。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/mysql/">
     <meta property="og:site_name" content="资深码农">
@@ -38,7 +38,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="MySQL 深度原理：B+树、MVCC、加锁范围">
-    <meta name="twitter:description" content="MySQL 索引原理与 SQL 优化：聚簇索引与回表的代价、覆盖索引、索引失效的常见条件。">
+    <meta name="twitter:description" content="InnoDB 页结构与 B+ 树、Buffer Pool 分段 LRU、三大日志与两阶段提交、MVCC 可见性判定、加锁范围与死锁推演，配排查命令和深分页改法。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
@@ -91,9 +91,9 @@
     </header>
 
     <p>很多人用 MySQL 只会写 SQL，但不知道为什么索引能加速，不知道事务隔离级别怎么实现的，也不知道 MVCC 是什么。</p>
-<p>这篇从 InnoDB 的磁盘页布局讲到加锁范围推演，中间穿插真实的参数数值和排查命令——目标是让你下次线上出现「锁等待超时」「慢查询突然飙升」时，知道该敲哪条命令、看哪个数字。</p>
+<p>磁盘页布局一路到加锁范围推演，配参数数值和排查命令。线上出现「锁等待超时」「慢查询突然飙升」时，就知道敲哪条命令、看哪个数字。</p>
 <h2>慢查询与锁等待的动手顺序</h2>
-    <p>线上只有两类现象：<strong>某条 SQL 变慢</strong>，和<strong>事务卡在锁上</strong>。两条路径的第一刀完全不同，走错方向能白花一小时。下面的命令按顺序敲，每条都写了看哪个数字；为什么这么判断见原理层。</p>
+    <p>线上只有两类现象：<strong>某条 SQL 变慢</strong>，和<strong>事务卡在锁上</strong>。两条路径第一刀不同，走错方向白花一小时。命令按顺序敲，每条都标了看哪个数字。</p>
     <pre><code class="language-sql">-- ===== 路径 A：某条 SQL 慢 =====
 -- 8.0.18 起有 EXPLAIN ANALYZE，它看的是「实际」而不是「预估」。
 -- 注意它会真的执行语句：写操作请放进事务里执行完再 ROLLBACK。
@@ -511,7 +511,7 @@ flowchart TD
     </table>
 
     <h2>聚簇索引、回表与覆盖索引</h2>
-    <p>InnoDB 的表<strong>本身就是一棵 B+ 树</strong>（聚簇索引），主键就是它的排序键，行数据直接放在叶子页。二级索引是另一棵树，叶子页存的不是行，而是<strong>主键值</strong>。理解这一点，回表、覆盖索引、主键该用什么类型，全部一目了然。</p>
+    <p>InnoDB 表<strong>本身就是一棵 B+ 树</strong>（聚簇索引），主键是排序键，行数据放在叶子页。二级索引是另一棵树，叶子页存的不是行，而是<strong>主键值</strong>。回表、覆盖索引、主键选型由此解释。</p>
 
     <div class="mermaid">
 flowchart LR
@@ -625,7 +625,7 @@ flowchart LR
     YOUNG -->|长期不访问 逐步后移| MID
     </div>
 
-    <p>为什么要搞这么复杂？因为一次 <code>SELECT * FROM big_table</code> 全表扫描会读入海量只用一次的页。如果用朴素 LRU，这些页会全部涌进链表头，把真正的热点页挤出去——命中率瞬间崩塌，业务集体变慢。</p>
+    <p>一次 <code>SELECT * FROM big_table</code> 全表扫描会读入海量只用一次的页；朴素 LRU 下这些页全涌进链表头，把热点页挤出去，命中率瞬间崩塌、业务集体变慢。</p>
 <p>midpoint 插入 + 1 秒停留门槛，恰好让「只扫一遍」的页进不了 young 区。</p>
 
     <pre><code class="language-sql">-- 命中率：目标 ≥ 99%，长期低于 95% 说明内存不够或有大扫描
@@ -684,7 +684,7 @@ SHOW STATUS LIKE 'Innodb_buffer_pool_pages_total';</code></pre>
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
         <div class="callout-title">Change Buffer 的隐藏前提</div>
-        <p>它<strong>只对非唯一二级索引生效</strong>。唯一索引插入必须立刻读页判重，没法延迟，所以「给字段加个唯一索引保险一点」在写密集场景是实打实的性能损失——它把可以攒批的随机写，变成了每次都必须读盘。</p>
+        <p>Change Buffer <strong>只对非唯一二级索引生效</strong>。唯一索引插入必须立刻读页判重，「给字段加个唯一索引保险一点」在写密集场景是性能损失：本可攒批的随机写变成每次读盘。</p>
     </div>
 
     <h2>三大日志与两阶段提交</h2>
@@ -844,7 +844,7 @@ sequenceDiagram
     </table>
 
     <h2>MVCC 的可见性判定算法</h2>
-    <p>MVCC 让「读」不用加锁：读事务顺着 undo log 版本链往回找，找到一个自己「有权看见」的版本。问题是——<strong>凭什么判定有权看见？</strong>这套判定只有 4 条规则，背下来就能自己推演任何并发场景。</p>
+    <p>MVCC 让「读」不用加锁：读事务顺着 undo log 版本链往回找，找到一个自己「有权看见」的版本。判定只有 4 条规则，记住就能自己推演任何并发场景。</p>
 
     <p>每行有三个隐藏字段，版本链就是靠 <code>roll_pointer</code> 串起来的：</p>
 
@@ -1011,7 +1011,7 @@ sequenceDiagram
     <div class="callout callout-danger">
         <div class="callout-icon">❌</div>
         <div class="callout-title">长事务：undo 撑爆磁盘的元凶</div>
-        <p>purge 线程只能清理「不再被任何 Read View 需要」的 undo 版本。一个开着不提交的 RR 事务，会让它之后所有版本都无法回收——undo 表空间持续膨胀，版本链越来越长，连别的事务的快照读都要顺着长链回溯，整库变慢。</p>
+        <p>purge 线程只清理「不再被任何 Read View 需要」的 undo 版本。一个不提交的 RR 事务会让之后的版本无法回收，undo 表空间膨胀、版本链变长，快照读也要顺长链回溯，整库变慢。</p>
         <pre><code class="language-sql">-- 揪出跑了超过 60 秒的事务
 SELECT trx_id, trx_state, trx_started,
        TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS run_sec,
@@ -1093,11 +1093,11 @@ flowchart TD
     <div class="callout callout-warning">
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">「没走索引就升级成表锁」是流传最广的错误说法</div>
-        <p>InnoDB <strong>不会</strong>把行锁升级为表锁。真实情况是：没有索引可用时全表扫描，<strong>扫过的每一行都加 Next-Key Lock</strong>，结果在业务上看起来像锁表。区别很重要——它意味着解法是「让 SQL 走上索引」，而不是「换引擎」或「调锁粒度参数」。</p>
+        <p>InnoDB <strong>不会</strong>把行锁升级为表锁。没有索引可用时全表扫描，<strong>扫过的每一行都加 Next-Key Lock</strong>，业务上看起来像锁表。解法是「让 SQL 走上索引」，不是「换引擎」或「调锁粒度参数」。</p>
         <p>顺带一提：RC 下未匹配的行锁会在语句结束前提前释放，RR 下要持有到事务结束。这是 RC 死锁率明显更低的第二个原因。</p>
     </div>
 
-    <p>死锁的成因只有一个：<strong>两个事务以相反顺序获取同一组锁</strong>。最常见的不是教科书里的「A锁1等2、B锁2等1」，而是下面这种「唯一索引冲突 + 间隙锁」的组合，很多人踩了都不知道自己踩了什么：</p>
+    <p>死锁的成因只有一个：<strong>两个事务以相反顺序获取同一组锁</strong>。最常见的是「唯一索引冲突 + 间隙锁」的组合，而不是教科书里的「A锁1等2、B锁2等1」：</p>
 
     <div class="mermaid">
 sequenceDiagram
@@ -1175,7 +1175,7 @@ SELECT object_name, index_name, lock_type, lock_mode, lock_status, lock_data
     <div class="callout callout-info">
         <div class="callout-icon">💡</div>
         <div class="callout-title">死锁不可能彻底消灭，要设计成可重试</div>
-        <p><code>innodb_deadlock_detect</code> 默认开启，检测到环立刻回滚代价小的事务，报 <code>ER_LOCK_DEADLOCK (1213)</code>。这是<strong>秒级返回的正常错误</strong>，不是故障。而 <code>innodb_lock_wait_timeout</code>（默认 50 秒）管的是「等不到锁」，是另一回事——生产环境通常调到 5～10 秒，避免一次锁等待把连接池拖垮。</p>
+        <p><code>innodb_deadlock_detect</code> 默认开启，检测到环就回滚代价小的事务，报 <code>ER_LOCK_DEADLOCK (1213)</code>，是<strong>秒级返回的正常错误</strong>。<code>innodb_lock_wait_timeout</code>（默认 50 秒）管等不到锁，生产常调到 5～10 秒，避免一次锁等待拖垮连接池。</p>
         <p>应用层要区别对待：1213 直接重试（幂等前提下），1205（等锁超时）则说明有慢事务，重试往往无效，该去抓长事务。</p>
     </div>
 
@@ -1405,8 +1405,8 @@ SELECT o.* FROM orders o
             </tr>
         </tbody>
     </table>
-    <p><strong>不适用边界</strong>：这篇只解决 InnoDB 自己能解释的问题。慢查询的系统化定位流程见站内 <a href="../optimization/slow-query/">慢查询定位</a>，索引设计方法见 <a href="../optimization/index/">索引优化</a> 与 <a href="../design/index-design/">索引设计</a>；表结构与范式取舍见 <a href="../design/">数据库设计专题</a>；</p>
-<p>缓存该不该加、加了之后的一致性窗口见 <a href="../cache/problems/">缓存一致性与失效</a>；同样的 MVCC 问题在 PostgreSQL 上是完全不同的形态（旧版本留在堆表、靠 VACUUM 回收），对照见 <a href="../postgresql/">PostgreSQL 深度原理</a> 与 <a href="../postgresql/intro/">PG 与 MySQL 架构差异</a>；</p>
+    <p><strong>不适用边界</strong>：只到 InnoDB 能解释的问题。慢查询定位见 <a href="../optimization/slow-query/">慢查询定位</a>，索引设计见 <a href="../optimization/index/">索引优化</a> 与 <a href="../design/index-design/">索引设计</a>，表结构范式取舍见 <a href="../design/">数据库设计专题</a>。</p>
+<p>缓存该不该加、之后的一致性窗口见 <a href="../cache/problems/">缓存一致性与失效</a>；MVCC 在 PostgreSQL 是另一形态（旧版本留在堆表、靠 VACUUM 回收），见 <a href="../postgresql/">PostgreSQL 深度原理</a> 与 <a href="../postgresql/intro/">PG 与 MySQL 架构差异</a>。</p>
 <p>到底该不该继续用 MySQL 则回到 <a href="../">数据库选型的第一性判断</a>。</p>
 
     <h2>最容易踩的坑</h2>

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="libuv 六个阶段的顺序、nextTick 与 Promise 微任务的清空时机、定时器漂移，以及线程池等待为何不体现在 CPU 和事件循环延迟上。">
+        <meta name="description" content="给出事件循环阻塞的可执行测量流程，讲六个阶段、nextTick 饿死 poll、epoll_wait 超时与 libuv 线程池分工，附分诊路径与反模式。">
     <meta name="keywords" content="Node.js,事件循环,event loop,libuv,process.nextTick,setImmediate,Worker Threads,异步IO,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/node/event-loop/">
     <!-- Open Graph -->
     <meta property="og:title" content="Node.js 事件循环的六个阶段与实际影响 - 资深码农">
-    <meta property="og:description" content="libuv 六个阶段的顺序、nextTick 与 Promise 微任务的清空时机、定时器漂移，以及线程池等待为何不体现在 CPU 和事件循环延迟上。">
+    <meta property="og:description" content="给出事件循环阻塞的可执行测量流程，讲六个阶段、nextTick 饿死 poll、epoll_wait 超时与 libuv 线程池分工，附分诊路径与反模式。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/node/event-loop/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Node.js 事件循环的六个阶段与实际影响 - 资深码农">
-    <meta name="twitter:description" content="libuv 六个阶段的顺序、nextTick 与 Promise 微任务的清空时机、定时器漂移，以及线程池等待为何不体现在 CPU 和事件循环延迟上。">
+    <meta name="twitter:description" content="给出事件循环阻塞的可执行测量流程，讲六个阶段、nextTick 饿死 poll、epoll_wait 超时与 libuv 线程池分工，附分诊路径与反模式。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "Node.js 事件循环的六个阶段与实际影响", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "libuv 六个阶段的顺序、nextTick 与 Promise 微任务的清空时机、定时器漂移，以及线程池等待为何不体现在 CPU 和事件循环延迟上。", "url": "https://www.yijunjun.asia/programming/node/event-loop/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/node/event-loop/"}, "articleSection": "后端与编程语言"}</script>    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Node.js 总览", "item": "https://www.yijunjun.asia/programming/node/"}, {"position": 4, "name": "Node.js 事件循环", "item": "https://www.yijunjun.asia/programming/node/event-loop/"}]}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "Node.js 事件循环的六个阶段与实际影响", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "给出事件循环阻塞的可执行测量流程，讲六个阶段、nextTick 饿死 poll、epoll_wait 超时与 libuv 线程池分工，附分诊路径与反模式。", "url": "https://www.yijunjun.asia/programming/node/event-loop/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/node/event-loop/"}, "articleSection": "后端与编程语言"}</script>    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Node.js 总览", "item": "https://www.yijunjun.asia/programming/node/"}, {"position": 4, "name": "Node.js 事件循环", "item": "https://www.yijunjun.asia/programming/node/event-loop/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Node.js 事件循环的六个阶段顺序是什么", "acceptedAnswer": {"@type": "Answer", "text": "一轮迭代的顺序是 timers、pending callbacks、idle 与 prepare、poll、check、close callbacks。timers 执行已到期的 setTimeout 与 setInterval 回调；pending callbacks 处理上一轮推迟的系统级回调，主要是 TCP 错误；idle 与 prepare 由 libuv 内部使用；poll 收割已完成的 IO 事件，也是整个循环唯一会阻塞等待的阶段；check 执行 setImmediate 回调；close callbacks 处理句柄关闭事件。每个阶段会把自己队列里的回调执行完才进入下一个阶段。"}}, {"@type": "Question", "name": "process.nextTick 为什么会饿死事件循环", "acceptedAnswer": {"@type": "Answer", "text": "因为 nextTick 队列不是每轮循环清空一次，而是在每个阶段切换之前、以及每个回调执行结束之后都要被完整清空，清空过程中新入队的项会追加到同一条队列末尾。递归调用 nextTick 意味着这条队列永远清不空，事件循环根本走不到 poll 阶段，所有网络和文件回调都得不到执行。表现是单核 CPU 打满、进程还在、健康检查不响应。需要切片时应改用 setImmediate，它每轮只执行本轮已入队的一批，给 IO 留出机会。"}}, {"@type": "Question", "name": "setTimeout 零延迟和 setImmediate 到底谁先执行", "acceptedAnswer": {"@type": "Answer", "text": "在 IO 回调内部注册时 setImmediate 一定先执行，因为 IO 回调运行在 poll 阶段，本轮的下一站就是 check 阶段，而 timers 要等到下一轮。在主模块顶层注册时顺序不稳定，原因是 setTimeout 的零延迟被钳成一毫秒，第一次进入 timers 阶段时是否已经过了这一毫秒取决于进程启动耗时和机器负载。工程上不要依赖这个顺序，想让路给 IO 用 setImmediate，想在同步代码结束后立刻执行用微任务。"}}, {"@type": "Question", "name": "libuv 线程池到底负责哪些操作", "acceptedAnswer": {"@type": "Answer", "text": "线程池承担那些操作系统没有提供可用异步接口的阻塞操作，主要是 fs 模块几乎所有异步方法、调用 getaddrinfo 的 dns.lookup、crypto 的 pbkdf2 与 scrypt 等派生函数的异步版本、zlib 的压缩与解压。它不承担网络 IO，TCP 与 UDP 由内核的 epoll 或 kqueue 直接通知，不占线程。默认线程数是 4，上限 1024，通过启动时的 UV_THREADPOOL_SIZE 环境变量调整。理解这条分工才能解释大量文件读写时延迟暴涨而 CPU 并不忙的现象。"}}, {"@type": "Question", "name": "为什么接口延迟很高但 CPU 使用率不高", "acceptedAnswer": {"@type": "Answer", "text": "最常见的三个原因是线程池排队、下游变慢、GC 停顿。线程池排队的特征是 fs、crypto、zlib 或 dns.lookup 的并发量远超线程池规模，线程都在等磁盘或做密钥派生，CPU 上体现不出来；下游变慢的特征是数据库或外部 HTTP 的 p99 同步升高；GC 问题的特征是老生代持续增长不回落。判定顺序是先看事件循环延迟直方图，延迟高说明主线程有长阻塞，延迟正常就往线程池和下游查。"}}, {"@type": "Question", "name": "poll 阶段为什么会阻塞，这会影响性能吗", "acceptedAnswer": {"@type": "Answer", "text": "poll 阶段的阻塞是设计上必要的行为，它让进程在无事可做时不消耗 CPU。libuv 进入 poll 前会计算一个超时值传给内核的等待调用：poll 队列非空或有 setImmediate 待执行时超时为零，立即返回；只有定时器时超时等于最近定时器的剩余时间；只有活跃 socket 时无限期等待直到事件就绪。所以空闲的 web 服务 CPU 接近零是正常的，而挂一个一毫秒的 setInterval 会让进程每毫秒醒一次，系统调用次数明显上升。"}}]}</script>
@@ -90,10 +90,10 @@
                     </header>
                     <div class="article-content">
 <p>事件循环是 Node.js 讲得最多也最糊的一块：教程停在「单线程加非阻塞 IO」，线上真正咬人的细节全在阶段边界和队列优先级里。</p>
-<p>这篇的靶子很具体——<strong>让你能在十分钟内测出「服务是不是被事件循环卡住了」，并且判断卡在主线程、线程池还是下游</strong>，然后再解释这些结论为什么成立。</p>
+<p>目标很具体——<strong>十分钟内测出服务是否被事件循环卡住，并判断卡在主线程、线程池还是下游</strong>，再解释结论为何成立。</p>
 <p>单线程模型本身的适用边界在 <a href="../">Node.js 后端的适用边界</a>，profile 与堆快照的完整判读在 <a href="../performance/">Node.js 性能诊断</a>。</p>
 <h2>怎么测出事件循环被阻塞了</h2>
-<p>这一层不解释机制，只给可直接敲的流程。顺序很重要：先拿到一个能持续观测的数字，再加压，最后才分层定位——反过来做会得到一堆无法解释的现象。</p>
+<p>这层不讲机制，只给能直接敲的流程。顺序不能换：先拿到可持续观测的数字，再加压，最后分层定位；反过来，现象无法解释。</p>
 <p>第一件事是把延迟探针挂上。用 <code>-r</code> 预加载，不改业务代码，也能测到启动阶段的阻塞：</p>
 <pre><code class="language-javascript">// /tmp/lag-probe.js —— 任何 Node 服务都能用：node -r /tmp/lag-probe.js server.js
 const { monitorEventLoopDelay } = require('node:perf_hooks');
@@ -181,7 +181,7 @@ node -e "setTimeout(function(){},9e5); console.log(process.getActiveResourcesInf
 
 <h2>一轮循环的六个阶段</h2>
 <p>回调没按预期时间点执行怎么判读，就是上面第 3 步与第 5 步要分层的依据。</p>
-<p>libuv 的一轮迭代按固定顺序穿过六个阶段。每个阶段有自己的回调队列，<strong>进入某个阶段后会把该阶段队列里的回调执行完（或达到系统相关的上限）才进入下一阶段</strong>。</p>
+<p>libuv 一轮迭代按固定顺序穿过六个阶段，每个阶段有自己的回调队列，<strong>进入后先执行完该队列的回调（或达系统相关上限）才进下一阶段</strong>。</p>
 <p>当没有任何活跃的 handle 和 request 时，循环退出，进程自然结束。</p>
 <div class="mermaid">
 stateDiagram-v2
@@ -218,7 +218,7 @@ stateDiagram-v2
 </table>
 
 <h2>微任务的插入时机才是关键</h2>
-<p>搞清这一节能解决那个最诡异的故障形态：进程活着、CPU 单核跑满、健康检查端口完全不响应。</p>
+<p>进程活着、CPU 单核跑满、健康检查端口完全不响应。</p>
 <p>六个阶段只是骨架，顺序看两条微任务队列何时清空：<code>process.nextTick</code> 优先于 Promise 微任务队列。</p>
 <p>而<strong>这两条队列在每个阶段切换之间、以及每个宏任务回调执行完之后都会被完整清空</strong>——不是每轮循环一次。这个细节决定了递归 <code>nextTick</code> 的杀伤力。</p>
 <table>
@@ -263,7 +263,7 @@ fs.readFile(__filename, () =&gt; {
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">递归 nextTick 能让整个进程假死</div>
-    <p>因为 nextTick 队列在进入下一阶段前必须清空，而清空过程中新增的项会追加到同一队列，循环永远走不到 poll 阶段。表现是 CPU 单核 100%、进程还活着、健康检查端口不响应、日志停止输出。</p>
+    <p>nextTick 队列进下一阶段前必须清空，清空时新增项追加到同一队列，循环永远走不到 poll。表现：CPU 单核 100%、进程活着、健康检查端口不响应、日志停止输出。</p>
 <p>同样的代码换成 <code>setImmediate</code> 递归则完全安全——每轮只执行本轮已入队的那一批，IO 回调能插进来。</p>
 </div>
 <pre><code class="language-javascript">// 场景：对 200 万条记录做 CPU 计算，又不想让健康检查超时
@@ -288,15 +288,15 @@ function goodChunk(items, i = 0, batch = 500) {
 // 真正 CPU 密集的负载该移出主线程，单线程的适用边界见 Node.js 总览篇。</code></pre>
 
 <h2>为什么主模块里 setTimeout 与 setImmediate 顺序不稳定</h2>
-<p>搞清这一节能解决一类恶心的 CI 问题：本地稳定通过的单测在构建机上随机失败。</p>
-<p>这是最经典的输出顺序题。答案不是「随机」，而是取决于<strong>进程从启动到第一次进入 timers 阶段花了多久</strong>。<code>setTimeout(fn, 0)</code> 被 Node 钳成 1ms，第一次进入 timers 阶段时：如果已经过了 1ms，定时器到期，先打印 timers 的回调；</p>
+<p>本地稳定通过的单测在构建机上随机失败。</p>
+<p>经典输出顺序题，答案不是「随机」，而取决于<strong>进程从启动到第一次进入 timers 阶段花了多久</strong>。<code>setTimeout(fn, 0)</code> 被 Node 钳成 1ms：首次进入 timers 若已过 1ms，定时器到期，先打印 timers 回调；</p>
 <p>如果还没到 1ms，timers 阶段空过，接着走到 check 阶段先打印 immediate。机器负载、启动时加载的模块数量都会改变这个结果。</p>
 <p>而在任何 IO 回调内部注册时，顺序是确定的：IO 回调运行在 poll 阶段，本轮的下一站就是 check，所以 <code>setImmediate</code> 一定先于 <code>setTimeout</code> 执行。</p>
 <p>结论很实用：<strong>不要让业务逻辑或单元测试依赖这两者的相对顺序</strong>，需要「给 IO 让路」就用 <code>setImmediate</code>，需要「同步代码结束后立刻」就用微任务。</p>
 
 <h2>poll 阶段阻塞多久，由最近的定时器决定</h2>
-<p>搞清这一节能解决两个观测上的困惑：空闲进程 CPU 为什么是 0%，以及加了一个 1ms 定时器之后系统调用为什么暴涨。</p>
-<p>libuv 在进入 poll 前会算一个超时值，这个值就是 <code>epoll_wait</code> 的 timeout 参数。理解它，就能解释「为什么空闲的 Node 进程 CPU 是 0% 而不是 100%」，也能解释「为什么加了一个 1ms 的 setInterval 之后进程的系统调用次数翻了几十倍」。</p>
+<p>空闲进程 CPU 为什么是 0%，以及加了一个 1ms 定时器之后系统调用为什么暴涨。</p>
+<p>libuv 进 poll 前算一个超时值，即 <code>epoll_wait</code> 的 timeout 参数：它解释了空闲 Node 进程 CPU 为什么是 0% 而不是 100%，也解释了加一个 1ms 的 setInterval 后系统调用翻几十倍。</p>
 <table>
 <thead><tr><th>当前状态</th><th>poll 阻塞时长</th><th>观测表现</th></tr></thead>
 <tbody>
@@ -309,7 +309,7 @@ function goodChunk(items, i = 0, batch = 500) {
 </table>
 
 <h2>libuv 线程池承担什么，不承担什么</h2>
-<p>搞清这一节能解决用法层第 4 步那个判断：延迟正常、CPU 不忙，接口却慢，问题在哪。</p>
+<p>对应用法层第 4 步的判断：延迟正常、CPU 不忙，接口却慢，问题在哪。</p>
 <p>这是排查「延迟很高但 CPU 不忙」时最容易漏掉的一层。网络 IO 由内核的 epoll / kqueue / IOCP 直接通知，不占线程；</p>
 <p>而文件系统操作、<code>dns.lookup</code>、部分 crypto 和 zlib 操作在操作系统层面<strong>没有可用的异步接口</strong>，libuv 只能把它们丢进线程池里用阻塞方式跑完再回调。线程池默认只有 4 个线程。</p>
 <div class="mermaid">
@@ -412,8 +412,8 @@ sequenceDiagram
 
 <h2>从症状到定位：分诊流程与反模式</h2>
 <p>前面几节是机制，这里收成一张流程图和两张判断表：看到某个症状，直接照着走。</p>
-<p>一句结论：<strong>事件循环延迟是 Node 服务最重要的单一健康指标，比 CPU 使用率更早、更准确地反映问题</strong>，因为线程池排队和下游阻塞不会体现在 CPU 上，而任何形式的主线程阻塞都会立刻体现在延迟直方图上。</p>
-<p>采集方式用 <code>perf_hooks.monitorEventLoopDelay</code>，告警阈值量级、直方图 p99 的判读、以及火焰图和堆快照的配合方法，详见 <a href="../performance/">Node.js 性能诊断</a>；单线程模型的适用边界、容器里的 CPU 配额与进程模型，详见 <a href="../">Node.js 总览</a>。</p>
+<p>结论：<strong>事件循环延迟是 Node 服务最重要的单一健康指标，比 CPU 使用率更早、更准地反映问题</strong>：线程池排队、下游阻塞不体现在 CPU 上，主线程阻塞立刻反映在延迟直方图上。</p>
+<p>采集用 <code>perf_hooks.monitorEventLoopDelay</code>；阈值量级、直方图 p99 判读、火焰图与堆快照的配合见 <a href="../performance/">Node.js 性能诊断</a>；单线程模型适用边界、容器 CPU 配额与进程模型见 <a href="../">Node.js 总览</a>。</p>
 <div class="mermaid">
 flowchart TD
     S["接口 p99 明显变高"] --> Q1{"CPU 是否单核接近 100%"}
@@ -450,9 +450,9 @@ flowchart TD
 <tr><td>在 close 事件之前就释放资源</td><td>close callbacks 阶段才是句柄真正销毁的时机</td><td>清理逻辑挂在 close 事件里</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：如果延迟直方图一直正常，问题就不在事件循环，继续在这里挖是浪费时间——去查线程池并发、下游 RT、连接池等待与 GC。内存持续增长、堆快照怎么读、火焰图怎么对比，在 <a href="../performance/">Node.js 性能诊断</a>；</p>
+<p><strong>不适用边界</strong>：直方图正常，问题不在事件循环，再挖没意义——去查线程池并发、下游 RT、连接池等待与 GC。内存增长、堆快照怎么读、火焰图怎么对比，见 <a href="../performance/">Node.js 性能诊断</a>；</p>
 <p>该不该用 Node、容器里的 CPU 与内存配额，在 <a href="../">Node.js 后端的适用边界</a>；框架层中间件叠太多导致的每请求固定开销，在 <a href="../framework-compare/">Node.js Web 框架选型</a>。</p>
-<p>这条路径上，上一篇划定了 Node 能做什么，本篇解释「为什么会卡、怎么测出卡」，下一篇把测出来的现象变成可操作的四类数据采集。</p>
+<p>为什么会卡、怎么测出卡讲完了；下一篇把测到的现象变成可操作的四类数据采集。</p>
 
 <div class="callout-title">最容易踩的坑</div>
     <ul>

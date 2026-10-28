@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Drizzle 迁移工程：generate 靠快照对比、危险变更清单、expand-migrate-contract 可退回步骤、多环境迁移锁。">
+    <meta name="description" content="drizzle-kit 的 generate 靠快照对比，改 schema 前先过危险变更清单；生产按 expand-migrate-contract 分步走，多环境要迁移锁，回滚优先向前修复而不是回退 DDL。">
     <meta name="keywords" content="Drizzle ORM,Migration 与生产部署,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/drizzle/migrations/">
     <meta property="og:title" content="迁移管理：生成、应用与生产流程 - Drizzle ORM - 资深码农">
-    <meta property="og:description" content="Drizzle 迁移工程：generate 靠快照对比、危险变更清单、expand-migrate-contract 可退回步骤、多环境迁移锁。">
+    <meta property="og:description" content="drizzle-kit 的 generate 靠快照对比，改 schema 前先过危险变更清单；生产按 expand-migrate-contract 分步走，多环境要迁移锁，回滚优先向前修复而不是回退 DDL。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/drizzle/migrations/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="迁移管理：生成、应用与生产流程 - Drizzle ORM">
-    <meta name="twitter:description" content="Drizzle 迁移工程：generate 靠快照对比、危险变更清单、expand-migrate-contract 可退回步骤、多环境迁移锁。">
+    <meta name="twitter:description" content="drizzle-kit 的 generate 靠快照对比，改 schema 前先过危险变更清单；生产按 expand-migrate-contract 分步走，多环境要迁移锁，回滚优先向前修复而不是回退 DDL。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,10 +71,10 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>迁移是 ORM 里唯一会不可逆毁掉生产数据的环节。查询写错最多报错，迁移写错列就没了。这篇讲清 drizzle-kit 的工作机制、危险变更的识别、以及生产环境怎么组织迁移流程。</p>
+<p>迁移是 ORM 里唯一会不可逆毁掉生产数据的环节：查询写错只报错，迁移写错就丢数据。drizzle-kit 生成、危险变更识别、生产流程都得提前定好。</p>
 <h2>从改 schema 到生产生效：六步</h2>
 
-<p>这六步是固定流程，<strong>第三步（人工审查）是唯一不能自动化也不能跳过的一步</strong>。每步的「出错怎么办」写在最后一列——只有最后一步没有便宜的退路，前五步的检查都是为它服务的。</p>
+<p>流程顺序固定，<strong>只有第三步人工审查不能自动化、不能跳过</strong>。「出错怎么办」写在最后一列：只有最后一步没有便宜退路，前面的检查都为它服务。</p>
 
 <table>
 <thead><tr><th>步骤</th><th>动作</th><th>怎么验证</th><th>出错怎么办</th></tr></thead>
@@ -158,7 +158,7 @@ psql "$PROD_URL" -c \
 </tbody>
 </table>
 
-<p><strong>为什么生产绝不能用 push</strong>：push 执行过程没有任何产物。你不知道它执行了什么 SQL，code review 里看不到 DDL 变更，出问题无法追溯，不同环境可能执行出不同结果（push 依赖当前数据库的实际状态）。</p>
+<p><strong>生产绝不能用 push</strong>：执行过程不留任何产物，code review 看不到 DDL 变更，出问题无法追溯；push 依赖当前库实际状态，不同环境可能跑出不同结果。</p>
 <p>更危险的是 push 遇到歧义变更（比如列重命名）时会交互式询问，在 CI 里就会卡住或选错。</p>
 
 <div class="mermaid">
@@ -181,7 +181,7 @@ flowchart TB
 
 <p>同一个变更被生成两遍，因为对比的是快照。</p>
 
-<p>generate 不是对比 schema 和数据库，而是<strong>对比当前 schema 与上一次的 JSON 快照</strong>。快照存在 <code>drizzle/meta/</code> 下，每次 generate 生成一个新快照和一个 SQL 文件。这意味着：快照必须和 SQL 文件一起提交，否则下次 generate 会重新生成已有变更。</p>
+<p>generate 不对比数据库，只<strong>对比当前 schema 与上一次的 JSON 快照</strong>。快照存在 <code>drizzle/meta/</code> 下，每次生成一个新快照和一个 SQL 文件。必须与 SQL 一起提交，否则会重新生成已有变更。</p>
 
 <pre><code class="language-bash"># 1. 生成迁移（对比 schema 与上次快照）
 npx drizzle-kit generate --name add_user_role
@@ -222,7 +222,7 @@ npx drizzle-kit pull --out ./tmp-introspect
 
 <p>SQL 看着正常、执行完数据却少了，diff 不判断业务影响。</p>
 
-<p>这是这篇最重要的一节。<strong>diff 工具只对比结构，不判断业务影响</strong>。以下变更 drizzle-kit 会老老实实生成 SQL，但执行后可能丢数据或锁表。</p>
+<p>下面这份清单最关键。<strong>diff 工具只对比结构，不判断业务影响</strong>。以下变更 drizzle-kit 会老老实实生成 SQL，但执行后可能丢数据或锁表。</p>
 
 <table>
 <thead><tr><th>schema 变更</th><th>生成的 DDL</th><th>风险</th><th>安全做法</th></tr></thead>
@@ -243,7 +243,7 @@ npx drizzle-kit pull --out ./tmp-introspect
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">审查清单：每个生成的 SQL 文件必须过一遍</div>
-    <p>有没有 DROP COLUMN 或 DROP TABLE？有没有 ALTER COLUMN TYPE？有没有 SET NOT NULL？有没有在大表上 CREATE INDEX 而没加 CONCURRENTLY？有没有 ADD CONSTRAINT FOREIGN KEY 而没先 NOT VALID？有没有在一个迁移里混了 DDL 和大批量 UPDATE（会长时间持锁）？重命名是真 rename 还是 drop 加 add？以上任一为是，就不能直接合并。</p>
+    <p>逐项检查：DROP COLUMN 或 DROP TABLE；ALTER COLUMN TYPE；SET NOT NULL；大表 CREATE INDEX 没加 CONCURRENTLY；ADD CONSTRAINT FOREIGN KEY 没先 NOT VALID；一个迁移里混了 DDL 和大批量 UPDATE（长时间持锁）；重命名是真 rename 还是 drop 加 add。任一命中就不能直接合并。</p>
 </div>
 
 <h2>与 expand-migrate-contract 的配合</h2>
@@ -287,7 +287,7 @@ stateDiagram-v2
 </tbody>
 </table>
 
-<p>回填的关键是<strong>分批提交</strong>。一条 <code>UPDATE posts SET new_col = old_col</code> 在百万行表上会产生巨大事务、大量 WAL 和长时间行锁。正确做法是按主键范围分批，每批几千行，批间 sleep。完整模式与兼容性策略见站内模式演进篇。</p>
+<p>回填的关键是<strong>分批提交</strong>：一条 <code>UPDATE posts SET new_col = old_col</code> 在百万行表上会产生巨大事务、大量 WAL、长时间行锁。按主键范围分批，每批几千行，批间 sleep。完整推演见模式演进篇。</p>
 
 <pre><code class="language-sql">-- Expand 阶段：只加 nullable 列，零风险
 ALTER TABLE posts ADD COLUMN author_uuid uuid;
@@ -481,12 +481,12 @@ flowchart TB
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：本篇只讲 Drizzle 侧的迁移工程。加列删列改类型会不会重写全表、锁多久、元数据锁怎么排队，以及 <code>NOT VALID</code>、<code>CONCURRENTLY</code> 这些低锁路径的完整推演见 <a href="../../design/index-design/">模式演进与约束设计：表结构上线之后怎么改</a>；</p>
+<p><strong>不适用边界</strong>：加列删列改类型会不会重写全表、锁多久、元数据锁怎么排队，与 <code>NOT VALID</code>、<code>CONCURRENTLY</code> 低锁路径完整推演见 <a href="../../design/index-design/">模式演进与约束设计：表结构上线之后怎么改</a>；</p>
 <p>schema 与类型怎么定义见 <a href="../intro/">Drizzle 上手：schema 定义与类型推导</a>；查询与事务怎么写见上一篇 <a href="../queries/">查询构建：关系查询、join 与事务</a>；该不该用 Drizzle 见 <a href="../">Drizzle 的设计：SQL-first 的类型安全 ORM</a>；</p>
 <p>表结构本身怎么设计见 <a href="../../design/">范式与反范式：数据库设计的取舍</a>；索引该不该建、建了有没有用见 <a href="../../optimization/index/">索引设计与优化</a>；</p>
 <p>回填期间主从延迟怎么观察与压制、PITR 与备份策略见 <a href="../../postgresql/replication-ha/">PostgreSQL 复制与高可用</a>；MySQL 侧 DDL 不可回滚与在线改表工具的差异见 <a href="../../mysql/">MySQL 深度原理</a>。</p>
 
-<p>这条路径到这里结束：第一篇决定用不用 Drizzle，第二篇定 schema 与类型，第三篇把查询写对，本篇让生产库安全跟上 schema 变化——四步里只有本篇的错误会直接毁掉数据。</p>
+<p>这条路径到这里结束：定用不用 Drizzle、定 schema 与类型、把查询写对、让生产库安全跟上 schema 变化——四步里只有迁移的错误会直接毁掉数据。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../queries/">← 上一步：查询构建：关系查询、join 与事务</a></p>
 

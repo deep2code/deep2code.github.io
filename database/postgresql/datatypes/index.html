@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="PostgreSQL 数据类型选型：timestamptz 的实际存储与跨区读写、字符与数值类型的取舍。">
+        <meta name="description" content="钱用 numeric、时刻用 timestamptz、标识用 uuid 或 bigint；text 加 CHECK 替 varchar(n)，改类型是否重写全表看二进制兼容，TOAST 解释大 jsonb 高频更新的塌陷。">
     <meta name="keywords" content="PostgreSQL 数据类型,PostgreSQL,关系数据库,PostgreSQL">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/database/postgresql/datatypes/">
     <!-- Open Graph -->
     <meta property="og:title" content="PostgreSQL 数据类型选择与代价 - 资深码农">
-    <meta property="og:description" content="PostgreSQL 数据类型选型：timestamptz 的实际存储与跨区读写、字符与数值类型的取舍。">
+    <meta property="og:description" content="钱用 numeric、时刻用 timestamptz、标识用 uuid 或 bigint；text 加 CHECK 替 varchar(n)，改类型是否重写全表看二进制兼容，TOAST 解释大 jsonb 高频更新的塌陷。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/postgresql/datatypes/">
     <meta property="og:site_name" content="资深码农">
@@ -39,7 +39,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PostgreSQL 数据类型选择与代价 - 资深码农">
-    <meta name="twitter:description" content="PostgreSQL 数据类型选型：timestamptz 的实际存储与跨区读写、字符与数值类型的取舍。">
+    <meta name="twitter:description" content="钱用 numeric、时刻用 timestamptz、标识用 uuid 或 bigint；text 加 CHECK 替 varchar(n)，改类型是否重写全表看二进制兼容，TOAST 解释大 jsonb 高频更新的塌陷。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="数据库与缓存">
@@ -91,7 +91,7 @@
                     </header>
                     <div class="article-content">
 <p>类型选错的代价不是「不太优雅」，而是真金白银：用 <code>float8</code> 存金额的系统迟早会在对账时差出几分钱；用 <code>timestamp</code> 存时间的系统一到跨时区或夏令时就开始错乱；</p>
-<p>把 <code>varchar(20)</code> 当性能优化写满全库，等到手机号要存国际号段时才发现改长度要 <code>ALTER TABLE</code>。这篇按「选什么、为什么、选错了迁移要付多少代价」来组织，重点是那些<strong>改起来要重写全表或者根本改不动</strong>的决定。</p>
+<p>把 <code>varchar(20)</code> 当性能优化写满全库，手机号要存国际号段时才发现改长度要 <code>ALTER TABLE</code>。代价集中在<strong>改起来要重写全表、或者根本改不动</strong>的决定上。</p>
 <h2>这个字段该选什么类型</h2>
 
 <p>建表时不需要记住所有类型，只需要按顺序问几个问题：<strong>是不是钱、是不是时刻、是不是标识、取值集合会不会变、结构稳不稳定</strong>。</p>
@@ -237,12 +237,12 @@ flowchart TB
     J1 --> TOAST
 </div>
 
-<p>顺带提一个影响所有变长类型的机制：<strong>TOAST</strong>。一行超过约 2 KB（页大小的四分之一）时，PG 会把大的变长字段压缩，压不下去就挪到附属的 TOAST 表里，主表只留一个指针。好处是宽表不会撑爆页；</p>
+<p><strong>TOAST</strong> 影响所有变长类型。一行超过约 2 KB（页大小的四分之一）时，PG 先压缩大的变长字段，压不下去就挪进 TOAST 表，主表只留一个指针，宽表不会撑爆页。</p>
 <p>代价是访问被 TOAST 化的字段要多一次 IO，而且<strong>更新一个大 jsonb 字段会连带整行重写</strong>，这是 jsonb 大字段高频更新场景性能塌陷的根因。</p>
 
 <h2>数值：钱的问题只有一个正确答案</h2>
 
-<p><code>float8</code> 是 IEEE 754 二进制浮点，十进制的 0.1 在二进制里是无限循环小数，存进去就已经有误差。这不是「精度够不够」的问题，而是「每一笔都带误差、累加后必然对不上」的问题。</p>
+<p><code>float8</code> 是 IEEE 754 二进制浮点，十进制的 0.1 在二进制里是无限循环小数，存进去就有误差。误差落在每一笔上，累加后必然对不上。</p>
 
 <table>
 <thead><tr><th>类型</th><th>存储</th><th>精度</th><th>运算速度</th><th>用在哪 / 绝对不要用在哪</th></tr></thead>
@@ -287,7 +287,7 @@ SELECT setval(pg_get_serial_sequence('legacy_order', 'id'),
 
 <h2>字符类型：text、varchar(n)、char(n) 在 PG 里性能相同</h2>
 
-<p>这是 PG 与 MySQL 最容易被误搬的一条经验。MySQL 里 <code>char</code> 定长、<code>varchar</code> 变长，行格式和索引前缀都受影响；<strong>PG 内部三者都是同一个 varlena 结构</strong>，带 1 或 4 字节长度头，存储与比较路径完全一致。</p>
+<p>MySQL 里 <code>char</code> 定长、<code>varchar</code> 变长，行格式和索引前缀都受影响；PG 内部三者都是同一个 varlena 结构，带 1 或 4 字节长度头，存储与比较路径完全一致。</p>
 <p><code>varchar(n)</code> 唯一的作用是多一条长度检查，<code>char(n)</code> 则会补空格到定长，既费空间又让比较语义变怪（尾部空格在比较时被忽略）。</p>
 
 <table>
@@ -302,7 +302,7 @@ SELECT setval(pg_get_serial_sequence('legacy_order', 'id'),
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">用 CHECK 约束代替 varchar(n) 更灵活</div>
-    <p>把列声明成 <code>text</code>，再写 <code>CHECK (char_length(phone) BETWEEN 5 AND 32)</code>。以后要放宽限制，只需删掉旧约束、加一条新的 <code>NOT VALID</code> 约束再 <code>VALIDATE</code>，全程只取 SHARE UPDATE EXCLUSIVE 锁，不重写表；而缩短 <code>varchar</code> 上限是要重写全表的。另外 <code>char_length</code> 数的是字符数，<code>octet_length</code> 才是字节数，校验中文长度时注意选对。</p>
+    <p>列声明成 <code>text</code>，再写 <code>CHECK (char_length(phone) BETWEEN 5 AND 32)</code>。放宽限制只需删旧约束、加一条 <code>NOT VALID</code> 约束再 <code>VALIDATE</code>，全程只取 SHARE UPDATE EXCLUSIVE 锁，不重写表；缩短 <code>varchar</code> 上限则要重写全表。<code>char_length</code> 数字符数，<code>octet_length</code> 才是字节数，校验中文别选错。</p>
 </div>
 
 <h2>时间类型：默认就该用 timestamptz</h2>
@@ -428,17 +428,17 @@ SELECT key, count(*) FROM product, jsonb_each_text(attrs) GROUP BY key ORDER BY 
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">jsonb 的四条硬边界</div>
     <p>一是<strong>不能建外键</strong>，引用完整性只能靠应用层保证；二是<strong>统计信息粒度粗</strong>，优化器对 jsonb 条件的选择率估算常常偏差一两个数量级，进而选错连接方式；</p>
-<p>三是<strong>更新任意一个键都重写整行</strong>，大字段高频更新会让表快速膨胀；四是<strong>约束能力弱</strong>，类型与取值范围只能用 CHECK 加表达式勉强补。把它当主数据模型用，等于把关系数据库最值钱的那部分能力关掉。</p>
+<p>三是<strong>更新任意一个键都重写整行</strong>，大字段高频更新让表快速膨胀；四是<strong>约束能力弱</strong>，类型与取值范围只能靠 CHECK 表达式补。所以 jsonb 别当主数据模型。</p>
 </div>
 
 <h2>数组、enum 与那些「看起来很方便」的类型</h2>
 
 <p><strong>数组</strong>适合标签这类小集合：单行内元素不多、整体一起读写、不需要被外键引用。</p>
-<p>它的限制很硬——元素不能建外键，追加一个元素要重写整行，而且多对多关系一旦需要反向查询（「哪些文章打了这个标签、按时间排序分页」），数组加 GIN 虽然能过滤但没法高效排序与分页。</p>
+<p>数组的限制很硬：元素不能建外键，追加一个元素要重写整行；多对多关系要反向查询时，数组加 GIN 能过滤，但没法高效排序和分页。</p>
 <p>判断标准很简单：<strong>如果这个集合里的元素本身是实体、需要独立属性或被引用，就必须建关联表</strong>。</p>
 
 <p><strong>enum</strong> 的坑集中在演进上：<code>ALTER TYPE ... ADD VALUE</code> 加值很容易（PG 12 起可以在事务里加，但加完不能在同一事务里使用该值），但<strong>删值和改值都不支持</strong>，只能新建一个类型再整列迁移；</p>
-<p>排序由定义顺序决定而不是字面值，插入到中间要用 <code>BEFORE</code> 或 <code>AFTER</code>；跨库迁移和 ORM 映射也普遍别扭。多数情况下 <code>text</code> 加 <code>CHECK</code>（可随时改）或一张小的字典关联表（可带展示名、排序权重、启用开关）更划算。</p>
+<p>排序按定义顺序而非字面值，插中间要用 <code>BEFORE</code> 或 <code>AFTER</code>；跨库迁移和 ORM 映射都别扭。多数场景 <code>text</code> 加 <code>CHECK</code>（可随时改）或小字典表（带展示名、排序权重、启用开关）更划算。</p>
 <p>enum 唯一明显的优势是存储紧凑（4 字节）且天然带约束。</p>
 
 <pre><code class="language-sql">-- 数组：标签这类小集合，配 GIN 索引做包含查询
@@ -487,7 +487,7 @@ ALTER TYPE order_state ADD VALUE 'refunded' AFTER 'shipped';   -- 加值可以�
 
 <h2>改类型要付多少代价：哪些转换会重写全表</h2>
 
-<p>判断标准是<strong>新旧类型的存储表示是否二进制兼容</strong>。兼容则只改系统表里的类型定义，秒级完成；不兼容就要重写整张表的每一行，全程持有 ACCESS EXCLUSIVE 锁，读写全部阻塞，并且所有相关索引都要重建。</p>
+<p>判断标准是<strong>新旧类型的存储表示是否二进制兼容</strong>。兼容只改系统表定义，秒级完成；不兼容要重写全表每一行，全程持有 ACCESS EXCLUSIVE 锁，读写阻塞，相关索引全重建。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -523,7 +523,7 @@ flowchart TB
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">大表改类型前先设 lock_timeout</div>
-    <p>ACCESS EXCLUSIVE 锁需要等现存的所有读写事务结束，而它在等待期间会<strong>阻塞后来的所有查询</strong>——一个长查询没结束，ALTER 在排队，业务流量全部堵在 ALTER 后面，几秒钟就能把连接池打满。</p>
+    <p>这把锁要等所有读写事务结束，等待期间<strong>阻塞后来的所有查询</strong>：一个长查询不结束，ALTER 排队，流量都堵在它后面，几秒就打满连接池。</p>
 <p>做法是先 <code>SET lock_timeout = '3s'</code>，抢不到锁就失败重试，别让它无限等待。</p>
 </div>
 
@@ -545,11 +545,11 @@ flowchart TB
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：这篇只管列类型选择与迁移。字段选好之后索引怎么建、GIN 与 BRIN 怎么选、执行计划怎么读见 <a href="../index-optimize/">索引选型与执行计划判读</a>；<code>ALTER</code> 拿的锁怎么排队、隔离级别语义见 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；</p>
+<p><strong>不适用边界</strong>：类型选择与迁移之外，索引怎么建、GIN 与 BRIN 怎么选、计划怎么读见 <a href="../index-optimize/">索引选型与执行计划判读</a>；<code>ALTER</code> 锁排队、隔离级别语义见 <a href="../mvcc-transaction/">隔离级别与并发控制</a>；</p>
 <p>为什么更新一个 jsonb 键会重写整行、死元组怎么回收见 <a href="../">PostgreSQL 深度原理</a>；<code>lock_timeout</code> 一类参数在哪配、部署期还有哪些不可逆决定见 <a href="../install/">生产部署与必调参数</a>；</p>
 <p>从 MySQL 迁过来的类型对应关系见 <a href="../intro/">PG 与 MySQL 架构差异与选型</a>；MySQL 侧的行格式与主键类型代价见 <a href="../../mysql/">MySQL 深度原理</a>。</p>
 
-<p>这条路径上，上一篇把实例装好调好，本篇决定表里每一列长什么样，下一篇在这些列上建索引并学会判读执行计划——类型选错会让后面的索引优化事倍功半。</p>
+<p>实例装好调好之后，每一列长什么样由类型定，索引都建在这些列上；类型选错，后面的索引优化事倍功半。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../install/">← 上一步：PostgreSQL 生产部署与必调参数</a> · <a href="../index-optimize/">下一步：PostgreSQL 索引选型与执行计划判读：GIN、BRIN、部分索引与 EXPLAIN →</a></p>
 

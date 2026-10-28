@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Argo CD 同步：差异计算比的是什么、ignoreDifferences 的局限、prune 与 selfHeal 的精确语义、排障入口。">
+        <meta name="description" content="同步机制的细节：三方 diff 与所有权记录、ignoreDifferences 的两种定位、automated 与 prune、selfHeal 的边界、波次与 hooks、性能瓶颈、救火与失败排查。">
     <meta name="keywords" content="ArgoCD,Application,Sync Policy,Sync Wave,自动化同步,回滚,selfHeal">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/gitops/application-sync/">
     <!-- Open Graph -->
     <meta property="og:title" content="Argo CD 同步机制与漂移自愈 - 资深码农">
-    <meta property="og:description" content="Argo CD 同步：差异计算比的是什么、ignoreDifferences 的局限、prune 与 selfHeal 的精确语义、排障入口。">
+    <meta property="og:description" content="同步机制的细节：三方 diff 与所有权记录、ignoreDifferences 的两种定位、automated 与 prune、selfHeal 的边界、波次与 hooks、性能瓶颈、救火与失败排查。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/gitops/application-sync/">
     <meta property="og:site_name" content="资深码农">
@@ -39,7 +39,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Argo CD 同步机制与漂移自愈 - 资深码农">
-    <meta name="twitter:description" content="Argo CD 同步：差异计算比的是什么、ignoreDifferences 的局限、prune 与 selfHeal 的精确语义、排障入口。">
+    <meta name="twitter:description" content="同步机制的细节：三方 diff 与所有权记录、ignoreDifferences 的两种定位、automated 与 prune、selfHeal 的边界、波次与 hooks、性能瓶颈、救火与失败排查。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
@@ -93,13 +93,13 @@
 <p>Argo CD 的同步（sync）常被理解成「Git 一改就 kubectl apply 一遍」。这个理解会让你在第一次遇到「明明没人动过，应用却永远显示 OutOfSync」时彻底失去方向。</p>
 <p>同步的本质是一个持续收敛的<strong>三方 diff</strong>，而它最难的部分不是把清单推上去，而是判断集群里的某个字段变化<strong>算不算漂移</strong>。</p>
 
-<p>本文只讲同步机制本身：diff 从哪来、三个同步开关的精确语义、状态机、波次与 hooks、性能、救火姿势和失败排查。</p>
-<p>GitOps 的原则与协作纪律、从传统流水线迁移的步骤、Argo CD 自身的高可用部署，分别见站内《GitOps 核心原则》《ArgoCD 安装配置》两篇；滚动更新、探针、金丝雀这些部署策略层面的内容见站内 Kubernetes 与 CI/CD 部署策略两篇，这里不展开。</p>
+<p>只讲同步机制本身：diff 从哪来、三个同步开关的精确语义、状态机、波次与 hooks、性能、救火姿势和失败排查。</p>
+<p>GitOps 原则与迁移步骤、Argo CD 高可用部署见站内《GitOps 核心原则》《ArgoCD 安装配置》两篇；滚动更新、探针、金丝雀等部署策略见 Kubernetes 与 CI/CD 部署策略两篇。</p>
 
 <h2>一、同步到底在比较什么</h2>
 
-<p>application-controller 每个周期（默认 <code>timeout.reconciliation</code> 为 180 秒，配了 webhook 则由事件触发）做三件事：让 repo-server 把仓库渲染成最终清单、从集群缓存里取出对应的 live 对象、结合上次同步留下的所有权记录算出差异。</p>
-<p><strong>渲染是必经步骤</strong>——仓库里放的是 Helm chart 或 kustomize 目录，diff 比较的是渲染产物而不是文件文本，所以「文件没变」并不代表「渲染结果没变」（values 引用了外部文件、chart 依赖没锁版本都会让渲染结果漂移）。</p>
+<p>application-controller 每个周期（默认 <code>timeout.reconciliation</code> 为 180 秒，配了 webhook 则由事件触发）做三件事：让 repo-server 渲染最终清单、从集群缓存取 live 对象、结合所有权记录算差异。</p>
+<p><strong>渲染是必经步骤</strong>，仓库放 Helm chart 或 kustomize 目录，diff 比较渲染产物非文件文本。「文件没变」不代表「渲染结果没变」：values 引用外部文件、chart 依赖没锁版本都会让结果漂移。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -130,7 +130,7 @@ flowchart TB
     H -->|"否"| W["等人点同步"]
 </div>
 
-<p>第三方（所有权记录）是最容易被忽略的一环。客户端 apply 时，Argo CD 靠 <code>kubectl.kubernetes.io/last-applied-configuration</code> 判断「哪些字段是我写的」，只有我写过的字段才参与三方合并；切到 Server-Side Apply 后，这个职责交给 API Server 的 <code>managedFields</code>。没有这一份记录，任何别人加的字段都会被当成漂移。</p>
+<p>第三方（所有权记录）最易被忽略。客户端 apply 时，Argo CD 靠 <code>kubectl.kubernetes.io/last-applied-configuration</code> 判断「哪些字段是我写的」，只有写过的才参与三方合并；切到 Server-Side Apply 后由 <code>managedFields</code> 承担。没有这份记录，别人加的字段都会被当成漂移。</p>
 
 <h2>二、「永远 OutOfSync」的真正原因：谁改的字段不算漂移</h2>
 
@@ -148,7 +148,7 @@ flowchart TB
 <tr><td>集群里有、仓库里没有的对象</td><td>历史遗留或人手工创建</td><td>被标为需要 prune</td><td><strong>算</strong></td><td>确认后 prune，或纳入仓库管理</td></tr>
 </tbody></table>
 
-<p>忽略配置写在 Application 的 <code>ignoreDifferences</code> 里。两种定位方式的取舍是：<code>jsonPointers</code> 简单但处理数组几乎无能为力（下标会随注入顺序变化），<code>jqPathExpressions</code>（v2.1+）能按条件筛选数组元素，代价是表达式本身要测。</p>
+<p>忽略配置写在 Application 的 <code>ignoreDifferences</code> 里。定位方式取舍：<code>jsonPointers</code> 简单但处理数组无能为力（下标随注入顺序变），<code>jqPathExpressions</code>（v2.1+）可按条件筛数组元素，代价是表达式要测。</p>
 
 <pre><code class="language-yaml">apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -244,7 +244,7 @@ spec:
 <tr><td>automated + selfHeal + prune</td><td>完整 GitOps</td><td>仓库是绝对真相，多余资源会被删</td><td>平台组件、整套环境</td><td>首次开启先 dry-run；对 PVC、Secret、CRD 单独加保护注解</td></tr>
 </tbody></table>
 
-<p>资源级的保护注解比全局开关更实用：在不希望被删的对象上加 <code>argocd.argoproj.io/sync-options: Prune=false</code>，即使 Application 开了 prune 也会跳过它。同理，<code>Delete=false</code> 能让这个对象在 Application 被删除时保留下来——数据库的 PVC 一定要加这两条。</p>
+<p>资源级保护注解比全局开关实用：在不希望被删的对象上加 <code>argocd.argoproj.io/sync-options: Prune=false</code>，Application 开了 prune 也会跳过；<code>Delete=false</code> 让对象在 Application 删除时保留。数据库 PVC 必须加这两条。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -282,7 +282,7 @@ stateDiagram-v2
     Healthy --> Synced: 回到稳定态
 </div>
 
-<p>Argo CD 的界面上有两个独立的灯：<strong>Sync Status</strong> 说的是「集群里的对象和仓库渲染结果一致吗」，<strong>Health Status</strong> 说的是「这些对象实际跑起来了吗」。把它们混为一谈是线上事故的常见诱因。</p>
+<p>Argo CD 界面有两个独立指标：<strong>Sync Status</strong> 问「集群对象和仓库渲染结果一致吗」，<strong>Health Status</strong> 问「对象实际跑起来了吗」。混为一谈是线上事故常见诱因。</p>
 
 <table>
 <thead><tr><th>组合</th><th>实际含义</th><th>该不该告警</th></tr></thead>
@@ -295,7 +295,7 @@ stateDiagram-v2
 <tr><td>Missing</td><td>渲染里有但集群里建不出来：CRD 未注册、命名空间不存在、被策略引擎拦下</td><td>必须告警</td></tr>
 </tbody></table>
 
-<p>自定义资源是健康判定的盲区：Argo CD 内置了 Deployment、StatefulSet、Ingress 等常见 kind 的健康逻辑，但对你自己或 Operator 引入的 CR，<strong>没有健康检查时默认判为 Healthy</strong>。于是出现「Synced + Healthy 一片绿，实际 Redis 集群根本没起来」的假绿。补法是在 <code>argocd-cm</code> 里给这个 kind 写一段 Lua：</p>
+<p>自定义资源是健康判定盲区：Argo CD 内置 Deployment、StatefulSet、Ingress 等 kind 的健康逻辑，但自定义或 Operator 的 CR，<strong>没有健康检查时默认判为 Healthy</strong>。出现「Synced + Healthy 一片绿，实际 Redis 集群没起来」的假绿。补法：在 <code>argocd-cm</code> 里给该 kind 写 Lua：</p>
 
 <pre><code class="language-yaml">apiVersion: v1
 kind: ConfigMap
@@ -396,7 +396,7 @@ spec:
 
 <h2>六、大资源集的同步性能</h2>
 
-<p>同步耗时几乎与「对象数」线性相关，因为默认每个对象都要走一次服务端预演加一次提交。下面这几种症状对应的是完全不同的瓶颈，别一上来就加副本：</p>
+<p>同步耗时与「对象数」近似线性：默认每个对象要一次服务端预演加一次提交。以下症状对应不同瓶颈，别急着加副本：</p>
 
 <table>
 <thead><tr><th>症状</th><th>瓶颈在哪</th><th>处理手段</th><th>量级参考</th></tr></thead>
@@ -414,7 +414,7 @@ spec:
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">不要把 application-controller 缩容到 0</div>
-    <p>这是流传很广的应急做法，代价极大：所有应用同时失去自愈和状态上报，界面上的健康状态全部变成陈旧数据，你连「现在集群是什么样」都看不到；</p>
+    <p>流传很广的应急做法，代价大：所有应用同时失去自愈和状态上报，健康状态变陈旧数据，连「现在集群是什么样」都看不到；</p>
 <p>恢复副本的瞬间又会涌入一大批积压的同步，把 API Server 打满。正确做法是<strong>只针对出问题的那个 Application 关掉自动同步</strong>，影响范围收敛到一个应用。</p>
 </div>
 
@@ -482,7 +482,7 @@ kubectl -n argocd logs sts/argocd-application-controller --tail=200 | grep -i pa
 argocd app history payment-api
 argocd app rollback payment-api 42</code></pre>
 
-<p><code>argocd app get</code> 的输出里，最值得先看的是 <code>CONDITIONS</code> 一列：<code>ComparisonError</code> 指向渲染或仓库访问，<code>SyncError</code> 指向 apply 被拒，<code>SharedResourceWarning</code> 说明同一个对象被两个 Application 同时纳管（这会导致两边互相覆盖，必须先解决归属），<code>OrphanedResourceWarning</code> 说明命名空间里有不属于任何 Application 的对象。</p>
+<p><code>argocd app get</code> 输出里优先看 <code>CONDITIONS</code>：<code>ComparisonError</code> 指向渲染或仓库访问，<code>SyncError</code> 指向 apply 被拒，<code>SharedResourceWarning</code> 表示同一对象被两个 Application 纳管（互相覆盖，必须先解决归属），<code>OrphanedResourceWarning</code> 表示命名空间里有不属于任何 Application 的对象。</p>
 
 <h2>九、反模式</h2>
 

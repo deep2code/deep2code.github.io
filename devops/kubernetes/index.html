@@ -10,14 +10,14 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="K8s 深度原理全景：最小对象清单与排查入口，控制循环与水平触发、apply 完整链路、调度器两阶段、三种探针与 preStop、QoS 与 CFS 限流、ClusterIP 的真相、滚动更新与 PDB 边界，以及什么规模该上。">
+    <meta name="description" content="K8s 主干：删掉的 Pod 为什么会回来、QoS 与 CPU 限流的延迟毛刺、ClusterIP 为什么是虚拟地址、滚动更新的两种中断，以及什么规模该上到哪一层。">
     <meta name="keywords" content="Kubernetes,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/devops/kubernetes/">
     <meta property="og:title" content="K8s 深度原理：控制循环、调度、探针与 Service 实现 - 资深码农">
-    <meta property="og:description" content="K8s 深度原理全景：最小对象清单与排查入口，控制循环与水平触发、apply 完整链路、调度器两阶段、三种探针与 preStop、QoS 与 CFS 限流、ClusterIP 的真相、滚动更新与 PDB 边界，以及什么规模该上。">
+    <meta property="og:description" content="K8s 主干：删掉的 Pod 为什么会回来、QoS 与 CPU 限流的延迟毛刺、ClusterIP 为什么是虚拟地址、滚动更新的两种中断，以及什么规模该上到哪一层。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/kubernetes/">
     <meta property="og:site_name" content="资深码农">
@@ -28,9 +28,9 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="K8s 深度原理：控制循环、调度、探针与 Service 实现">
-    <meta name="twitter:description" content="K8s 深度原理全景：最小对象清单与排查入口，控制循环与水平触发、apply 完整链路、调度器两阶段、三种探针与 preStop、QoS 与 CFS 限流、ClusterIP 的真相、滚动更新与 PDB 边界，以及什么规模该上。">
+    <meta name="twitter:description" content="K8s 主干：删掉的 Pod 为什么会回来、QoS 与 CPU 限流的延迟毛刺、ClusterIP 为什么是虚拟地址、滚动更新的两种中断，以及什么规模该上到哪一层。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
-    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"K8s 深度原理：容器编排到底编什么？","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"K8s 深度原理全景：最小对象清单与排查入口，控制循环与水平触发、apply 完整链路、调度器两阶段、三种探针与 preStop、QoS 与 CFS 限流、ClusterIP 的真相、滚动更新与 PDB 边界，以及什么规模该上。","url":"https://www.yijunjun.asia/devops/kubernetes/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/kubernetes/"},"articleSection":"运维与云原生"}</script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"K8s 深度原理：容器编排到底编什么？","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"K8s 主干：删掉的 Pod 为什么会回来、QoS 与 CPU 限流的延迟毛刺、ClusterIP 为什么是虚拟地址、滚动更新的两种中断，以及什么规模该上到哪一层。","url":"https://www.yijunjun.asia/devops/kubernetes/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/kubernetes/"},"articleSection":"运维与云原生"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "Kubernetes", "item": "https://www.yijunjun.asia/devops/kubernetes/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -74,7 +74,7 @@
         </div>
     </header>
     <p>K8s 的概念多到让人放弃，但只有<strong>一个</strong>核心思想：你描述期望状态，一堆控制器不停把现实拉向它。抓住这条主线，Pod、Service、探针、QoS、滚动更新全是它的推论。</p>
-<p>这篇按「控制循环 → 一次 apply 的完整链路 → 调度 → 生命周期与探针 → 资源与 QoS → Service 的真实实现 → 滚动更新与排障」展开。</p>
+<p>按「控制循环 → 一次 apply 的完整链路 → 调度 → 生命周期与探针 → 资源与 QoS → Service 的真实实现 → 滚动更新与排障」展开。</p>
 <h2>一个服务上 K8s 最少要写哪几个对象</h2>
     <p>一个无状态 HTTP 服务上集群，最少只要两个对象：<code>Deployment</code> 描述「跑几份、跑什么镜像」，<code>Service</code> 给它一个稳定的集群内地址。集群外访问再加 <code>Ingress</code>，配置从镜像里拿出来再加 <code>ConfigMap</code>。</p>
 <p>下面这份是能直接 <code>kubectl apply -f</code> 的最小完整清单，注释只说明「为什么要这行」。</p>
@@ -354,7 +354,7 @@ flowchart TB
     </table>
 
     <h2>控制循环：为什么删掉的 Pod 会自己回来</h2>
-    <p>每个控制器都在跑同一个死循环：<strong>读期望状态 → 读实际状态 → 算差异 → 采取行动</strong>。这就是 <code>kubectl delete pod</code> 后 Pod 又出现的原因：你删的是实际状态，期望状态（Deployment 的 replicas=3）没变，ReplicaSet 控制器发现少了一个就立刻补一个。</p>
+    <p>每个控制器跑同一个死循环：<strong>读期望状态 → 读实际状态 → 算差异 → 采取行动</strong>。<code>kubectl delete pod</code> 后 Pod 又回来：删的是实际状态，期望状态（Deployment 的 replicas=3）没变，ReplicaSet 发现少一个就补一个。</p>
 
     <div class="mermaid">
 flowchart LR
@@ -747,11 +747,11 @@ kubectl exec -it POD -- cat /sys/fs/cgroup/cpu.stat
 # Prometheus 里对应的指标
 # rate(container_cpu_cfs_throttled_periods_total[5m])
 #   / rate(container_cpu_cfs_periods_total[5m]) &gt; 0.1 说明问题严重</code></pre>
-        <p>对延迟敏感的服务，常见做法是<strong>只设 requests 不设 cpu limits</strong>（靠 requests 保下限，允许突发占用空闲 CPU），或把 limit 设到远高于日常水位。内存相反：<strong>limits 必须设</strong>，否则一个内存泄漏的 Pod 能把整个节点拖垮。</p>
+        <p>延迟敏感的服务通常<strong>只设 requests、不设 cpu limits</strong>：requests 保下限，突发吃空闲 CPU；或把 limit 定得远高于日常水位。内存相反，<strong>limits 必须设</strong>，否则内存泄漏的 Pod 会拖垮节点。</p>
     </div>
 
     <h2>Service 的 ClusterIP 其实不存在</h2>
-    <p>这是最反直觉的一点：<code>ClusterIP</code> 是<strong>纯虚拟的地址，没有任何进程监听它，也不属于任何网卡</strong>。它能通，是因为每个节点上都有 kube-proxy 写好的 DNAT 规则，数据包离开时把目标改写成某个真实 Pod IP。</p>
+    <p><code>ClusterIP</code> 是<strong>纯虚拟地址，没有进程监听，也不属于任何网卡</strong>。它能通，靠每个节点上 kube-proxy 写好的 DNAT 规则，数据包离开时把目标改写成真实 Pod IP。</p>
 
     <div class="mermaid">
 flowchart TB
@@ -907,7 +907,7 @@ flowchart TB
     </table>
 
     <h2>什么规模该上、上到什么程度</h2>
-    <p>K8s 不是「用不用」的二元选择，而是「用到哪一层」。控制平面本身就是一套要有人维护的分布式系统，成本是固定支出，收益却和服务数量、发布频率、弹性需求成正比。下表按规模给出落点。</p>
+    <p>K8s 不是「用不用」的二元选择，而是「用到哪一层」。控制平面本身是要人维护的分布式系统。成本是固定支出，收益跟服务数量、发布频率、弹性需求成正比。</p>
 
     <table>
         <thead>
@@ -962,7 +962,7 @@ flowchart TB
 <p>只有单实例且不允许重启的遗留系统也不行——K8s 的核心能力是「随时可以重建一个副本」，不满足前提就帮不上忙。</p>
 <p>容器与镜像机制在 <a href="../docker/">Docker</a>；清单模板化的手段在 <a href="helm/">Helm</a>；入口层七层细节在 <a href="../nginx/">Nginx</a>。</p>
 
-    <p>本篇是这条路径的总览：给出全局主线与最小清单。要判断该不该上、上到哪一层，接着读下一篇；要把集群建起来、把工作负载与配置写对，按路径往后读即可。</p>
+    <p>这条路径的总览只给全局主线和最小清单。该不该上、上到哪一层看下一篇；集群搭建、工作负载与配置的写法按路径往后读。</p>
 
     <p class="cluster-nav">同主题路径：<a href="intro/">下一步：K8s 的抽象层次与该不该上 →</a></p>
 

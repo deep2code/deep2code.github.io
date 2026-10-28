@@ -10,14 +10,14 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Kafka 主干：分段日志与稀疏索引、ISR 与 HW/LEO、幂等与事务、Consumer Group 重平衡、offset 提交语义与分区容量决策。">
+    <meta name="description" content="分段日志与稀疏索引、Page Cache 与堆内存取舍、ISR 与 acks=all 的失效条件、幂等序号窗口、Rebalance 触发与 Lag 诊断、扩分区对顺序的影响，并给出按处境选参数组合的边界。">
     <meta name="keywords" content="Kafka 消息队列,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/">
     <meta property="og:title" content="Kafka 深度原理：存储、副本、Rebalance 与投递语义 - 资深码农">
-    <meta property="og:description" content="Kafka 主干：分段日志与稀疏索引、ISR 与 HW/LEO、幂等与事务、Consumer Group 重平衡、offset 提交语义与分区容量决策。">
+    <meta property="og:description" content="分段日志与稀疏索引、Page Cache 与堆内存取舍、ISR 与 acks=all 的失效条件、幂等序号窗口、Rebalance 触发与 Lag 诊断、扩分区对顺序的影响，并给出按处境选参数组合的边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/">
     <meta property="og:site_name" content="资深码农">
@@ -28,9 +28,9 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kafka 深度原理：存储、副本、Rebalance 与投递语义">
-    <meta name="twitter:description" content="Kafka 主干：分段日志与稀疏索引、ISR 与 HW/LEO、幂等与事务、Consumer Group 重平衡、offset 提交语义与分区容量决策。">
+    <meta name="twitter:description" content="分段日志与稀疏索引、Page Cache 与堆内存取舍、ISR 与 acks=all 的失效条件、幂等序号窗口、Rebalance 触发与 Lag 诊断、扩分区对顺序的影响，并给出按处境选参数组合的边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
-    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 深度原理：存储、副本、Rebalance 与投递语义","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 主干：分段日志与稀疏索引、ISR 与 HW/LEO、幂等与事务、Consumer Group 重平衡、offset 提交语义与分区容量决策。","url":"https://www.yijunjun.asia/architecture/kafka/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/"},"articleSection":"后端开发"}</script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 深度原理：存储、副本、Rebalance 与投递语义","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"分段日志与稀疏索引、Page Cache 与堆内存取舍、ISR 与 acks=all 的失效条件、幂等序号窗口、Rebalance 触发与 Lag 诊断、扩分区对顺序的影响，并给出按处境选参数组合的边界。","url":"https://www.yijunjun.asia/architecture/kafka/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "Kafka 消息队列", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -75,7 +75,7 @@
     </header>
 
 <p>「Kafka 快是因为顺序写磁盘」只是四个原因之一，而且解释不了它更重要的部分：<strong>怎么在异步复制的前提下做到不丢消息</strong>。</p>
-<p>这一篇是整条 Kafka 路径的主干，既是集群出问题时的入口，也是后面六篇共同依赖的机制底座。</p>
+<p>这条 Kafka 路径的主干，既是集群出问题时的入口，也是后面六篇共同依赖的机制底座。</p>
 <h2>集群出问题时先敲的四条命令</h2>
 
 <p>Kafka 的故障现象高度重复：要么写入被拒，要么 LAG 只涨不降，要么消费者反复重分配。这三类问题都能用下面四条命令在两分钟内定位到环节。</p>
@@ -133,7 +133,7 @@ bin/kafka-configs.sh --bootstrap-server localhost:9092 --describe --entity-type 
 </tbody>
 </table>
 
-<p>最后是一张参数速查。<strong>默认值随版本与客户端库变化，落地前用上面第 ⑤ 条命令核对集群的实际生效值</strong>，不要照抄任何博客（包括这一篇）里的数字。</p>
+<p>最后是一张参数速查。<strong>默认值随版本与客户端库变化，落地前用上面第 ⑤ 条命令核对集群的实际生效值</strong>，不要照抄任何博客里的数字。</p>
 
 <table>
 <thead><tr><th>参数</th><th>作用</th><th>常见默认值</th><th>什么时候必须改</th></tr></thead>
@@ -190,7 +190,7 @@ flowchart TB
 
 <h2>存储引擎：分段日志与稀疏索引</h2>
 
-<p>搞清这一节能解决两个现象：磁盘占用为什么是阶梯式下降而不是平滑下降，以及开了 TLS 之后吞吐为什么会掉一截。</p>
+<p>磁盘占用为什么是阶梯式下降而不是平滑下降，以及开了 TLS 之后吞吐为什么会掉一截。</p>
 <p>一个 Partition 在磁盘上就是一个目录，里面是一组<strong>分段（Segment）</strong>文件，文件名是该段第一条消息的 offset，天然有序：</p>
 
 <pre><code class="language-bash">$ ls -l /kafka-logs/order-events-0/
@@ -211,7 +211,7 @@ flowchart LR
     S3 --> S4["④ 命中，sendfile 直接发给消费者"]
 </div>
 
-<p>索引是<strong>稀疏</strong>的：默认每写入 4KB 数据（<code>log.index.interval.bytes</code>）才记一条索引项。这是空间与时间的折中——索引文件小到能整个 mmap 进内存，代价是最后一小段需顺序扫描，而这恰是磁盘与 Page Cache 最擅长的。</p>
+<p>索引是<strong>稀疏</strong>的：默认每写入 4KB（<code>log.index.interval.bytes</code>）记一条索引项。索引文件小到能整个 mmap 进内存，代价是最后一小段要顺序扫描，正是磁盘与 Page Cache 擅长的。</p>
 <p>删除也发生在段这一级：<strong>retention 到期删的是整个段文件</strong>，所以磁盘释放是阶梯式的。</p>
 
 <table>
@@ -228,13 +228,13 @@ flowchart LR
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">Kafka 的 JVM 堆不需要调大</div>
-    <p>Kafka 把缓存完全交给操作系统 Page Cache，自己几乎不在堆里缓存消息。所以 broker 的 heap 给 6GB 左右就够，<strong>剩下的物理内存全留给 Page Cache</strong>。给 broker 配 64GB 堆是典型反向优化：堆越大 GC 停顿越长，可缓存的内存反而越少。</p>
+    <p>Kafka 几乎不在堆里缓存消息，全交给操作系统 Page Cache。broker 的 heap 给 6GB 左右就够，<strong>剩下的物理内存全留给 Page Cache</strong>；64GB 堆是反向优化：堆越大 GC 停顿越长、可缓存内存越少。</p>
     <p>同理，<code>vm.swappiness</code> 建议设 1 而不是 0——完全禁止 swap 会让内存紧张时直接触发 OOM Killer，留一点余量更稳。</p>
 </div>
 
 <h2>ISR、HW/LEO 与「真正不丢」的参数组合</h2>
 
-<p>搞清这一节能解决用法层第一行那个现象：为什么写入会被 broker 主动拒绝，以及为什么 <code>acks=all</code> 配了却还是丢了数据。先分清两个水位：</p>
+<p>为什么写入会被 broker 主动拒绝，以及为什么 <code>acks=all</code> 配了却还是丢了数据。先分清两个水位：</p>
 
 <div class="mermaid">
 flowchart TB
@@ -272,7 +272,7 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">acks=all 单独用是假的安全感</div>
-    <p><code>acks=all</code> 的语义是「ISR 中<strong>当前所有</strong>副本都写入才返回」。如果 3 个副本里有 2 个因网络或 GC 落后被移出 ISR，ISR 就只剩 Leader 自己——此时 <code>acks=all</code> 退化成 <code>acks=1</code>。Leader 一挂这批消息全丢，而 Producer 收到的是成功响应。</p>
+    <p><code>acks=all</code> 语义是「ISR 中<strong>当前所有</strong>副本都写入才返回」。3 个副本里 2 个因网络或 GC 落后被移出，ISR 只剩 Leader，<code>acks=all</code> 退化成 <code>acks=1</code>：Leader 一挂这批全丢，Producer 仍收到成功响应。</p>
     <pre><code class="language-properties"># Broker / Topic 端：ISR 少于 2 个就拒绝写入，宁可不可用也不丢
 min.insync.replicas=2
 default.replication.factor=3
@@ -300,7 +300,7 @@ delivery.timeout.ms=120000</code></pre>
 
 <h2>幂等、事务与顺序的相互制约</h2>
 
-<p>「Kafka 支持 Exactly Once，所以我不用做幂等了」这句话错在哪：幂等 Producer 只有两个字段：<strong>PID（Producer ID）加分区级递增序号</strong>。Broker 为每个「PID 加分区」维护最近 5 个 batch 的序号，重复序号直接丢弃，序号跳跃则报错。</p>
+<p>「Kafka 支持 Exactly Once 就不用做幂等」不成立：幂等 Producer 只有两个字段，<strong>PID（Producer ID）加分区级递增序号</strong>。Broker 为每个「PID 加分区」维护最近 5 个 batch 的序号，重复丢弃、跳跃报错。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -344,7 +344,7 @@ sequenceDiagram
 
 <h2>Consumer Group 与 Rebalance</h2>
 
-<p>LAG 涨而 <code>CONSUMER-ID</code> 不停变化，是用法层最常见的那条现象。Rebalance 是 Kafka 消费端最大的稳定性风险：期间<strong>整个消费组停止消费</strong>（经典协议下是 stop-the-world）。要控制它，先得知道它被什么触发。</p>
+<p>LAG 涨而 <code>CONSUMER-ID</code> 不停变化是最常见的现象。Rebalance 是 Kafka 消费端最大的稳定性风险：期间<strong>整个消费组停止消费</strong>（经典协议下是 stop-the-world）。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -380,7 +380,7 @@ stateDiagram-v2
     <div class="callout-title">「心跳正常却被踢出组」的真相</div>
     <p>心跳由<strong>独立后台线程</strong>发送，所以业务线程卡住时心跳依然正常。真正踢人的是 <code>max.poll.interval.ms</code>：Consumer 必须周期性调用 <code>poll()</code> 才证明自己还在消费。</p>
 <p>一次 poll 拉回 500 条、每条处理 1 秒就是 500 秒，超过默认的 5 分钟就被判定「卡死」踢出组，触发 Rebalance；重启后继续超时，形成<strong>无限 Rebalance 循环</strong>——表现就是 lag 不断涨、消费却几乎停滞。</p>
-    <p>两个方向解决：把 <code>max.poll.records</code> 降到「单批能在超时内处理完」的量；或把重活扔进业务线程池、让 poll 循环快速空转（但这样必须自己管 offset 提交时机，写法见 <a href="producer-consumer/">生产者与消费者实战</a>）。</p>
+    <p>两个方向：把 <code>max.poll.records</code> 降到「单批能在超时内处理完」；或把重活丢进线程池、让 poll 快速空转，代价是自己管 offset 提交时机（见 <a href="producer-consumer/">生产者与消费者实战</a>）。</p>
 </div>
 
 <table>
@@ -395,7 +395,7 @@ stateDiagram-v2
 
 <h2>offset 提交与投递语义</h2>
 
-<p>「消息明明处理了却又来一遍」和「位点莫名跳走」这两类现象，根源在消费位点。位点存在内置 topic <code>__consumer_offsets</code> 里（默认 50 分区，compact 策略）。三种投递语义的差别完全取决于<strong>「提交 offset」和「处理业务」的先后顺序</strong>：</p>
+<p>「消息明明处理了却又来一遍」「位点莫名跳走」都指向消费位点：位点存于内置 topic <code>__consumer_offsets</code>（默认 50 分区，compact）。投递语义的差别只在<strong>「提交 offset」与「处理业务」的先后顺序</strong>：</p>
 
 <div class="mermaid">
 flowchart TB
@@ -426,7 +426,7 @@ flowchart TB
 
 <h2>积压诊断与容量决策</h2>
 
-<p>「该加消费者还是加分区」是每次堆积都要吵一遍的问题。Lag 的定义很简单：<code>Lag = 分区 LEO 减去已提交 offset</code>。但看 lag 的方式决定你能不能定位问题——<strong>要看每个分区的 lag，而不是总和</strong>。</p>
+<p>「该加消费者还是加分区」要看 Lag，定义是 <code>Lag = 分区 LEO 减去已提交 offset</code>。<strong>要看每个分区的 lag，而不是总和</strong>，总和看不出问题在哪个分区。</p>
 
 <pre><code class="language-bash"># 逐分区查看 lag，重点看分布是否均匀
 kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
@@ -456,9 +456,9 @@ kafka-run-class.sh kafka.tools.GetOffsetShell \
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">分区数不是想加就能加</div>
-    <p><strong>只能增加不能减少</strong>，而且增加分区会立刻改变 key 到分区的映射——同一个订单 ID 的新消息落到新分区，与它在老分区里未消费完的消息<strong>并行处理</strong>，顺序性当场失效。</p>
+    <p><strong>只能增加不能减少</strong>：加分区立刻改变 key 的分区映射，同一订单 ID 的新消息进新分区，和老分区未消费完的消息<strong>并行处理</strong>，顺序失效。</p>
 <p>对顺序敏感的 topic，扩分区必须在业务低峰、确认积压清零后进行。</p>
-    <p>分区数也有上限：每个分区在每台 broker 上占若干文件句柄，Producer 为每个分区维护独立 batch 缓冲（<code>batch.size</code> 乘以分区数可能吃满 <code>buffer.memory</code>），节点故障时的 Leader 选举时间也随分区数线性增长。估算步骤见 <a href="topic-partition/">分区设计</a>。</p>
+    <p>分区数也有上限：每分区每台 broker 占文件句柄，Producer 每个分区维护独立 batch 缓冲（<code>batch.size</code> 乘分区数可能吃满 <code>buffer.memory</code>），故障时 Leader 选举耗时随分区数线性增长。估算见 <a href="topic-partition/">分区设计</a>。</p>
 </div>
 
 <h2>按处境选配置组合，以及什么时候别用 Kafka</h2>
@@ -498,7 +498,7 @@ kafka-run-class.sh kafka.tools.GetOffsetShell \
 <p><strong>不适用边界</strong>：需要按消息指定投递时间、按属性做复杂路由与优先级、或系统小到只有几个服务且流量很低，三类都不该用 Kafka。</p>
 <p>横向选型见 <a href="../messaging/compare/">消息队列选型对比</a>，可靠投递的通用模式见 <a href="../messaging/reliable/">可靠消息投递</a>。Kafka 没有按 key 随机读的能力，需要点查就把数据落到 KV 或 OLAP 存储里。</p>
 
-<p>本篇在这条路径上是主干与入口：机制都在这里，往下每篇负责把其中一段做成可执行步骤。第一站先想清楚「这东西是哪一类系统、什么时候不该用」。</p>
+<p>机制都在这里，往下每篇各把一段做成可执行步骤。第一站先分清是哪类系统、什么时候不该用。</p>
 
 <p class="cluster-nav">同主题路径：<a href="intro/">下一步：Kafka 是什么：提交日志模型与选型边界 →</a></p>
 

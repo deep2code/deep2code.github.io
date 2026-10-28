@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Next.js 数据获取与缓存分层：Full Route Cache 与动态渲染互斥，cookies 下推让页面主体保持静态。">
+    <meta name="description" content="Next.js 四层缓存（请求去重、Data Cache、整路由缓存、Router Cache）各管一段，失效手段按层走；14 到 15 的 fetch 默认值反转，不走 fetch 的查询绕过缓存。">
     <meta name="keywords" content="Next.js,数据获取与缓存,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/frontend/nextjs/data-fetching/">
     <meta property="og:title" content="数据获取与缓存：四层缓存与失效 - Next.js - 资深码农">
-    <meta property="og:description" content="Next.js 数据获取与缓存分层：Full Route Cache 与动态渲染互斥，cookies 下推让页面主体保持静态。">
+    <meta property="og:description" content="Next.js 四层缓存（请求去重、Data Cache、整路由缓存、Router Cache）各管一段，失效手段按层走；14 到 15 的 fetch 默认值反转，不走 fetch 的查询绕过缓存。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/frontend/nextjs/data-fetching/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="数据获取与缓存：四层缓存与失效 - Next.js">
-    <meta name="twitter:description" content="Next.js 数据获取与缓存分层：Full Route Cache 与动态渲染互斥，cookies 下推让页面主体保持静态。">
+    <meta name="twitter:description" content="Next.js 四层缓存（请求去重、Data Cache、整路由缓存、Router Cache）各管一段，失效手段按层走；14 到 15 的 fetch 默认值反转，不走 fetch 的查询绕过缓存。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,10 +68,10 @@
                     </header>
                     <div class="article-content">
 
-<p>Next.js 最容易出事的地方就是缓存。不是因为它做得差，而是因为它在<strong>四个不同的层次上各有一套缓存</strong>，默认值还随版本变过，而使用者以为自己在跟一层打交道。</p>
+<p>Next.js 的缓存问题多出在<strong>四个不同的层次上各有一套缓存</strong>，默认值还随版本变过，使用者常以为在跟一层打交道。</p>
 <p>「改了数据页面不更新」「明明设了缓存数据库还是被打满」「刷新几次内容在新旧之间跳」这三类问题，根因几乎都是把层搞混了。</p>
 
-<p>这篇的目标是让你以后遇到缓存问题时，能先定位到层，再决定清哪一层。渲染时机与静态动态判定见 <a href="../">Next.js 的渲染模型</a>，自托管下的缓存共享配置见 <a href="../deploy/">部署形态与运行时约束</a>。</p>
+<p>遇到缓存问题时先定位层，再决定清哪一层。渲染时机与静态动态判定见 <a href="../">Next.js 的渲染模型</a>，自托管缓存共享配置见 <a href="../deploy/">部署形态与运行时约束</a>。</p>
 <p>HTTP 层的缓存头与 CDN 策略站内 <a href="../../performance/web-vitals/">前端性能：从后端视角看</a> 已写透，这里只讲框架内部这四层。</p>
 
 <h2>四层缓存全景</h2>
@@ -111,13 +111,13 @@ flowchart TB
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">用后端的话对齐一下</div>
-    <p>① 是一次请求内的本地 map 去重，相当于 DataLoader；② 是应用层的结果缓存，相当于自己写的 Redis 缓存；③ 是页面级整体缓存，相当于反向代理缓存整页 HTML，只不过它在应用进程里；④ 是客户端 SDK 的本地缓存，服务端没法直接清掉它。</p>
+    <p>① 一次请求内的本地 map 去重，类似 DataLoader；② 应用层结果缓存，类似 Redis 缓存；③ 页面级整体缓存，类似反向代理缓存整页 HTML，但在应用进程里；④ 客户端 SDK 本地缓存，服务端没法直接清掉。</p>
 <p>四层各管一段，清哪一层取决于旧数据是从哪一层拿到的。</p>
 </div>
 
 <h2>Request Memoization：省掉重复查询，但别指望太多</h2>
 
-<p>同一次渲染里，布局要用户信息，页面也要，侧边栏也要。写三次 <code>fetch('/api/me')</code>，实际只发一次——这一层解决的就是「组件级取数导致同一份数据被重复查」的问题。它不需要配置，键是 URL 加上请求方法与关键选项。</p>
+<p>布局、页面、侧边栏同一次渲染都要用户信息，写三次 <code>fetch('/api/me')</code> 实际只发一次。这一层解决组件级取数导致同一份数据重复查，无需配置，键是 URL 加请求方法与关键选项。</p>
 
 <table>
 <thead><tr><th>情形</th><th>是否去重</th><th>原因</th></tr></thead>
@@ -132,7 +132,7 @@ flowchart TB
 
 <h2>Data Cache 与 fetch 的缓存语义：注意版本默认值反转</h2>
 
-<p>这是升级时最容易出事的一处。<strong>Next 14 的 <code>fetch</code> 默认缓存，Next 15 改成默认不缓存</strong>。同一份代码，升级后行为完全相反：在 14 上你可能困惑「数据怎么一直是旧的」，在 15 上你可能困惑「数据库 QPS 怎么突然翻了几倍」。</p>
+<p><strong>Next 14 的 <code>fetch</code> 默认缓存，Next 15 改成默认不缓存</strong>。同一份代码升级后行为相反：14 上「数据怎么一直是旧的」，15 上「数据库 QPS 怎么突然翻了几倍」。</p>
 
 <table>
 <thead><tr><th>写法</th><th>Next 14 行为</th><th>Next 15 行为</th><th>对路由渲染方式的影响</th></tr></thead>
@@ -196,12 +196,12 @@ export async function getRate() {
 <tr><td>声明 <code>force-dynamic</code></td><td>不可用</td><td>可用</td><td>显式选择</td></tr>
 </tbody></table>
 
-<p>所以有一个很实用的重构手法：<strong>把需要 <code>cookies()</code> 的那一小块下推</strong>。页面主体保持静态可整页缓存，用户头像、未读数这些个性化部分交给客户端组件在 hydration 后拉一次，或者等 PPR 成熟后交给它。</p>
+<p><strong>把需要 <code>cookies()</code> 的那一小块下推</strong>：页面主体保持静态可整页缓存，用户头像、未读数交给客户端组件在 hydration 后拉一次，或者等 PPR 成熟后交给它。</p>
 <p>代价是那一小块会有短暂的空态。</p>
 
 <h2>Router Cache 与四种失效手段各清哪一层</h2>
 
-<p>这张表是本篇最实用的东西。「改了数据页面不更新」几乎都是清错了层。</p>
+<p>这张表最实用。「改了数据页面不更新」几乎都是清错了层。</p>
 
 <table>
 <thead><tr><th>手段</th><th>调用位置</th><th>① 记忆化</th><th>② Data Cache</th><th>③ Full Route Cache</th><th>④ Router Cache</th></tr></thead>
@@ -214,7 +214,7 @@ export async function getRate() {
 <tr><td>重新部署</td><td>发布流程</td><td>不涉及</td><td><strong>默认保留</strong></td><td>清空重建</td><td>客户端下次加载新资源后失效</td></tr>
 </tbody></table>
 
-<p>两个最容易误解的点：<strong><code>revalidatePath</code> 清不掉别人浏览器里的 Router Cache</strong>，它只能让发起这次请求的那个客户端刷新；而 <strong><code>router.refresh()</code> 清不掉服务端的 Data Cache</strong>，服务端如果还持有旧值，刷新回来的还是旧值。</p>
+<p><strong><code>revalidatePath</code> 清不掉别人浏览器里的 Router Cache</strong>，只能让发起这次请求的那个客户端刷新；<strong><code>router.refresh()</code> 清不掉服务端的 Data Cache</strong>，旧值还在就刷回旧值。</p>
 <p>这两个方向搞反，就会出现「我明明清了缓存」但现象毫无变化。</p>
 
 <pre><code class="language-typescript">// app/admin/actions.ts —— 写操作之后按标签失效，而不是无脑清整站
@@ -244,7 +244,7 @@ export async function updateProduct(id: string, patch: { name?: string; price?: 
 
 <h2>不走 fetch 的数据源不受 Data Cache 管</h2>
 
-<p>这点后端工程师尤其容易想当然。Data Cache 是挂在 Next 扩展过的 <code>fetch</code> 上的，<strong>直连数据库、用 ORM、用 Redis 客户端、用 gRPC，全都绕过这一层</strong>。你在路由段写了 <code>revalidate = 300</code>，只影响整路由缓存与 fetch 条目，不会让你的 <code>db.query</code> 少执行一次。</p>
+<p>Data Cache 挂在 Next 扩展过的 <code>fetch</code> 上，<strong>直连数据库、用 ORM、用 Redis 客户端、用 gRPC，全都绕过这一层</strong>。写了 <code>revalidate = 300</code>，只影响整路由缓存与 fetch 条目，不会让 <code>db.query</code> 少执行一次。</p>
 
 <table>
 <thead><tr><th>数据来源</th><th>自动进 Data Cache</th><th>怎么缓存</th><th>能否按标签失效</th></tr></thead>
@@ -327,7 +327,7 @@ flowchart TB
 
 <h2>多实例部署下的缓存一致性</h2>
 
-<p>这是自托管最容易被忽略的一步，也是「刷新几次内容跳来跳去」的标准根因：<strong>Data Cache 与整路由缓存默认写在实例本地的文件系统里</strong>。三个副本就是三份互不相识的缓存。</p>
+<p>自托管最易忽略：<strong>Data Cache 与整路由缓存默认写在实例本地的文件系统里</strong>，三个副本三份互不相识的缓存，「刷新几次内容跳来跳去」由此来。</p>
 
 <div class="mermaid">
 sequenceDiagram

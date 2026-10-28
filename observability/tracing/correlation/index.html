@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="链路关联：三支柱分工、统一 ID 清单、从告警到代码的五跳、直方图与 exemplar、采样导致的查不到链路。">
+    <meta name="description" content="traceID 关联日志、指标、链路：统一 ID 落地清单、exemplar 从 P99 下钻到具体请求、告警到代码五跳导航、字段名与采样一致性、links 处理异步关联。">
     <meta name="keywords" content="日志与监控,链路追踪,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/observability/tracing/correlation/">
     <meta property="og:title" content="日志指标链路三者关联：traceID、exemplar 与下钻路径 - 日志与监控 - 资深码农">
-    <meta property="og:description" content="链路关联：三支柱分工、统一 ID 清单、从告警到代码的五跳、直方图与 exemplar、采样导致的查不到链路。">
+    <meta property="og:description" content="traceID 关联日志、指标、链路：统一 ID 落地清单、exemplar 从 P99 下钻到具体请求、告警到代码五跳导航、字段名与采样一致性、links 处理异步关联。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/observability/tracing/correlation/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="日志指标链路三者关联：traceID、exemplar 与下钻路径 - 日志与监控">
-    <meta name="twitter:description" content="链路关联：三支柱分工、统一 ID 清单、从告警到代码的五跳、直方图与 exemplar、采样导致的查不到链路。">
+    <meta name="twitter:description" content="traceID 关联日志、指标、链路：统一 ID 落地清单、exemplar 从 P99 下钻到具体请求、告警到代码五跳导航、字段名与采样一致性、links 处理异步关联。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -67,13 +67,13 @@
                         <h1 class="article-title">日志指标链路三者关联：traceID、exemplar 与下钻路径</h1>
                     </header>
                     <div class="article-content">
-<p><strong>本篇只讲「关联」这一件事</strong>：怎么用 traceID 把日志、指标、链路真正串成一条可以一路点下去的排障路径。Span 数据模型与 SpanKind、W3C traceparent 传播协议与断链场景、头部采样与尾部采样、Collector pipeline，都在站内 <a href="../opentelemetry/">OpenTelemetry 怎么接</a> 里写透了，本篇不重复；</p>
+<p><strong>日志指标链路怎么关联</strong>：用 traceID 把三者串成一条能一路点下去的排障路径。Span 数据模型与 SpanKind、W3C traceparent 传播与断链、头部与尾部采样、Collector pipeline，站内 <a href="../opentelemetry/">OpenTelemetry 怎么接</a> 已写透。</p>
 <p>日志字段规范与上下文透传的代码见 <a href="../../logging/structured/">结构化日志落地</a>，日志派生指标与告警见 <a href="../../logging/log-metrics/">从日志派生指标与告警</a>。</p>
 
 <h2>为什么关联比单独任何一支都重要</h2>
 <p>三大支柱各自回答一个问题：<strong>指标告诉你哪里坏了</strong>（订单服务 P99 从 200ms 涨到 2s），<strong>链路告诉你哪一跳慢</strong>（慢在库存服务的一次 DB 查询上）。</p>
 <p><strong>日志告诉你为什么</strong>（那次查询命中了一个没走索引的分支，因为灰度配置把某个开关打开了）。任何一支单独存在时，它的回答都在半路上断掉。</p>
-<p>三者割裂的具体表现是：拿到告警后，人在三个系统之间用<strong>时间戳和 IP 做手工 join</strong>。指标面板显示 10:12 有尖刺，于是去日志系统把时间窗设成 10:11 到 10:13，搜出六万条，靠肉眼找可疑的；</p>
+<p>三者割裂时，人要在三个系统间用<strong>时间戳和 IP 手工 join</strong>：指标面板 10:12 有尖刺，就把日志时间窗设成 10:11 到 10:13，搜出六万条靠肉眼找可疑的；</p>
 <p>找到一条可疑日志后拿它的 pod 名和时间点，去链路系统按服务加时间范围翻，翻出几十条 trace，再一条条看哪条对得上。</p>
 <p>这个过程通常要几十分钟，而且结论经常是错的——时间戳对齐误差、同一秒内多个请求、时钟漂移，都会让你 join 到错误的那一条上。</p>
 
@@ -124,7 +124,7 @@ sequenceDiagram
 </table>
 
 <h2>traceID 是唯一的粘合剂：完整落地清单</h2>
-<p>关联不需要什么复杂机制，只需要<strong>一个在所有系统里都出现、且名字一样的 ID</strong>。难的不是原理，是清单里的每一条都要真做到——漏掉任意一条，链条就在那里断掉。</p>
+<p>关联只需要<strong>一个在所有系统里都出现、名字一样的 ID</strong>。难的不是原理，是清单里每一条都要真做到——漏一条，链条就在那里断掉。</p>
 
 <table>
 <thead>
@@ -134,7 +134,7 @@ sequenceDiagram
 <tr><td>入口生成或继承</td><td>网关与各服务入口都要处理：有 <code>traceparent</code> 就继承，没有就新建</td><td>只在网关生成时，内网直连调用与回调入口的链路凭空断开</td></tr>
 <tr><td>透传到所有下游</td><td>HTTP 头、gRPC metadata、MQ 消息头；用 SDK 的自动注入而不是手写</td><td>某一跳没透传，下游成为孤立 trace，且现场很难发现</td></tr>
 <tr><td>定时任务与脚本自行生成</td><td>任务入口显式开 root span</td><td>后台任务的日志完全无法与任何链路关联</td></tr>
-<tr><td>注入每条日志的固定字段</td><td>在 logger 封装层自动带 <code>trace_id</code> 与 <code>span_id</code></td><td>关联退化成时间窗搜索，本篇全部收益丧失</td></tr>
+<tr><td>注入每条日志的固定字段</td><td>在 logger 封装层自动带 <code>trace_id</code> 与 <code>span_id</code></td><td>关联退化成时间窗搜索，全部收益丧失</td></tr>
 <tr><td>写进 HTTP 响应头</td><td>中间件里 <code>Trace-Id</code> 响应头；前端错误页展示</td><td>用户报障时只能给时间和截图，定位成本高一个量级</td></tr>
 <tr><td>错误上报与工单带上</td><td>前端异常上报、客服工单模板、审批单都留字段</td><td>跨团队协作时每次都要重新定位</td></tr>
 <tr><td>指标的 exemplar 带上</td><td>直方图观测时附带 trace_id</td><td>从「P99 高」到「哪条慢」之间仍然是断层</td></tr>
@@ -216,7 +216,7 @@ func Observe(next http.Handler) http.Handler {
 // promhttp.HandlerFor(reg, promhttp.HandlerOpts{EnableOpenMetrics: true})</code></pre>
 
 <h2>exemplar：跨过「P99 高」到「哪一条慢」的鸿沟</h2>
-<p>直方图是聚合结构，它的设计目的就是丢掉个体。所以「P99 是 2 秒」这句话本身无法继续追问下去，过去只能靠时间窗回日志里翻慢请求，而慢请求在总量里可能只占万分之一。</p>
+<p>直方图是聚合结构，设计目的就是丢掉个体。「P99 等于 2 秒」没法继续追问，过去只能按时间窗回日志翻慢请求，而慢请求可能只占万分之一。</p>
 <p>exemplar 的做法很直接：<strong>让每个 bucket 附带少量具体样本的 traceID</strong>，Grafana 在延迟面板上把它们画成小点，点一下就跳到那条 trace。它解决的是可观测性里最实际的一个断层。</p>
 
 <table>
@@ -234,7 +234,7 @@ func Observe(next http.Handler) http.Handler {
 </table>
 
 <h2>从告警到根因的导航路径设计</h2>
-<p>把「每一跳都可点击」当成硬指标，是可观测性成熟度最实在的衡量方式——它没法靠买产品解决，只能靠把配置一条条做对。路径是固定的五跳：<strong>告警 → 看板 → 链路 → 日志 → 代码</strong>。</p>
+<p><strong>每一跳都可点击，最实在的可观测性成熟度标准</strong>：没法靠买产品解决，只能一条条把配置做对。路径固定五跳：告警 → 看板 → 链路 → 日志 → 代码。</p>
 
 <div class="mermaid">
 flowchart TB

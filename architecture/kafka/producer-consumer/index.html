@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Kafka 客户端实操：send 只入队、Producer 参数矩阵与调错后果、异常分类与关闭丢消息窗口、poll 内部步骤、消费线程模型与背压。">
+        <meta name="description" content="生产者 sender 线程与 batch 合并、close 与 SIGTERM 窗口的丢消息条件、poll 内部与心跳分工、消费线程模型和按处境选参数组合。">
     <meta name="keywords" content="Kafka生产者,Kafka消费者,sarama,confluent-kafka,Go,Python">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/producer-consumer/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环 - 资深码农">
-    <meta property="og:description" content="Kafka 客户端实操：send 只入队、Producer 参数矩阵与调错后果、异常分类与关闭丢消息窗口、poll 内部步骤、消费线程模型与背压。">
+    <meta property="og:description" content="生产者 sender 线程与 batch 合并、close 与 SIGTERM 窗口的丢消息条件、poll 内部与心跳分工、消费线程模型和按处境选参数组合。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/producer-consumer/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环">
-    <meta name="twitter:description" content="Kafka 客户端实操：send 只入队、Producer 参数矩阵与调错后果、异常分类与关闭丢消息窗口、poll 内部步骤、消费线程模型与背压。">
+    <meta name="twitter:description" content="生产者 sender 线程与 batch 合并、close 与 SIGTERM 窗口的丢消息条件、poll 内部与心跳分工、消费线程模型和按处境选参数组合。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="架构与分布式">
     <meta property="article:tag" content="Kafka,Go,Python,消息队列">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 客户端实操：send 只入队、Producer 参数矩阵与调错后果、异常分类与关闭丢消息窗口、poll 内部步骤、消费线程模型与背压。","url":"https://www.yijunjun.asia/architecture/kafka/producer-consumer/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/producer-consumer/"},"articleSection":"后端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"生产者 sender 线程与 batch 合并、close 与 SIGTERM 窗口的丢消息条件、poll 内部与心跳分工、消费线程模型和按处境选参数组合。","url":"https://www.yijunjun.asia/architecture/kafka/producer-consumer/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/producer-consumer/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "生产者与消费者", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,7 +90,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这一篇只解决一件事：<strong>客户端代码怎么写、参数怎么配才不出事</strong>。参数名统一用 Java 客户端的官方命名，Go 的 sarama 与 confluent-kafka-go 只是换了个壳，语义一一对应，文中标出映射关系。</p>
+<p>只讲<strong>客户端代码怎么写、参数怎么配才不出事</strong>。参数名用 Java 官方命名，Go 的 sarama 与 confluent-kafka-go 只是换了壳，语义一一对应，文中标出映射。</p>
 <h2>最小可用的生产者与消费者</h2>
 
 <p>先查表定位你要做的事，再抄下面两份代码。注释只写「为什么要这行」，机制在原理层展开。</p>
@@ -269,7 +269,7 @@ flowchart TB
 </div>
 
 <p>这张图能直接解释四个现象。第一，<strong>Callback 是在 Sender 线程上执行的</strong>，你在回调里查数据库、调接口，会把整个 Producer 的发送吞吐拖死。</p>
-<p>第二，多个分区的 batch 只要 leader 在同一个 Broker 上，就合并成一个请求发出，所以分区数变多，请求数不一定线性增加。第三，<code>buffer.memory</code> 是所有分区共享的，某个分区的 leader 挂了导致 batch 堆积，会连带拖慢其他分区。</p>
+<p>第二，多个分区的 batch 只要 leader 在同一 Broker 上就合并成一个请求，分区数变多请求数不一定线性增加。第三，<code>buffer.memory</code> 全分区共享，一个分区 leader 挂后 batch 堆积拖慢其他分区。</p>
 <p>第四，进程退出时这块内存里的东西没有任何持久化，谁都救不了。</p>
 
 <table>
@@ -310,7 +310,7 @@ flowchart TB
 
 <h2>异常分类与关闭时的丢消息窗口</h2>
 
-<p>搞清这一节能解决两类事故：把不可重试异常一直重试刷满日志，以及滚动发布时每次都丢几百条。</p>
+<p>把不可重试异常一直重试刷满日志，以及滚动发布时每次都丢几百条。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -338,7 +338,7 @@ flowchart TB
 </tbody>
 </table>
 
-<p>「close 会丢消息，所以必须先 flush」只说对了一半。Java 客户端的 <code>close()</code> 无参版本本身会阻塞等所有已发送记录完成，语义等价于先 flush 再关。真正丢消息的是下面几种关闭方式。</p>
+<p>Java 客户端的 <code>close()</code> 无参版本本身会阻塞，等所有已发送记录完成，等价于先 flush 再关。真正丢消息的是下面几种关闭方式。</p>
 
 <table>
 <thead><tr><th>关闭方式</th><th>实际行为</th><th>结果</th></tr></thead>
@@ -355,7 +355,7 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">Kubernetes 场景必须对齐三个超时</div>
-    <p>Pod 收到 SIGTERM 后有 <code>terminationGracePeriodSeconds</code>（默认 30 秒）的窗口。关闭钩子里 <code>close(timeout)</code> 的超时必须明显小于这个值，<code>delivery.timeout.ms</code> 又不能大到让 close 等不完。三者不匹配的典型现象是：滚动发布每次都丢几百条消息，压测时却怎么都复现不出来。</p>
+    <p>Pod 收到 SIGTERM 后有 <code>terminationGracePeriodSeconds</code>（默认 30 秒）窗口。关闭钩子里 <code>close(timeout)</code> 的超时要明显小于它，<code>delivery.timeout.ms</code> 不能大到让 close 等不完。三者不匹配时：滚动发布每次丢几百条，压测复现不出来。</p>
 </div>
 
 <pre><code class="language-go">package main
@@ -449,7 +449,7 @@ sequenceDiagram
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">「poll 负责发心跳」是 0.10.0 时代的旧说法</div>
-    <p>从 0.10.1 起，心跳由独立后台线程发送，处理消息期间心跳不会断，所以 <code>session.timeout.ms</code> 不再受业务处理耗时影响。真正约束处理耗时的是 <code>max.poll.interval.ms</code>：超过它协调者会认为你卡死并踢出组。</p>
+    <p>0.10.1 起心跳由独立后台线程发送，处理消息时不会断，<code>session.timeout.ms</code> 不受业务耗时影响；约束处理耗时的是 <code>max.poll.interval.ms</code>，超过它协调者判定卡死并踢出组。</p>
 <p>这两个参数的分工搞混，就会写出「把 session.timeout.ms 调到 10 分钟来解决处理慢」这种无效修法。</p>
 </div>
 
@@ -501,7 +501,7 @@ kafka-consumer-groups.sh --bootstrap-server kafka-1:9092 \
 
 <h2>三种消费线程模型与线程池方案的真实代价</h2>
 
-<p>搞清这一节能避免一个很贵的决定：为了提速上线程池，同时悄悄丢掉了顺序性和位点的正确性。</p>
+<p>为了提速上线程池，同时悄悄丢掉了顺序性和位点的正确性。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -539,7 +539,7 @@ flowchart TB
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">先加分区再加线程</div>
-    <p>并发度上限等于分区数，一个分区在同一消费组内只会被一个成员消费，加到第 N+1 个实例时它完全空转。扩容顺序是：先确认分区数够不够（方法见 <a href="../topic-partition/">分区设计</a>），再考虑加实例，最后才考虑线程池。</p>
+    <p>并发度上限是分区数，一个分区在同一消费组内只被一个成员消费，第 N+1 个实例空转。扩容顺序：先看分区数够吗（见 <a href="../topic-partition/">分区设计</a>），再加实例，最后上线程池。</p>
 <p>只有在「分区数已经因为顺序性或成本原因不能再加，而单条处理耗时又下不来」时，线程池才是合理选项。</p>
 </div>
 
@@ -599,7 +599,7 @@ func consume(ctx context.Context, brokers []string) error {
 <p><code>close()</code> 在另一个线程里调用是不安全的，KafkaConsumer 不是线程安全类。唯一允许跨线程调用的方法是 <code>wakeup()</code>，它会让阻塞在 poll 上的线程抛出 WakeupException，从而跳出循环走收尾逻辑。</p>
 <p>背压用 <code>pause()</code> 而不是 sleep：sleep 会让你逼近 <code>max.poll.interval.ms</code> 触发 Rebalance，而 pause 之后仍然可以正常 poll 维持组成员身份，只是不再返回被暂停分区的数据。</p>
 
-<p>重放靠 <code>seek()</code>：按位点用 <code>seek(tp, offset)</code>，按时间用 <code>offsetsForTimes()</code> 先把时间戳换成位点再 seek。注意 seek 只对<strong>已经分配给当前成员的分区</strong>生效，刚 subscribe 之后立刻 seek 会抛 IllegalStateException，正确位置是在 <code>onPartitionsAssigned</code> 回调里，或者先 poll 一次拿到分配结果再 seek。</p>
+<p>重放靠 <code>seek()</code>：按位点用 <code>seek(tp, offset)</code>，按时间用 <code>offsetsForTimes()</code> 转成位点再 seek。它只对<strong>已经分配给当前成员的分区</strong>生效，刚 subscribe 就 seek 会抛 IllegalStateException；应在 <code>onPartitionsAssigned</code> 回调里，或先 poll 一次拿到分配结果。</p>
 
 <h2>按处境选参数组合与线程模型</h2>
 
@@ -618,7 +618,7 @@ func consume(ctx context.Context, brokers []string) error {
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：这一篇只负责客户端怎么写。丢消息的六个环节与验证清单见 <a href="../reliability/">可靠性落地</a>；分区数与分区键见 <a href="../topic-partition/">分区设计</a>；集群与监听器见 <a href="../install/">生产级部署</a>；压测与瓶颈定位见 <a href="../performance/">性能调优与压测</a>；</p>
+<p><strong>不适用边界</strong>：只到客户端写法。六个丢点清单见 <a href="../reliability/">可靠性落地</a>；分区键见 <a href="../topic-partition/">分区设计</a>；集群监听器见 <a href="../install/">生产级部署</a>；压测见 <a href="../performance/">性能调优与压测</a>；</p>
 <p>Rebalance、幂等 PID 与水位的机制回到 <a href="../">主干篇</a>。延迟消息、优先级、单条重试这些能力 Kafka 客户端层给不了，选型问题回到 <a href="../intro/">选型边界</a>。</p>
 
 <p>代码写对之后，下一步是把「会不会丢」这件事从感觉变成可验证：六个环节逐个过一遍。</p>

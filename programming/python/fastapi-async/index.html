@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="FastAPI 的异步正确性：事件循环阻塞的判定、同步依赖的处置、gather 与 TaskGroup、取消语义与后台任务的静默失败。">
+    <meta name="description" content="事件循环阻塞的判定与排查：怎么证明真被阻塞、卡在哪一行、哪些库会阻塞，gather 与 TaskGroup 的异常语义差别，以及并发模型与限流位置怎么选。">
     <meta name="keywords" content="FastAPI,异步与性能优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/programming/python/fastapi-async/">
     <meta property="og:title" content="asyncio 的性能陷阱 - FastAPI - 资深码农">
-    <meta property="og:description" content="FastAPI 的异步正确性：事件循环阻塞的判定、同步依赖的处置、gather 与 TaskGroup、取消语义与后台任务的静默失败。">
+    <meta property="og:description" content="事件循环阻塞的判定与排查：怎么证明真被阻塞、卡在哪一行、哪些库会阻塞，gather 与 TaskGroup 的异常语义差别，以及并发模型与限流位置怎么选。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/python/fastapi-async/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="asyncio 的性能陷阱 - FastAPI">
-    <meta name="twitter:description" content="FastAPI 的异步正确性：事件循环阻塞的判定、同步依赖的处置、gather 与 TaskGroup、取消语义与后台任务的静默失败。">
+    <meta name="twitter:description" content="事件循环阻塞的判定与排查：怎么证明真被阻塞、卡在哪一行、哪些库会阻塞，gather 与 TaskGroup 的异常语义差别，以及并发模型与限流位置怎么选。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,7 +68,7 @@
                     </header>
                     <div class="article-content">
 <p>asyncio 的坑有一个共同特征：<strong>不报错</strong>。代码能跑、测试能过、单请求延迟正常，只有并发一上来才暴露，而现象又是最容易误判的「CPU 不高但延迟很高」。</p>
-<p>这篇先给一套能动手跑的判定流程——怎么证明事件循环真的被阻塞了、阻塞在哪一行、挪出去之后怎么确认有效——再把这些陷阱按机制串起来。框架层面的 async 与 sync handler 分派见<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
+<p>能动手跑的判定流程：怎么证明事件循环被阻塞、阻塞在哪一行、挪出去后怎么确认有效；陷阱按机制串起来。框架层面的 async 与 sync handler 分派见<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
 <h2>怎么测出协程被阻塞，以及把它挪出去</h2>
 <p>「延迟高」不等于「被阻塞」，先按下面四步做判定，顺序不要跳：静态检查最便宜，压测对照最有说服力。</p>
 
@@ -244,7 +244,7 @@ async def tune_threadpool() -&gt; None:
 <p>为什么一次阻塞会放大到全部请求、为什么线程池对 CPU 密集没用、为什么超时对纯计算无效——都在下面几节。</p>
 
 <h2>协作式调度：只有 await 才让出控制权</h2>
-<p>搞清这一节能解决的现象是：QPS 上不去、延迟随并发线性恶化、CPU 使用率却只有百分之二十，于是被误判成「机器不够」。asyncio 是<strong>单线程事件循环加协程协作式调度</strong>。</p>
+<p>QPS 上不去、延迟随并发线性恶化、CPU 使用率却只有百分之二十，于是被误判成「机器不够」。asyncio 是<strong>单线程事件循环加协程协作式调度</strong>。</p>
 <p>循环从就绪队列取一个协程跑，跑到 <code>await</code> 且确实需要等待时，协程交回控制权，循环再取下一个。关键推论：<strong>不 await 的代码，事件循环无法中断它</strong>。</p>
 <p>一段纯计算、一次同步 socket 调用、一个 <code>time.sleep</code>，期间整个循环停转，所有已就绪的协程一个都推进不了。</p>
 <p>CPU 不高是因为大家都在等一个被阻塞的线程，而不是在算东西——这正是上面第 4 步压测对照能把它认出来的原因。</p>
@@ -268,7 +268,7 @@ sequenceDiagram
 </div>
 
 <h2>五类最常见的阻塞源</h2>
-<p>搞清这一节能解决的现象是：知道有阻塞，但不知道从哪些库开始找。下表左列按出现频率排序，右列是「还没来得及换库时」的过渡手段。</p>
+<p>知道有阻塞，但不知道从哪些库开始找。下表左列按出现频率排序，右列是「还没来得及换库时」的过渡手段。</p>
 <table>
 <thead><tr><th>阻塞源</th><th>典型写法</th><th>替代方案</th><th>过渡手段</th></tr></thead>
 <tbody>
@@ -284,11 +284,11 @@ sequenceDiagram
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">小文件读写不必强上 aiofiles</div>
-    <p>读一个几 KB 的配置文件，阻塞时间是微秒级，换成异步反而引入线程池调度开销。判断标准是量级：单次阻塞超过 1 毫秒才值得处理，超过 10 毫秒必须处理。别把「异步化」当成目标本身。</p>
+    <p>读几 KB 配置文件，阻塞是微秒级，换异步反而引入线程池调度开销。判断看量级：单次阻塞超过 1 毫秒才值得管，超过 10 毫秒必须处理。异步化不是目标。</p>
 </div>
 
 <h2>三种探测手段各能看到什么</h2>
-<p>搞清这一节能解决的现象是：开了一堆工具却互相矛盾，不知道该信哪个。三种手段的可见范围不同，不是替代关系。</p>
+<p>开了一堆工具却互相矛盾，不知道该信哪个。三种手段的可见范围不同，不是替代关系。</p>
 <table>
 <thead><tr><th>手段</th><th>输出</th><th>怎么判读</th></tr></thead>
 <tbody>
@@ -317,7 +317,7 @@ async def dump_tasks() -&gt; None:
 </code></pre>
 
 <h2>并发控制：gather、as_completed 与 TaskGroup</h2>
-<p>搞清这一节能解决的现象是：一批并发任务里有一个失败，结果剩下的任务还在后台跑、连接没关、日志里也看不到异常。三个原语的差别主要在<strong>异常语义</strong>和<strong>资源边界</strong>，不是写法偏好。</p>
+<p>并发任务里一个失败，其余照跑、连接不关、日志里看不到异常。三个原语的差别在<strong>异常语义</strong>与<strong>资源边界</strong>，不是写法偏好。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -405,7 +405,7 @@ async def gather_semantics():
 </table>
 
 <h2>超时与取消：只能在 await 点生效</h2>
-<p>搞清这一节能解决的现象是：「设了 3 秒超时为什么还是卡了 30 秒」，以及优雅关闭时连接池里的连接一直没被归还。取消的实现方式是<strong>在协程下一次到达 <code>await</code> 时抛出 <code>CancelledError</code></strong>。</p>
+<p>「设了 3 秒超时为什么还是卡了 30 秒」，以及优雅关闭时连接池里的连接一直没被归还。取消的实现方式是<strong>在协程下一次到达 <code>await</code> 时抛出 <code>CancelledError</code></strong>。</p>
 <p>所以一段不含 await 的纯计算、或者卡在同步阻塞里的代码，<strong>无法被取消</strong>——超时时间到了也只能等它自己跑完。</p>
 
 <div class="mermaid">
@@ -489,7 +489,7 @@ def called_inside_running_loop():
 </code></pre>
 
 <h2>两类最隐蔽的 bug</h2>
-<p>搞清这一节能解决的现象是：某个通知偶发不发出、某个后台任务偶发不执行，而日志里一条错误都没有。它们的共同点是<strong>不抛异常</strong>，只在日志里留一条容易被忽略的警告。</p>
+<p>某个通知偶发不发出、某个后台任务偶发不执行，而日志里一条错误都没有。它们的共同点是<strong>不抛异常</strong>，只在日志里留一条容易被忽略的警告。</p>
 
 <table>
 <thead><tr><th>bug</th><th>写法</th><th>现象</th><th>正确做法</th></tr></thead>
@@ -522,7 +522,7 @@ def spawn(coro) -&gt; asyncio.Task:
 </code></pre>
 
 <h2>asyncio 与多线程的量级对照</h2>
-<p>搞清这一节能解决的现象是：为了「性能」把一个十并发的内部服务改成全异步，付出了一堆改造成本却测不出差别。</p>
+<p>为了「性能」把一个十并发的内部服务改成全异步，付出了一堆改造成本却测不出差别。</p>
 <table>
 <thead><tr><th>并发规模</th><th>asyncio</th><th>线程池</th><th>结论</th></tr></thead>
 <tbody>
@@ -569,10 +569,10 @@ def spawn(coro) -&gt; asyncio.Task:
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：接口慢但事件循环延迟正常，说明瓶颈在下游或 SQL，属于数据库与链路问题，见站内<a href="../../../observability/performance/">后端性能优化专题</a>；worker 数、进程模型、WSGI 与 ASGI 契约在<a href="../web/">《Python Web 服务的部署形态》</a>；</p>
-<p>线程、进程、协程三条路线的取舍与 GIL 的确切约束在<a href="../concurrency/">《Python 并发的三条路线与选择》</a>；内存只涨不降、指标多进程串号、优雅关闭的完整链路在<a href="../fastapi-production/">《Python 服务上生产》</a>；对象开销与热路径的单操作成本在<a href="../core/">《Python 运行时机制》</a>；</p>
+<p>接口慢但事件循环延迟正常，瓶颈在下游或 SQL，属数据库链路问题，见<a href="../../../observability/performance/">后端性能优化专题</a>。worker 数、进程模型、WSGI、ASGI 契约在<a href="../web/">《Python Web 服务的部署形态》</a>。</p>
+<p>线程、进程、协程取舍与 GIL 约束见<a href="../concurrency/">《Python 并发的三条路线与选择》</a>；内存只涨不降、指标多进程串号、优雅关闭链路在<a href="../fastapi-production/">《Python 服务上生产》</a>；对象开销与热路径成本在<a href="../core/">《Python 运行时机制》</a>。</p>
 <p>框架怎么分派 async 与 sync handler、依赖注入的执行时机在<a href="../fastapi/">《FastAPI 的机制与生产化》</a>。</p>
-<p>这条路径上，上一篇解决的是「三套环境装出同一套依赖」，本篇进入运行期的并发正确性与延迟，下一篇再把视角挪到进程之外：探针、优雅关闭、日志与发布。</p>
+<p>上一篇解决三套环境装出同一套依赖，再讲运行期并发正确性与延迟，下一篇转到进程之外：探针、优雅关闭、日志与发布。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../fastapi-dependencies/">← 上一步：依赖与环境管理：从 pip 到 uv</a> · <a href="../fastapi-production/">下一步：Python 服务上生产：进程模型、优雅关闭与可观测性 →</a></p>
 

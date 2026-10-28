@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Kafka 压测与调优：先建基线，判定树按侧和资源定位瓶颈，Broker 线程池指标判读、压缩默认值陷阱、冷读与回归清单。">
+        <meta name="description" content="Kafka 性能调优与压测：先取五条基线数字，再按 linger.ms、批量、压缩等旋钮定位瓶颈，说明 Broker 端压缩默认值如何破坏零拷贝，并给出 MQ 吞吐对照与调优后的回归清单。">
     <meta name="keywords" content="Kafka性能优化,RabbitMQ,RocketMQ,消息队列对比,技术选型,吞吐">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/performance/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照 - 资深码农">
-    <meta property="og:description" content="Kafka 压测与调优：先建基线，判定树按侧和资源定位瓶颈，Broker 线程池指标判读、压缩默认值陷阱、冷读与回归清单。">
+    <meta property="og:description" content="Kafka 性能调优与压测：先取五条基线数字，再按 linger.ms、批量、压缩等旋钮定位瓶颈，说明 Broker 端压缩默认值如何破坏零拷贝，并给出 MQ 吞吐对照与调优后的回归清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/performance/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照">
-    <meta name="twitter:description" content="Kafka 压测与调优：先建基线，判定树按侧和资源定位瓶颈，Broker 线程池指标判读、压缩默认值陷阱、冷读与回归清单。">
+    <meta name="twitter:description" content="Kafka 性能调优与压测：先取五条基线数字，再按 linger.ms、批量、压缩等旋钮定位瓶颈，说明 Broker 端压缩默认值如何破坏零拷贝，并给出 MQ 吞吐对照与调优后的回归清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="架构与分布式">
     <meta property="article:tag" content="Kafka,性能优化,消息队列对比,技术选型">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 压测与调优：先建基线，判定树按侧和资源定位瓶颈，Broker 线程池指标判读、压缩默认值陷阱、冷读与回归清单。","url":"https://www.yijunjun.asia/architecture/kafka/performance/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/performance/"},"articleSection":"后端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 性能调优与压测：先取五条基线数字，再按 linger.ms、批量、压缩等旋钮定位瓶颈，说明 Broker 端压缩默认值如何破坏零拷贝，并给出 MQ 吞吐对照与调优后的回归清单。","url":"https://www.yijunjun.asia/architecture/kafka/performance/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/performance/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "消息队列对比", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,7 +90,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇只讲操作层面：<strong>怎么测基线、怎么定位瓶颈在哪一侧、每个旋钮往哪拧、以及「Kafka 更快」的边界在哪里</strong>。零拷贝在什么条件下失效、分段日志怎么支撑顺序写，机制见 <a href="../">主干篇</a>。</p>
+<p>只讲操作：<strong>怎么测基线、瓶颈在哪侧、每个旋钮往哪拧、「Kafka 更快」的边界</strong>。零拷贝何时失效、分段日志怎么支撑顺序写，机制见 <a href="../">主干篇</a>。</p>
 <h2>建立基线与定位瓶颈的固定顺序</h2>
 
 <p>调参的第一步不是改参数，是<strong>把一组可对比的数字记下来</strong>。按下面五步走，每一步的产出都要写进文档。</p>
@@ -246,7 +246,7 @@ stateDiagram-v2
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
     <div class="callout-title">只改一项的话，改 linger.ms</div>
-    <p>默认 0 意味着几乎不攒批，一条消息一个请求，网络往返数被放大到极致，压缩也压不出效果。调到 10 毫秒通常让吞吐有量级改善，代价是每条消息最多多等 10 毫秒。</p>
+    <p>默认 0 几乎不攒批，一条消息一个请求，网络往返被放大，压缩也压不出效果。调到 10 毫秒吞吐常有量级改善，每条最多多等 10 毫秒。</p>
 <p>这是整个 Kafka 调优里投入产出比最高的一个改动，而且风险极低。</p>
 </div>
 
@@ -339,8 +339,8 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">Broker 的 compression.type 必须保持 producer</div>
-    <p>这个参数默认值是 <code>producer</code>，即原样保存 Producer 送来的压缩格式。一旦在 Broker 上指定了具体算法而它与 Producer 不同，Broker 就要把<strong>每一个批次解压再重新压缩</strong>，后果有两个：CPU 消耗成倍上升；</p>
-<p>消费时无法再用 sendfile 直接把 page cache 里的数据送到网卡，<strong>零拷贝失效</strong>。同样的机制也解释了老版本客户端接入为何让集群 CPU 莫名升高——消息格式向下转换同样让零拷贝失效。</p>
+    <p>该参数默认 <code>producer</code>，即原样保存 Producer 的压缩格式。Broker 指定了不同算法就要把<strong>每一个批次解压再重新压缩</strong>，CPU 消耗成倍上升；</p>
+<p>消费时 sendfile 无法把 page cache 数据直送网卡，<strong>零拷贝失效</strong>。老版本客户端接入让集群 CPU 莫名升高，也是消息格式向下转换破坏了零拷贝。</p>
 </div>
 
 <h2>page cache、冷读与分区数</h2>
@@ -435,7 +435,7 @@ sequenceDiagram
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">「Kafka 最快」只在批量吞吐场景成立</div>
-    <p>Kafka 的高吞吐来自攒批、顺序写和零拷贝，这三项都需要流量密度才能发挥。单条消息、低 QPS、要求亚毫秒响应的场景下，攒批反而成了纯粹的延迟来源，此时 RabbitMQ 的逐条投递更快也更稳。</p>
+    <p>Kafka 的高吞吐来自攒批、顺序写、零拷贝，三者都要流量密度。单条消息、低 QPS、要亚毫秒响应时，攒批只剩延迟，RabbitMQ 的逐条投递更快也更稳。</p>
 <p>选型时先问清楚场景是「管道」还是「任务分发」：前者选 Kafka，后者 RabbitMQ 往往更省心。拿量级完全不同的压测结果证明某个 MQ「更快」，基本没有参考价值。</p>
 </div>
 
@@ -455,10 +455,10 @@ sequenceDiagram
 </tbody>
 </table>
 
-<p><strong>不适用边界</strong>：这一篇解决「快不快」，解决不了「丢不丢」，两者配置经常互相拉扯，可靠性底线见上一篇 <a href="../reliability/">可靠性落地</a>。分区数与倾斜见 <a href="../topic-partition/">分区设计</a>；客户端代码与线程模型见 <a href="../producer-consumer/">生产者与消费者实战</a>；</p>
-<p>主机层与磁盘规划见 <a href="../install/">生产级部署</a>；零拷贝与分段日志机制回到 <a href="../">主干篇</a>。如果目标是亚毫秒延迟或复杂路由，调参给不了答案，回到 <a href="../intro/">选型边界</a> 与 <a href="../../messaging/compare/">消息队列选型</a>。</p>
+<p><strong>不适用边界</strong>：解决「快不快」，解决不了「丢不丢」，配置常互相拉扯。可靠性底线见 <a href="../reliability/">可靠性落地</a>，分区倾斜见 <a href="../topic-partition/">分区设计</a>，客户端线程模型见 <a href="../producer-consumer/">生产者与消费者实战</a>。</p>
+<p>主机与磁盘规划见 <a href="../install/">生产级部署</a>；零拷贝机制见 <a href="../">主干篇</a>。要亚毫秒延迟或复杂路由，调参给不了答案，回到 <a href="../intro/">选型边界</a>、<a href="../../messaging/compare/">消息队列选型</a>。</p>
 
-<p>这一篇是这条路径的最后一站：从选型、部署、分区、客户端、可靠性走到性能，剩下的工作是把基线数字与告警固化下来，让下一次「变慢了」有据可查。</p>
+<p>这条路径走到这里：从选型、部署、分区、客户端、可靠性走到性能，剩下的工作是把基线数字与告警固化下来，让下一次「变慢了」有据可查。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../reliability/">← 上一步：Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费</a></p>
 

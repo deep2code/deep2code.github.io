@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Vite 上手：以 HTML 为入口、public 与静态资源、预构建缓存、环境变量前缀与构建期注入、类型检查与代理。">
+    <meta name="description" content="讲清 Vite 上手的机制：index.html 为什么是入口、依赖预构建的实际影响、环境变量的构建时注入与安全边界、类型检查缺失与 server.proxy 的范围。">
     <meta name="keywords" content="Vite,Vite 入门,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/frontend/vite/intro/">
     <meta property="og:title" content="Vite 上手：项目结构、依赖预构建与环境变量 - Vite - 资深码农">
-    <meta property="og:description" content="Vite 上手：以 HTML 为入口、public 与静态资源、预构建缓存、环境变量前缀与构建期注入、类型检查与代理。">
+    <meta property="og:description" content="讲清 Vite 上手的机制：index.html 为什么是入口、依赖预构建的实际影响、环境变量的构建时注入与安全边界、类型检查缺失与 server.proxy 的范围。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/frontend/vite/intro/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Vite 上手：项目结构、依赖预构建与环境变量 - Vite">
-    <meta name="twitter:description" content="Vite 上手：以 HTML 为入口、public 与静态资源、预构建缓存、环境变量前缀与构建期注入、类型检查与代理。">
+    <meta name="twitter:description" content="讲清 Vite 上手的机制：index.html 为什么是入口、依赖预构建的实际影响、环境变量的构建时注入与安全边界、类型检查缺失与 server.proxy 的范围。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -68,12 +68,12 @@
                     </header>
                     <div class="article-content">
 
-<p><code>npm create vite</code> 之后的项目能直接跑，所以很多人从没搞清那几个目录和文件各自的命运。这一篇讲的就是这些具体机制：入口为什么是 HTML、资源放哪里、预构建缓存在哪、环境变量怎么注入、为什么类型错误不报。</p>
+<p><code>npm create vite</code> 之后的项目能直接跑，那几个目录和文件各自的命运常被跳过：入口为什么是 HTML、资源放哪里、预构建缓存在哪、环境变量怎么注入、类型错误为什么不报。</p>
 <p>架构层面的原理见 <a href="../">Vite 的架构</a>，插件与配置细节见 <a href="../config/">配置与插件机制</a>。</p>
 
 <h2>入口是 index.html，不是 JS</h2>
 
-<p>这是与 Webpack 最直观的结构差异。Webpack 的入口是 JS，HTML 由插件根据模板生成；<strong>Vite 的入口就是项目根目录下那个真实的 <code>index.html</code></strong>，开发期浏览器直接加载它，里面那个 <code>type="module"</code> 的 script 标签就是模块图的根。它是构建产物的一部分，不是模板。</p>
+<p>Webpack 入口是 JS，HTML 由插件按模板生成；<strong>Vite 入口是项目根目录下真实的 <code>index.html</code></strong>，开发期浏览器直接加载，其中 <code>type="module"</code> 那个 script 标签是模块图根。它是构建产物的一部分，不是模板。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -103,7 +103,7 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">别把 index.html 放进 public</div>
-    <p>放进去它会被原样拷贝，不参与构建，于是 script 标签里的源码路径不会被改写成产物路径，线上打开就是 404 或空白页。<code>index.html</code> 必须在项目根目录（或 <code>root</code> 指定的目录）下。多页应用要在 <code>build.rollupOptions.input</code> 里显式列出每个 HTML 文件。</p>
+    <p>放进去不参与构建，script 里的源码路径不会改写成产物路径，线上打开就是 404 或空白页。<code>index.html</code> 必须在项目根目录（或 <code>root</code> 指定的目录）下。多页应用要在 <code>build.rollupOptions.input</code> 里列出每个 HTML 文件。</p>
 </div>
 
 <h2>静态资源：加哈希还是原样拷贝</h2>
@@ -139,7 +139,7 @@ const workerUrl = new URL('./heavy.worker.ts', import.meta.url).href</code></pre
 
 <h2>依赖预构建的实际影响</h2>
 
-<p>预构建是让「开发期不打包」这个模型能成立的前提（原理见 <a href="../">架构篇</a>）。日常开发中你会以三种形式感受到它：<strong>首次启动慢一点、缓存目录会脏、以及页面偶尔自动刷新一次</strong>。</p>
+<p>预构建支撑「开发期不打包」模型（原理见 <a href="../">架构篇</a>）。日常开发中的感受是：<strong>首次启动慢一点、缓存目录会脏、页面偶尔自动刷新一次</strong>。</p>
 
 <table>
 <thead><tr><th>现象</th><th>原因</th><th>怎么确认</th><th>处理</th></tr></thead>
@@ -183,11 +183,11 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">带 VITE_ 前缀等于公开</div>
-    <p>前缀机制的设计目的是防止无前缀的服务端密钥被误打进前端，但它的另一面必须记牢：<strong>加了前缀的变量会被明文写进 JS 产物</strong>，用户打开开发者工具搜索就能看到。</p>
+    <p>前缀机制防止无前缀的服务端密钥误打进前端，另一面要记牢：<strong>加了前缀的变量会被明文写进 JS 产物</strong>，打开开发者工具搜索就能看到。</p>
 <p>任何数据库密码、第三方 API 的私有 key、签名 secret 都不能加前缀，也就意味着它们根本不该出现在前端代码里——需要用到时必须由自己的后端代理转发。</p>
 </div>
 
-<p>另一个必须知道的限制：<strong>构建时注入意味着一份产物不能多环境复用</strong>。测试环境和生产环境的接口地址不同，就得构建两次，无法做到「构建一次、到处部署」。</p>
+<p><strong>构建时注入意味着一份产物不能多环境复用</strong>。测试与生产接口地址不同就要构建两次，做不到「构建一次、到处部署」。</p>
 <p>要复用产物只能改成运行时注入——把配置放进一个不带哈希的小 JS 文件或由服务端渲染进 HTML，启动时读。这套方案的权衡见站内 <a href="../../frameworks/engineering/">前端工程化</a>。</p>
 
 <pre><code class="language-bash"># .env —— 所有环境共享的默认值，进 git
@@ -246,12 +246,12 @@ if (import.meta.env.DEV) {
 <tr><td><code>?inline</code> 后缀</td><td>无</td><td>不注入</td><td>拿到 CSS 字符串而不插入页面，用于 Shadow DOM</td></tr>
 </tbody></table>
 
-<p>TypeScript 方面有一条必须记住的硬事实：<strong>Vite 只转译，不做类型检查</strong>。esbuild 擦掉类型语法就返回，速度极快，代价是类型错误在开发期和构建期都完全静默。<strong>CI 里必须单独跑 <code>tsc --noEmit</code> 并让它成为卡口</strong>，否则类型系统等于没有。</p>
+<p>TypeScript 上 <strong>Vite 只转译，不做类型检查</strong>：esbuild 擦掉类型语法就返回，代价是类型错误在开发期和构建期都静默。<strong>CI 里必须单独跑 <code>tsc --noEmit</code> 并让它成为卡口</strong>，否则类型系统等于没有。</p>
 <p>同时建议开启 <code>verbatimModuleSyntax</code>，让「仅类型的导入没写 <code>import type</code>」这类问题在编辑器里就报出来——它在生产构建时可能表现为把整个模块打进产物。</p>
 
 <h2>开发期跨域：server.proxy</h2>
 
-<p>代理的原理是让 dev server 代替浏览器去请求后端，<strong>浏览器眼里所有请求都是同源的</strong>，于是不触发跨域检查。它只在开发期生效，生产环境的同源问题要靠 Nginx 或网关解决。</p>
+<p>代理让 dev server 代替浏览器请求后端，<strong>浏览器眼里所有请求同源</strong>，不触发跨域检查。它只在开发期生效，生产的同源问题靠 Nginx 或网关解决。</p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -309,7 +309,7 @@ export default defineConfig(({ mode }) =&gt; {
 
 <h2>常用命令与各自的作用范围</h2>
 
-<p>这几个命令背后是两套完全不同的构建路径，搞混它们会让排查方向从一开始就错。<code>dev</code> 走按需转译那一套，<code>build</code> 走 Rollup 全量打包，<code>preview</code> 只是一个托管 <code>dist</code> 的静态服务器——它是用来验证产物的，不是用来开发的。</p>
+<p>这几个命令背后是两套构建路径，搞混会让排查方向错。<code>dev</code> 按需转译，<code>build</code> 走 Rollup 全量打包，<code>preview</code> 只是托管 <code>dist</code> 的静态服务器，用来验证产物，不是用来开发的。</p>
 
 <table>
 <thead><tr><th>命令</th><th>实际做什么</th><th>常被误解的地方</th></tr></thead>
@@ -322,7 +322,7 @@ export default defineConfig(({ mode }) =&gt; {
 <tr><td><code>vite build --mode staging</code></td><td>以指定模式构建，加载对应的 env 文件</td><td><code>mode</code> 与 <code>NODE_ENV</code> 是两件事，自定义 mode 下仍按生产方式打包</td></tr>
 </tbody></table>
 
-<p>最后一行的区别值得单独记住：<strong><code>mode</code> 决定加载哪些 <code>.env</code> 文件，<code>NODE_ENV</code> 决定依赖库内部走开发分支还是生产分支</strong>。用 <code>--mode staging</code> 构建时 Vite 仍然按生产方式打包，所以不会意外把框架的开发版打进产物；</p>
+<p><strong><code>mode</code> 决定加载哪些 <code>.env</code> 文件，<code>NODE_ENV</code> 决定依赖库内部走开发分支还是生产分支</strong>。用 <code>--mode staging</code> 构建时 Vite 仍按生产方式打包，不会把框架的开发版打进产物；</p>
 <p>但如果有人在 <code>.env.staging</code> 里手写了一个开发用的 <code>NODE_ENV</code>，就会得到一个又慢又大、还带完整警告输出的产物，这类问题往往要等到线上性能异常才被发现。</p>
 
 <h2>反模式对照</h2>

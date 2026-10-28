@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Redis 结构选型与建模：场景到结构映射、对象缓存、Stream 队列、限流、Lua 原子边界、SCAN、延迟任务与键空间通知、容量反模式。">
+    <meta name="description" content="按业务需求选 Redis 数据结构：结构判断表、场景复杂度来由、限流三种实现、Pipeline 与 Lua 的原子性边界、SCAN 用法与延迟队列。">
     <meta name="keywords" content="缓存架构,Redis 实战,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/cache/redis-practice/">
     <meta property="og:title" content="数据结构选型与业务建模：用什么结构解什么问题 - 缓存架构 - 资深码农">
-    <meta property="og:description" content="Redis 结构选型与建模：场景到结构映射、对象缓存、Stream 队列、限流、Lua 原子边界、SCAN、延迟任务与键空间通知、容量反模式。">
+    <meta property="og:description" content="按业务需求选 Redis 数据结构：结构判断表、场景复杂度来由、限流三种实现、Pipeline 与 Lua 的原子性边界、SCAN 用法与延迟队列。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/cache/redis-practice/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="数据结构选型与业务建模：用什么结构解什么问题">
-    <meta name="twitter:description" content="Redis 结构选型与建模：场景到结构映射、对象缓存、Stream 队列、限流、Lua 原子边界、SCAN、延迟任务与键空间通知、容量反模式。">
+    <meta name="twitter:description" content="按业务需求选 Redis 数据结构：结构判断表、场景复杂度来由、限流三种实现、Pipeline 与 Lua 的原子性边界、SCAN 用法与延迟队列。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,12 +71,12 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇不讲 Redis 内部怎么实现，只讲一件事：<strong>手上有个业务问题，该用哪个数据结构建模</strong>。</p>
-<p>选错结构的代价通常不是「慢一点」，而是几个月后发现某个能力根本做不到——比如用 List 做了消息队列，上线半年后才发现消费者崩溃时消息会静默丢失。</p>
+<p>不谈 Redis 内部怎么实现，只讲一件事：<strong>手上有个业务问题，该用哪个数据结构建模</strong>。</p>
+<p>选错结构的代价不是「慢一点」，而是几个月后发现某个能力根本做不到：用 List 做消息队列，消费者崩溃时消息会静默丢失。</p>
 <p>编码转换阈值、内存布局、单线程模型这些内部机制详见站内 Redis 深度原理。</p>
 <h2>「这个需求用哪种结构」判断表与四段最小命令序列</h2>
 
-<p>建模之前先查下面这张表。前三列决定结构选得对不对，第四列决定它上线三个月后会不会变成容量问题——<strong>多数 Redis 事故的根因是选结构时只看了「能不能做」，没看「不能做什么」和「内存怎么涨」</strong>。</p>
+<p>前三列决定结构选得对不对，第四列决定上线三个月后会不会变成容量问题。<strong>多数 Redis 事故的根因是只看了「能不能做」，没看「不能做什么」和「内存怎么涨」</strong>。</p>
 <p>为什么是这些取舍，原因见原理层。</p>
 
 <table>
@@ -168,7 +168,7 @@ return 0</code></pre>
 
 <h2>场景到结构的映射与复杂度</h2>
 
-<p>搞清这一节能解决的现象是：命令写对了、结果也对，但在数据量涨上去之后延迟突然变差——通常是复杂度被忽略了。</p>
+<p>命令写对了、结果也对，但在数据量涨上去之后延迟突然变差——通常是复杂度被忽略了。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -223,12 +223,12 @@ GEOSEARCH shop:geo FROMLONLAT 116.40 39.91 BYRADIUS 3 km ASC COUNT 20
 # 业务上还要按营业状态过滤时，COUNT 要取得比实际需要的更多，留出被过滤掉的余量
 GEODIST shop:geo shop:1001 shop:1002 m             # 两点直线距离，不是路网距离</code></pre>
 
-<p>排行榜、签到、UV 的命令序列在用法层已经给过，这里要补的是它们为什么是这个复杂度：<strong>ZSet 的取前 N 之所以是 O(log n 加 N)，是因为跳表定位到起点是对数级、之后顺着链表走 N 步</strong>；</p>
+<p>排行榜、签到、UV 的命令序列在用法层已给过，这里只补复杂度的来由：<strong>ZSet 取前 N 是 O(log n 加 N)，因为跳表定位起点是对数级、之后顺链表走 N 步</strong>；</p>
 <p><code>BITCOUNT</code> 的 n 是 bitmap 的字节数而不是被置位的数量，所以一个只有一位为 1 但偏移量很大的 bitmap，统计成本和写满的一样高。</p>
 
 <h2>对象缓存：String 还是 Hash</h2>
 
-<p>搞清这一节能解决的现象是：缓存明明命中了，但某个字段的更新总是偶尔丢失，或者带宽被缓存流量吃掉一大块。</p>
+<p>缓存明明命中了，但某个字段的更新总是偶尔丢失，或者带宽被缓存流量吃掉一大块。</p>
 
 <table>
 <thead><tr><th>维度</th><th>String 存序列化整体</th><th>Hash 按字段存</th></tr></thead>
@@ -246,7 +246,7 @@ GEODIST shop:geo shop:1001 shop:1002 m             # 两点直线距离，不是
 
 <h2>消息队列：List 的缺陷与 Stream 的能力</h2>
 
-<p>搞清这一节能解决的现象是：队列看起来一直正常，但每次消费者进程被重启或被 OOM 杀掉之后，总有少量业务「像没发生过一样」。</p>
+<p>队列看起来一直正常，但每次消费者进程被重启或被 OOM 杀掉之后，总有少量业务「像没发生过一样」。</p>
 
 <table>
 <thead><tr><th>能力</th><th>List</th><th>Stream</th></tr></thead>
@@ -334,7 +334,7 @@ stateDiagram-v2
 
 <h2>分布式限流的三种实现</h2>
 
-<p>搞清这一节能解决的现象是：限流配的是每分钟一百次，监控里却时不时出现两百次的峰值，而每个窗口的计数都没超。</p>
+<p>限流配的是每分钟一百次，监控里却时不时出现两百次的峰值，而每个窗口的计数都没超。</p>
 
 <table>
 <thead><tr><th>实现</th><th>精度</th><th>内存</th><th>突发流量</th><th>主要问题</th></tr></thead>
@@ -344,8 +344,8 @@ stateDiagram-v2
 <tr><td>令牌桶（Lua）</td><td>中高</td><td>两个字段，常数</td><td>支持，桶内余量就是允许的突发量</td><td>实现稍复杂；桶容量设太大等于放过大流量突刺</td></tr>
 </tbody></table>
 
-<p>固定窗口的临界问题值得具体看：限制每分钟一百次时，窗口按自然分钟切分，攻击者在第 59 秒打满一百次、第 61 秒再打满一百次，<strong>两秒内实际通过两百次</strong>，而每个窗口的计数都没超。</p>
-<p>另外 <code>INCR</code> 和 <code>EXPIRE</code> 分两条命令发送时，第一条成功第二条失败会留下一个<strong>永不过期的计数器</strong>，之后这个维度会被永久限流——这是线上真实发生过的事故形态。</p>
+<p>限制每分钟一百次时，窗口按自然分钟切分：攻击者在第 59 秒打满一百次、第 61 秒再打满一百次，<strong>两秒内实际通过两百次</strong>，每个窗口计数都没超。</p>
+<p><code>INCR</code> 和 <code>EXPIRE</code> 分两条命令发送时，第一条成功第二条失败会留下一个<strong>永不过期的计数器</strong>，该维度从此被永久限流，线上真出过。</p>
 
 <pre><code class="language-lua">-- 令牌桶限流。KEYS[1] 是桶状态 key（Hash，存 tokens 与 ts）
 -- ARGV[1] 桶容量  ARGV[2] 每秒生成令牌数  ARGV[3] 本次请求令牌数  ARGV[4] 当前毫秒时间戳
@@ -384,7 +384,7 @@ return {allowed, math.floor(tokens)}</code></pre>
 
 <h2>Pipeline、MULTI、Lua 的原子性边界</h2>
 
-<p>搞清这一节能解决的现象是：库存扣减、余额变更这类逻辑在压测下偶尔出现超卖，而代码看起来「已经用事务包起来了」。</p>
+<p>库存扣减、余额变更这类逻辑在压测下偶尔出现超卖，而代码看起来「已经用事务包起来了」。</p>
 
 <table>
 <thead><tr><th>机制</th><th>减少网络往返</th><th>中间不被插入其他命令</th><th>能基于读结果做判断</th><th>失败语义</th></tr></thead>
@@ -395,7 +395,7 @@ return {allowed, math.floor(tokens)}</code></pre>
 <tr><td>Lua 脚本</td><td>是，一次调用</td><td>保证，脚本执行期间不处理其他命令</td><td>可以，这是唯一能做读后判断再写的方式</td><td>脚本中途报错时已执行的写入不会回滚，要自己保证幂等</td></tr>
 </tbody></table>
 
-<p>所以「先 <code>GET</code> 判断再 <code>SET</code>」只能用 Lua：两条独立命令之间有一个完整的网络往返，其他客户端完全可以在这期间改掉这个 key，<strong>执行 <code>SET</code> 时你的判断依据已经失效了</strong>；而 <code>MULTI</code> 拿不到中间结果，无法在事务内做判断。</p>
+<p>「先 <code>GET</code> 判断再 <code>SET</code>」只能用 Lua：两条命令之间有一个完整网络往返，其他客户端能在这期间改掉 key，<strong>执行 <code>SET</code> 时判断依据已失效</strong>；<code>MULTI</code> 拿不到中间结果，无法在事务内判断。</p>
 
 <pre><code class="language-lua">-- 只在新值更大时才覆盖（典型场景：多来源上报同一指标，只保留最新版本号）
 -- KEYS[1] 目标 key  ARGV[1] 新值  ARGV[2] TTL 毫秒
@@ -422,7 +422,7 @@ return 0</code></pre>
 
 <h2>SCAN 的正确用法</h2>
 
-<p>搞清这一节能解决的现象是：写了个清理脚本跑完，过一阵发现还有大量符合条件的 key 没被删掉。</p>
+<p>写了个清理脚本跑完，过一阵发现还有大量符合条件的 key 没被删掉。</p>
 
 <pre><code class="language-bash"># 正确的遍历循环：唯一的结束条件是返回游标为 0
 cursor=0
@@ -439,23 +439,23 @@ while :; do
   [ "$cursor" = "0" ] &amp;&amp; break
 done</code></pre>
 
-<p>SCAN 的语义保证是：<strong>从开始到结束一直存在的元素一定会被返回至少一次，但可能被返回多次</strong>。遍历期间新增的元素可能返回也可能不返回，已删除的元素可能已经被返回过。</p>
+<p>SCAN 保证：<strong>从开始到结束一直存在的元素一定会被返回至少一次，也可能被返回多次</strong>。遍历期间新增的元素可能不返回，已删除的可能已被返回。</p>
 <p>所以业务侧必须能容忍重复——删除、覆盖写这类幂等操作没问题，而「每扫到一个就给用户发一条消息」这种会发重复。同类的 <code>HSCAN</code>、<code>SSCAN</code>、<code>ZSCAN</code> 语义一致。</p>
 <p>永远不要用 <code>KEYS</code>，它是一次性遍历全库的阻塞操作，百万级 key 会让整个实例停顿。</p>
 
 <h2>延迟任务与键空间通知</h2>
 
-<p>搞清这一节能解决的现象是：用过期事件驱动的延迟任务，平时看着没问题，一次发版重启之后有一批任务永远没被触发。</p>
+<p>用过期事件驱动的延迟任务，平时看着没问题，一次发版重启之后有一批任务永远没被触发。</p>
 
-<p><strong>键空间通知不能承载任何关键业务。</strong>它基于发布订阅，是即发即忘的：没有客户端在线时消息直接丢弃，没有持久化，没有确认和重投，消费者重启期间的通知全部永久丢失。</p>
+<p><strong>键空间通知不能承载关键业务。</strong>它基于发布订阅、即发即忘：无在线客户端时消息直接丢弃，无持久化、无确认和重投，重启期间的通知全丢。</p>
 <p>过期事件的触发时机取决于惰性删除与定期采样删除，一个已逻辑过期的 key 可能过很久才真正产生事件，时间精度完全不可控。</p>
 
-<p>正确做法就是上面那个 ZSet 延迟队列：score 存到期时间戳，用 Lua 原子地取出到期任务并移入处理中集合，成功后删除，另有独立巡检把处理中集合里超时未完成的任务重新投回。</p>
+<p>做法是 ZSet 延迟队列：score 存到期时间戳，用 Lua 原子取出到期任务并移入处理中集合，成功后删除，超时未完成的由独立巡检重新投回。</p>
 <p>它有确认、可重投、精度由轮询间隔决定，还额外支持按任务 ID 直接取消。任务量到千万级时应该换成专业的延迟消息中间件。</p>
 
 <h2>序列化格式的选择</h2>
 
-<p>搞清这一节能解决的现象是：缓存内存占用比预估高出一倍，或者上线一个新字段之后老缓存全部读不出来。</p>
+<p>缓存内存占用比预估高出一倍，或者上线一个新字段之后老缓存全部读不出来。</p>
 
 <p>序列化直接决定缓存的内存占用和 CPU 开销，取舍很清楚：<strong>JSON</strong> 可读、调试方便、跨语言无障碍，代价是体积大（字段名重复存储），是绝大多数业务的默认选择。</p>
 <p><strong>MessagePack</strong> 在保持无 schema 的同时把体积压到 JSON 的六到七成，改造成本极低，是最容易拿到的优化。</p>
@@ -497,11 +497,11 @@ done</code></pre>
 <tr><td>单 key QPS 到数万的热点</td><td>本地缓存前置或副本打散</td><td>分片按 key 哈希，加节点对单 key 完全无效</td><td>引入秒级不一致或 N 倍写放大，取舍见 <a href="../architecture/">多级缓存与拓扑</a></td></tr>
 </tbody></table>
 
-<p><strong>不适用边界</strong>：这一篇只管「用什么结构表达业务」。缓存该不该加、命中率与成本怎么算在 <a href="../">缓存的收益与代价</a>；更新策略与脏数据窗口在 <a href="../problems/">缓存一致性与失效</a>；</p>
-<p>本地缓存、网关缓存、热点打散这些拓扑问题在 <a href="../architecture/">多级缓存与拓扑</a>；单线程事件循环、编码转换阈值、过期删除、持久化与集群槽位这些内部机制在 <a href="../../redis/">Redis 深度原理</a>。</p>
+<p><strong>不适用边界</strong>：只管结构选型。加不加缓存、命中率与成本在 <a href="../">缓存的收益与代价</a>；更新策略与脏数据窗口在 <a href="../problems/">缓存一致性与失效</a>；</p>
+<p>本地缓存、网关缓存、热点打散在 <a href="../architecture/">多级缓存与拓扑</a>；单线程事件循环、编码转换阈值、过期删除、持久化与集群槽位在 <a href="../../redis/">Redis 深度原理</a>。</p>
 <p>另外，Redis 不是搜索引擎也不是分析库：需要按内容检索请看 <a href="../../search/">Elasticsearch 的索引结构与查询代价</a>。</p>
 
-<p>本篇在这条路径上负责把业务翻译成数据结构。结构定下来、命令写对之后，下一步是把这些 key 摆到合适的缓存层级上——同一份数据放在本地缓存还是分布式缓存，决定了你能承诺多短的失效窗口。</p>
+<p>这里把业务翻译成数据结构。结构定下、命令写对后，下一步把 key 摆到合适的缓存层级：同一份数据放本地缓存还是分布式缓存，决定你能承诺多短的失效窗口。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../problems/">← 上一步：缓存一致性与失效：四种更新策略的脏数据窗口推演</a> · <a href="../architecture/">下一步：多级缓存与拓扑：六层缓存的延迟与失效难度取舍 →</a></p>
 

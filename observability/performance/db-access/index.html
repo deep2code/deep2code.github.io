@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="应用侧数据库访问：连接池为何不是越大越好、连接泄漏、ORM 陷阱、事务边界与批量写入。">
+    <meta name="description" content="数据库没问题而是应用用错：连接池大小与泄漏、坏连接超时、ORM 陷阱、事务边界、批量写、写后读">
     <meta name="keywords" content="性能优化实战,数据库性能优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/observability/performance/db-access/">
     <meta property="og:title" content="应用侧的数据库访问优化 - 性能优化实战 - 资深码农">
-    <meta property="og:description" content="应用侧数据库访问：连接池为何不是越大越好、连接泄漏、ORM 陷阱、事务边界与批量写入。">
+    <meta property="og:description" content="数据库没问题而是应用用错：连接池大小与泄漏、坏连接超时、ORM 陷阱、事务边界、批量写、写后读">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/observability/performance/db-access/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="应用侧的数据库访问优化 - 性能优化实战">
-    <meta name="twitter:description" content="应用侧数据库访问：连接池为何不是越大越好、连接泄漏、ORM 陷阱、事务边界与批量写入。">
+    <meta name="twitter:description" content="数据库没问题而是应用用错：连接池大小与泄漏、坏连接超时、ORM 陷阱、事务边界、批量写、写后读">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -69,27 +69,27 @@
             <span class="meta-item">🏷️ 数据库优化</span>
         </div>
     </header>
-    <p>这篇只讲<strong>「数据库本身没问题，是应用用错了」</strong>这一类问题：连接池、ORM 陷阱、批量与 N+1、事务边界、读写分离的应用侧实现。SQL 写法、索引设计、慢查询治理、分库分表全部属于数据库侧，见站内<a href="../../../database/optimization/">数据库优化</a>四篇；</p>
+    <p>只管一类问题——<strong>数据库本身没问题，是应用用错了</strong>：连接池、ORM 陷阱、批量与 N+1、事务边界、读写分离。SQL 写法、索引、慢查询、分库分表全部归数据库侧，见<a href="../../../database/optimization/">数据库优化</a>四篇；</p>
 <p>B+ 树、缓冲池、MVCC、加锁范围、执行计划判读见站内<a href="../../../database/mysql/">MySQL 深度原理</a>；缓存层的设计见站内<a href="../../../database/cache/">缓存设计</a>；接口整体的耗时拆解见<a href="../api-latency/">接口性能优化</a>。</p>
 
     <h2>先划清边界：数据库很快，是应用用错了</h2>
-    <p>线上「数据库慢」的报警里，我见过的至少有一半，数据库侧是清白的：慢查询日志空空如也，实例 CPU 百分之二十，执行时间毫秒级，但应用侧的接口 P99 是两秒。</p>
+    <p>线上「数据库慢」的报警，我见过至少一半数据库侧清白：慢查询日志空白，实例 CPU 百分之二十，执行毫秒级，应用侧 P99 却是两秒。</p>
 <p><strong>这类问题的共同特征是：耗时花在应用到数据库之间的那几层，而不是数据库内部。</strong></p>
     <div class="mermaid">
 flowchart TB
-    subgraph A["应用代码层 本篇重点"]
+    subgraph A["应用代码层（重点）"]
         A1["事务边界 循环里查询"]
         A2["读写分离路由 写后读"]
     end
-    subgraph B["ORM 层 本篇重点"]
+    subgraph B["ORM 层（重点）"]
         B1["懒加载 自动生成 SQL"]
         B2["一级二级缓存 逐条保存"]
     end
-    subgraph C["连接池层 本篇重点"]
+    subgraph C["连接池层（重点）"]
         C1["池大小 获取超时 泄漏"]
         C2["最大存活时长 有效性检测"]
     end
-    subgraph D["驱动层 本篇重点"]
+    subgraph D["驱动层（重点）"]
         D1["批量语句重写 服务端预编译"]
         D2["fetchSize 流式读取"]
     end
@@ -166,7 +166,7 @@ sequenceDiagram
             <tr>
                 <td>SQL 本身慢、扫描行数巨大</td>
                 <td>慢查询日志有记录，执行计划走全表</td>
-                <td>索引或 SQL 写法问题，不属于本篇</td>
+                <td>索引或 SQL 写法问题</td>
                 <td>站内数据库优化篇</td>
             </tr>
         </tbody>
@@ -174,7 +174,7 @@ sequenceDiagram
 
     <h2>连接池：最容易配错的组件</h2>
     <p><strong>池不是越大越好，很多系统把池从 200 降到 20 后吞吐反而上升、P99 下降。</strong></p>
-<p>原因在数据库侧——连接不是免费的并发度，每个活跃连接在数据库里对应一个工作线程，当活跃连接数超过数据库能真正并行处理的数量后，多出来的连接只带来三样东西。</p>
+<p>原因在数据库侧：活跃连接不是免费的并发度，每个连接对应一个工作线程。连接数一旦超过真正能并行的量，多出来的只带来三样。</p>
 <p>线程上下文切换、缓冲池与锁结构的争抢、以及更长的排队。</p>
 <p>这正是主干篇里排队论那条曲线的另一种体现，详见<a href="../">后端性能优化的度量与方法论</a>。</p>
     <p>经验公式来自 HikariCP 的池大小建议：<code>连接数 = 核数 × 2 + 有效磁盘数</code>。一台 8 核加 SSD 的数据库，对应池大小 15 到 20 就够了。</p>
@@ -309,12 +309,12 @@ spring.datasource.url=jdbc:mysql://db:3306/app?rewriteBatchedStatements=true&amp
             </tr>
         </tbody>
     </table>
-    <p>坏连接是另一类偶发故障，根因几乎总是同一个：<strong>应用池里的连接存活时间超过了链路上某一环的空闲超时</strong>。链路上可能有云负载均衡（常见空闲超时 300 秒）、数据库代理、以及数据库自身的 <code>wait_timeout</code>（MySQL 默认 28800 秒）。</p>
-<p>对端单方面关闭连接后并不会通知应用，池里那条连接看起来仍然可用，直到业务借走它并发出第一条语句才报错。三条规则：<strong>maxLifetime 取链路上最小空闲超时再减去几十秒余量</strong>；</p>
+    <p>坏连接这类偶发故障，根因几乎同一个：<strong>池里连接的存活时间超过链路上某一环的空闲超时</strong>。可能是云负载均衡（多为 300 秒）、数据库代理、数据库 <code>wait_timeout</code>（MySQL 默认 28800 秒）。</p>
+<p>对端关连接不通知应用，池里那条看着还能用，直到业务借走它发出第一条语句才报错。三条规则：<strong>maxLifetime 取链路上最小空闲超时再减几十秒余量</strong>；</p>
 <p>开启保活让空闲连接周期性发心跳；依赖驱动的连接有效性检查而不是每次借出都发一条测试 SQL（后者等于给每个请求加一次往返）。</p>
 
     <h2>ORM 的六类性能陷阱</h2>
-    <p>ORM 的问题不在于慢，而在于<strong>它让昂贵的操作在代码上看起来免费</strong>。访问一个属性可能是一次网络往返，保存一个列表可能是一千次插入，加一个注解可能把事务范围扩大十倍。</p>
+    <p>ORM 的坑不在慢，在<strong>它让昂贵操作看着免费</strong>：访问一个属性可能是一次往返，保存一个列表可能是一千次插入，加一个注解能把事务范围扩大十倍。</p>
 <p>下面六类占了我见过的绝大多数 ORM 性能问题。</p>
     <table>
         <thead>
@@ -372,7 +372,7 @@ spring.datasource.url=jdbc:mysql://db:3306/app?rewriteBatchedStatements=true&amp
     </div>
 
     <h2>事务边界：应用侧最大的性能与稳定性问题</h2>
-    <p>一条原则就够了：<strong>事务里只包数据库操作。</strong>原因是从执行第一条更新语句开始，行锁就被持有直到提交，事务里任何一毫秒的等待都是锁持有时间。</p>
+    <p>一条原则就够：<strong>事务里只包数据库操作</strong>。第一条更新语句一执行，行锁就持有到提交，事务里等的一毫秒也是锁持有时间。</p>
 <p>一个平均 800ms、偶发 3 秒的第三方接口放进事务，等于让这行数据被锁住同样长的时间。</p>
     <div class="mermaid">
 sequenceDiagram
@@ -464,11 +464,11 @@ public void payGood(long orderId) {
         </tbody>
     </table>
     <p>顺带纠正一个常见误解：<strong>「把事务隔离级别调低就能解决锁等待」是错的</strong>。</p>
-<p>锁等待的根因是锁持有时间太长，隔离级别只影响加锁范围与可见性规则，调低隔离级别可能减少某些间隙锁，但对「事务里等了 800ms 的外部调用」毫无帮助。</p>
+<p>锁等待的根因是持锁太久，隔离级别只影响加锁范围和可见性；调低它也许少一点间隙锁，管不了事务里等 800ms 的外部调用。</p>
 <p>加锁范围与隔离级别的具体语义见站内<a href="../../../database/mysql/">MySQL 深度原理</a>。</p>
 
     <h2>批量操作：1000 条插入不该是 1000 次往返</h2>
-    <p>最典型的认知错误：<strong>以为调用了批量接口就是批量了</strong>。JDBC 的 addBatch 与 executeBatch 只是把语句攒在客户端，MySQL 驱动在未开启 <code>rewriteBatchedStatements=true</code> 时仍然逐条发送，1000 条插入就是 1000 次网络往返，同机房按每次 0.5ms 算，光往返就是 500ms。</p>
+    <p>最典型的错误：<strong>以为调了批量接口就是批量</strong>。JDBC 的 addBatch 与 executeBatch 只把语句攒在客户端，MySQL 驱动不开 <code>rewriteBatchedStatements=true</code> 仍逐条发，1000 条插入就是 1000 次往返，同机房每次 0.5ms，光往返 500ms。</p>
 <p>开启之后驱动会把它们改写成一条多值插入语句，一次往返完成，差距通常在 10 倍以上。</p>
     <pre><code class="language-java">// 批量写入的正确姿势。前提：JDBC URL 上带 rewriteBatchedStatements=true，否则以下代码等于逐条插入。
 private static final int BATCH_SIZE = 500; // 500 到 1000 是常见甜点区，再大收益递减且单包过大
@@ -569,7 +569,7 @@ LIMIT 20;
 
     <h2>读写分离的应用侧实现</h2>
     <p>读写分离在应用侧真正难的不是路由，而是<strong>写后读</strong>。</p>
-<p>主从复制是异步的，写完立刻读从库大概率读不到，表现为「下单成功但订单列表里没有」这类偶发 bug，而且它只在延迟升高时复现，本地和测试环境永远测不出来。</p>
+<p>复制是异步的，写完立刻读从库多半读不到，即「下单成功但订单列表里没有」的偶发 bug，只在延迟升高时复现，本地和测试环境测不出。</p>
     <table>
         <thead>
             <tr>
@@ -611,7 +611,7 @@ LIMIT 20;
             </tr>
         </tbody>
     </table>
-    <p>还有三件事必须说清楚。第一，<strong>只读从库不是免费的</strong>：它有自己的最大连接数上限，复制线程本身要消耗资源，并且在大批量写入时延迟会显著上升——这时把读切到从库等于把不一致放大。</p>
+    <p>必须说清三点。第一，<strong>只读从库不是免费的</strong>：它有连接数上限，复制线程也占资源，大批量写入时延迟显著上升，这时把读切过去就是放大不一致。</p>
 <p>第二，<strong>事务内的读必须走主库</strong>，哪怕是纯查询，否则同一事务内读到两个不同的数据版本。</p>
 <p>第三，路由要能<strong>按延迟自动摘除</strong>：从库延迟超过阈值就临时不分配读流量，否则一个卡住的从库会让部分用户持续看到旧数据。</p>
 
@@ -648,7 +648,7 @@ LIMIT 20;
             </tr>
         </tbody>
     </table>
-    <p>顺带提醒一个和性能无关但更严重的点：<strong>预编译的防注入效果来自参数与语句分离，字符串拼接出来的 SQL 即使走了预编译接口也一样能被注入</strong>，注入边界的完整讨论见站内安全篇。</p>
+    <p>顺带一个和性能无关但更严重的点：<strong>防注入靠参数与语句分离，字符串拼出来的 SQL 走预编译接口照样能被注入</strong>；注入边界见站内安全篇。</p>
 
     <h2>排查清单与反模式</h2>
     <div class="mermaid">

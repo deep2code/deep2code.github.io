@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="PromQL 语义陷阱：瞬时与区间向量、rate 与 irate、窗口与抓取间隔、直方图分位数与标签匹配。">
+        <meta name="description" content="PromQL 语义陷阱：向量类型区分、rate/irate/increase 取点与外推、区间长度下限、histogram_quantile 聚合顺序、标签匹配、absent 对指标消失告警。">
     <meta name="keywords" content="PromQL 查询优化,监控,可观测性,Prometheus,Grafana,监控与可观测性">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/observability/metrics/promql/">
     <!-- Open Graph -->
     <meta property="og:title" content="PromQL 语义陷阱：向量类型、rate 外推、分位数与向量匹配 - 资深码农">
-    <meta property="og:description" content="PromQL 语义陷阱：瞬时与区间向量、rate 与 irate、窗口与抓取间隔、直方图分位数与标签匹配。">
+    <meta property="og:description" content="PromQL 语义陷阱：向量类型区分、rate/irate/increase 取点与外推、区间长度下限、histogram_quantile 聚合顺序、标签匹配、absent 对指标消失告警。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/observability/metrics/promql/">
     <meta property="og:site_name" content="资深码农">
@@ -39,7 +39,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PromQL 语义陷阱：向量类型、rate 外推、分位数与向量匹配">
-    <meta name="twitter:description" content="PromQL 语义陷阱：瞬时与区间向量、rate 与 irate、窗口与抓取间隔、直方图分位数与标签匹配。">
+    <meta name="twitter:description" content="PromQL 语义陷阱：向量类型区分、rate/irate/increase 取点与外推、区间长度下限、histogram_quantile 聚合顺序、标签匹配、absent 对指标消失告警。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="可观测性与性能">
@@ -90,8 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>PromQL 的函数不多，一小时能背完。写出「能跑但结果是错的」查询的是它的<strong>语义</strong>：瞬时向量与区间向量的类型区分、<code>rate</code> 的线性外推、分位数不可相加、二元运算要求标签完全相同。</p>
-<p>这一篇只讲这些陷阱——每一条都是线上真实误判过的。Prometheus 自身的架构与运维见站内 <code>devops/monitoring/prometheus/</code>，基数与告警方法论见 <code>devops/monitoring/</code> 主干篇。</p>
+<p>PromQL 函数不多，一小时能背完。能跑但结果错，错在<strong>语义</strong>：瞬时向量与区间向量、<code>rate</code> 线性外推、分位数不可相加、二元运算要求标签完全相同。</p>
+<p>这些陷阱每一条都是线上真实误判过的。架构运维见 <code>devops/monitoring/prometheus/</code>，基数与告警方法论见 <code>devops/monitoring/</code> 主干篇。</p>
 
 <h2>一、瞬时向量与区间向量：类型决定了能调用什么</h2>
 <p>PromQL 有四种表达式类型，绝大多数解析错误和「结果为空」都源于类型用错。</p>
@@ -151,10 +151,10 @@ flowchart TB
 </div>
 
 <h2>二、rate / irate / increase：差异、外推与区间长度</h2>
-<p>三者都只作用于 Counter 类型的区间向量，都会自动处理计数器重置：窗口内值下降就当作进程重启，只累加上升部分，不产生巨大负值。差别只在取哪些点。</p>
+<p>都只作用于 Counter 区间向量，自动处理计数器重置：窗口内下降就当进程重启，只累加上升部分，不产生巨大负值。只按取点区分。</p>
 <p><code>rate</code> 取窗口内<strong>首尾两个样本</strong>做差，除以时间跨度，得到每秒平均增长率。曲线平滑，是画图和告警的默认选择。<code>irate</code> 只取窗口内<strong>最后两个样本</strong>，反应极快。</p>
 <p><code>increase</code> 本质就是 <code>rate</code> 乘以区间长度，语义是「这段时间一共增长了多少」。</p>
-<p><code>irate</code> 有个反直觉的坑：长时间范围的图里，Grafana 的绘图步长会远大于抓取间隔。查 24 小时的图步长可能是 5 分钟，而 <code>irate</code> 每个点只取那一刻最后两个样本的瞬时值，中间几十个样本全被跳过。</p>
+<p><code>irate</code> 有个坑：查 24 小时的图，Grafana 绘图步长可能是 5 分钟，远大于抓取间隔；<code>irate</code> 每个点只取最后两个样本的瞬时值，中间几十个样本全被跳过。</p>
 <p>结果是曲线布满毛刺，<strong>而且真正的尖峰有很大概率恰好落在被跳过的区间里</strong>。所以 <code>irate</code> 只适合看短时间范围的瞬时波动，绝不能用于告警。</p>
 <p><strong>外推（extrapolation）</strong>解释了「为什么 <code>increase</code> 算出来是 23.7 次」：窗口边界上通常没有采样点，Prometheus 按两端点的斜率把增长量<strong>外推到窗口真实边界</strong>，所以结果是小数。</p>
 <p>这不是缺陷，而是为了让不同长度窗口的结果保持可比。两个推论：一是用 <code>increase</code> 对整数阈值告警时要留余量，外推可能让结果略大于实际观测增量；</p>
@@ -173,7 +173,7 @@ flowchart TB
 </tbody>
 </table>
 <p>区间长度怎么选？<strong>经验规则是至少覆盖 4 个抓取间隔。</strong><code>rate</code> 至少需要两个点，而抓取可能抖动或丢一次，留 4 倍冗余才能保证窗口里稳定有两个以上的点。</p>
-<p>抓取间隔 30 秒时写 <code>rate(x[1m])</code> 是典型错误：窗口里理论上只有 2 个点，一次抓取延迟或失败就会让点数掉到 1，<code>rate</code> 立刻返回空。Grafana 里表现为断线，告警里表现为静默——这就是「查询时不时返回 NaN」最常见的原因。</p>
+<p>抓取间隔 30 秒时写 <code>rate(x[1m])</code> 是典型错误：窗口里理论上只有 2 个点，一次抓取延迟或失败就让点数掉到 1，<code>rate</code> 返回空。Grafana 断线、告警静默，是查询返回 NaN 最常见的原因。</p>
 <table>
 <thead><tr><th>抓取间隔</th><th>区间写法</th><th>窗口内理论点数</th><th>结果</th></tr></thead>
 <tbody>
@@ -249,7 +249,7 @@ flowchart TB
     S --> D1["错误三 聚合时丢了 le<br/>写成 sum by job"]
     D1 --> BAD3["函数拿不到桶边界<br/>返回 NaN 或直接报错"]
 </div>
-<p>为什么<strong>必须按 <code>le</code> 聚合</strong>？<code>histogram_quantile</code> 靠 <code>le</code> 标签识别桶边界：先从最大的无穷桶取总数，算出目标分位数对应第几个样本，再在它落在的两个相邻桶边界之间做<strong>线性插值</strong>。</p>
+<p>为什么<strong>必须按 <code>le</code> 聚合</strong>？<code>histogram_quantile</code> 靠 <code>le</code> 识别桶边界：从无穷桶取总数，定位分位数对应的样本落在哪两个相邻桶，再在边界间做<strong>线性插值</strong>。</p>
 <p>一旦 <code>le</code> 被聚合掉，函数只看到一个数字，没有任何分布信息。</p>
 <p><code>sum by (le)</code> 把所有实例合并成整体分布，这是<strong>跨实例聚合分位数的唯一正确方法</strong>：合并的是桶计数（可加的整数），不是分位数（不可加）。所以 Histogram 能跨实例聚合，Summary 不能。</p>
 <p>至于「多实例的 P99 求平均为什么错」的完整推演，见站内主干篇的分位数章节。</p>
@@ -368,7 +368,7 @@ and
 <h2>七、absent 与 absent_over_time：对「指标消失」告警</h2>
 <p>这是最常被漏掉的一类告警。比较类表达式在<strong>没有数据时返回空集，而空集不满足任何条件</strong>。</p>
 <p>于是进程崩溃、采集端挂掉、标签被 relabel 改坏这些最严重的故障，反而一条告警都不触发：面板一片空白，值班群一片安静。</p>
-<p><code>absent(v)</code> 的语义：参数返回空集就产出一个值为 1 的序列，否则什么都不返回。<code>absent_over_time(v[5m])</code> 判断整个时间窗内是否完全没有样本，适合抓取间隔长或数据稀疏的场景，能避免单次抖动误报。</p>
+<p><code>absent(v)</code>：参数为空集就产出一个值为 1 的序列，否则不返回。<code>absent_over_time(v[5m])</code> 判整窗有无样本，适合抓取间隔长、数据稀疏时，避免单次抖动误报。</p>
 <pre><code class="language-promql"># 1. 某个 job 的目标整体消失（服务发现挂了、标签配置被改坏）
 absent(up{job="payment-api"}) == 1
 

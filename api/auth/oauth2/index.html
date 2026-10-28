@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="授权码之外的 OAuth2 模式：隐式与密码模式为何废弃，PKCE 怎么把授权码绑到客户端，OIDC 在令牌里加了认证时间与方式。">
+    <meta name="description" content="授权码加 PKCE 的每步参数与校验点、OAuth2 是授权不是认证的边界、四个角色的信任方向与废弃模式的理由。">
     <meta name="keywords" content="认证授权,OAuth2 与 OIDC,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/api/auth/oauth2/">
     <meta property="og:title" content="OAuth 2.0 与 OIDC 的协议细节 - 认证授权 - 资深码农">
-    <meta property="og:description" content="授权码之外的 OAuth2 模式：隐式与密码模式为何废弃，PKCE 怎么把授权码绑到客户端，OIDC 在令牌里加了认证时间与方式。">
+    <meta property="og:description" content="授权码加 PKCE 的每步参数与校验点、OAuth2 是授权不是认证的边界、四个角色的信任方向与废弃模式的理由。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/api/auth/oauth2/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="OAuth 2.0 与 OIDC 的协议细节 - 认证授权">
-    <meta name="twitter:description" content="授权码之外的 OAuth2 模式：隐式与密码模式为何废弃，PKCE 怎么把授权码绑到客户端，OIDC 在令牌里加了认证时间与方式。">
+    <meta name="twitter:description" content="授权码加 PKCE 的每步参数与校验点、OAuth2 是授权不是认证的边界、四个角色的信任方向与废弃模式的理由。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -72,13 +72,13 @@
                     </header>
                     <div class="article-content">
 <p>OAuth 2.0 的接入门槛很低，跟着一份 SDK 文档抄二十行代码就能跑通第三方登录，这导致绝大多数人从没真正看过它的报文。</p>
-<p>这个协议的坑都在参数层面：<code>redirect_uri</code> 怎么匹配、<code>state</code> 校验放在哪一步、<code>code_verifier</code> 和 <code>code_challenge</code> 怎么绑定、<code>id_token</code> 和 <code>access_token</code> 的受众为何不同。这篇按报文拆开流程，并单独讲清 OIDC 相对 OAuth2 增加的部分。</p>
+<p>这个协议的坑都在参数层面：<code>redirect_uri</code> 怎么匹配、<code>state</code> 校验放在哪一步、<code>code_verifier</code> 和 <code>code_challenge</code> 怎么绑定、<code>id_token</code> 和 <code>access_token</code> 的受众为何不同。按报文拆开流程，并单独讲清 OIDC 相对 OAuth2 增加的部分。</p>
 <p>攻击面与危害范围（<code>state</code> 缺失、PKCE 绕过的具体利用）见站内 <a href="../../security/auth-security/">越权与鉴权安全</a>，令牌格式与验签细节见站内 <a href="../jwt/">JWT 的结构与验签机制</a>。</p>
 <h2>授权码 + PKCE 的完整落地：每步参数与每步校验点</h2>
 <p>先把结论摆前面：<strong>有用户参与的登录，现在只有一种选择——授权码模式加 PKCE，且 <code>code_challenge_method</code> 必须是 S256</strong>。</p>
-<p>隐式模式（授权服务器把访问令牌直接放进重定向地址）已不推荐，密码模式（客户端自己收集用户在授权服务器的密码）同样废弃，理由见下文原理层。</p>
+<p>隐式模式（访问令牌直接放进重定向地址）已不推荐；密码模式（客户端收集用户在授权服务器的密码）同样废弃。</p>
 <p>机密客户端也要用 PKCE，它多出的成本只有几行哈希代码。</p>
-<p>下面这段是能直接跑起来的最小实现，重点不在「跳转过去」，而在<strong>回调回来之后那五个校验</strong>：少任何一个，流程照样能登录成功，安全性却已经没有了。</p>
+<p>最小实现在下面，重点不在「跳转过去」，而在<strong>回调回来之后那五个校验</strong>：少任何一个，登录照样成功，安全性已经没了。</p>
 <pre><code class="language-typescript">// 授权码 + PKCE 的服务端落地（Express + jose）。公开客户端去掉 client_secret，其余完全一致
 import crypto from 'node:crypto'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
@@ -314,18 +314,19 @@ app.get('/callback', async (req, res) =&gt; {
 
 <h2>先纠正最根本的误解：OAuth2 是授权协议</h2>
 <p>搞清这一点，能解决一类很隐蔽的高危实现：登录流程全程通过，却从未验证「这份断言是签给我的」。</p>
-<p>OAuth 2.0 要解决的原始问题是：<strong>让第三方应用在不知道用户密码的前提下，代表用户访问其在另一个服务上的资源</strong>。输出是一个访问令牌，语义是「某应用被允许在某范围内访问某资源」。</p>
+<p>OAuth 2.0 解决的问题是：<strong>让第三方应用不掌握用户密码，代表用户访问其在另一个服务上的资源</strong>。输出是一个访问令牌：某应用在某范围内可访问某资源。</p>
 <p>它<strong>没有</strong>规定如何表达「用户是谁」，也没有规定应用如何确认用户已经完成认证。</p>
-<p>把 OAuth2 当认证协议用会踩陷阱：访问令牌的受众是<strong>资源服务器</strong>，不是你的应用，别处签发的同受众令牌也能通过，可冒充任意用户。这正是 OIDC 存在的原因：<code>id_token</code> 受众是<strong>你的客户端</strong>，带 <code>nonce</code> 与签名，回答「用户是谁」。</p>
+<p>用 OAuth2 做认证时，访问令牌受众是<strong>资源服务器</strong>，不是你的应用：别处签发的同受众令牌也能通过。</p>
+<p>可冒充任意用户。OIDC 的 <code>id_token</code> 受众是<strong>你的客户端</strong>，带 <code>nonce</code> 与签名，回答用户是谁。</p>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">把访问令牌当身份凭证是高危错误</div>
-    <p>判断很简单：若登录流程里没有任何一步校验「这份断言是签给我这个 client_id 的」，它就可被令牌替换攻击。OIDC 的做法是校验 <code>id_token</code> 的 <code>aud</code> 等于自己的 <code>client_id</code>、<code>iss</code> 等于预期签发方、<code>nonce</code> 等于本次流程存下的值。</p>
+    <p>若登录流程里没有任何一步校验「这份断言是签给我这个 client_id 的」，就可被令牌替换攻击。OIDC 校验 <code>id_token</code> 的 <code>aud</code> 等于自己的 <code>client_id</code>、<code>iss</code> 等于预期签发方、<code>nonce</code> 等于本次存的值。</p>
 </div>
 
 <h2>四个角色与它们之间的信任关系</h2>
 <p>把信任方向理顺，后面每个参数的存在理由都会变得自然，也就不需要死记清单。</p>
-<p>协议有四个角色，理清它们的信任方向，后面所有参数的作用都会变得自然：资源拥有者（用户）只信任授权服务器，因此认证必须发生在授权服务器页面上，而不是客户端表单里；</p>
+<p>协议有四个角色，信任方向各不相同：资源拥有者（用户）只信任授权服务器，因此认证必须发生在授权服务器页面上，而不是客户端表单里；</p>
 <p>客户端不被信任，所以它拿到的是有范围限制的令牌而不是密码；资源服务器只信任授权服务器的签名或内省结果，不信任客户端的任何说法。</p>
 <div class="mermaid">
 flowchart TB
@@ -391,7 +392,7 @@ flowchart TB
 <h2>授权码模式：逐参数看报文</h2>
 <p>搞清报文往返，能解决排查阶段最常见的两类失败：<code>invalid_grant</code> 到底是哪一步不一致，以及授权码被重复兑换意味着什么。</p>
 <p>授权码模式是当前唯一推荐给用户登录场景的模式。</p>
-<p>它的核心设计是<strong>把浏览器能看到的东西和能换令牌的东西分开</strong>：浏览器只经手一个短命、一次性的授权码，真正的令牌在客户端后端与令牌端点间直接传输，浏览器接触不到。</p>
+<p>核心是<strong>把浏览器能看到的与能换令牌的分开</strong>：浏览器只经手一个短命、一次性的授权码，令牌在客户端后端与令牌端点间传输，浏览器碰不到。</p>
 <div class="mermaid">
 sequenceDiagram
     participant B as 浏览器
@@ -557,13 +558,13 @@ stateDiagram-v2
         </tr>
     </tbody>
 </table>
-<p><strong>隐式模式</strong>把访问令牌放进重定向地址，令牌会出现在浏览器历史、经 Referer 外泄，且无后端、拿不到刷新令牌。<strong>密码模式</strong>更根本：客户端直接接触用户凭证，正是 OAuth2 要消灭的，泄露的是密码而非令牌。</p>
+<p><strong>隐式模式</strong>把访问令牌放进重定向地址：令牌进浏览器历史、经 Referer 外泄，无后端就拿不到刷新令牌。<strong>密码模式</strong>让客户端直接接触用户凭证，OAuth2 要消灭的正是它。</p>
 
 <h2>PKCE：把授权码绑定到发起它的客户端</h2>
 <p>有后端、能保管 secret 时是否还需要 PKCE，取决于它的绑定机理。</p>
 <p>公开客户端（SPA、原生 App）无法保存 <code>client_secret</code>——代码可以被反编译、可以被查看源码，所以「用 code 加 secret 换令牌」这一层保护对它们不成立。</p>
 <p>此时如果授权码在回调链路上被截获（自定义 URL scheme 被同设备恶意应用抢注、日志或 Referer 泄露、中间人），截获者就能直接换到令牌。</p>
-<p>PKCE 把一次性授权码和<strong>发起这次流程的那个客户端实例</strong>绑定：客户端先生成高熵随机串 <code>code_verifier</code>，把它的 SHA-256 摘要经 base64url 编码作为 <code>code_challenge</code> 发到授权端点，服务器把 challenge 与授权码存在一起；</p>
+<p>PKCE 把一次性授权码与<strong>发起流程的客户端实例</strong>绑定：生成高熵随机串 <code>code_verifier</code>，其 SHA-256 摘要 base64url 编码成 <code>code_challenge</code> 发往授权端点，服务端与授权码一起存。</p>
 <p>换令牌时客户端必须提交原始 <code>code_verifier</code>，服务端重算哈希比对。截获授权码的人没有 verifier，而从 challenge 反推 verifier 在计算上不可行，所以码变成了废纸。</p>
 <div class="callout callout-tip">
     <div class="callout-icon">✅</div>
@@ -826,7 +827,7 @@ curl -s -X POST https://idp.example.com/oauth2/revoke \
         </tr>
     </tbody>
 </table>
-<p><strong>不适用边界：</strong>OAuth2 与 OIDC 只管授权范围与用户是谁，不解决数据级权限判断、令牌格式与验签细节（<code>kid</code> 轮换）、上线后的工程问题。见 <a href="../../security/auth-security/">越权与鉴权安全</a>、<a href="../jwt/">JWT 验签机制</a>、<a href="../best-practices/">认证系统的工程实践</a>、<a href="../">认证与授权的协议全景</a>。</p>
+<p><strong>不适用边界：</strong>OAuth2 与 OIDC 只管授权范围与用户是谁，数据级权限、<code>kid</code> 轮换、上线后的工程问题见 <a href="../../security/auth-security/">越权与鉴权安全</a>、<a href="../jwt/">JWT 验签机制</a>、<a href="../best-practices/">认证系统的工程实践</a>、<a href="../">认证与授权的协议全景</a>。</p>
 
 <h2>接入第三方登录的实操清单</h2>
 <table>

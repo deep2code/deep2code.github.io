@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="分库分表的决策边界：替代方案、分片键选择、分片算法与全局 ID、扩容状态机与中间件选型。">
+    <meta name="description" content="分片动手前的三项自查、分片键按真实查询清单选、基因法、扩容九步与双写校验切写、何时改用分布式数据库">
     <meta name="keywords" content="数据库性能优化,分库分表与读写分离,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/optimization/sharding/">
     <meta property="og:title" content="分库分表：决策边界、分片键选择与扩容落地 - 数据库性能优化 - 资深码农">
-    <meta property="og:description" content="分库分表的决策边界：替代方案、分片键选择、分片算法与全局 ID、扩容状态机与中间件选型。">
+    <meta property="og:description" content="分片动手前的三项自查、分片键按真实查询清单选、基因法、扩容九步与双写校验切写、何时改用分布式数据库">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/optimization/sharding/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="分库分表：决策边界、分片键选择与扩容落地">
-    <meta name="twitter:description" content="分库分表的决策边界：替代方案、分片键选择、分片算法与全局 ID、扩容状态机与中间件选型。">
+    <meta name="twitter:description" content="分片动手前的三项自查、分片键按真实查询清单选、基因法、扩容九步与双写校验切写、何时改用分布式数据库">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -72,10 +72,10 @@
 
     <p>分库分表是数据库优化里唯一<strong>不可逆</strong>的一步。索引建错了删掉就行，缓存加错了摘掉就行，分片一旦落地，分片键就固化进了每一条查询。</p>
 <p>跨分片能力的缺失会永久留在业务代码里，并被之后每一个新需求继续放大。</p>
-<p>所以这篇的重点不是「怎么分」，而是「什么时候才该分」和「分了之后要付什么代价」。一句话先摆在前面：<strong>分片解决的是单机容量和写入上限，它解决不了复杂查询</strong>。</p>
+<p>分库分表真正难的是「什么时候才该分」和「分了要付什么代价」，不是「怎么分」。<strong>分片解决单机容量和写入上限，解决不了复杂查询</strong>。</p>
 <h2>动手前的三项自查：现在的瓶颈到底是什么</h2>
 
-    <p>分片是单向门，所以第一件事不是设计分片键，而是<strong>证明你真的需要它</strong>。下面三项自查每项都有可以直接敲的取数命令，任何一项的答案是「还有余量」，这一轮就不该分。</p>
+    <p>分片是单向门，动手前先<strong>证明自己真的需要它</strong>，而不是设计分片键。三项自查都有可直接敲的取数命令，任何一项还有余量就不该分。</p>
 
     <table>
         <thead><tr><th>自查项</th><th>怎么确认</th><th>如果答案是这样，先做这件事</th></tr></thead>
@@ -123,7 +123,7 @@ LIMIT 20;</code></pre>
 
     <h2>分片键检查清单与扩容的可执行步骤</h2>
 
-    <p>三项自查都指向「必须分」之后，才轮到分片键。<strong>分片键是这套方案里唯一几乎改不回来的决策</strong>，所以它不该由讨论决定，而该由数据决定——把真实查询清单列全，逐条核对能不能带上候选键。</p>
+    <p>三项自查都指向「必须分」，才轮到分片键。<strong>分片键几乎改不回来</strong>，不该由讨论决定，而该由数据决定：把真实查询清单列全，逐条核对能否带上候选键。</p>
 
     <table>
         <thead><tr><th>检查项</th><th>怎么验证</th><th>不通过怎么办</th></tr></thead>
@@ -240,7 +240,7 @@ flowchart TB
         </tbody>
     </table>
 
-    <p>基因法值得单独展开，它是电商订单表的经典做法。背景是：订单按 <code>user_id</code> 分片（因为「我的订单」是最高频场景），但订单详情页按 <code>order_id</code> 查，而 <code>order_id</code> 里不含用户信息，只能扇出到所有分片。</p>
+    <p>基因法是电商订单表的经典做法。背景：订单按 <code>user_id</code> 分片（「我的订单」最高频），但详情页按 <code>order_id</code> 查，而 <code>order_id</code> 不含用户信息，只能扇出到所有分片。</p>
 <p>基因法在生成 <code>order_id</code> 时，把 <code>user_id</code> 的低几位直接写进 <code>order_id</code> 的低位，这几位就是「基因」。</p>
 
     <div class="mermaid">
@@ -373,7 +373,7 @@ sequenceDiagram
     <p>一开始就多分几片：事后扩容要走完下面整套状态机，代价高得多。</p>
 
     <p>所以最重要的结论是：<strong>预留足够的分片数比事后扩容便宜得多</strong>。</p>
-<p>一次就分 32 或 64 片，这些分片初期可以全部放在同一个物理实例上，后续按需把部分分片整体搬到新实例——这种搬迁只移动数据、不改变路由规则，风险低一个数量级。</p>
+<p>一次分 32 或 64 片，初期全部放同一个物理实例上，后续按需把部分分片整体搬到新实例。搬迁只移数据、不改路由规则，风险低一个数量级。</p>
 <p>相反，分片数不足后再改分片数，取模算法下几乎全量数据都要重新分布。</p>
 
     <div class="mermaid">
@@ -408,8 +408,8 @@ stateDiagram-v2
     end note
 </div>
 
-    <p>每一步的要点：<strong>双写</strong>阶段旧分片仍是唯一事实来源，新分片写失败只告警；<strong>全量迁移</strong>要分批限速并记录进度以支持断点续跑；<strong>增量追平</strong>通常用 binlog 订阅，追到延迟稳定在秒级以内；</p>
-<p><strong>校验</strong>必须同时对比行数和内容校验和，只对比行数会漏掉更新丢失；<strong>灰度切读</strong>按用户或分片维度放量，并做新旧结果的双读对比；<strong>切写</strong>之后旧分片保留只读一段时间，这是最后的回滚窗口。</p>
+    <p><strong>双写</strong>期旧分片仍是唯一事实来源，新分片写失败只告警；<strong>全量迁移</strong>分批限速、记录进度，可断点续跑；<strong>增量追平</strong>通常用 binlog 订阅，延迟稳定到秒级以内；</p>
+<p><strong>校验</strong>必须同时比行数和校验和，只比行数会漏更新丢失；<strong>灰度切读</strong>按用户或分片放量，做新旧双读对比；<strong>切写</strong>后旧分片保留只读一段时间，作最后回滚窗口。</p>
 
     <pre><code class="language-sql">-- 迁移校验：逐片对比行数与内容校验和，只比行数会漏掉「行数相同但内容被改坏」
 -- 在旧库和新库分别执行，结果必须完全一致
@@ -501,7 +501,7 @@ props:
 
     <h2>什么时候该分片，什么时候该换数据库</h2>
 
-    <p>TiDB、OceanBase、CockroachDB 这类分布式数据库把分片下沉到了存储层：数据自动按区间切分并在节点间迁移，应用看到的仍然是一张表，跨分片 join、分布式事务、全局索引由数据库自己实现。</p>
+    <p>TiDB、OceanBase、CockroachDB 把分片下沉到存储层：数据自动按区间切分、在节点间迁移，应用看到的仍是一张表，跨分片 join、分布式事务、全局索引数据库自己实现。</p>
 <p><strong>它省掉的正是分库分表最贵的那部分——业务改造和永久性的能力损失。</strong></p>
 
     <table>
@@ -526,12 +526,12 @@ props:
             <tr><td>SaaS 多租户，头部租户体量悬殊</td><td>按租户分片，但给头部租户独立分片或独立库</td><td>租户维度天然隔离，但均匀取模一定会被大租户压垮</td><td>路由规则里出现例外条目，需要长期维护，策略见 <a href="../../design/sharding-strategy/">数据归属与多租户</a></td></tr>
             <tr><td>运营后台要任意条件查询与跳页</td><td>把后台查询整体搬离分片库，走搜索引擎或数仓</td><td>任意条件与跳页在分片上必然扇出加深分页放大</td><td>数据有延迟，且多维护一条同步链路</td></tr>
             <tr><td>只是历史数据太多</td><td>归档或分区，不要分片</td><td>缩小热数据集合可逆，分片不可逆</td><td>要保留历史数据的查询入口</td></tr>
-            <tr><td>写入吞吐已到顶且必须留在 MySQL 生态</td><td>水平分片，一次规划足够分片数</td><td>这是分片真正成立的场景：容量与写入上限随分片数扩展</td><td>接受本文第四节那份能力清单的永久缺失</td></tr>
+            <tr><td>写入吞吐已到顶且必须留在 MySQL 生态</td><td>水平分片，一次规划足够分片数</td><td>这是分片真正成立的场景：容量与写入上限随分片数扩展</td><td>接受第四节那份能力清单的永久缺失</td></tr>
         </tbody>
     </table>
 
     <p><strong>不适用边界</strong>：分片解决不了任何「单次查询本身很贵」的问题——扫描量、排序、深分页在分片后只会更贵，这些先去 <a href="../slow-query/">慢查询治理</a> 与 <a href="../index/">索引设计与治理</a>；</p>
-<p>瓶颈到底在哪一层、各手段的投入产出排序在 <a href="../">数据库性能优化主干篇</a>；跨片事务的补偿与幂等落地在 <a href="../../../architecture/distributed/transaction/">分布式事务</a> 与 <a href="../../../architecture/distributed/idempotency/">幂等设计</a>；分析型与报表型负载在 <a href="../../clickhouse/">ClickHouse</a>；分片间指标怎么采集与对比在 <a href="../../../observability/metrics/">指标与监控</a>。</p>
+<p>瓶颈在哪一层、各手段投入产出在 <a href="../">数据库性能优化主干篇</a>；跨片事务的补偿与幂等在 <a href="../../../architecture/distributed/transaction/">分布式事务</a> 与 <a href="../../../architecture/distributed/idempotency/">幂等设计</a>；分析型负载在 <a href="../../clickhouse/">ClickHouse</a>；分片间指标采集在 <a href="../../../observability/metrics/">指标与监控</a>。</p>
 
     <h2>分片之后的运维</h2>
 
@@ -550,7 +550,7 @@ props:
         </tbody>
     </table>
 
-    <p>这条路径到这里结束：主干篇给判断顺序，索引篇解决扫描量，慢查询篇把发现与归因流程化，本篇是最后一招——只有前面全部用尽时才动它，而且动之前先读完那份能力清单。</p>
+    <p>主干篇给判断顺序，索引篇解决扫描量，慢查询篇把发现与归因流程化。分片是最后一招：前面全部用尽才动它，动之前先读完那份能力清单。</p>
 
     <p class="cluster-nav">同主题路径：<a href="../slow-query/">← 上一步：慢查询治理：从发现到根治的完整闭环</a></p>
 

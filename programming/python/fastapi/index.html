@@ -71,10 +71,10 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>FastAPI 上手快，踩的坑也集中：在 <code>async def</code> 里调了同步库、依赖里做重 IO 没缓存、忘了 <code>response_model</code> 把内部字段带出去、拿 <code>BackgroundTasks</code> 当队列用。这些问题的根源都在机制层面——不知道一次请求在框架内部经过了什么。</p>
-<p>这篇先给一份能直接长大的最小骨架，再按处理链把机制讲清楚，最后收拢上线前的判断。项目目录、配置、日志、异常层级这些工程骨架问题见<a href="../fastapi-intro/">《Python 后端项目的工程骨架》</a>。</p>
+<p>FastAPI 的坑集中在机制层：<code>async def</code> 里调同步库、依赖里做重 IO 没缓存、忘了 <code>response_model</code> 带出内部字段、拿 <code>BackgroundTasks</code> 当队列，都是没弄清一次请求在框架内部经过什么。</p>
+<p>项目目录、配置、日志、异常层级这些工程骨架问题见<a href="../fastapi-intro/">《Python 后端项目的工程骨架》</a>；机制按请求处理链讲，上线前的判断也按这条链收口。</p>
 <h2>最小骨架与「要做什么 → 写在哪」</h2>
-<p>下面这份骨架不是 Hello World，而是把「第一次上线前一定会遇到的五件事」都放到了正确位置：输入输出模型分离、依赖里管资源与鉴权、领域异常统一转换、lifespan 建连接池、生产关文档地址。</p>
+<p>骨架把「第一次上线前一定会遇到的五件事」放对位置：输入输出模型分离、依赖管资源与鉴权、领域异常统一转换、lifespan 建连接池、生产关文档地址。</p>
 <p>照这个形态起项目，后面原理层讲的坑大部分根本不会发生。</p>
 <pre><code class="language-python"># app/main.py —— 单文件形态的最小骨架，长大之后按 routers / models / deps 拆开即可
 from contextlib import asynccontextmanager
@@ -221,10 +221,10 @@ app = create_app()
 <tr><td>anyio 线程池容量</td><td><code>def</code> handler 的并发上限</td><td>40（以所用版本的文档为准）</td><td>同步库多、下游扛得住时上调；调大之前先确认数据库连接池够</td></tr>
 </tbody>
 </table>
-<p>这一层不解释为什么，比如「为什么同一个依赖只跑一次」「为什么 <code>async def</code> 里的同步调用会影响别的请求」「为什么 <code>yield</code> 后的清理阶段抛异常没用」，都在下面的原理层。</p>
+<p>这一层只给写法，原因都在原理层：同一个依赖只跑一次、<code>async def</code> 里的同步调用影响别的请求、<code>yield</code> 后清理阶段抛异常没用。</p>
 
 <h2>核心是类型签名驱动</h2>
-<p>搞清这一节能解决的现象是：参数取不到、文档里的字段和实际不一致。FastAPI 本身代码量不大，能力来自两个东西：Starlette 提供 ASGI 与路由，pydantic 提供校验与序列化。</p>
+<p>参数取不到、文档里的字段和实际不一致。FastAPI 本身代码量不大，能力来自两个东西：Starlette 提供 ASGI 与路由，pydantic 提供校验与序列化。</p>
 <p>它做的事是<strong>读函数签名，然后推导出参数从哪来、怎么校验、怎么序列化、文档怎么生成</strong>。理解这条推导规则，大部分定位问题就不需要猜。</p>
 
 <div class="mermaid">
@@ -264,8 +264,8 @@ sequenceDiagram
 </table>
 
 <h2>依赖注入：单请求缓存与清理时机</h2>
-<p>搞清这一节能解决的现象是：一个请求里鉴权查了好几次库，或者数据库会话在该关的时候没关。<code>Depends</code> 不只是「传参的糖」。</p>
-<p>它有三条机制必须知道：<strong>依赖按需解析</strong>（没被引用就不执行）、<strong>同一请求内同一依赖只解析一次</strong>（结果缓存，可用 <code>use_cache=False</code> 关掉）、<strong><code>yield</code> 之后的代码在响应发送之后执行</strong>（0.106 起的行为）。</p>
+<p>一个请求里鉴权查了好几次库，或者数据库会话在该关的时候没关。<code>Depends</code> 不只是「传参的糖」。</p>
+<p><strong>依赖按需解析</strong>（没被引用就不执行）、<strong>同一请求内同一依赖只解析一次</strong>（结果缓存，<code>use_cache=False</code> 可关）、<strong><code>yield</code> 之后的代码在响应发送之后执行</strong>（0.106 起）。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -351,7 +351,7 @@ async def audit(
 </table>
 
 <h2>同步与异步 handler：最高频的性能事故</h2>
-<p>搞清这一节能解决的现象是：压测 QPS 上不去，且延迟随并发线性恶化。这是 FastAPI 上线后的首要性能问题，两种 handler 的执行位置完全不同：</p>
+<p>压测 QPS 上不去，且延迟随并发线性恶化。这是 FastAPI 上线后的首要性能问题，两种 handler 的执行位置完全不同：</p>
 <ul>
 <li><code>def</code> handler：被丢进 anyio 的外部线程池执行，<strong>默认容量 40 个线程</strong>。里面做同步阻塞不会卡事件循环，但并发上限就是线程数，第 41 个请求开始排队。</li>
 <li><code>async def</code> handler：直接在事件循环里跑。<strong>里面任何同步阻塞都会按住整个 worker 的所有请求</strong>。</li>
@@ -439,7 +439,7 @@ async def cpu_bound():
 <p>阻塞的成因、识别手段与并发控制细节在<a href="../fastapi-async/">《asyncio 的性能陷阱》</a>里完整展开；接口耗时该怎么拆解、连接池容量怎么算见站内<a href="../../../observability/performance/">后端性能优化专题</a>。</p>
 
 <h2>response_model：字段过滤不是可选项</h2>
-<p>搞清这一节能解决的现象是：响应里出现了 <code>password_hash</code>、<code>deleted_at</code> 这类字段，而且没有任何报错。<code>response_model</code> 的作用被严重低估：它不只是生成文档，而是<strong>按声明的模型过滤输出字段</strong>。</p>
+<p>响应里出现了 <code>password_hash</code>、<code>deleted_at</code> 这类字段，而且没有任何报错。<code>response_model</code> 的作用被严重低估：它不只是生成文档，而是<strong>按声明的模型过滤输出字段</strong>。</p>
 <p>不声明的话，handler 返回的 ORM 对象或 dict 会被原样序列化——密码哈希、内部状态、软删除标记、关联对象的全部字段都可能一起出去。</p>
 
 <table>
@@ -467,7 +467,7 @@ async def cpu_bound():
 </table>
 
 <h2>BackgroundTasks 不是任务队列</h2>
-<p>搞清这一节能解决的现象是：发布期间一批「已经返回成功」的后续动作凭空消失。<code>BackgroundTasks</code> 的执行位置是<strong>同一个进程、响应返回之后</strong>。它没有持久化、没有重试、没有可观测性。</p>
+<p>发布期间一批「已经返回成功」的后续动作凭空消失。<code>BackgroundTasks</code> 的执行位置是<strong>同一个进程、响应返回之后</strong>。它没有持久化、没有重试、没有可观测性。</p>
 <p>进程重启、Pod 被驱逐、任务里抛异常，任务就消失了且没人知道。</p>
 
 <div class="mermaid">
@@ -505,7 +505,7 @@ sequenceDiagram
 <p>队列的可靠投递、幂等与积压治理见站内<a href="../../../architecture/messaging/">消息队列专题</a>。</p>
 
 <h2>lifespan、中间件与异常处理器的分工</h2>
-<p>搞清这一节能解决的现象是：鉴权写在中间件里之后，文档里看不到、也拿不到路由信息。</p>
+<p>鉴权写在中间件里之后，文档里看不到、也拿不到路由信息。</p>
 <p><code>on_event("startup")</code> 已弃用，统一用 <code>lifespan</code>：它是一个异步上下文管理器，<code>yield</code> 之前建资源、之后释放资源，而且<strong>能保证在接流量之前完成初始化</strong>。</p>
 
 <pre><code class="language-python">from contextlib import asynccontextmanager
@@ -604,10 +604,10 @@ def create_app() -&gt; FastAPI:
 </tbody>
 </table>
 <p><strong>不适用边界</strong>：项目目录、配置分层、日志与异常层级这些工程骨架在<a href="../fastapi-intro/">Python 后端项目的工程骨架</a>；依赖与虚拟环境管理在<a href="../fastapi-dependencies/">依赖与环境管理：从 pip 到 uv</a>；</p>
-<p>事件循环为什么会被卡住、并发控制与超时取消在<a href="../fastapi-async/">asyncio 的性能陷阱</a>；进程模型、worker 数量、优雅关闭与指标接入在<a href="../fastapi-production/">Python 服务上生产</a>；WSGI 与 ASGI 的区别与部署形态在<a href="../web/">Python Web 服务的部署形态</a>；</p>
+<p>事件循环为什么卡住、并发控制与超时取消在<a href="../fastapi-async/">asyncio 的性能陷阱</a>；进程模型、worker 数量、优雅关闭在<a href="../fastapi-production/">Python 服务上生产</a>；WSGI 与 ASGI 的区别在<a href="../web/">Python Web 服务的部署形态</a>；</p>
 <p>跨服务的耗时拆解与容量评估见站内<a href="../../../observability/performance/">后端性能优化专题</a>；鉴权协议本身与常见 Web 攻击面见<a href="../../../api/security/">接口安全专题</a>。</p>
-<p>框架换成 Django 或 Flask，本篇的机制结论大半不适用，但「输出字段要显式声明」「同步阻塞不能进事件循环」这两条是跨框架的。</p>
-<p>这条路径上，前面几篇分别讲运行时、执行机制、语义正确性与版本选型，本篇是这些约束在一个具体框架里的落地形态；接下来的四篇把它拆细：工程骨架、依赖管理、异步性能、上生产。</p>
+<p>框架换成 Django 或 Flask，机制结论大半不适用，但「输出字段要显式声明」「同步阻塞不能进事件循环」这两条是跨框架的。</p>
+<p>运行时、执行机制、语义正确性、版本选型在前几篇，FastAPI 把这套约束落成写法；工程骨架、依赖管理、异步性能、上生产四篇拆细。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../ecosystem/">← 上一步：Python 生态的选型与演进：版本、实现与替代方案</a> · <a href="../fastapi-intro/">下一步：Python 后端项目的工程骨架 →</a></p>
 

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Go 排序：slices 与 sort 的反射差异、cmp 函数迁移、严格弱序与不稳定排序、原地操作与切片共享。">
+        <meta name="description" content="讲 Go 排序选型：slices 与 sort 两套 API 分工、pdqsort 不稳定与分页坑、原地函数会改原数据、比较函数只用 cmp 和 strings 拼。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/go/sort/">
     <!-- Open Graph -->
     <meta property="og:title" content="排序与切片操作的现代写法 - 资深码农">
-    <meta property="og:description" content="Go 排序：slices 与 sort 的反射差异、cmp 函数迁移、严格弱序与不稳定排序、原地操作与切片共享。">
+    <meta property="og:description" content="讲 Go 排序选型：slices 与 sort 两套 API 分工、pdqsort 不稳定与分页坑、原地函数会改原数据、比较函数只用 cmp 和 strings 拼。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/go/sort/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="排序与切片操作的现代写法 - 资深码农">
-    <meta name="twitter:description" content="Go 排序：slices 与 sort 的反射差异、cmp 函数迁移、严格弱序与不稳定排序、原地操作与切片共享。">
+    <meta name="twitter:description" content="讲 Go 排序选型：slices 与 sort 两套 API 分工、pdqsort 不稳定与分页坑、原地函数会改原数据、比较函数只用 cmp 和 strings 拼。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "排序与切片操作的现代写法", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "Go 排序：slices 与 sort 的反射差异、cmp 函数迁移、严格弱序与不稳定排序、原地操作与切片共享。", "url": "https://www.yijunjun.asia/programming/go/sort/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/sort/"}, "articleSection": "后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BlogPosting", "headline": "排序与切片操作的现代写法", "datePublished": "2026-09-22", "dateModified": "2026-09-22", "description": "讲 Go 排序选型：slices 与 sort 两套 API 分工、pdqsort 不稳定与分页坑、原地函数会改原数据、比较函数只用 cmp 和 strings 拼。", "url": "https://www.yijunjun.asia/programming/go/sort/", "inLanguage": "zh-CN", "author": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "publisher": {"@type": "Person", "name": "资深码农", "url": "https://www.yijunjun.asia"}, "mainEntityOfPage": {"@type": "WebPage", "@id": "https://www.yijunjun.asia/programming/go/sort/"}, "articleSection": "后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Go 语言总览", "item": "https://www.yijunjun.asia/programming/go/"}, {"position": 4, "name": "Go sort 包", "item": "https://www.yijunjun.asia/programming/go/sort/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,7 +91,7 @@
                     </header>
                     <div class="article-content">
 <h2>从 sort.Slice 到 slices.Sort：两套 API 的分工</h2>
-<p>Go 1.21 把 <code>slices</code> 包收进标准库，排序这件事有了第二套 API。<strong>新的更快也更短，原因是它不用反射</strong>：<code>sort.Slice</code> 接收 <code>any</code> 加一个 <code>less</code> 闭包，必须靠 <code>reflect.Swapper</code> 构造交换函数；<code>slices.SortFunc</code> 是泛型函数，编译期就知道元素类型和大小，交换是直接的内存操作。</p>
+<p>Go 1.21 把 <code>slices</code> 包收进标准库，排序有了第二套 API。<strong>新的更快也更短，因为不用反射</strong>：<code>sort.Slice</code> 收 <code>any</code> 加一个 <code>less</code> 闭包，靠 <code>reflect.Swapper</code> 构造交换函数；<code>slices.SortFunc</code> 是泛型，编译期已知类型和大小，交换直接操作内存。</p>
 <div class="mermaid">
 flowchart TB
     subgraph legacy["sort 包 泛型之前的三种写法"]
@@ -159,7 +159,7 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">从 x/exp/slices 迁移时最容易出的错</div>
-    <p><code>golang.org/x/exp/slices</code> 早期版本的 <code>SortFunc</code> 接收的是<strong>返回 bool 的 less 函数</strong>，进标准库后改成了<strong>返回 int 的 cmp 函数</strong>。直接把老代码的 <code>func(a, b T) bool</code> 挪过来，编译能过（因为 bool 不是 int，其实会报错）或者语义悄悄反了的情况都有。迁移时务必逐个改成 <code>cmp.Compare</code> 风格。</p>
+    <p><code>golang.org/x/exp/slices</code> 早期版本的 <code>SortFunc</code> 接<strong>返回 bool 的 less 函数</strong>，进标准库后改成<strong>返回 int 的 cmp 函数</strong>。老代码的 <code>func(a, b T) bool</code> 直接搬，要么编译报错要么语义悄悄反了。迁移时逐个改成 <code>cmp.Compare</code> 风格。</p>
 </div>
 
 <h2>稳定性：什么时候必须要它</h2>
@@ -175,7 +175,7 @@ flowchart TB
 <tr><td>只为了取最大最小值</td><td>不必</td><td>用 slices.Max 与 slices.Min 更快 根本不用排序</td></tr>
 </tbody>
 </table>
-<p>注意第三行：<strong>分页配合不稳定排序是个隐蔽的线上 bug</strong>。按「状态」排序分页，状态相同的记录顺序在两次查询间可能不同，用户翻到第二页会看到第一页出现过的记录。</p>
+<p>注意第三行：<strong>分页配不稳定排序是隐蔽的 bug</strong>。按「状态」排序分页，状态相同的记录两次查询顺序可能不同，第二页会重现第一页的记录。</p>
 <p>修法是在排序键末尾追加一个唯一键（比如 ID）来保证全序，而不是依赖稳定排序——因为数据库侧的排序你也控制不了稳定性。</p>
 
 <h2>比较函数：严格弱序与 cmp 包</h2>
@@ -246,7 +246,7 @@ func findByName(sorted []Employee, name string) (Employee, bool) {
 }</code></pre>
 
 <h2>slices 包速查：哪个函数会改原切片</h2>
-<p>这张表里最需要注意的是「是否修改原切片」这一列——<code>slices</code> 包里有一半函数是原地操作的，把返回值当成新切片用、同时别人还持有原切片，就会读到意外变化的数据。</p>
+<p>这张表要注意「是否修改原切片」这一列：<code>slices</code> 包里一半函数是原地操作的，把返回值当新切片用、别人还持有原切片时会读到意外数据。</p>
 <table>
 <thead><tr><th>函数</th><th>作用</th><th>是否修改原切片</th><th>注意事项</th></tr></thead>
 <tbody>
@@ -430,8 +430,8 @@ func sortByExpensiveKey[T any](items []T, keyOf func(T) string) {
 </div>
 
 <h2>结论</h2>
-<p>新代码一律用 <code>slices</code> 包：<code>slices.Sort</code> 排基础类型，<code>slices.SortFunc</code> 配 <code>cmp.Or</code> 排结构体，需要保序时换 <code>SortStableFunc</code>。<code>sort</code> 包只在「数据不在单一切片里」这一种情况下还有用。<strong>比较函数只用 <code>cmp.Compare</code> 和 <code>strings.Compare</code> 拼，不手写大于小于判断</strong>，严格弱序这件事就不会出错。</p>
-<p>切片那一半的注意力全花在「谁在共享这个底层数组」上：传子切片出去前限容量，长期持有前先复制，用 <code>slices</code> 里的原地函数时记住它会改原数据。这三条覆盖了我见过的所有切片事故。</p>
+<p>新代码一律用 <code>slices</code> 包：<code>slices.Sort</code> 排基础类型，<code>slices.SortFunc</code> 配 <code>cmp.Or</code> 排结构体，需要保序时换 <code>SortStableFunc</code>。<code>sort</code> 包只在数据不在单一切片里时还有用。<strong>比较函数只用 <code>cmp.Compare</code> 和 <code>strings.Compare</code> 拼</strong>，严格弱序就不会错。</p>
+<p>切片要盯的是「谁共享这个底层数组」：传子切片前限容量，长期持有前先复制，用 <code>slices</code> 里的原地函数会改原数据。这三条覆盖我所见的切片事故。</p>
                     </div>
                 </article>
                 <nav class="article-nav">

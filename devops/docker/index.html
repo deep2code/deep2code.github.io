@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Docker 机制与实践：namespace 与 cgroup、overlayfs 写时复制、镜像瘦身、构建缓存、PID 1 信号、日志驱动与磁盘清理。">
+        <meta name="description" content="从 namespace、cgroup、overlayfs 讲容器的构成，再讲多阶段构建与镜像体积、CI 缓存不命中、PID 1 的信号转发、日志轮转与磁盘写满的排查。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/docker/">
     <!-- Open Graph -->
     <meta property="og:title" content="容器的实现机制与镜像工程 - 资深码农">
-    <meta property="og:description" content="Docker 机制与实践：namespace 与 cgroup、overlayfs 写时复制、镜像瘦身、构建缓存、PID 1 信号、日志驱动与磁盘清理。">
+    <meta property="og:description" content="从 namespace、cgroup、overlayfs 讲容器的构成，再讲多阶段构建与镜像体积、CI 缓存不命中、PID 1 的信号转发、日志轮转与磁盘写满的排查。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/docker/">
     <meta property="og:site_name" content="资深码农">
@@ -38,7 +38,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="容器的实现机制与镜像工程 - 资深码农">
-    <meta name="twitter:description" content="Docker 机制与实践：namespace 与 cgroup、overlayfs 写时复制、镜像瘦身、构建缓存、PID 1 信号、日志驱动与磁盘清理。">
+    <meta name="twitter:description" content="从 namespace、cgroup、overlayfs 讲容器的构成，再讲多阶段构建与镜像体积、CI 缓存不命中、PID 1 的信号转发、日志轮转与磁盘写满的排查。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
@@ -95,7 +95,7 @@
 <p>把这句话吃透，容器的大部分怪问题都可以自己推导出来——凡是这三组机制没覆盖到的东西，就一定是漏到宿主上去的。</p>
 
     <h2>容器是怎么被拼出来的</h2>
-    <p>一次 <code>docker run</code> 的实质是：新建若干 namespace、在 cgroup 里写下额度、把镜像层 mount 成 overlayfs 并 <code>pivot_root</code> 过去、丢弃多余 capability、装载 seccomp 规则，然后 <code>execve</code> 业务二进制。这些动作由 runc 按 OCI <code>config.json</code> 执行，runc 本身执行完就退出，留下 containerd-shim 作为常驻父进程。</p>
+    <p>一次 <code>docker run</code> 做的事：新建 namespace、在 cgroup 里写额度、镜像层 mount 成 overlayfs 并 <code>pivot_root</code> 过去、丢弃多余 capability、装载 seccomp、<code>execve</code> 业务二进制。由 runc 按 OCI <code>config.json</code> 执行，runc 跑完即退出，containerd-shim 留作常驻父进程。</p>
 
     <div class="mermaid">
 flowchart TB
@@ -251,7 +251,7 @@ sequenceDiagram
         </tbody>
     </table>
 
-    <p>alpine 也不是无条件更优：musl 与 glibc 在 DNS 解析和 NSS 行为上有差异，Python 生态的预编译 wheel 大多只发 glibc 版本，落到 alpine 上会退化成源码编译，构建时间和最终体积双双变差。Go 这类可以静态链接的语言才是 scratch 与 distroless 的最佳搭配。</p>
+    <p>alpine 不是无条件更优：musl 与 glibc 的 DNS 解析和 NSS 行为有差异，Python 预编译 wheel 大多只发 glibc 版，落到 alpine 退化成源码编译，构建时间和体积双差。Go 这类静态链接语言才是 scratch 与 distroless 的最佳搭配。</p>
 
     <pre><code class="language-dockerfile"># syntax=docker/dockerfile:1.7
 # 构建阶段：基础镜像钉到小版本，避免上游 tag 漂移导致整条缓存链失效
@@ -285,7 +285,7 @@ ENTRYPOINT ["/app"]</code></pre>
 <div class="echart-container" id="docker-multistage-compare"></div>
 
     <h2>CI 里构建缓存为什么总不命中</h2>
-    <p>根因通常与 Dockerfile 无关：CI runner 是一次性的，而 BuildKit 默认只使用 builder 的本地缓存，机器销毁缓存就一起消失。第二位的原因是导出模式选错——默认的 inline 模式只带最终阶段的层，多阶段构建的中间层一个都不复用。</p>
+    <p>根因通常与 Dockerfile 无关：CI runner 是一次性的，BuildKit 默认只用 builder 本地缓存，机器销毁缓存即消失。第二位是导出模式选错：默认 inline 只带最终阶段的层，多阶段构建中间层不复用。</p>
 
     <div class="mermaid">
 flowchart TB
@@ -365,7 +365,7 @@ cat /sys/fs/cgroup/system.slice/docker-$CID.scope/memory.max
 cat /sys/fs/cgroup/system.slice/docker-$CID.scope/cpu.stat</code></pre>
 
     <h2>PID 1、信号转发与容器停不下来</h2>
-    <p>PID 1 在内核里有特殊语义：对于它没有安装处理函数的信号，内核不会执行默认动作。于是业务进程作为 PID 1 却没注册 SIGTERM 处理时，<code>docker stop</code> 发出的信号等于被丢掉，等满默认 10 秒超时后改发 SIGKILL，退出码 137。</p>
+    <p>PID 1 有特殊内核语义：没安装处理函数的信号，内核不执行默认动作。业务进程作为 PID 1 却没注册 SIGTERM 时，<code>docker stop</code> 的信号等于被丢弃，等满默认 10 秒超时后改发 SIGKILL，退出码 137。</p>
 <p>同一个坑的另一半是 shell 形式的 <code>CMD</code>：它会被包成 <code>/bin/sh -c</code>，此时 sh 是 PID 1，多数 shell 不会把信号转发给子进程。</p>
 
     <div class="mermaid">
@@ -390,11 +390,11 @@ stateDiagram-v2
     </div>
 
     <p>三种修法按优先级排：用 exec 形式的 <code>ENTRYPOINT</code> 让业务进程直接成为 PID 1；必须用入口脚本时，最后一行写 <code>exec</code> 替换自身；</p>
-<p>容器内确实会拉起多个进程时加 <code>--init</code>，注入一个最小 init 负责转发信号并回收僵尸进程——僵尸堆积会吃满 <code>pids.max</code>，这是长跑容器莫名 fork 失败的常见原因。另外 <code>STOPSIGNAL</code> 可以改默认信号，nginx 收到 SIGQUIT 才是优雅退出，收 SIGTERM 是快速退出。</p>
+<p>容器内确实拉起多个进程时加 <code>--init</code>，注入最小 init 转发信号并回收僵尸；僵尸堆积吃满 <code>pids.max</code>，是长跑容器 fork 失败的常见原因。<code>STOPSIGNAL</code> 可改默认信号，nginx 收 SIGQUIT 才是优雅退出，收 SIGTERM 是快速退出。</p>
 <p>优雅退出与流量摘除如何配合（preStop、终止宽限期）详见站内 Kubernetes 一篇。</p>
 
     <h2>日志驱动与磁盘写满</h2>
-    <p>默认的 json-file 驱动不做任何轮转，只要应用往标准输出写，文件就一直涨。这个配置只对新建容器生效，改完守护进程配置必须重建容器才算生效——这是「我已经配了 max-size 为什么还涨」的答案。</p>
+    <p>默认 json-file 驱动不做轮转，应用写标准输出则文件一直涨。配置只对新建容器生效，改完守护进程必须重建容器。「我已经配了 max-size 为什么还涨」原因在此。</p>
 <p><code>docker logs</code> 只对 json-file 与 local 驱动可用，切到 fluentd、syslog 之类之后这条命令直接失败，排查手感会变差，本地开发环境不建议换。</p>
 <p>另外默认的阻塞投递模式下，日志后端变慢会反压到应用线程；换成非阻塞模式则要接受缓冲区满时丢日志。</p>
 
@@ -406,8 +406,8 @@ stateDiagram-v2
   "default-address-pools": [ { "base": "10.201.0.0/16", "size": 24 } ]
 }</code></pre>
 
-    <p>排查磁盘用 <code>docker system df -v</code>：它会把镜像、容器可写层、卷、构建缓存分开列出，绝大多数「莫名其妙没空间」是构建缓存和卷。注意 <code>docker system prune</code> 默认不删卷，也不删正在被引用的构建缓存；<code>docker rm -f</code> 更不会删卷。</p>
-<p>还有一条容易白忙半天的：不要手工 <code>rm</code> 正在被写入的日志文件，dockerd 仍持有文件描述符，空间不会释放，只有重建容器或重启守护进程才回来。日志集中采集的链路设计详见站内日志与监控相关文章。</p>
+    <p>排查磁盘用 <code>docker system df -v</code>：镜像、可写层、卷、构建缓存分开列出，多数「莫名其妙没空间」是缓存和卷。<code>docker system prune</code> 默认不删卷也不删被引用的构建缓存；<code>docker rm -f</code> 更不删卷。</p>
+<p>不要手工 <code>rm</code> 正在被写入的日志文件：dockerd 仍持有文件描述符，空间不释放，只有重建容器或重启守护进程才回来。日志采集链路见站内日志与监控专题。</p>
 
     <h2>最容易踩的坑</h2>
     <div class="callout callout-danger">

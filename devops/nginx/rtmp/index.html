@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="自建 RTMP 直播的推流鉴权、HLS 延迟构成、录制转码与带宽成本，以及何时该用云服务替代自建。">
+        <meta name="description" content="stream 四层代理、ssl_preread 按 SNI 分流、RTMP 推流鉴权防盗链、转封装与部署边界。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/nginx/rtmp/">
     <!-- Open Graph -->
     <meta property="og:title" content="Nginx 流媒体与四层代理：RTMP、HLS 与 stream 模块 - 资深码农">
-    <meta property="og:description" content="自建 RTMP 直播的推流鉴权、HLS 延迟构成、录制转码与带宽成本，以及何时该用云服务替代自建。">
+    <meta property="og:description" content="stream 四层代理、ssl_preread 按 SNI 分流、RTMP 推流鉴权防盗链、转封装与部署边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/nginx/rtmp/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Nginx 流媒体与四层代理：RTMP、HLS 与 stream 模块">
-    <meta name="twitter:description" content="自建 RTMP 直播的推流鉴权、HLS 延迟构成、录制转码与带宽成本，以及何时该用云服务替代自建。">
+    <meta name="twitter:description" content="stream 四层代理、ssl_preread 按 SNI 分流、RTMP 推流鉴权防盗链、转封装与部署边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
     <meta property="article:tag" content="服务端与云">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 流媒体与四层代理：RTMP、HLS 与 stream 模块","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"自建 RTMP 直播的推流鉴权、HLS 延迟构成、录制转码与带宽成本，以及何时该用云服务替代自建。","url":"https://www.yijunjun.asia/devops/nginx/rtmp/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/rtmp/"},"articleSection":"服务端与云"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 流媒体与四层代理：RTMP、HLS 与 stream 模块","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"stream 四层代理、ssl_preread 按 SNI 分流、RTMP 推流鉴权防盗链、转封装与部署边界。","url":"https://www.yijunjun.asia/devops/nginx/rtmp/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/rtmp/"},"articleSection":"服务端与云"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "Nginx 概述", "item": "https://www.yijunjun.asia/devops/nginx/"}, {"position": 4, "name": "RTMP 模块", "item": "https://www.yijunjun.asia/devops/nginx/rtmp/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,7 +92,7 @@
                     </header>
                     <div class="article-content">
 <p>谈 Nginx 基本都在谈七层 HTTP，但它还有两块能力很少被提起：<strong>官方的 <code>stream</code> 模块能做 TCP 与 UDP 的四层代理，第三方的 rtmp 模块能做直播推流接收与 HLS 切片</strong>。</p>
-<p>主干篇讲的进程模型、请求阶段、location 匹配、代理缓冲那一整套，在这两块里大部分都不适用——因为四层根本不解析应用协议，而 RTMP 走的是完全独立的配置块。这一篇专门补这两块。</p>
+<p>主干篇的进程模型、请求阶段、location 匹配、代理缓冲，在这两块里大多不适用：四层不解析应用协议，RTMP 走完全独立的配置块。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -178,7 +178,7 @@ stream {
 
 <h2>ssl_preread：不解密就按 SNI 分流</h2>
 
-<p>TLS 握手的第一个报文 ClientHello 是明文的，里面的 SNI 扩展写着客户端要访问哪个域名。<code>ssl_preread</code> 就是只窥探这个报文、取出 SNI 与 ALPN 存进变量，然后把整条连接原样转给对应后端。<strong>Nginx 自己不参与加解密，也不需要任何证书和私钥。</strong></p>
+<p>TLS 握手第一个报文 ClientHello 是明文，其 SNI 扩展写着客户端请求的域名。<code>ssl_preread</code> 只窥探这个报文，取出 SNI 和 ALPN 存进变量，把连接原样转给对应后端。<strong>Nginx 自己不做加解密，也不需要证书私钥。</strong></p>
 
 <div class="mermaid">
 sequenceDiagram
@@ -373,7 +373,7 @@ http {
 
 <h2>鉴权与防盗链</h2>
 
-<p>推流地址泄漏导致画面被顶替，是自建直播最常见的事故。仅靠「地址保密」等于没有鉴权，必须做两层：<strong>推流侧用 <code>on_publish</code> 回调校验签名，播放侧用 <code>secure_link</code> 给切片 URL 加时效签名</strong>。</p>
+<p>自建直播最常见事故：推流地址泄漏、画面被顶替。地址保密等于没鉴权，必须两层：<strong>推流侧 <code>on_publish</code> 回调验签，播放侧 <code>secure_link</code> 给切片 URL 加时效签名</strong>。</p>
 
 <pre><code class="language-nginx">http {
     # 播放防盗链：URL 形如 /hls/room1/index.m3u8?md5=xxx&amp;expires=1790000000
@@ -409,7 +409,7 @@ http {
 
 <h2>录制、转码与部署边界</h2>
 
-<p>必须区分两个词：<strong>转封装</strong>只是换容器格式（RTMP 流变成 ts 切片），几乎不消耗 CPU；<strong>转码</strong>要完整解码再重新编码，一路 1080p 软编能吃掉好几个 CPU 核。Nginx RTMP 模块只会转封装，它的 <code>exec</code> 指令做的事情仅仅是拉起一个 ffmpeg 进程。</p>
+<p>先分清两个词：<strong>转封装</strong>只换容器格式（RTMP 流变 ts 切片），几乎不耗 CPU；<strong>转码</strong>要完整解码再编码，一路 1080p 软编能吃掉好几个 CPU 核。Nginx RTMP 模块只会转封装，<code>exec</code> 仅拉起一个 ffmpeg 进程。</p>
 
 <table>
 <thead><tr><th>能力</th><th>Nginx RTMP 自己能做</th><th>CPU 开销</th><th>部署建议</th></tr></thead>

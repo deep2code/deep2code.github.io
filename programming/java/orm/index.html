@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="JPA 与 MyBatis：持久化上下文的三个效果、merge 与 save 的语义、EAGER 默认值、N+1 形态、乐观锁重试位置与混用边界。">
+        <meta name="description" content="讲 JPA 持久化上下文的缓存与 flush 机制、懒加载异常成因，以及 JPA 和 MyBatis 的选型边界。">
     <meta name="keywords" content="MyBatis,MyBatis-Plus,JPA,Hibernate,N+1,动态SQL,一级缓存,二级缓存,分页,多数据源,技术博客">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -26,7 +26,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/java/orm/">
     <!-- Open Graph -->
     <meta property="og:title" content="JPA 持久化上下文与 MyBatis 选型 - 资深码农">
-    <meta property="og:description" content="JPA 与 MyBatis：持久化上下文的三个效果、merge 与 save 的语义、EAGER 默认值、N+1 形态、乐观锁重试位置与混用边界。">
+    <meta property="og:description" content="讲 JPA 持久化上下文的缓存与 flush 机制、懒加载异常成因，以及 JPA 和 MyBatis 的选型边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/java/orm/">
     <meta property="og:site_name" content="资深码农">
@@ -37,12 +37,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="JPA 持久化上下文与 MyBatis 选型 - 资深码农">
-    <meta name="twitter:description" content="JPA 与 MyBatis：持久化上下文的三个效果、merge 与 save 的语义、EAGER 默认值、N+1 形态、乐观锁重试位置与混用边界。">
+    <meta name="twitter:description" content="讲 JPA 持久化上下文的缓存与 flush 机制、懒加载异常成因，以及 JPA 和 MyBatis 的选型边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
     <meta property="article:tag" content="后端与编程语言">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"JPA 持久化上下文与 MyBatis 选型","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"JPA 与 MyBatis：持久化上下文的三个效果、merge 与 save 的语义、EAGER 默认值、N+1 形态、乐观锁重试位置与混用边界。","url":"https://www.yijunjun.asia/programming/java/orm/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/java/orm/"},"articleSection":"后端与编程语言"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"JPA 持久化上下文与 MyBatis 选型","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"讲 JPA 持久化上下文的缓存与 flush 机制、懒加载异常成因，以及 JPA 和 MyBatis 的选型边界。","url":"https://www.yijunjun.asia/programming/java/orm/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/programming/java/orm/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "编程语言与代码功底", "item": "https://www.yijunjun.asia/programming/"}, {"position": 3, "name": "Java 总览", "item": "https://www.yijunjun.asia/programming/java/"}, {"position": 4, "name": "MyBatis 与 JPA 实战", "item": "https://www.yijunjun.asia/programming/java/orm/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -89,13 +89,13 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>用 JPA 写业务的人几乎都问过这三句话：为什么我只改了对象、没调 <code>save</code>，数据库居然更新了？为什么我调了 <code>save</code>，日志里当场却没有 SQL？为什么方法返回之后取一个关联字段就抛 <code>LazyInitializationException</code>？</p>
+<p>写 JPA 业务的人几乎都问过这三句话：只改对象、没调 <code>save</code>，数据库怎么更新了？调了 <code>save</code> 为什么日志里当场没 SQL？方法返回后取关联字段为什么抛 <code>LazyInitializationException</code>？</p>
 <p>这三个问题的答案是同一个东西——<strong>持久化上下文（Persistence Context）</strong>。不理解它，Hibernate 的行为看起来全是玄学；理解了它，这些现象都是必然结果，而且可以提前预判。</p>
 
-<p>这篇不写 CRUD 教程，先给两个框架的最小可用写法与选型定式，再讲机制和陷阱。SQL 本身怎么写快、索引怎么建、执行计划怎么读，见站内 <a href="../../../database/mysql/">MySQL 深度剖析</a> 与 <a href="../../../database/optimization/">数据库优化</a>；</p>
-<p>连接池参数矩阵、真正的批量写入、事务边界与事务内 RPC 的危害，见 <a href="../../../observability/performance/">性能优化</a>。这几处本文只给结论，不重复展开。</p>
+<p>CRUD 教程跳过，只讲两个框架的最小可用写法、选型定式、机制和陷阱。写快 SQL、建索引、读执行计划见 <a href="../../../database/mysql/">MySQL 深度剖析</a> 与 <a href="../../../database/optimization/">数据库优化</a>；</p>
+<p>连接池参数矩阵、真正的批量写入、事务边界与事务内 RPC 的危害，见 <a href="../../../observability/performance/">性能优化</a>。这几处只给结论，不重复展开。</p>
 <h2>两个框架的最小可用写法与 N 加 1 的检测方法</h2>
-<p>先给 JPA 侧的标准形态。关键不是语法，而是三条约定：<strong>所有关联显式写 <code>LAZY</code>、只读查询用投影、需要关联时在查询层显式声明</strong>。做到这三条，后面原理层列的坑有一半根本不会出现。</p>
+<p>JPA 侧标准形态是三条约定：<strong>所有关联显式写 <code>LAZY</code>、只读查询用投影、需要关联时在查询层显式声明</strong>。这三条做到，原理层的坑少一半。</p>
 <pre><code class="language-java">// ---------- JPA 侧 ----------
 @Entity
 @Getter @Setter                 // 实体不要用 @Data：equals 与 toString 会访问懒加载字段
@@ -244,12 +244,12 @@ class OrderQueryServiceSqlCountTest {
         assertThat(sqlCount).isLessThanOrEqualTo(2);
     }
 }</code></pre>
-<p>没有 Hibernate 的场合（纯 MyBatis）用同样的思路：接入 <code>datasource-proxy</code> 或给数据源包一层计数装饰器，断言单次请求的语句条数。这条断言的价值在于它<strong>与数据量无关</strong>——数据涨了条数还是常数，才说明没有 N 加 1。</p>
+<p>纯 MyBatis 同样思路：接 <code>datasource-proxy</code> 或给数据源包一层计数装饰器，断言单次请求的语句条数。它<strong>与数据量无关</strong>：数据涨了条数仍是常数，才算没有 N 加 1。</p>
 <p>上面这些写法为什么必须这样——为什么不调 <code>save</code> 也会更新、为什么原生 SQL 前不会自动 flush、为什么集合 fetch 配分页会把全表拉进内存——下面几节逐个解释。</p>
 
 <h2>持久化上下文：一级缓存、脏检查、身份映射是同一个东西</h2>
 
-<p>搞清这一节能解释开头那三个「玄学」现象，也能解释为什么批处理里事务越长越慢。</p>
+<p>开头三个「玄学」现象、批处理事务越长越慢，都出自持久化上下文。</p>
 
 <p>持久化上下文是 <code>EntityManager</code>（Hibernate 里是 <code>Session</code>）背后的那块内存区域。在 Spring 的默认配置下，它的生命周期<strong>与事务绑定</strong>：事务开始时创建，提交或回滚时销毁。</p>
 <p>它同时承担三个职责，而这三个职责被人用三个不同名字讨论，导致很多人以为它们是三样东西。</p>
@@ -267,20 +267,20 @@ flowchart TB
     AQ --> DB["数据库"]
 </div>
 
-<p>三个「效果」是同一个设计的三个侧面。身份映射表让同一事务内的同一行数据只有一个 Java 对象，所以第二次 <code>findById(1L)</code> 直接命中内存，这就是被叫做「一级缓存」的东西。</p>
+<p>三个「效果」是同一设计的三个侧面。身份映射表让同一事务里同一行只有一个 Java 对象，第二次 <code>findById(1L)</code> 直接命中内存，即「一级缓存」。</p>
 <p>注意它<strong>不是业务缓存</strong>，事务一结束就整块扔掉，也不跨请求共享，指望它扛读流量是完全错的方向。</p>
 <p>快照机制让 Hibernate 知道你改了哪些字段，所以能自动生成 UPDATE。动作队列让写操作攒起来批量发出，所以 SQL 出现的时间点和你写代码的行号对不上。</p>
 
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">一级缓存的隐性成本</div>
-    <p>持久化上下文里有多少 managed 实体，脏检查就要比对多少份快照。在一个事务里 <code>findAll()</code> 出十万条实体再做循环处理，提交时的脏检查会明显卡顿，而且这些实体在事务结束前不会被 GC 回收。</p>
+    <p>有多少 managed 实体，脏检查就比对多少份快照：同一事务里 <code>findAll()</code> 出十万条实体再循环，提交时明显卡顿，实体在事务结束前不会被 GC 回收。</p>
 <p>批处理场景要么用 DTO 投影绕开管理，要么每处理若干条主动 <code>flush()</code> 加 <code>clear()</code>。堆为什么会因此涨上去、以及怎么确认是它，见 <a href="../jvm-tuning/">JVM 调优实战</a>。</p>
 </div>
 
 <h2>实体的四种状态，以及每个 API 实际在做什么</h2>
 
-<p>搞清这一节能提前预判「这行代码会不会发 SQL」，也能解释 <code>merge</code> 之后改动丢失这类无报错的数据错误。</p>
+<p>分清状态能预判「这行代码会不会发 SQL」，也能解释 <code>merge</code> 后改动丢了却不报错。</p>
 
 <p>JPA 规范定义了实体的四种状态。搞清楚一个对象此刻处于哪种状态，几乎就能推断出后面会发生什么 SQL。</p>
 
@@ -308,15 +308,15 @@ stateDiagram-v2
     end note
 </div>
 
-<p>两个必须纠正的流传很广的说法。第一，<strong><code>merge</code> 不是「把这个对象变成受管」</strong>，它是「把这个对象的字段值复制到一个受管副本上，然后返回那个副本」。写成 <code>em.merge(user);</code> 却继续操作原来的 <code>user</code>，改动会全部丢失，必须写 <code>user = em.merge(user);</code>。</p>
-<p>Spring Data 的 <code>save()</code> 同理，它内部判断主键是否为空来决定走 <code>persist</code> 还是 <code>merge</code>，所以<strong>对有主键的对象调 <code>save()</code> 会先发一条 SELECT</strong> 把数据库里的行加载进来做合并，这是很多人没意识到的额外查询。</p>
+<p>两个流传很广、必须纠正的说法。第一，<strong><code>merge</code> 不是把对象变受管</strong>，是把字段值复制到受管副本上再返回副本；写成 <code>em.merge(user);</code> 却还用原来的 <code>user</code>，改动全部丢失，必须写 <code>user = em.merge(user);</code>。</p>
+<p>Spring Data 的 <code>save()</code> 同理：内部按主键是否为空选 <code>persist</code> 或 <code>merge</code>，<strong>对有主键的对象调 <code>save()</code> 会先发一条 SELECT</strong> 加载数据库的行做合并，这是易漏的额外查询。</p>
 
 <p>第二，<strong><code>persist</code> 不保证立刻发 INSERT</strong>。只有主键策略是 <code>IDENTITY</code>（依赖数据库自增）时，Hibernate 被迫立刻执行 INSERT 才能拿到主键填进身份映射表；用 <code>SEQUENCE</code> 或 <code>TABLE</code> 策略时它能先取号、把 INSERT 攒到 flush。</p>
 <p>这也解释了为什么 <strong>MySQL 自增主键下 JPA 的批量插入很难真正 batch</strong> ——每条都要立刻回写主键，JDBC 批处理攒不起来。真要批量写，方案见 <a href="../../../observability/performance/">性能优化</a> 里的批量写入部分。</p>
 
 <h2>flush 的时机，以及为什么 SQL 出现得比你想的晚</h2>
 
-<p>搞清这一节能解决一类很费时间的误判：日志里 UPDATE 出现的位置和代码顺序对不上，于是怀疑框架有 bug。</p>
+<p>日志里 UPDATE 出现的位置和代码顺序对不上，于是怀疑框架有 bug。</p>
 
 <p>flush 是「把动作队列和脏检查结果翻译成 SQL 发给数据库」这个动作，它和 commit 是两件事：flush 之后事务仍可回滚。默认的 <code>FlushModeType.AUTO</code> 下有三个触发点，再加一个「不会触发」的特例。</p>
 
@@ -353,11 +353,11 @@ sequenceDiagram
 <tr><td>原生 SQL 查询前</td><td>用 <code>@Query(nativeQuery = true)</code></td><td><strong>不会自动 flush</strong>，Hibernate 无法分析原生 SQL 涉及哪些表，容易读到旧数据</td><td>原生查询前手动 flush，这是很少被提到的坑</td></tr>
 </tbody></table>
 
-<p>最后一行值得单独强调：很多人以为「查询前会自动 flush」是无条件的，于是在同一事务里先改实体、再用原生 SQL 统计，结果统计值不含本次改动。Hibernate 对 JPQL 能解析出涉及的实体表，对原生 SQL 只能放弃判断。</p>
+<p>查询前自动 flush 有前提：Hibernate 能解析 JPQL 涉及的表，对原生 SQL 只能放弃判断。所以同一事务里先改实体、再用原生 SQL 统计，统计值不含本次改动。</p>
 
 <h2>LazyInitializationException 的完整成因，和 open-in-view 的代价</h2>
 
-<p>搞清这一节能解释为什么「把 open-in-view 打开异常就没了」是最糟的修法：异常消失了，代价转移到了连接池上。</p>
+<p>open-in-view 打开后异常消失只是把代价转到连接池，是最糟的修法。</p>
 
 <p>先说清代理是怎么来的。<code>getReference()</code>（旧名 <code>getOne()</code>）根本不查数据库，它返回一个只填了主键的字节码代理；<code>@OneToMany</code> 默认 <code>FetchType.LAZY</code>，加载父实体时子集合也是一个代理集合。</p>
 <p>代理内部持有创建它的那个 Session 引用，第一次访问非主键字段时才去发 SQL 初始化自己。</p>
@@ -386,8 +386,8 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">spring.jpa.open-in-view 默认是 true</div>
-    <p>Spring Boot 启动时会打一条 warn 说明这一点，几乎所有人都忽略了它。它的作用是把 <code>EntityManager</code> 的生命周期从事务扩展到整个请求，代价是<strong>数据库连接被持有到视图渲染完成</strong>。</p>
-<p>对返回 JSON 的 REST 服务来说，序列化阶段的每次懒加载访问都是一条额外 SQL，而且发生在事务之外、没有一致性保证。建议显式设为 <code>false</code>，把暴露出来的异常逐个用查询层修掉，而不是让它兜底。</p>
+    <p>Spring Boot 启动时会打一条 warn，几乎没人看。它把 <code>EntityManager</code> 的生命周期从事务扩到整个请求，代价是<strong>数据库连接被持有到视图渲染完成</strong>。</p>
+<p>REST 服务返回 JSON 时，序列化时每次懒加载都多一条 SQL，且在事务之外、无一致性保证。应显式设 <code>false</code>，暴露的异常逐个用查询层修掉，不让它兜底。</p>
 </div>
 
 <table>
@@ -402,13 +402,13 @@ flowchart TB
 
 <h2>N plus 1 在 JPA 里的两种特有形态</h2>
 
-<p>搞清这一节能解释用法层那条断言为什么有效：这两种形态都会让 SQL 条数随数据量增长，而条数断言正好把它锁死。</p>
+<p>这两种形态都会让 SQL 条数随数据量增长，而条数断言正好把它锁死。</p>
 
 <p>N plus 1 的通用定义（查一次列表再逐条查关联）见 <a href="../../../observability/performance/">性能优化</a>，这里只讲 JPA 独有的两个触发姿势，因为它们比手写 SQL 时隐蔽得多。</p>
 
-<p><strong>形态一：LAZY 集合在循环里被访问。</strong>查出 100 个订单，然后 <code>for (Order o : orders) o.getItems().size()</code>，每次访问都初始化一个独立的集合代理，总共 1 加 100 条 SQL。危险在于这段循环经常不在你写的代码里，而在 Jackson 序列化、模板渲染、或者某个 <code>toString()</code> 里。</p>
+<p><strong>形态一：循环里访问 LAZY 集合。</strong>查出 100 个订单，再 <code>for (Order o : orders) o.getItems().size()</code>，每次访问初始化一个独立集合代理，共 1 加 100 条 SQL。循环常常不在你代码里，而在 Jackson 序列化、模板渲染甚至 <code>toString()</code> 里。</p>
 
-<p><strong>形态二：<code>@ManyToOne</code> 和 <code>@OneToOne</code> 默认是 EAGER。</strong>这是 JPA 规范里一个公认的坏默认值。你以为自己只查订单，实际每条订单都会带出买家、带出买家的部门、层层展开，要么变成一个巨大的 JOIN，要么变成一串额外 SELECT。</p>
+<p><strong>形态二：<code>@ManyToOne</code> 和 <code>@OneToOne</code> 默认 EAGER。</strong>JPA 规范公认的坏默认值。你以为只查订单，实际每条带出买家、买家部门，层层展开，要么变成一个巨大 JOIN、要么一串额外 SELECT。</p>
 <p><strong>正确做法是把所有关联显式声明为 <code>fetch = FetchType.LAZY</code></strong>，需要的地方再用 fetch 或投影声明，把「默认不取、按需声明」变成团队规范。</p>
 
 <table>
@@ -422,7 +422,7 @@ flowchart TB
 
 <h2>JOIN FETCH 加分页：Hibernate 会把全表拉进内存排序</h2>
 
-<p>搞清这一节能避免这一簇里事故率最高的一种写法，它在测试环境完全没有症状。</p>
+<p>JOIN FETCH 配分页是这一簇里事故率最高的写法，测试环境完全无症状。</p>
 
 <p>当 fetch 的是<strong>集合</strong>关联时，一行父实体会被 JOIN 成多行结果，数据库的 <code>limit</code> 和 <code>offset</code> 作用在 JOIN 后的行上，切出来的页和父实体的页对不上。</p>
 <p>Hibernate 的选择是干脆不把分页下推，而是<strong>把满足条件的全部结果集取到内存，在内存里做分页</strong>，并在日志里留下一行警告：</p>
@@ -430,7 +430,7 @@ flowchart TB
 <pre><code class="language-bash">WARN  org.hibernate.hql.internal.ast.QueryTranslatorImpl
       HHH000104: firstResult/maxResults specified with collection fetch; applying in memory!</code></pre>
 
-<p>这行 WARN 在测试环境数据量小的时候毫无症状，上线遇到百万行就是一次 OOM 或者长时间 GC。<strong>看到 HHH000104 必须当故障处理，不能当提示忽略。</strong>正确做法是两步查询：先分页查主键，再按主键集合 fetch。</p>
+<p>这行 WARN 在测试环境数据少时毫无症状，上线百万行就是 OOM 或长时间 GC。<strong>HHH000104 必须当故障处理，不能只当提示。</strong>该两步查询：先分页查主键，再按主键 fetch。</p>
 
 <pre><code class="language-java">public interface OrderRepository extends JpaRepository&lt;Order, Long&gt; {
 
@@ -468,13 +468,13 @@ public class OrderPageService {
     }
 }</code></pre>
 
-<p>如果嫌两步查询啰嗦，退而求其次的方案是保持单次分页查询，给集合关联加 <code>@BatchSize</code>，让 N 条子查询合并成 N 除以 batchSize 条 <code>IN</code> 查询。分页正确、SQL 条数可控，代价是比两步查询多几条 SQL。</p>
+<p>嫌两步查询啰嗦，退一步是保持单次分页查询，给集合关联加 <code>@BatchSize</code>，把 N 条子查询合并成 N 除以 batchSize 条 <code>IN</code> 查询。分页正确、条数可控，代价是多几条 SQL。</p>
 
 <h2>实体设计的坑：equals、双向关联、级联、乐观锁、枚举</h2>
 
-<p>搞清这一节能避开一类最贵的问题：不是慢，而是<strong>数据错了</strong>，而且错得很安静。</p>
+<p>不是慢，而是<strong>数据错了</strong>，而且错得很安静。</p>
 
-<p>下面这张表里的每一条都能在真实项目里造成数据错误，而不只是性能问题。它们的共同特征是：编译通过、单测也可能通过，出问题时现象离原因很远。</p>
+<p>表里每条都能在真实项目里造成数据错误，不止性能问题。共同点是编译通过、单测也可能过，出问题时现象离原因很远。</p>
 
 <table>
 <thead><tr><th>设计点</th><th>常见写法</th><th>为什么出问题</th><th>正确做法</th></tr></thead>
@@ -489,7 +489,7 @@ public class OrderPageService {
 <tr><td><code>@Transactional</code> 加大事务</td><td>整个 Service 方法标注解，里面夹着 RPC 调用</td><td>连接被占住等网络，连接池瞬间耗尽，表现为全站超时</td><td>事务只包住数据库操作，RPC 移出事务；事务边界的完整讨论见 <a href="../spring-core/">Spring 核心机制</a></td></tr>
 </tbody></table>
 
-<p>乐观锁值得单独给一段代码，重点在重试的位置：<strong>必须在事务之外重试</strong>，因为冲突时事务已经标记回滚，在同一个事务里重试只会拿到不可用的持久化上下文。</p>
+<p>乐观锁代码重点在重试位置：<strong>必须在事务之外重试</strong>。冲突时事务已标记回滚，同一事务里重试只会拿到不可用的持久化上下文。</p>
 
 <pre><code class="language-java">@Entity
 @Getter @Setter                      // 实体不要用 @Data，equals 与 toString 会引发懒加载
@@ -535,11 +535,11 @@ public class AccountService {
     }
 }</code></pre>
 
-<p>如果冲突率本身很高（例如秒杀的同一行库存），乐观锁重试会退化成活锁，此时该换成数据库的悲观锁 <code>select ... for update</code>，或者把并发压力挪到缓存层。判断标准是压测下的重试次数分布，不是感觉。</p>
+<p>冲突率很高时（秒杀同一行库存），乐观锁重试退化成活锁，该换数据库悲观锁 <code>select ... for update</code>，或把并发压力挪去缓存层。标准是压测下的重试次数分布，不是感觉。</p>
 
 <h2>JPA 和 MyBatis 怎么选，混用的边界在哪</h2>
 
-<p>这个问题不该按喜好回答，而该按<strong>查询形态</strong>回答。两个框架的设计目标本来不同：JPA 是对象持久化方案，假设你的操作以领域对象为单位；MyBatis 是 SQL 映射方案，假设你要精确控制每条 SQL。</p>
+<p>选框架该按<strong>查询形态</strong>，不该按喜好。两者目标不同：JPA 是对象持久化方案，假设操作按领域对象走；MyBatis 是 SQL 映射方案，假设要精确控制每条 SQL。</p>
 
 <table>
 <thead><tr><th>维度</th><th>JPA 与 Hibernate</th><th>MyBatis 与 MyBatis-Plus</th><th>实际影响</th></tr></thead>
@@ -548,7 +548,7 @@ public class AccountService {
 <tr><td>复杂查询能力</td><td>弱，窗口函数、CTE、多表聚合需要退回原生 SQL</td><td>强，想写什么写什么</td><td>报表、BI、对账模块基本只能 MyBatis</td></tr>
 <tr><td>样板代码量</td><td>极少，方法名派生查询加上 <code>save</code> 就够单表 CRUD</td><td>多，每个查询都要写 XML 或注解（MyBatis-Plus 的 <code>BaseMapper</code> 能补一部分）</td><td>表多、CRUD 密集的后台系统，JPA 省下的代码量是数量级的</td></tr>
 <tr><td>动态 SQL</td><td>Criteria API 或 Specification，类型安全但写起来冗长</td><td>XML 的 <code>if</code> 与 <code>foreach</code>，直观但容易漏掉括号导致条件错位</td><td>多条件筛选页，两边都不优雅，Specification 更安全</td></tr>
-<tr><td>学习曲线</td><td>陡，不懂持久化上下文就会踩本文列的所有坑</td><td>平缓，会 SQL 就能上手</td><td>团队流动快、初级成员多，MyBatis 出事故的概率更低</td></tr>
+<tr><td>学习曲线</td><td>陡，不懂持久化上下文就会踩上面列的所有坑</td><td>平缓，会 SQL 就能上手</td><td>团队流动快、初级成员多，MyBatis 出事故的概率更低</td></tr>
 <tr><td>缓存</td><td>一级缓存随事务；二级缓存跨事务，需要认真配置失效策略</td><td>一级缓存随 <code>SqlSession</code>；二级缓存跨 session，<strong>默认关闭且强烈建议保持关闭</strong></td><td>两边的二级缓存都容易读到脏数据，缓存应该放到应用层显式管理</td></tr>
 <tr><td>数据库可移植性</td><td>好，方言层屏蔽差异</td><td>差，SQL 里的函数和分页语法都绑定具体数据库</td><td>要同时支持 MySQL 与 PostgreSQL 的产品，JPA 优势明显</td></tr>
 </tbody></table>
@@ -569,7 +569,7 @@ flowchart TB
 <table>
 <thead><tr><th>场景</th><th>该怎么做</th><th>为什么</th><th>代价</th></tr></thead>
 <tbody>
-<tr><td>表多、以单表 CRUD 为主的后台系统</td><td>纯 JPA，列表页全部走 DTO 投影</td><td>派生查询省掉的样板代码是数量级的</td><td>团队必须理解持久化上下文，否则本文列的坑会逐个踩到</td></tr>
+<tr><td>表多、以单表 CRUD 为主的后台系统</td><td>纯 JPA，列表页全部走 DTO 投影</td><td>派生查询省掉的样板代码是数量级的</td><td>团队必须理解持久化上下文，否则上面列的坑会逐个踩到</td></tr>
 <tr><td>报表、对账、BI 取数</td><td>MyBatis 或原生 SQL，接只读数据源</td><td>窗口函数与多表聚合用 Criteria 拼不出来，也无法优化</td><td>SQL 与数据库绑定，换库要重写；需要单独一套映射</td></tr>
 <tr><td>以 JPA 为主但有少量复杂报表</td><td>JPA 负责写，MyBatis 只做只读查询</td><td>两个框架各用其长，且读路径不影响一致性</td><td>两套配置与两套监控；新人容易分不清该用哪个</td></tr>
 <tr><td>DBA 要求逐条评审 SQL</td><td>MyBatis 全量 XML，SQL 集中在一处</td><td>JPA 生成的 SQL 随实体与方言变化，评审无法落地</td><td>样板代码多，单表 CRUD 也要手写</td></tr>
@@ -579,11 +579,11 @@ flowchart TB
 <tr><td>需要同时支持 MySQL 与 PostgreSQL</td><td>JPA 为主，把无法移植的语句隔离到少数几个可替换实现里</td><td>方言层屏蔽了分页语法与函数差异</td><td>那几个原生 SQL 要维护多份，且要在两种库上都跑测试</td></tr>
 </tbody></table>
 
-<p>关于混用，唯一需要死守的边界是：<strong>同一张表的写操作只能由一个框架承担</strong>。原因回到本文第一节——JPA 的一级缓存不知道 MyBatis 在同一个事务里改过数据。</p>
+<p>关于混用，唯一需要死守的边界是：<strong>同一张表的写操作只能由一个框架承担</strong>。原因回到第一节——JPA 的一级缓存不知道 MyBatis 在同一个事务里改过数据。</p>
 <p>之后 <code>findById</code> 会从身份映射表返回过期实体，而脏检查还会拿过期快照生成 UPDATE，把 MyBatis 的改动覆盖掉。这类 bug 在日志里看不出任何异常，排查成本极高。</p>
 
 <p>MyBatis 侧另外两个必须知道的点。第一，<code>#{}</code> 编译成预编译语句的占位符，参数走绑定变量；<code>${}</code> 是字符串拼接，值直接进 SQL 文本。</p>
-<p>表名、列名、排序方向这类结构位置无法用绑定变量，不得不用 <code>${}</code> 时必须用白名单校验取值，绝不能信任前端传来的字段名——参数化的完整边界见站内 <a href="../../../api/security/">接口安全</a>。</p>
+<p>结构位置（表名、列名、排序方向）无法用绑定变量，不得不用 <code>${}</code> 时必须白名单校验，绝不能信前端的字段名——参数化边界见 <a href="../../../api/security/">接口安全</a>。</p>
 <p>第二，二级缓存默认关闭是件好事，开启后它以 namespace 为粒度失效，任意一条写操作会清掉整个 mapper 的缓存，命中率低且极易在多表关联场景读到脏数据。</p>
 
 <p>与这些判断对应的反模式：</p>
@@ -601,10 +601,10 @@ flowchart TB
 <tr><td>用 <code>saveAll</code> 当批量插入</td><td>本质是循环单条 insert，MySQL 自增主键下还攒不起 JDBC batch</td><td>走 JDBC 批处理或 MyBatis 批量语句，见 <a href="../../../observability/performance/">性能优化</a></td></tr>
 </tbody></table>
 
-<p><strong>不适用边界</strong>：这篇只覆盖单库的对象持久化。索引设计、执行计划判读、锁与隔离级别在 <a href="../../../database/mysql/">MySQL 深度剖析</a> 与 <a href="../../../database/optimization/">数据库优化</a>；</p>
-<p>连接池参数、慢查询治理与批量写入方案在 <a href="../../../observability/performance/">性能优化</a>；事务边界、代理与自调用这些框架层规则在 <a href="../spring-core/">Spring 核心机制</a>；一次查询把百万行捞进内存之后的堆表现与排查在 <a href="../jvm-tuning/">JVM 调优实战</a>；</p>
+<p><strong>不适用</strong>：只讲单库对象持久化。索引设计、执行计划、锁与隔离级别见 <a href="../../../database/mysql/">MySQL 深度剖析</a>、<a href="../../../database/optimization/">数据库优化</a>；</p>
+<p>连接池参数、慢查询、批量写入见 <a href="../../../observability/performance/">性能优化</a>；事务边界、代理与自调用等规则见 <a href="../spring-core/">Spring 核心机制</a>；一次查询把百万行捞进内存后的堆排查见 <a href="../jvm-tuning/">JVM 调优实战</a>；</p>
 <p>跨服务的数据一致性（本地消息表、TCC、Saga）在 <a href="../../../architecture/distributed/">分布式系统核心</a>；<code>javax.persistence</code> 改名为 <code>jakarta.persistence</code>、Hibernate 6 的行为变化在 <a href="../java17-springboot3/">Java 8 升 17 的实战路径</a>。</p>
-<p>这条路径上，上一篇讲事务边界画在哪，本篇讲边界之内到底发出了多少条 SQL，下一篇把视野推到服务之间——同样的问题换成「一次请求穿过几个服务、每一跳的超时与重试怎么配」。</p>
+<p>事务边界画在哪，Spring 核心机制那页讲过；边界内发出多少条 SQL 是这里的主题；再往前是一次请求穿过几个服务、每一跳的超时与重试怎么配。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../spring-core/">← 上一步：Spring 核心机制：IoC 容器、AOP 代理与事务陷阱</a> · <a href="../spring-cloud/">下一步：Spring Cloud 组件演进与 K8s 环境下的取舍 →</a></p>
 

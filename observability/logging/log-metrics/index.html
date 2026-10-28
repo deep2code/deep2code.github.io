@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="从日志派生指标：只能靠日志的三种场景、派生位置的成本差、突降告警、关键词规则的演进、Loki 标签基数。">
+    <meta name="description" content="讲什么时候只能从日志出指标、采集侧转换与平台侧查询和专用工具三条路径的成本差、四类日志告警各自的陷阱、Loki 与 ES 的两套成本模型。">
     <meta name="keywords" content="日志与监控,监控告警,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/observability/logging/log-metrics/">
     <meta property="og:title" content="从日志派生指标与告警：log-based metrics 的三条路径 - 日志与监控 - 资深码农">
-    <meta property="og:description" content="从日志派生指标：只能靠日志的三种场景、派生位置的成本差、突降告警、关键词规则的演进、Loki 标签基数。">
+    <meta property="og:description" content="讲什么时候只能从日志出指标、采集侧转换与平台侧查询和专用工具三条路径的成本差、四类日志告警各自的陷阱、Loki 与 ES 的两套成本模型。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/observability/logging/log-metrics/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="从日志派生指标与告警：log-based metrics 的三条路径 - 日志与监控">
-    <meta name="twitter:description" content="从日志派生指标：只能靠日志的三种场景、派生位置的成本差、突降告警、关键词规则的演进、Loki 标签基数。">
+    <meta name="twitter:description" content="讲什么时候只能从日志出指标、采集侧转换与平台侧查询和专用工具三条路径的成本差、四类日志告警各自的陷阱、Loki 与 ES 的两套成本模型。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,14 +71,14 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p><strong>本篇只讲一件事：从日志里派生指标和告警（log-based metrics）。</strong>监控方法论、黄金信号、RED 与 USE、SLI/SLO 与错误预算、告警分级与 on-call 排班、MTTD 与 MTTR，全部在站内 <a href="../../metrics/">监控入门</a> 和 <a href="../../index.html">可观测性三大支柱</a> 里；</p>
+<p><strong>从日志派生指标和告警（log-based metrics）</strong>之外都在 <a href="../../metrics/">监控入门</a>、<a href="../../index.html">可观测性三大支柱</a>：监控方法论、黄金信号、RED 与 USE、SLI/SLO 与错误预算、告警分级与 on-call 排班、MTTD 与 MTTR；</p>
 <p>Prometheus 架构与告警链路见 <a href="../../metrics/prometheus/">Prometheus 架构与运维</a>，日志平台的索引与容量见 <a href="../elk/">ELK 篇</a>。这里假定你已经有一套指标系统，讨论的是<strong>日志和它之间那条转换管道</strong>。</p>
 
 <h2>先回答：什么时候该从日志出指标</h2>
 <p>结论先摆出来：<strong>直接埋点永远优于从日志派生</strong>。指标是聚合后的时间序列，单条几十字节、延迟十几秒、可以按标签精确切分；</p>
 <p>日志派生要先把原始文本搬一遍再算，成本高一到两个量级，还多了采集丢失和延迟这两个风险源。</p>
 <p>很多团队反过来做——因为「反正日志都有了」——结果是指标系统形同虚设，全部告警都压在日志平台上，日志平台一抖动整个监控就瞎。</p>
-<p>但确实有三种情况只能靠日志：<strong>改不了代码</strong>（第三方组件、遗留系统、云服务的访问日志、Nginx 与网关的日志）；<strong>事后才发现需要这个指标</strong>，而历史日志还在保留期内，可以回溯算出过去两周的数值；</p>
+<p>有三种情况只能靠日志：<strong>改不了代码</strong>（第三方、遗留系统、云服务、Nginx 网关日志）；<strong>事后才需要这个指标</strong>，历史日志还在保留期内，能回溯算出过去两周数值；</p>
 <p><strong>需要携带高基数上下文去定位具体样本</strong>，比如不只要知道失败了 137 次，还要知道是哪 137 个订单号。</p>
 
 <div class="mermaid">
@@ -111,7 +111,7 @@ flowchart TB
 </table>
 
 <h2>三条实现路径：采集侧转换、平台侧查询、专用工具</h2>
-<p>同一个「从日志出指标」的需求，落地位置不同，成本差几十倍。绝大多数团队默认走了最贵的那条（平台侧查询），因为它最直观：日志已经在 ES 或 Loki 里了，写个查询就出数。</p>
+<p>同一个需求放在不同位置，成本差几十倍。多数团队默认走最贵的平台侧查询，因为直观：日志已在 ES 或 Loki 里，写个查询就出数。</p>
 <p>但每次告警评估都要扫一遍日志，评估周期 30 秒、规则 200 条，日志平台就被自己的监控打爆了。</p>
 
 <div class="mermaid">
@@ -222,16 +222,16 @@ sinks:
 <div class="callout-icon">❌</div>
 <div class="callout-title">日志量突降往往比突增更严重</div>
 <p>突增意味着「有东西在刷屏」，这件事通常还有别的信号能发现。</p>
-<p>突降意味着两件事之一：<strong>服务已经不工作了</strong>（没有请求进来，所以没有日志），或者<strong>采集链路断了</strong>（agent 挂了、日志路径变了、磁盘满了、格式改了导致解析全丢）。</p>
-<p>第二种情况最危险，因为此时所有基于日志的告警都会静默不触发，看板一片绿，而你实际上已经失明。突降告警和关键词告警的优先级应该反过来。</p>
+<p>突降有两种：<strong>服务已不工作</strong>（没有请求进来就没有日志），或<strong>采集链路断了</strong>（agent 挂了、路径变了、磁盘满了、格式改了致解析全丢）。</p>
+<p>采集链路断了最危险：基于日志的告警全部静默，看板一片绿，人实际已经失明。突降告警应比关键词告警优先。</p>
 </div>
 
 <h2>为什么「出现 ERROR 就告警」是错的</h2>
 <p>这条规则几乎是每个团队日志告警的第一版，也几乎每个团队都在三个月内把它关掉了。</p>
-<p>原因不在规则本身，而在<strong>ERROR 这个级别在多数代码库里已经被污染了</strong>：参数校验失败、用户输错密码、第三方返回业务失败、重试后成功的那次失败，全都在打 ERROR（判据见 <a href="../">应用侧日志工程</a>）。</p>
+<p>规则本身没错，错在<strong>ERROR 在多数代码库里已污染</strong>：参数校验失败、用户输错密码、第三方业务失败、重试成功的那次失败全打 ERROR（判据见 <a href="../">应用侧日志工程</a>）。</p>
 <p>于是 ERROR 基线常年在每分钟几百条，一条一个告警等于自杀。</p>
 <p>更根本的问题是<strong>告警对象错了</strong>。运维需要知道的是「用户受影响了吗、影响多大、在变好还是变坏」，这是一个<strong>带分母、有持续时间、可分级</strong>的比率；</p>
-<p>而「日志里出现了某行文本」是一个离散事件，它既不能表达严重程度，也不能表达趋势。正确的演进路径是把关键词规则逐步替换成比率规则，只给少数几个真正稀有的关键词保留即时告警。</p>
+<p>出现某行文本是离散事件，表达不了严重程度和趋势。关键词规则该逐步换成比率规则，只给少数几个真正稀有的关键词留即时告警。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -350,9 +350,9 @@ sequenceDiagram
 </table>
 
 <h2>Loki 与 ES 在「日志转指标」上是两套成本模型</h2>
-<p>这一点经常被混着讲，导致选型时算错账。<strong>ES 对所有字段建索引</strong>，查询靠倒排索引定位，任意字段过滤都快，代价是写入放大、存储成本高、且高基数字段会让索引膨胀。</p>
+<p>混着讲，选型会算错账。<strong>ES 对所有字段建索引</strong>，查询靠倒排索引，任意字段过滤都快，代价是写入放大、存储成本高、高基数字段让索引膨胀。</p>
 <p><strong>Loki 只索引标签</strong>，日志内容按块压缩存储，查询时先用标签选出块再<strong>暴力扫描内容</strong>，所以存储便宜得多，但「扫多少」直接决定查询成本和速度。</p>
-<p>由此得出一条容易被踩的结论：<strong>Loki 的标签基数必须严格控制</strong>。把 <code>trace_id</code> 或 <code>pod</code> 以外的高基数字段放进标签，会产生海量的小 stream，写入端内存暴涨、查询端要合并成千上万个块，性能比 ES 更糟。</p>
+<p>由此，<strong>Loki 的标签基数必须严格控制</strong>。把 <code>trace_id</code> 或 <code>pod</code> 以外的高基数字段进标签，会冒出海量小 stream，写入端内存暴涨、查询端要合并成千上万个块，性能比 ES 更糟。</p>
 <p>在 Loki 里高基数字段应该留在日志正文里，靠 <code>| json | field="x"</code> 这种过滤表达式在扫描时筛。</p>
 
 <table>

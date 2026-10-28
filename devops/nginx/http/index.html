@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="把 Nginx 当 HTTP 服务器用：root 与 alias 的拼接差异、正则 location 的陷阱、try_files 的 SPA 回退、server_name 匹配优先级、证书链与会话复用、HTTP/3 与 QUIC、预压缩、日志轮转要发 USR1。">
+        <meta name="description" content="Nginx 静态与 TLS：root 拼接、alias 替换，directio 生效时 sendfile 自动失效，SPA 回退要用 =404 兜底，双证书并配。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/nginx/http/">
     <!-- Open Graph -->
     <meta property="og:title" content="Nginx 作为 HTTP 服务器：静态站点、TLS 与协议支持 - 资深码农">
-    <meta property="og:description" content="把 Nginx 当 HTTP 服务器用：root 与 alias 的拼接差异、正则 location 的陷阱、try_files 的 SPA 回退、server_name 匹配优先级、证书链与会话复用、HTTP/3 与 QUIC、预压缩、日志轮转要发 USR1。">
+    <meta property="og:description" content="Nginx 静态与 TLS：root 拼接、alias 替换，directio 生效时 sendfile 自动失效，SPA 回退要用 =404 兜底，双证书并配。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/nginx/http/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Nginx 作为 HTTP 服务器：静态站点、TLS 与协议支持">
-    <meta name="twitter:description" content="把 Nginx 当 HTTP 服务器用：root 与 alias 的拼接差异、正则 location 的陷阱、try_files 的 SPA 回退、server_name 匹配优先级、证书链与会话复用、HTTP/3 与 QUIC、预压缩、日志轮转要发 USR1。">
+    <meta name="twitter:description" content="Nginx 静态与 TLS：root 拼接、alias 替换，directio 生效时 sendfile 自动失效，SPA 回退要用 =404 兜底，双证书并配。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
     <meta property="article:tag" content="服务端与云">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 作为 HTTP 服务器：静态站点、TLS 与协议支持","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"把 Nginx 当 HTTP 服务器用：root 与 alias 的拼接差异、正则 location 的陷阱、try_files 的 SPA 回退、server_name 匹配优先级、证书链与会话复用、HTTP/3 与 QUIC、预压缩、日志轮转要发 USR1。","url":"https://www.yijunjun.asia/devops/nginx/http/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/http/"},"articleSection":"服务端与云"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 作为 HTTP 服务器：静态站点、TLS 与协议支持","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Nginx 静态与 TLS：root 拼接、alias 替换，directio 生效时 sendfile 自动失效，SPA 回退要用 =404 兜底，双证书并配。","url":"https://www.yijunjun.asia/devops/nginx/http/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/http/"},"articleSection":"服务端与云"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "Nginx 概述", "item": "https://www.yijunjun.asia/devops/nginx/"}, {"position": 4, "name": "Nginx HTTP 模块", "item": "https://www.yijunjun.asia/devops/nginx/http/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,13 +92,13 @@
                     </header>
                     <div class="article-content">
 <p>Nginx 大部分时间被当成反向代理用，但它首先是一个 HTTP 服务器：自己从磁盘读文件、自己终止 TLS、自己协商 HTTP/2 与 HTTP/3、自己压缩和记日志。</p>
-<p>这一篇只讲这部分——文件怎么定位、server 怎么被选中、证书怎么配、协议怎么开、日志怎么不丢。</p>
+<p>文件定位、server 选中、证书配置、协议开启、日志不丢，逐项讲清。</p>
 
-<p>请求在 Nginx 内部经过的 11 个处理阶段、location 的匹配优先级、<code>proxy_buffering</code> 与上游长连接、超时参数全景，都在 <code>../</code> 主干篇，本文只在需要时指路。</p>
+<p>请求在 Nginx 内部经过的 11 个处理阶段、location 的匹配优先级、<code>proxy_buffering</code> 与上游长连接、超时参数全景，都在 <code>../</code> 主干篇，只在需要时指路。</p>
 
 <h2>root 与 alias：拼接还是替换</h2>
 
-<p>这是静态服务里第一个分水岭，也是路径穿越事故的主要来源。<code>root</code> 的语义是<strong>拼接</strong>：最终磁盘路径等于 <code>root</code> 的值加上完整请求 URI（包含 location 匹配掉的那段前缀）。<code>alias</code> 的语义是<strong>替换</strong>：把 location 匹配掉的那段前缀换成 <code>alias</code> 的值。</p>
+<p>这是静态服务第一个分水岭，也是路径穿越事故主因。<code>root</code> 是<strong>拼接</strong>：磁盘路径等于 <code>root</code> 加完整请求 URI（含 location 匹配掉的前缀）；<code>alias</code> 是<strong>替换</strong>：把那段前缀换成 <code>alias</code> 的值。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -159,11 +159,11 @@ location ~ ^/download/(?&lt;fname&gt;.+)$ {
     limit_rate 2m;
 }</code></pre>
 
-<p>大文件服务里 <code>sendfile</code>、<code>aio</code>、<code>directio</code> 三者的内核行为主干篇已经讲过，这里只强调一条容易忘的结论：<strong><code>directio</code> 生效时 <code>sendfile</code> 对同一个文件自动失效</strong>，两者不能叠加，所以「全局开了 sendfile 就够了」在大文件场景并不成立。</p>
+<p><code>sendfile</code>、<code>aio</code>、<code>directio</code> 的内核行为主干篇讲过，只留一条易忘结论：<strong><code>directio</code> 生效时 <code>sendfile</code> 对同一文件自动失效</strong>，不能叠加，「全局开 sendfile 就够了」在大文件场景不成立。</p>
 
 <h2>try_files 与 SPA 回退</h2>
 
-<p><code>try_files</code> 属于 precontent 阶段，它按顺序探测每个候选项，第一个存在的就用，全都不存在时把最后一个参数当作<strong>内部重定向目标或状态码</strong>。常见误用是把最后一个参数写成文件名而不是 URI。</p>
+<p><code>try_files</code> 属于 precontent 阶段，按序探测候选项，第一个存在就用，全不存在时把最后一个参数当<strong>内部重定向目标或状态码</strong>。误用是把它写成文件名而非 URI。</p>
 
 <table>
 <thead><tr><th>写法</th><th>行为</th><th>适用场景</th></tr></thead>
@@ -178,7 +178,7 @@ location ~ ^/download/(?&lt;fname&gt;.+)$ {
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">SPA 回退会把 404 变成 200</div>
-    <p>配了 <code>try_files $uri $uri/ /index.html</code> 之后，<strong>任何不存在的路径都会返回 200 加一个 HTML 页面</strong>，包括写错的 API 路径。前端拿到 HTML 去做 JSON 解析，报出一个和真实原因完全无关的错。解决办法是把 API 前缀单独写成 <code>location ^~ /api/</code> 让它不落到回退规则里。</p>
+    <p>配 <code>try_files $uri $uri/ /index.html</code> 后，<strong>任何不存在的路径都返回 200 加一个 HTML 页面</strong>，含写错的 API 路径。前端拿 HTML 解析 JSON，报错和真实原因无关。解法是 API 前缀单独写 <code>location ^~ /api/</code>，不落回退。</p>
 <p>同时入口文件必须短缓存：<code>index.html</code> 长缓存会让用户永远拿不到新版本，而它引用的带 hash 的资源早已不存在。</p>
 </div>
 
@@ -265,7 +265,7 @@ server {
 <tr><td><code>ssl_prefer_server_ciphers</code></td><td><code>off</code></td><td>保持 <code>off</code></td><td>强行开启可能反而选到客户端上更慢的套件</td></tr>
 </tbody></table>
 
-<p>双证书是个被低估的能力：<strong>同一个 server 里可以同时配 RSA 和 ECDSA 两套证书</strong>，Nginx 依据 ClientHello 里声明的签名算法自动挑。ECDSA 握手更快、报文更小，现代客户端全都支持；RSA 留给极老客户端兜底。配置方式就是写两组 <code>ssl_certificate</code> 与 <code>ssl_certificate_key</code>，顺序无关。</p>
+<p>双证书是被低估的能力：<strong>同一个 server 里可同时配 RSA 和 ECDSA 两套证书</strong>，Nginx 按 ClientHello 的签名算法自动挑。ECDSA 握手更快、报文更小，现代客户端全支持；RSA 兜底极老客户端。写两组 <code>ssl_certificate</code> 与 <code>ssl_certificate_key</code>，顺序无关。</p>
 
 <h2>HTTP/2 与 HTTP/3</h2>
 
@@ -281,7 +281,7 @@ server {
 </tbody></table>
 
 <p>关于「合并文件减少请求数」这条流传最广的前端优化建议：它在 HTTP/1.1 时代成立，因为浏览器对同域并发连接数有 6 个左右的上限。</p>
-<p>HTTP/2 单连接可以并行几十上百个 stream，把 20 个小文件合成一个大 bundle 反而破坏了缓存粒度——改一行代码整个 bundle 的 hash 就变了，用户要重新下载全部。域名分片更糟，它强迫浏览器额外建立多条 TLS 连接，握手成本远超收益。</p>
+<p>HTTP/2 单连接并行几十上百个 stream，20 个小文件合成一个大 bundle 反而破坏缓存粒度：改一行代码整个 hash 就变，要重下全部。域名分片更糟，强迫浏览器多建 TLS 连接，握手成本远超收益。</p>
 
 <h2>压缩：实时压还是预压缩</h2>
 

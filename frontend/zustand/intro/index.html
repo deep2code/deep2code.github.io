@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="Zustand 上手：合并语义与选择器比较方式、异步建模、影响半径与重渲染定位、订阅与持久化的版本迁移。">
+    <meta name="description" content="Zustand 上手：建 store 与异步写法、选择器决定影响半径的粒度原则、组件外订阅的手动比较、中间件包裹顺序与持久化版本迁移。">
     <meta name="keywords" content="Zustand,Zustand 入门,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/frontend/zustand/intro/">
     <meta property="og:title" content="Zustand 上手：store、selector 与订阅粒度 - Zustand - 资深码农">
-    <meta property="og:description" content="Zustand 上手：合并语义与选择器比较方式、异步建模、影响半径与重渲染定位、订阅与持久化的版本迁移。">
+    <meta property="og:description" content="Zustand 上手：建 store 与异步写法、选择器决定影响半径的粒度原则、组件外订阅的手动比较、中间件包裹顺序与持久化版本迁移。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/frontend/zustand/intro/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Zustand 上手：store、selector 与订阅粒度 - Zustand">
-    <meta name="twitter:description" content="Zustand 上手：合并语义与选择器比较方式、异步建模、影响半径与重渲染定位、订阅与持久化的版本迁移。">
+    <meta name="twitter:description" content="Zustand 上手：建 store 与异步写法、选择器决定影响半径的粒度原则、组件外订阅的手动比较、中间件包裹顺序与持久化版本迁移。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,7 +71,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Zustand 的接口很小，坑却集中在两处：<strong>更新的合并语义</strong>和<strong>选择器的比较方式</strong>。这两点理解错了，表现分别是「同级字段莫名消失」和「组件疯狂重渲染」。这篇按上手顺序把它们讲透，并给出中间件的组合方式。</p>
+<p>Zustand 的接口很小，坑集中在两处：<strong>更新的合并语义</strong>和<strong>选择器的比较方式</strong>。理解错了，表现分别是「同级字段莫名消失」和「组件疯狂重渲染」，中间件按真实需求再叠。</p>
 <p>设计取舍见《Zustand 的设计》，组织模式与服务端渲染陷阱见《状态组织模式与常见陷阱》。</p>
 
 <h2>建一个 store</h2>
@@ -133,7 +133,7 @@ export const useEditor = create&lt;EditorState&gt;((set, get) =&gt; ({
 
 <p>这段定义里有四个可以直接照搬的决策。<strong>初始值单独抽出来</strong>：重置功能与单元测试都需要一份干净的初值，写在字面量里就只能复制一遍。</p>
 <p><strong>方法与状态放在同一个对象里</strong>：调用方拿到的就是「数据加操作」，不需要额外去某个文件找对应的处理函数。</p>
-<p><strong>异步直接写在方法里</strong>：不需要任何中间件承载副作用，但要自己决定失败怎么表达——这里选择抛出异常交给调用方，另一种做法是在状态里放错误字段，两者不要混用，否则调用方不知道该看哪里。</p>
+<p><strong>异步直接写在方法里</strong>：不需要中间件承载副作用，但失败怎么表达要自己定——抛异常交给调用方，或在状态里放错误字段，两者别混用，否则调用方不知道看哪里。</p>
 <p><strong>方法内部用 get 读当前值</strong>：不要捕获模块作用域里的变量，那些值在异步等待期间可能已经过期。</p>
 
 <h2>更新的合并语义</h2>
@@ -241,15 +241,15 @@ function SaveButton() {
 
 <h2>订阅粒度为什么值得花心思</h2>
 
-<p>选择器写得对不对，决定的不是代码好不好看，而是<strong>状态变更的影响半径</strong>。举个具体场景：一个后台页面顶部有搜索框、左侧有筛选树、右侧是一张两百行的表格，三者都从同一个 store 取状态。</p>
-<p>如果表格的选择器顺手取了整个筛选对象，那么用户在搜索框里每敲一个字，表格都会重渲染一次——两百行乘以每秒若干次按键，主线程立刻被占满，用户的直观感受是「输入卡顿」。</p>
+<p>选择器写得对不对，决定的是<strong>状态变更的影响半径</strong>。场景：后台页面顶部搜索框、左侧筛选树、右侧两百行表格，三者从同一个 store 取状态。</p>
+<p>表格的选择器若顺手取了整个筛选对象，搜索框每敲一个字表格重渲染一次，两百行乘以每秒若干次按键，主线程被占满，用户感受是「输入卡顿」。</p>
 
-<p>这类问题的难点在于<strong>定位</strong>：症状出现在表格上，原因在搜索框的按键上，而代码里两者毫无关联。排查顺序是先确认「哪个组件在重渲染」，再看它的选择器取了什么，最后反查是谁在改那部分状态。</p>
-<p>把选择器收窄到真正用到的字段，通常一行改动就能解决。反过来说，如果一开始就遵守「只取用到的字段、返回原始值」这两条，这类问题根本不会出现。</p>
+<p>这类问题难在<strong>定位</strong>：症状在表格上，原因在搜索框的按键上，代码里两者毫无关联。排查顺序：哪个组件在重渲染，它的选择器取了什么，谁在改那部分状态。</p>
+<p>把选择器收窄到真正用到的字段，通常一行改动就能解决。一开始就遵守「只取用到的字段、返回原始值」，这类问题不会出现。</p>
 
 <h2>组件外订阅</h2>
 
-<p>store 不依赖组件树，所以可以在任意模块里读写与监听。订阅方法返回一个取消函数，回调在<strong>每次状态更新</strong>时执行——注意是每次，不是「你关心的字段变化时」，所以要自己做比较。</p>
+<p>store 不依赖组件树，任意模块里都能读写与监听。订阅方法返回一个取消函数，回调在<strong>每次状态更新</strong>时执行，字段没变也执行，要自己比较。</p>
 
 <pre><code class="language-typescript">import { useEditor } from '@/stores/editor'
 
@@ -366,8 +366,8 @@ sequenceDiagram
 </div>
 
 <p>关于是否引入中间件，有一条判断值得记住：<strong>持久化和调试是在解决真实问题，不可变辅助往往是在掩盖设计问题</strong>。</p>
-<p>当你发现必须靠它才能写出可读的更新代码时，先问一句状态为什么嵌套了四层——把结构拍平、或者按领域拆成多个 store，通常比加一层中间件更划算。</p>
-<p>至于持久化，它的复杂度全部集中在版本迁移上：只要你的状态结构还会演进，版本号和迁移函数就必须从第一天就写上，事后补是补不回来的，因为线上已经存在一批无法识别版本的旧数据。</p>
+<p>必须靠它才能写出可读的更新代码时，先问一句状态为什么嵌套了四层——拍平结构或拆 store，通常比加一层中间件划算。</p>
+<p>持久化的复杂度集中在版本迁移：状态结构还会演进，版本号和迁移函数第一天就要写上，事后补不回来，线上已存在无法识别版本的旧数据。</p>
 
 <h2>排查对照</h2>
 

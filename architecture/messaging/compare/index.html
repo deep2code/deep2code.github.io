@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="消息队列选型方法论：四步筛产品，对比 RabbitMQ 的 Exchange 路由、RocketMQ 的存储与事务机制，并给出迁移共存做法。">
+    <meta name="description" content="四步筛选顺序与硬约束、RabbitMQ 路由与 prefetch 边界、TTL 加死信队列缺陷、RocketMQ 存储与事务消息、迁移双写对账。">
     <meta name="keywords" content="消息队列深入,MQ 选型对比,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/messaging/compare/">
     <meta property="og:title" content="MQ 选型方法论与 RabbitMQ / RocketMQ 机制拆解 - 消息队列深入 - 资深码农">
-    <meta property="og:description" content="消息队列选型方法论：四步筛产品，对比 RabbitMQ 的 Exchange 路由、RocketMQ 的存储与事务机制，并给出迁移共存做法。">
+    <meta property="og:description" content="四步筛选顺序与硬约束、RabbitMQ 路由与 prefetch 边界、TTL 加死信队列缺陷、RocketMQ 存储与事务消息、迁移双写对账。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/messaging/compare/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="MQ 选型方法论与 RabbitMQ / RocketMQ 机制拆解">
-    <meta name="twitter:description" content="消息队列选型方法论：四步筛产品，对比 RabbitMQ 的 Exchange 路由、RocketMQ 的存储与事务机制，并给出迁移共存做法。">
+    <meta name="twitter:description" content="四步筛选顺序与硬约束、RabbitMQ 路由与 prefetch 边界、TTL 加死信队列缺陷、RocketMQ 存储与事务消息、迁移双写对账。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -73,10 +73,10 @@
                     <div class="article-content">
 <p>所有「哪个 MQ 更快」的对比都不可信：吞吐数字取决于消息体大小、批量参数、刷盘策略和副本数，换一组参数就能让任意一款赢。</p>
 <p>真正能决定选型的是<strong>能力有无</strong>——路由是否够灵活、延迟消息是否原生、顺序保证的粒度、能不能重放历史。</p>
-<p>这篇先给筛选方法，再拆 RabbitMQ 的 Exchange 路由模型与 RocketMQ 的存储和事务机制，Kafka 部分只给结论，内部实现见站内 Kafka 专题。</p>
+<p>先给筛选方法，再拆 RabbitMQ 的 Exchange 路由模型与 RocketMQ 的存储和事务机制，Kafka 部分只给结论，内部实现见站内 Kafka 专题。</p>
 <h2>四步筛：从需求走到候选产品</h2>
 
-<p>选型流程只有四步，顺序不能反：<strong>投递语义与回溯 → 顺序要求 → 吞吐与消息体 → 运维承接能力</strong>。每步的产出是「排除哪些候选」，不是「选定谁」。四步走完通常只剩一两个，差异已不足以改变结论。</p>
+<p>四步顺序不能反：<strong>投递语义与回溯 → 顺序要求 → 吞吐与消息体 → 运维承接能力</strong>。每步只排除候选，不是选定谁。走完通常只剩一两个。</p>
 
 <table>
 <thead><tr><th>步骤</th><th>要问出的具体事实</th><th>怎么用它排除候选</th><th>这一步最常见的错误</th></tr></thead>
@@ -133,7 +133,7 @@ kafka-producer-perf-test.sh --topic bench --num-records 2000000 \
 </tbody>
 </table>
 
-<p>四步的结论压成三行：<strong>选了谁、因为哪个硬约束、放弃了什么能力、用什么替代</strong>。第三行最重要，是半年后有人质疑选型时唯一有用的东西。下面解释这些能力差异从哪来。</p>
+<p>四步结论压成三行：<strong>选了谁、因为哪个硬约束、放弃了什么能力、用什么替代</strong>。第三行最重要，是半年后质疑选型时唯一有用的东西。</p>
 
 <h2>为什么先筛能力，再比性能</h2>
 <p>把<a href="../">主干篇</a>那六个维度变成一棵判断树，大多数项目走两三个节点就能收敛。注意每个菱形问的都是「有没有」而不是「好不好」。</p>
@@ -155,12 +155,12 @@ flowchart TB
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">被问烂的那句「万级 / 十万级 / 百万级」</div>
-    <p>这组数字来自很多年前的单机对比，今天引用只会误导：RabbitMQ 3.12 的经典队列 v2 在小消息下单节点也能做到每秒数万，Kafka 在 acks 等于 all、同步副本要求 2、消息 10KB 下也不过每秒几万条。</p>
+    <p>多年前的单机对比数字，今天引用会误导：RabbitMQ 3.12 经典队列 v2 小消息单节点每秒数万，Kafka 在 acks 等于 all、同步副本要求 2、消息 10KB 也不过每秒几万条。</p>
 <p>量级对比只能用于<strong>排除明显不匹配的选项</strong>（比如每秒五十万条日志显然不该用 RabbitMQ），不能用于「A 比 B 快所以选 A」。要数字就用自己的消息体和参数压一遍。</p>
 </div>
 
 <h2>RabbitMQ 的差异化能力：Exchange 路由模型</h2>
-<p>RabbitMQ 和日志型 MQ 最大的结构差异：生产者<strong>从不直接发到队列</strong>，而是发到 Exchange，由 Exchange 按 Binding 规则决定消息进哪些队列。路由在 Broker 侧完成，这是它相比「消费端自己筛」的核心优势。</p>
+<p>RabbitMQ 与日志型 MQ 最大的结构差异：生产者<strong>从不直接发到队列</strong>，而是发到 Exchange，按 Binding 决定进哪些队列。路由在 Broker 侧完成，胜过「消费端自己筛」。</p>
 <div class="mermaid">
 flowchart TB
     subgraph PUB["生产侧"]
@@ -270,15 +270,15 @@ ch.start_consuming()</code></pre>
 <tr><td>Stream（3.9 起）</td><td>仅追加日志，支持多消费者独立位点与回放</td><td>需要重放、扇出到很多消费者时</td><td>协议与队列不同，客户端要用 stream 插件；语义更接近日志型 MQ，不要和普通队列混用同一套代码</td></tr>
 </tbody>
 </table>
-<p><strong>prefetch 的影响被严重低估。</strong>默认 <code>prefetch_count=0</code> 意味着无限预取：第一个连上来的消费者会把消息一口气拉到本地缓冲区，后来的消费者拿不到任何消息，看起来像「扩容无效」。</p>
-<p>但 prefetch 设成 1 会让每处理一条都多一轮网络往返，吞吐掉到十分之一。经验值是处理耗时 50ms 左右时取 10 到 50；耗时超过 1 秒时取 1 到 5。unacked 消息会占 Broker 内存，<code>prefetch 乘以消费者数</code>就是内存上限的估算基数。</p>
+<p><strong>prefetch 的影响被严重低估。</strong>默认 <code>prefetch_count=0</code> 即无限预取：第一个连上的消费者把消息全拉到本地缓存，后来的拿不到消息，看着像「扩容无效」。</p>
+<p>但 prefetch 设成 1，每处理一条就多一轮网络往返，吞吐掉到十分之一。处理耗时 50ms 左右取 10 到 50，超过 1 秒取 1 到 5。unacked 占 Broker 内存，<code>prefetch 乘以消费者数</code>是内存上限的估算基数。</p>
 
 <h2>RabbitMQ 做延迟队列：TTL 加死信的致命缺陷</h2>
 <p>「消息 TTL + 死信交换机」是流传最广的延迟队列做法，也是最容易翻车的做法。原因在于<strong>队列是 FIFO 的，Broker 只检查队首那条消息是否过期</strong>。</p>
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">队头阻塞让按消息设置 TTL 的方案彻底不可用</div>
-    <p>先发一条 TTL 为 30 分钟的消息，再发一条 TTL 为 10 秒的消息。10 秒后第二条<strong>不会</strong>被投到死信交换机，必须等队首那条 30 分钟到期出队后才会被检查。结果「延迟 10 秒的订单超时关单」实际在 30 分钟后才触发。</p>
+    <p>先发一条 TTL 为 30 分钟的消息，再发一条 TTL 为 10 秒的。10 秒后第二条<strong>不会</strong>进死信交换机，要等队首那条 30 分钟到期才检查。「延迟 10 秒的订单超时关单」30 分钟后才触发。</p>
 <p>只要同一个队列里存在不同 TTL 的消息，这个方案就是错的。</p>
 </div>
 <table>
@@ -326,7 +326,7 @@ flowchart TB
 </table>
 <p><strong>NameServer 为什么是无状态且节点间不通信</strong>：每个 Broker 每 30 秒向<strong>所有</strong> NameServer 注册一次全量路由信息，NameServer 超过 120 秒收不到心跳就摘除该 Broker；客户端每 30 秒从其中一台拉取路由。</p>
 <p>因为路由数据在每台 NameServer 上都是全量的，节点之间不需要复制，也就不需要选主和一致性协议，运维上任意增减节点都不影响。</p>
-<p>代价是路由信息<strong>最终一致</strong>：Broker 刚下线的那几十秒内，客户端可能还拿着旧路由发消息，所以生产端必须依赖发送重试（同步发送默认重试 2 次，自动切换到其他 Broker）。</p>
+<p>代价：路由<strong>最终一致</strong>：Broker 下线后几十秒内，客户端可能还拿旧路由发消息，生产端要靠发送重试（同步发送默认重试 2 次，自动切其他 Broker）。</p>
 
 <h2>RocketMQ 的三个特色能力</h2>
 <p>延迟消息、顺序消息、事务消息是 RocketMQ 相比其他产品最省事的地方——它们都不需要自研。</p>
@@ -484,13 +484,13 @@ consumer.registerMessageListener(new MessageListenerOrderly() {
 </tbody>
 </table>
 <p><strong>迁移与共存</strong>：确实需要换或同时用两套时，做法是在应用侧抽一层薄接口，只抽象「发送一条带 key 的消息」和「订阅并幂等处理」这两件事，</p>
-<p>把事务消息、延迟级别、Exchange 绑定这类各家特有能力<strong>显式暴露</strong>出去，而不是硬塞进统一接口。过度抽象的后果是：为了统一接口放弃 RocketMQ 的事务消息和 RabbitMQ 的路由能力，</p>
-<p>最后得到一个功能等于交集的最小实现，两边优势都用不上。切换期建议双写一段时间并对账，确认新链路的消息量与处理结果一致后再摘掉旧链路。</p>
+<p>事务消息、延迟级别、Exchange 绑定这类各家特有能力要<strong>显式暴露</strong>，不要硬塞进统一接口：为统一接口放弃 RocketMQ 事务消息和 RabbitMQ 路由能力，</p>
+<p>最后得到一个功能等于交集的最小实现，两边优势都用不上。切换期双写并对账，新链路消息量与结果一致后再摘旧链路。</p>
 
-<p><strong>不适用边界</strong>：这篇不回答「要不要引入 MQ」，那见 <a href="../">主干篇</a>；消息定成命令还是事件、契约怎么演进见 <a href="../patterns/">消息通信模式</a>；五个丢失点的逐点验证与参数速查见 <a href="../reliable/">消息可靠投递</a>；</p>
-<p>Kafka 的分段日志、ISR 与 HW、acks 组合、幂等与事务、Rebalance 见 <a href="../../kafka/">Kafka 专题</a>，分区数与分区键的取舍见 <a href="../../kafka/topic-partition/">分区设计</a>、压测方法见 <a href="../../kafka/performance/">性能调优与压测</a>。需要强一致或同步拿结果的链路，换哪个产品都解决不了。</p>
+<p><strong>不适用边界</strong>：不答「要不要引入 MQ」，见 <a href="../">主干篇</a>；命令还是事件、契约演进见 <a href="../patterns/">消息通信模式</a>；五个丢失点逐点验证见 <a href="../reliable/">消息可靠投递</a>；</p>
+<p>Kafka 的分段日志、ISR 与 HW、acks 组合、幂等与事务、Rebalance 见 <a href="../../kafka/">Kafka 专题</a>，分区键取舍见 <a href="../../kafka/topic-partition/">分区设计</a>、压测见 <a href="../../kafka/performance/">性能调优与压测</a>。强一致或同步拿结果，换产品也解决不了。</p>
 
-<p>本篇是这条路径的最后一环。前三篇定「要不要用、消息长什么样、怎么不丢」，这篇只负责把它们落到一个具体产品上——顺序反过来，就会变成先选产品再改需求。</p>
+<p>路径的最后一环是落到一个产品。前三篇定「要不要用、消息长什么样、怎么不丢」，顺序反过来就变成先选产品再改需求。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../reliable/">← 上一步：消息可靠投递：五个丢失点与跨产品通用防法</a></p>
 

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="划清网关的责任边界与参数，讲横切能力收到入口、限流与路由，以及不该由网关做的事。">
+        <meta name="description" content="判断能力归属只问是否需要业务语义；插件顺序、重试风暴、超时预算、鉴权旁路与 BFF 分工的配置和避坑清单。">
     <meta name="keywords" content="API网关,服务注册发现,Nacos,Consul,负载均衡">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/governance/api-gateway/">
     <!-- Open Graph -->
     <meta property="og:title" content="API 网关的责任边界：不放业务逻辑、流量治理与重试风暴 - 资深码农">
-    <meta property="og:description" content="划清网关的责任边界与参数，讲横切能力收到入口、限流与路由，以及不该由网关做的事。">
+    <meta property="og:description" content="判断能力归属只问是否需要业务语义；插件顺序、重试风暴、超时预算、鉴权旁路与 BFF 分工的配置和避坑清单。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/governance/api-gateway/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="API 网关的责任边界：不放业务逻辑、流量治理与重试风暴 - 资深码农">
-    <meta name="twitter:description" content="划清网关的责任边界与参数，讲横切能力收到入口、限流与路由，以及不该由网关做的事。">
+    <meta name="twitter:description" content="判断能力归属只问是否需要业务语义；插件顺序、重试风暴、超时预算、鉴权旁路与 BFF 分工的配置和避坑清单。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="架构与分布式">
     <meta property="article:tag" content="API网关">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"API 网关的责任边界：不放业务逻辑、流量治理与重试风暴","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"划清网关的责任边界与参数，讲横切能力收到入口、限流与路由，以及不该由网关做的事。","url":"https://www.yijunjun.asia/architecture/governance/api-gateway/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/governance/api-gateway/"},"articleSection":"后端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"API 网关的责任边界：不放业务逻辑、流量治理与重试风暴","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"判断能力归属只问是否需要业务语义；插件顺序、重试风暴、超时预算、鉴权旁路与 BFF 分工的配置和避坑清单。","url":"https://www.yijunjun.asia/architecture/governance/api-gateway/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/governance/api-gateway/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "API 网关与服务注册发现", "item": "https://www.yijunjun.asia/architecture/governance/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -92,12 +92,12 @@
                     <div class="article-content">
 <p>网关是全站唯一一个所有流量都必经的组件，也是最容易被写坏的组件。</p>
 <p>写坏的方式几乎总是同一个：因为它能看到所有请求，大家就不断往里塞逻辑，直到它变成所有团队都要改、谁改都可能全站故障的巨型单点。</p>
-<p>这篇只讲两件事：<strong>网关的责任边界到底划在哪里</strong>，以及<strong>网关自带的那几个危险功能（重试、超时、限流）怎么配才不会把小故障放大成全站故障</strong>。</p>
+<p>两件事：<strong>网关的责任边界到底划在哪里</strong>，以及<strong>网关自带的那几个危险功能（重试、超时、限流）怎么配才不会把小故障放大成全站故障</strong>。</p>
 
 <p>网关底层的 Nginx 实现细节——11 个请求处理阶段与 location 匹配优先级、<code>proxy_buffering</code> 的内存与磁盘行为、上游长连接三件套、<code>limit_req</code> 的三种形态——站内 <a href="../../../devops/nginx/">Nginx 核心原理</a>已写透，不重复。</p>
 <h2>什么该放网关、什么绝不能放</h2>
 
-<p>判断一个能力该放哪里，只需问一个问题：<strong>它需不需要知道业务数据的含义</strong>。需要，就留在业务服务；不需要，才有资格进网关。下表是核心结论，可直接当评审清单，原因在原理层。</p>
+<p>判断一个能力该放哪里，只问：<strong>它需不需要知道业务数据的含义</strong>。需要就留在业务服务，不需要才有资格进网关。</p>
 
 <table>
 <thead><tr><th>能力</th><th>归属</th><th>判定理由</th><th>放错位置的后果</th></tr></thead>
@@ -128,7 +128,7 @@ flowchart TB
     Q3 -->|低频且稳定| YES["写成网关插件"]
 </div>
 
-<p>下面是一条路由的最小可用配置，以 APISIX 为例。<strong>它刻意把重试设成 0</strong>：重试要不要开、开几次必须是一次显式决定，而不是抄配置时带进来的默认值，原因见原理层的重试风暴。</p>
+<p>以 APISIX 为例，一条路由的最小可用配置如下。<strong>它刻意把重试设成 0</strong>：开不开、开几次必须是显式决定，不能是抄配置带来的默认值。</p>
 
 <pre><code class="language-json">{
   "uri": "/api/order/*",
@@ -182,8 +182,8 @@ flowchart TB
 
 <h2>一个请求穿过网关的完整责任链</h2>
 
-<p>搞清这一节能解决的现象是：插件顺序调了一下，认证服务的 CPU 被打满。把网关拆开看，它其实是一串有严格先后顺序的处理阶段。</p>
-<p>顺序不能随便调：限流在认证之前（否则伪造令牌的洪水会把验签 CPU 打满），路由匹配在协议转换之前（不知道去哪就不知道转成什么协议），日志在最后（否则记不到最终响应码）。</p>
+<p>插件顺序调了一下，认证服务的 CPU 被打满。把网关拆开看，它其实是一串有严格先后顺序的处理阶段。</p>
+<p>顺序不可随便调：限流先于认证，防伪造令牌洪水打满验签 CPU；路由先于协议转换，去向决定协议；日志在最后，否则记不到最终响应码。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -214,7 +214,7 @@ flowchart TB
 
 <h2>最重要的设计原则：网关里不放业务逻辑</h2>
 
-<p>搞清这一节能解决的现象是：网关成了发布瓶颈，一次改动要五个团队会签。</p>
+<p>网关成了发布瓶颈，一次改动要五个团队会签。</p>
 <p>这条原则被说了无数遍，但几乎每个团队都会违反：违反它的收益立刻兑现（在网关加个 if 半小时上线，改五个服务要一周），代价延后。代价长什么样：</p>
 
 <ul>
@@ -226,8 +226,8 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">网关正在变成业务代码的三个识别信号</div>
-    <p>信号一：<strong>网关配置或插件代码里出现了具体业务字段名</strong>，比如 <code>if (body.merchantType == 3)</code>、<code>if (path == "/order/refund" &amp;&amp; amount &gt; 10000)</code>。信号二：<strong>网关需要访问业务数据库、业务缓存或调用业务 RPC 来做判断</strong>，一旦出现这种依赖，网关可用性就被业务库可用性绑死。</p>
-<p>信号三：<strong>网关的发布频率和业务服务一样高</strong>，健康的网关一个季度发几次版，若它一周发三次，说明业务需求已堵在网关上。三个信号出现任何一个，就该把逻辑往下推到 BFF 或业务服务。</p>
+    <p>信号一：<strong>网关配置或插件代码里出现了具体业务字段名</strong>，如 <code>if (body.merchantType == 3)</code>、<code>if (path == "/order/refund" &amp;&amp; amount &gt; 10000)</code>。信号二：<strong>网关需要访问业务数据库、业务缓存或调用业务 RPC 来做判断</strong>，可用性被业务库绑死。</p>
+<p>信号三：<strong>网关发布频率和业务服务一样高</strong>，健康网关一个季度发几次版，一周发三次说明需求已堵在网关。任一信号出现，逻辑下推到 BFF 或业务服务。</p>
 </div>
 
 <h2>认证在网关，鉴权在服务</h2>
@@ -284,13 +284,13 @@ location = /_auth {
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">「网关已经鉴权了，服务内部就不用校验」是错的</div>
-    <p>这个假设的前提是业务服务绝不可能被绕过网关访问，而现实里几乎总有旁路：同机房内网直连、定时任务直接调 Service 名、另一个服务为省一跳直连你的 Pod、压测流量从内部打入、运维用 <code>kubectl port-forward</code> 调试。</p>
-<p>只要有一条旁路，纯网关鉴权就等于没有鉴权。正确姿势是网关挡掉外部无效流量，服务内部仍做资源级校验，并用 mTLS 或内网 Token 保证「这个请求确实来自网关」。</p>
+    <p>前提是业务服务绝不会绕过网关被访问，几乎总有旁路：同机房内网直连、定时任务调 Service 名、另一服务为省一跳直连 Pod、压测流量内部打入、运维用 <code>kubectl port-forward</code>。</p>
+<p>只要有旁路，纯网关鉴权等于没有。网关挡外部无效流量，服务内部仍做资源级校验，用 mTLS 或内网 Token 保证「这个请求确实来自网关」。</p>
 </div>
 
 <h2>重试是网关最危险的功能</h2>
 
-<p>搞清这一节能解决的现象是：根因已经修好，下游却始终起不来。重试的直觉是「失败了再试一次，成功率更高」。</p>
+<p>根因已经修好，下游却始终起不来。重试的直觉是「失败了再试一次，成功率更高」。</p>
 <p>这个直觉在下游健康时成立，在下游过载时完全反转：<strong>重试的流量放大系数等于 1 + 重试次数，而它恰好在下游最脆弱的时刻生效。</strong></p>
 
 <div class="mermaid">
@@ -316,7 +316,7 @@ sequenceDiagram
     G--xC: 502，且下游即使修好也起不来
 </div>
 
-<p><strong>重试风暴形成后，即使根因（慢 SQL）已修复，下游也会被持续的三倍流量压住起不来</strong>，必须先在网关侧关掉重试或打开熔断，给下游恢复窗口。这也是重试开关必须能热切换的原因。</p>
+<p><strong>重试风暴形成后，即使根因（慢 SQL）已修复，下游也会被持续的三倍流量压住起不来</strong>，必须先关重试或开熔断，给下游恢复窗口。重试开关要能热切换。</p>
 
 <table>
 <thead><tr><th>配置项</th><th>常见错误配法</th><th>推荐配法</th><th>原因</th></tr></thead>
@@ -364,7 +364,7 @@ clusters:
       max_ejection_percent: 30        # 最多摘 30%，防止把整个集群摘空</code></pre>
 
 <p><code>max_retries: 32</code> 就是预算的硬实现：无论上游失败多严重，全集群同时在飞的重试请求不会超过 32 个，放大系数被物理封顶。</p>
-<p><code>max_ejection_percent: 30</code> 同样重要——不设上限，一次全局故障（比如下游依赖的数据库挂了）会让被动健康检查把所有实例都摘掉，等数据库恢复时你的服务反而一台可用实例都没有。</p>
+<p><code>max_ejection_percent: 30</code> 同样重要：不设上限，一次下游数据库故障会让被动健康检查摘掉所有实例，恢复时反而一台可用实例都没有。</p>
 
 <h2>超时预算必须从外到内递减</h2>
 
@@ -386,12 +386,12 @@ clusters:
     <div class="callout-icon">💡</div>
     <div class="callout-title">比静态分配更好的做法：传递 deadline</div>
     <p>静态分配假设每一跳都用满预算，实际上前几跳往往很快。<strong>把剩余时间随请求向下传递</strong>（gRPC 的 <code>grpc-timeout</code> 头原生支持，HTTP 可自己约定 <code>X-Deadline-Ms</code>），</p>
-<p>每一跳用「剩余时间」而不是固定值作为超时上限，剩余时间已不够完成一次下游调用时<strong>直接快速失败</strong>，不再发起注定白跑的调用。这一个改动通常能在故障期间省下 20% 到 40% 的无效下游压力。</p>
+<p>每一跳用「剩余时间」而非固定值作超时上限，不够完成一次下游调用时<strong>直接快速失败</strong>，不再发起白跑调用。故障期间通常省下 20% 到 40% 的无效下游压力。</p>
 </div>
 
 <h2>高可用与可观测性</h2>
 
-<p>搞清这一节能解决的现象是：网关自己滚动重启就丢限流精度、踢长连接。网关的高可用有三条硬要求：</p>
+<p>网关自己滚动重启就丢限流精度、踢长连接。网关的高可用有三条硬要求：</p>
 
 <ul>
 <li><strong>数据面必须无状态</strong>，任何会话状态（比如限流计数、连接亲和）都不能只存在单个节点的内存里，否则滚动重启就会丢限流精度或踢掉长连接。</li>
@@ -409,7 +409,7 @@ clusters:
 <tr><td>本地预扣 + 定期同步</td><td>中高，误差不超过一个配额批次</td><td>摊薄后接近 0</td><td>批次给得太大时突发流量会超额；同步周期建议 200ms 到 1s</td></tr>
 </tbody></table>
 
-<p>网关是采集黄金信号（延迟、流量、错误、饱和度）性价比最高的位置，一处埋点就覆盖全站入口，而且记录的是<strong>用户实际感受到的</strong>耗时和错误率，比每个服务自己上报的更可信。几条一定要配的查询：</p>
+<p>网关一处埋点就覆盖全站入口，是采集黄金信号（延迟、流量、错误、饱和度）的最佳位置，记录的是<strong>用户实际感受到的</strong>耗时和错误率，比服务上报更可信。几条查询：</p>
 
 <pre><code class="language-promql"># 1) 入口 P99 延迟，按路由和上游分组，定位到具体接口
 histogram_quantile(0.99,
@@ -433,7 +433,7 @@ sum by (cluster) (envoy_cluster_upstream_cx_active)
   /
 sum by (cluster) (envoy_cluster_circuit_breakers_default_cx_open + 1024)</code></pre>
 
-<p>第三条查询值得单独拎出来：<strong>重试占比是最好的早期预警指标</strong>，它通常在错误率上涨之前几十秒就开始抬头，因为重试成功的请求不体现在错误率里，但它已说明下游在恶化。</p>
+<p><strong>重试占比是最好的早期预警指标</strong>：通常在错误率上涨前几十秒就抬头。重试成功的请求不体现在错误率里，但已说明下游在恶化。</p>
 <p>Span 数据模型、上下文传播与采样策略，站内 <a href="../../../observability/tracing/opentelemetry/">OpenTelemetry 实战</a>已完整展开，这里只强调一点：<strong>traceID 必须在网关生成并注入下游和访问日志</strong>，这是后续所有排查的起点。</p>
 
 <h2>选型先问谁运维它，以及 BFF 的分工</h2>
@@ -474,8 +474,8 @@ sum by (cluster) (envoy_cluster_circuit_breakers_default_cx_open + 1024)</code><
 <tr><td>典型技术栈</td><td>APISIX / Envoy / Spring Cloud Gateway</td><td>Node.js、Go，或 GraphQL 网关</td></tr>
 </tbody></table>
 
-<p>BFF 该由谁维护是个组织问题：<strong>由前端团队维护</strong>能让「加个字段」不用跨团队排期，收益最大，但前提是前端团队具备服务端运维能力（日志、监控、容量、发布回滚、值班）。</p>
-<p>如果不具备，BFF 会变成没人看监控的定时炸弹。折中做法是基础架构提供统一的 BFF 运行时和脚手架（含默认埋点、熔断、限流、发布流水线），前端只写聚合逻辑，运行时稳定性由平台负责。</p>
+<p>BFF 由谁维护是组织问题：<strong>由前端团队维护</strong>能让「加个字段」不用跨团队排期，前提是有服务端运维能力（日志、监控、容量、发布回滚、值班）。</p>
+<p>否则 BFF 就是没人看监控的定时炸弹。折中做法是平台提供统一 BFF 运行时和脚手架（默认埋点、熔断、限流、发布流水线），前端只写聚合逻辑，稳定性归平台。</p>
 
 <h2>流量治理与不适用边界</h2>
 
@@ -527,11 +527,11 @@ sum by (cluster) (envoy_cluster_circuit_breakers_default_cx_open + 1024)</code><
 
 <p>关于这段配置的三个要点：第一，<code>rules</code> 是有序的，命中第一条就不再往下走，所以内部头规则必须写在百分比规则前面；</p>
 <p>第二，第二条规则里省略 <code>upstream_id</code> 的那一项表示走路由默认上游，这是 APISIX 表达「剩余 95% 走旧版」的写法；</p>
-<p>第三，<code>proxy-mirror</code> 复制出的影子请求<strong>会被网关忽略响应，但下游是真的收到了</strong>——影子集群必须连影子数据库，否则 5% 的写请求会污染生产数据，踩过这个坑的团队不少。</p>
+<p><code>proxy-mirror</code> 复制的影子请求<strong>会被网关忽略响应，但下游是真的收到了</strong>：影子集群必须连影子数据库，否则 5% 的写请求会污染生产数据。</p>
 
-<p><strong>不适用边界</strong>：网关解决不了「服务该怎么拆」，那一层在 <a href="../../microservices/">微服务拆分</a>；也不负责东西向治理，服务间的超时、重试、熔断参数怎么定在 <a href="../circuit-breaker/">熔断限流降级与舱壁隔离</a>；</p>
-<p>上游地址从哪来、摘除延迟为什么是四段在 <a href="../service-discovery/">服务注册发现</a>；限流阈值与灰度规则放配置中心但生效点在网关，服务端机制见 <a href="../config-center/">配置中心的服务端机制与选型</a>；</p>
-<p>Nginx 的 11 个处理阶段、location 优先级与 <code>limit_req</code> 的三种形态在 <a href="../../../devops/nginx/">Nginx 核心原理</a>；本篇只划责任边界与参数，数据面怎么部署、选哪种形态见下一步。</p>
+<p><strong>不适用边界</strong>：「服务该怎么拆」在 <a href="../../microservices/">微服务拆分</a>；东西向的服务间超时、重试、熔断参数在 <a href="../circuit-breaker/">熔断限流降级与舱壁隔离</a>；</p>
+<p>上游地址、摘除延迟四段见 <a href="../service-discovery/">服务注册发现</a>；限流阈值与灰度规则放配置中心，生效在网关，机制见 <a href="../config-center/">配置中心的服务端机制与选型</a>；</p>
+<p>Nginx 的 11 个处理阶段、location 优先级与 <code>limit_req</code> 的三种形态在 <a href="../../../devops/nginx/">Nginx 核心原理</a>；这里只划责任边界与参数，数据面怎么部署、选哪种形态见下一步。</p>
 
 <p>外部流量从哪进来、哪些横切能力收到入口，是网关这一层要划清的边界。数据面部署还有三种形态：集中部署、按业务线拆、下沉成 Sidecar。</p>
 

@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Node 工程里的 TypeScript：.d.ts 与 exports/types 字段解析失败怎么定位，monorepo 的 project references 增量构建为何常失效。">
+        <meta name="description" content="Node 项目里 TypeScript 的工程链路：tsc 与转译器分工、模块解析与 ESM/CJS 双轨、边界校验、生产排错、按项目形态选配置。">
     <meta name="keywords" content="TypeScript,tsconfig,类型体操,路径别名,ESLint,Prettier,ts-node,Node.js后端,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/programming/node/typescript/">
     <!-- Open Graph -->
     <meta property="og:title" content="Node.js 项目里的 TypeScript 工程化 - 资深码农">
-    <meta property="og:description" content="Node 工程里的 TypeScript：.d.ts 与 exports/types 字段解析失败怎么定位，monorepo 的 project references 增量构建为何常失效。">
+    <meta property="og:description" content="Node 项目里 TypeScript 的工程链路：tsc 与转译器分工、模块解析与 ESM/CJS 双轨、边界校验、生产排错、按项目形态选配置。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/programming/node/typescript/">
     <meta property="og:site_name" content="资深码农">
@@ -38,7 +38,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Node.js 项目里的 TypeScript 工程化 - 资深码农">
-    <meta name="twitter:description" content="Node 工程里的 TypeScript：.d.ts 与 exports/types 字段解析失败怎么定位，monorepo 的 project references 增量构建为何常失效。">
+    <meta name="twitter:description" content="Node 项目里 TypeScript 的工程链路：tsc 与转译器分工、模块解析与 ESM/CJS 双轨、边界校验、生产排错、按项目形态选配置。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="编程语言与代码功底">
@@ -90,8 +90,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>Node 项目里关于 TypeScript 的争论，早就不在「要不要写类型」上了，而在工程链路上：谁负责类型检查、谁负责产出 JavaScript、模块解析按哪套规则走、为什么本地跑得好好的代码到生产就报找不到模块。</p>
-<p>这篇不讲语法，先给一份能直接用的配置与「要达到什么目的就开哪个开关」的对照，再讲这条链路里那些编译期看着没事、运行期才炸的接缝。</p>
+<p>Node 项目里 TypeScript 的争论不在「要不要写类型」。而在工程链路：谁做类型检查、谁产出 JavaScript。模块解析按哪套规则走、为什么本地能跑、到生产就报找不到模块。</p>
+<p>语法之外：能直接抄的配置、「要达到什么目的就开哪个开关」的对照。链路上还有编译期看着没事、运行期才炸的接缝。</p>
 <h2>tsconfig 最小可用配置与检查转译分离</h2>
 <p>先给一份可以直接抄进后端服务的配置。前提是 Node 22 LTS、产物直接交给 Node 跑（没有打包步骤）、用 ESM。注释写的是「为什么要这行」，机制解释在原理层。</p>
 <pre><code class="language-json">// tsconfig.json —— 后端服务的最小可用配置，产物直接给 Node 跑
@@ -158,10 +158,10 @@
 <p>上面每一条为什么这么定——为什么转译器替代不了检查器、为什么 <code>moduleResolution</code> 选错会在运行时才炸、strict 到底包含哪八个——下面逐节展开。</p>
 
 <h2>类型检查和转译是两条独立的流水线</h2>
-<p>搞清这一节能解决一个选型疑问：既然 swc 快几十倍，为什么还需要 tsc。</p>
-<p><code>tsc</code> 同时干两件事：构建整个项目的类型图做检查，以及把 TS 语法降级成目标版本的 JavaScript。<code>esbuild</code> 和 <code>swc</code> 只干第二件，而且是<strong>逐文件</strong>干的——拿到一个文件就能输出结果，不需要知道别的文件长什么样。</p>
+<p>既然 swc 快几十倍，为什么还需要 tsc。</p>
+<p><code>tsc</code> 同时干两件事：构建全项目类型图做检查，把 TS 语法降级成目标版本的 JavaScript。<code>esbuild</code> 和 <code>swc</code> 只做后者，而且<strong>逐文件</strong>：拿到一个文件就能输出，不必知道别的文件。</p>
 <p>这不是「实现得更快」，是工作量根本不同：构建跨文件类型图需要把整个依赖图（包括 node_modules 里的 .d.ts）读进来做推导，这部分开销天生无法靠重写语言消掉。</p>
-<p>结论很直接：转译器永远替代不了类型检查器，所以工程上要把两件事拆成两条并行的流水线，产物走快的那条，检查走准的那条，用 CI 门禁把它们绑在一起。</p>
+<p>转译器永远替代不了类型检查器。工程上把两件事拆成两条并行流水线。产物走快的那条，检查走准的那条，用 CI 门禁绑在一起。</p>
 <div class="mermaid">
 flowchart TB
     SRC["src 下的 .ts 源码"]
@@ -194,10 +194,10 @@ flowchart TB
 <tr><td>Node 原生类型擦除</td><td>否</td><td>单文件</td><td>不支持</td><td>不支持</td><td>小脚本、开发期直跑 .ts</td></tr>
 </tbody>
 </table>
-<p>Node 从 22.6 起有 <code>--experimental-strip-types</code>，只擦除可擦除语法；<code>enum</code>、<code>namespace</code>、构造函数参数属性这类会生成运行时代码的语法要另外用 <code>--experimental-transform-types</code>。TS 5.8 加了 <code>erasableSyntaxOnly</code>，作用是让编译器直接禁掉这些语法，免得你写完才发现 Node 跑不了。Bun 内置转译、连 tsconfig 的 paths 都认，细节见站内 Bun 专题。</p>
+<p>Node 从 22.6 起有 <code>--experimental-strip-types</code>，只擦除可擦除语法。<code>enum</code>、<code>namespace</code>、构造函数参数属性这类生成运行时代码的语法，另用 <code>--experimental-transform-types</code>。TS 5.8 的 <code>erasableSyntaxOnly</code> 直接禁掉这类语法，否则要等 Node 报错。Bun 内置转译，连 tsconfig 的 paths 都认，细节见站内 Bun 专题。</p>
 
 <h2>transpile-only 到底漏掉了什么</h2>
-<p>搞清这一节能解决一类「代码明明一样」的事故：本地 tsc 跑得通，换成 swc 构建出来的产物运行时报 undefined。</p>
+<p>本地 tsc 跑得通，换成 swc 构建出来的产物运行时报 undefined。</p>
 <p>很多人以为「跳过类型检查」只是少了一道保险，其实还顺带改变了几个语义。下面这些坑都不是理论问题，是单文件转译的必然结果。</p>
 <table>
 <thead><tr><th>语义</th><th>tsc 的行为</th><th>单文件转译的行为</th><th>线上表现</th><th>规避</th></tr></thead>
@@ -212,7 +212,7 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">最典型的漏网姿势</div>
-    <p>开发用 <code>ts-node --transpile-only</code>（图快），构建用 <code>swc</code>（也图快），CI 只跑 <code>jest</code>（测试覆盖不到的分支自然不报错）。整条链路上没有任何一环做类型检查，于是 TypeScript 在这个项目里退化成「带类型注释的 JavaScript」，而团队还以为有类型保护。</p>
+    <p>开发用 <code>ts-node --transpile-only</code>（图快），构建用 <code>swc</code>（也图快），CI 只跑 <code>jest</code>（测不到的分支自然不报错）。整条链路没有一环做类型检查，TypeScript 退化成「带类型注释的 JavaScript」，团队还以为有类型保护。</p>
 <p>判断方法很简单：在仓库里随便找个文件写一行 <code>const n: number = 'x'</code>，看 CI 会不会红。</p>
 </div>
 <pre><code class="language-json">// .swcrc —— 用 swc 跑 NestJS 时，下面两个开关不开，DI 会直接崩
@@ -231,7 +231,7 @@ flowchart TB
 }</code></pre>
 
 <h2>moduleResolution 与 ESM/CJS 双轨</h2>
-<p>搞清这一节能解决那个最费时间的现象：编译一切正常，<code>node dist/main.js</code> 起手就 ERR_MODULE_NOT_FOUND。</p>
+<p>编译一切正常，<code>node dist/main.js</code> 起手就 ERR_MODULE_NOT_FOUND。</p>
 <p><code>moduleResolution</code> 决定编译器<strong>按哪套规则找模块和类型</strong>，它必须跟你产物的真实运行方式对齐，否则就会出现「编译过了但 Node 找不到」或者反过来「Node 跑得通但类型报错」。</p>
 <table>
 <thead><tr><th>取值</th><th>读 exports/imports 字段</th><th>相对导入要写扩展名</th><th>对应的运行方式</th><th>典型报错</th></tr></thead>
@@ -242,7 +242,7 @@ flowchart TB
 <tr><td>bundler</td><td>是</td><td>不要求</td><td>产物还要过 Vite/webpack/esbuild</td><td>把产物直接给 Node 会 ERR_MODULE_NOT_FOUND</td></tr>
 </tbody>
 </table>
-<p>要注意 <code>bundler</code> 只能配合 <code>module</code> 为 esnext 或 preserve 使用，它明确假设「有人会帮你重写模块路径」。如果你的后端没有打包步骤，选它就等于让类型检查和运行时用两套规则，编译期发现不了任何路径问题。</p>
+<p><code>module</code> 为 esnext 或 preserve 时才能用 <code>bundler</code>，它假设「有人会帮你重写模块路径」。后端没有打包步骤，选它等于让类型检查和运行时用两套规则。编译期发现不了路径问题。</p>
 <p>TS 5.8 在 nodenext 下才开始允许 <code>require</code> 一个 ESM 模块，对应的正是 Node 22.12 放开的能力——这类版本联动就是为什么 nodenext 要跟着 TS 和 Node 一起升。</p>
 <div class="mermaid">
 sequenceDiagram
@@ -305,11 +305,11 @@ export { here, cfg, legacy }</code></pre>
 <tr><td>报两个同名类型互不兼容</td><td>依赖树里有两份同一个 @types 包</td><td>npm ls 定位后用 overrides 收敛版本</td></tr>
 </tbody>
 </table>
-<p>顺便纠正一个流传很广的说法：<code>skipLibCheck: true</code> 并不是「编译快三倍」的开关。它的作用是跳过对依赖 <code>.d.ts</code> <strong>内部一致性</strong>的检查，让你不至于因为两个第三方包的类型互相打架而无法编译；</p>
-<p>你自己代码里用到这些类型时，检查照旧进行。它带来的加速取决于依赖声明的体积，可能明显，也可能几乎没有。留着它是为了少受别人的类型 bug 影响，不是为了提速。</p>
+<p><code>skipLibCheck: true</code> 并不是「编译快三倍」的开关。它跳过的是对依赖 <code>.d.ts</code> <strong>内部一致性</strong>的检查，免得两个第三方包的类型互相打架而无法编译；</p>
+<p>自己代码用到这些类型时，检查照旧。加速取决于依赖声明体积，可能几乎没有。留着只为少受别人的类型 bug 影响，不是为了提速。</p>
 
 <h2>strict 的子开关：收益与改造成本</h2>
-<p>搞清这一节能解决老项目改造的排序问题：先开哪个，能少走多少回头路。</p>
+<p>先开哪个，能少走多少回头路。</p>
 <p><code>strict</code> 不是一个开关，是八个。另外两个报错量最大的开关<strong>不在</strong> strict 里面，这是老项目改造时最常见的误解。</p>
 <table>
 <thead><tr><th>开关</th><th>属于 strict</th><th>拦住什么</th><th>老项目改造成本</th><th>注意</th></tr></thead>
@@ -331,8 +331,8 @@ export { here, cfg, legacy }</code></pre>
 <p>中间态可以用 tsconfig 的 <code>exclude</code> 或者单独一份 <code>tsconfig.strict.json</code> 只 include 已达标的目录，让 CI 同时跑两套检查、防止已改好的目录退化。</p>
 
 <h2>类型只活在编译期，边界仍然要校验</h2>
-<p>搞清这一节能解决一个认知偏差：有类型不等于数据是那个形状，尤其是跨进程边界。</p>
-<p>这是最值得反复说的一条：编译产物里<strong>没有任何类型检查代码</strong>。你写 <code>function f(u: User)</code>，运行时传进来一个 <code>{}</code> 也照样执行。凡是数据来自进程外部，静态类型就只是一句注释。</p>
+<p>有类型不等于数据是那个形状，尤其是跨进程边界。</p>
+<p>编译产物里<strong>没有任何类型检查代码</strong>。写 <code>function f(u: User)</code>，运行时传进来一个 <code>{}</code> 也照样执行。数据只要来自进程外部，静态类型就只是一句注释。</p>
 <div class="mermaid">
 flowchart TB
     subgraph OUT["编译器看不见的输入"]
@@ -381,11 +381,11 @@ export function createUser(raw: unknown) {
   if (!r.success) return { ok: false as const, issues: r.error.issues }
   return { ok: true as const, data: r.data }   // 到这里 r.data 才真的是 CreateUser
 }</code></pre>
-<p>同理，<code>as</code> 断言和 <code>JSON.parse</code> 是类型系统里最大的两个洞：前者是你告诉编译器「别管了我说得对」，后者返回 <code>any</code>，一旦赋给有类型的变量，后面所有推导都建立在一个谎言上。</p>
+<p><code>as</code> 断言和 <code>JSON.parse</code> 是类型系统里最大的两个洞。前者等于「别管了我说得对」，后者返回 <code>any</code>，赋给有类型的变量后推导全建立在一个谎言上。</p>
 <p>想表达「这个对象符合某个类型」但仍要检查，用 <code>satisfies</code> 而不是 <code>as</code>。</p>
 
 <h2>source map 与生产排错</h2>
-<p>搞清这一节能解决那个具体的麻烦：线上栈全是 <code>dist/main.js</code> 的行号，没法定位。</p>
+<p>线上栈全是 <code>dist/main.js</code> 的行号，没法定位。</p>
 <p>栈里全是 <code>dist/main.js:1:23456</code> 的时候，光有 sourceMap 配置不够，还要保证 map 文件真的跟着产物进了镜像，并且进程启用了映射。</p>
 <table>
 <thead><tr><th>配置</th><th>产物</th><th>栈帧可读性</th><th>是否泄漏源码</th><th>适用</th></tr></thead>
@@ -399,7 +399,7 @@ export function createUser(raw: unknown) {
 </table>
 <p>几个容易忽略的点：<code>--enable-source-maps</code>（也可以写进 <code>NODE_OPTIONS</code>）默认不开，不开则栈完全不映射；Docker 镜像里如果只 <code>COPY dist/*.js</code> 而漏掉 <code>.map</code>，映射同样失效。</p>
 <p><code>Error.stackTraceLimit</code> 默认是 10，深栈会被截断，排查复杂调用链时先把它调大；异步栈靠 V8 的 async stack trace 串联，跨 <code>setTimeout</code> 之类的宏任务边界仍然会断。</p>
-<p>要给 APM 上传 map 又不想泄漏映射关系，通常做法是上传后删掉产物里的 <code>sourceMappingURL</code> 注释（tsc 没有对应开关，用 esbuild 的 external 模式或构建脚本处理）。运行时层面的采样与火焰图见 <a href="../performance/">Node.js 性能诊断</a>。</p>
+<p>要给 APM 上传 map 又不泄漏映射关系，做法是上传后删掉产物里的 <code>sourceMappingURL</code> 注释（tsc 无对应开关，靠 esbuild external 模式或构建脚本）。采样与火焰图见 <a href="../performance/">Node.js 性能诊断</a>。</p>
 
 <h2>monorepo：project references 与增量构建</h2>
 <p>明明配了 incremental，却还是每次全量，这是常踩的时间黑洞。</p>
@@ -474,8 +474,8 @@ stateDiagram-v2
 </tbody>
 </table>
 <p><strong>不适用边界</strong>：类型系统解决不了运行时的数据正确性，凡是跨进程边界都要 parse，这一点在 <a href="../">Node.js 后端的适用边界</a> 里也是「不该用 Node 写核心账务」的理由之一。</p>
-<p>类型也解决不了性能问题：编译产物里没有类型，慢在哪要靠 profile 与延迟直方图，见 <a href="../performance/">Node.js 性能诊断</a>；框架带来的类型推导能力差异（端到端类型、RPC 客户端）见 <a href="../framework-compare/">Node.js Web 框架选型</a>。</p>
-<p>这条路径上，前两篇在讲运行时行为，本篇换到构建与类型链路，下一篇回到框架层：在这些约束下该选哪个 Web 框架。</p>
+<p>类型也管不了性能：产物里没有类型，慢在哪看 profile 与延迟直方图，见 <a href="../performance/">Node.js 性能诊断</a>；框架的类型推导（端到端类型、RPC 客户端）见 <a href="../framework-compare/">Node.js Web 框架选型</a>。</p>
+<p>这条路径上，前两篇在讲运行时行为，这里换到构建与类型链路，下一篇回到框架层：在这些约束下该选哪个 Web 框架。</p>
 
 <div class="callout-title">最容易踩的坑</div>
     <ul>

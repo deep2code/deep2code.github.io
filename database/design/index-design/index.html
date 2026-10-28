@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="改表与 DDL 兼容：灰度期读写错配、expand-migrate-contract 骨架、变更兼容性判定、唯一约束与 CHECK 陷阱、回填脚本要求。">
+    <meta name="description" content="上线后怎么改表：加法先行减法最后，每步带验证与回滚点；读写错配、元数据锁排队与回填脚本的五条要求。">
     <meta name="keywords" content="数据库设计,索引设计原则,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/design/index-design/">
     <meta property="og:title" content="模式演进与约束设计：表结构上线之后怎么改 - 资深码农">
-    <meta property="og:description" content="改表与 DDL 兼容：灰度期读写错配、expand-migrate-contract 骨架、变更兼容性判定、唯一约束与 CHECK 陷阱、回填脚本要求。">
+    <meta property="og:description" content="上线后怎么改表：加法先行减法最后，每步带验证与回滚点；读写错配、元数据锁排队与回填脚本的五条要求。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/design/index-design/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="模式演进与约束设计：表结构上线之后怎么改">
-    <meta name="twitter:description" content="改表与 DDL 兼容：灰度期读写错配、expand-migrate-contract 骨架、变更兼容性判定、唯一约束与 CHECK 陷阱、回填脚本要求。">
+    <meta name="twitter:description" content="上线后怎么改表：加法先行减法最后，每步带验证与回滚点；读写错配、元数据锁排队与回填脚本的五条要求。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -70,11 +70,11 @@
         </div>
     </header>
     <p>建表是一次性的，改表是无限次的。绝大多数数据库设计资料都在讲怎么把表建好，却几乎不讲一个更常见也更危险的问题：</p>
-<p><strong>表结构已经上线，上面跑着几十个服务实例和几亿行数据，现在要改，怎么改才不出事</strong>。这篇只讲改表，以及改表时那些能救命的约束设计。范式与冗余的取舍见《范式与反范式》篇。</p>
+<p><strong>表结构已上线，上面有几十个服务实例、几亿行数据，现在要改，怎么改才不出事</strong>。改表的约束设计能救命；范式与冗余的取舍见《范式与反范式》。</p>
 <h2>六类改表动作：安全做法、验证与回滚点</h2>
 
     <p>所有改表动作只按一条顺序排：<strong>加法先行，减法最后，中间用一个完整发布周期隔开</strong>。</p>
-<p>下表左到右就是执行顺序，「回滚点」一列写的是这一步出问题时该做什么——某一步填不出回滚动作，说明被切得太粗，要再拆。为什么必须这么切，原因见原理层。</p>
+<p>下表左到右就是执行顺序，「回滚点」写该步出错时做什么。填不出回滚动作，说明切得太粗，要再拆。这么切的原因见原理层。</p>
 
     <table>
         <thead>
@@ -182,7 +182,7 @@
 
     <h2>前置检查与一次改类型的完整执行清单</h2>
 
-    <p>下面两段可直接抄进变更工单。第一段是所有 DDL 的前置检查，第二段是「把 <code>status</code> 换成新枚举列 <code>status_v2</code>」这个典型不兼容变更的六步落地，每步后跟验证与回滚动作。</p>
+    <p>两段可直接抄进变更工单：所有 DDL 的前置检查，以及「把 <code>status</code> 换成新枚举列 <code>status_v2</code>」这个不兼容变更的六步落地，每步带验证与回滚。</p>
 
     <pre><code class="language-sql">-- ① 前置检查一：找长事务与长查询。它们会让 DDL 卡在元数据锁上，
 --    而后续所有访问这张表的普通查询会排在这个 DDL 之后，表现为整表瞬间不可用。
@@ -244,7 +244,7 @@ ALTER TABLE orders DROP COLUMN status;</code></pre>
 
     <h2>为什么改表比建表难：灰度期的读写错配</h2>
     <p>秒级完成的 DDL，发布窗口里接口却大面积报错，根因在读写错配。</p>
-    <p>所有改表事故的根都在同一处：<strong>发布不是原子的</strong>。滚动发布期间，新旧版本实例同时在跑，连着同一个数据库。数据库只有一个结构，代码却有两个版本的期望。</p>
+    <p>改表事故的根都在一处：<strong>发布不是原子的</strong>。滚动发布期间新旧实例同时在跑，共用一个库。结构只有一份，代码有两个版本的期望。</p>
 <p>这个窗口通常是几分钟到几十分钟，如果是灰度放量，可能是几天。</p>
 
     <div class="mermaid">
@@ -265,7 +265,7 @@ sequenceDiagram
     Note over OLD,NEW: 事故三 同时改了读和写<br/>两个版本各写一半 数据永久分叉且无法判断谁对
     </div>
 
-    <p>把这三类事故抽象出来就是一条纪律：<strong>任何一步变更都不能同时改读和写</strong>。违反它，一定存在一个窗口，两个版本的代码对同一份数据持有互相矛盾的假设。</p>
+    <p>三类事故合成一条纪律：<strong>任何一步变更都不能同时改读和写</strong>。违反它就出现一个窗口：两个版本对同一份数据的假设互相矛盾。</p>
 <p>而遵守它，每一步都能找到一个明确的回滚动作。</p>
 
     <h2>expand-migrate-contract：唯一安全的变更骨架</h2>
@@ -383,13 +383,13 @@ stateDiagram-v2
         <div class="callout-icon">⚠️</div>
         <div class="callout-title">被忽略的共性风险：元数据锁排队</div>
         <p>「这个 DDL 是 INSTANT 的，秒级完成，可以直接上」这句话只说了一半。所有 DDL 都要先拿到表级元数据锁。</p>
-<p>如果表上有一个没结束的长事务或长查询，DDL 会一直等，<strong>而后续所有对这张表的普通查询会排在这个 DDL 之后</strong>，表现为整张表几秒内彻底不可用，连接池瞬间打满。</p>
-<p>执行任何 DDL 前先查一遍长事务，并给 DDL 会话设置较短的锁等待超时，拿不到锁就立刻放弃重试，而不是死等。大表在线改表的工具与参数，《索引优化》篇的索引治理部分已有展开。</p>
+<p>表上有一个没结束的长事务或长查询，DDL 一直等，<strong>后续对这张表的普通查询全排在这个 DDL 之后</strong>，整张表几秒内不可用，连接池打满。</p>
+<p>执行 DDL 前先查一遍长事务，给 DDL 会话设较短的锁等待超时，拿不到锁就放弃重试，不死等。大表在线改表的工具参数见《索引优化》的索引治理。</p>
     </div>
 
     <h2>改列名与删列：必须拆成两个发布周期</h2>
     <p>元数据操作不到一秒，改列名与删列却是最危险的两类变更。</p>
-    <p>这两个操作在数据库层面都极快（只动元数据），所以容易被低估。风险完全来自应用侧：<strong>灰度期间还在运行的旧实例会因为找不到列而整条 SQL 失败</strong>，不是降级，是报错。</p>
+    <p>这两个操作只动元数据，快得容易被低估。风险全在应用侧：<strong>灰度期间还在跑的旧实例找不到列，整条 SQL 直接失败</strong>，不会只降级。</p>
 
     <div class="mermaid">
 flowchart TB
@@ -407,7 +407,7 @@ flowchart TB
     </div>
 
     <p>关于改列名，还有一个更稳的选择：<strong>不改</strong>。列名只是标识符，在应用层做一次映射的成本远低于一次跨发布周期的协调。</p>
-<p>真要改，等价于「加新列、双写、回填、切读、停旧写、删旧列」六步，即上一节的完整流程。<code>SELECT *</code> 是隐藏地雷——它让「哪些代码用了这一列」无法被静态回答，也让删列的影响面无法评估。</p>
+<p>真要改，等于上一节的六步：加新列、双写、回填、切读、停旧写、删旧列。<code>SELECT *</code> 是地雷——用了这列的代码无法静态列出，删列影响面无法评估。</p>
 
     <h2>唯一约束的三个设计陷阱</h2>
     <p>同一个编码删了就再也建不回来、别的租户建过我就建不了，这类投诉只在特定操作序列下复现。</p>
@@ -555,7 +555,7 @@ ALTER TABLE orders DROP CONSTRAINT ck_orders_uid_nn;</code></pre>
 
     <h2>数据迁移脚本的工程要求</h2>
     <p>回填跑到九成挂了只能从头再来，重跑还可能改坏已经对的数据。</p>
-    <p>回填脚本的失败率比 DDL 高得多，因为运行时间长、要处理存量脏数据、还会和线上写入竞争。能进生产的迁移脚本必须同时满足下面五条，缺一条就会在凌晨三点把人叫起来。</p>
+    <p>回填脚本运行时间长、处理存量脏数据、和线上写入抢，失败率远高于 DDL。迁移脚本进生产要同时满足下面五条，缺一条就凌晨三点报警。</p>
 
     <table>
         <thead>
@@ -777,8 +777,8 @@ flowchart TB
         </tbody>
     </table>
 
-    <p>手工执行必然漂移的原因很具体：变更由人挑时机、挑环境执行，就一定会出现某个环境漏执行、某个分片执行两遍、某次执行的内容和仓库脚本对不上这三类情况，</p>
-<p>而且事后没有任何记录能证明「当前库的结构」等于「哪个版本代码期望的结构」。版本化工具的核心价值不是省事，是把执行记录落在数据库里并校验脚本指纹，让环境之间的差异能被发现。</p>
+    <p>手工执行必然漂移：变更由人挑时机、挑环境，就一定出现三类情况——某个环境漏执行、某个分片跑两遍、执行内容和仓库脚本对不上，</p>
+<p>事后没有记录能证明「当前库的结构」就是某版本代码期望的结构。版本化工具不是图省事，在执行记录落库、脚本指纹可校验，能发现环境差异。</p>
 
     <h2>按规模与场景选变更路径</h2>
     <p>同一个变更在不同规模下的正确路径不一样。下表按「表有多大、有几个消费方、能不能停机」把常见情形排开，每行都写清代价。</p>
@@ -844,11 +844,11 @@ flowchart TB
         </tbody>
     </table>
 
-    <p><strong>不适用边界</strong>：本篇只讲「已上线的结构怎么安全改」。表该怎么建、一份事实存几遍在 <a href="../">范式与反范式：数据库设计的取舍</a>；实体、关系与四类难模式在上一篇 <a href="../modeling/">业务建模：从需求到表结构</a>；</p>
-<p>多租户与分片键的数据归属在下一篇 <a href="../sharding-strategy/">数据归属与多租户：分片的数据模型策略</a>；索引该不该建、怎么下线无用索引在 <a href="../../optimization/index/">索引设计与优化</a>；分片扩容迁移流程在 <a href="../../optimization/sharding/">分库分表</a>；</p>
+    <p><strong>不适用边界</strong>：这里只管已上线的结构怎么安全改。表怎么建、事实存几遍在 <a href="../">范式与反范式</a>；实体、关系与四类难模式在上一篇 <a href="../modeling/">业务建模</a>；</p>
+<p>数据归属与分片键在下一篇 <a href="../sharding-strategy/">数据归属与多租户</a>；索引该不该建、怎么下线无用索引在 <a href="../../optimization/index/">索引设计与优化</a>；分片扩容迁移在 <a href="../../optimization/sharding/">分库分表</a>；</p>
 <p>回填期间主从延迟怎么观察与压制在 <a href="../../postgresql/replication-ha/">PostgreSQL 复制与高可用</a>；MySQL 侧的锁与 MVCC 机制在 <a href="../../mysql/">MySQL 深度原理</a>；改类型本身会不会重写全表、各类型转换的代价在 <a href="../../postgresql/datatypes/">PostgreSQL 数据类型</a>。</p>
 
-    <p>这条路径上，前两篇把结构定下来，本篇负责「定错了还能不能救回来」，下一篇处理数据长大后的归属——分片键一旦定错，本篇的流程也救不了，因为要改的不是一张表而是全部路由。</p>
+    <p>前两篇定结构，这里回答「定错了能不能救回来」，下一篇管数据长大后的归属。分片键一旦定错就救不了：要改的不是一张表，是全部路由。</p>
 
     <p class="cluster-nav">同主题路径：<a href="../modeling/">← 上一步：业务建模：从需求到表结构</a> · <a href="../sharding-strategy/">下一步：数据归属与多租户：分片的数据模型策略 →</a></p>
 

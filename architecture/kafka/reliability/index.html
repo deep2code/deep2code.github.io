@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Kafka 消息可靠性落地：拆解 send 到落库的六个丢消息环节，给出 acks 与副本配置清单、逐点验证方法与消费端幂等实现。">
+        <meta name="description" content="副本数与 min.insync.replicas 组合、位点进本地事务的精确一次、阻塞重试卡分区、按业务等级的可靠性组合、死信 Topic 告警与重投。">
     <meta name="keywords" content="Kafka可靠性,Exactly-Once,幂等,事务API,死信队列,消息不丢失">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/kafka/reliability/">
     <!-- Open Graph -->
     <meta property="og:title" content="Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费 - 资深码农">
-    <meta property="og:description" content="Kafka 消息可靠性落地：拆解 send 到落库的六个丢消息环节，给出 acks 与副本配置清单、逐点验证方法与消费端幂等实现。">
+    <meta property="og:description" content="副本数与 min.insync.replicas 组合、位点进本地事务的精确一次、阻塞重试卡分区、按业务等级的可靠性组合、死信 Topic 告警与重投。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/kafka/reliability/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费">
-    <meta name="twitter:description" content="Kafka 消息可靠性落地：拆解 send 到落库的六个丢消息环节，给出 acks 与副本配置清单、逐点验证方法与消费端幂等实现。">
+    <meta name="twitter:description" content="副本数与 min.insync.replicas 组合、位点进本地事务的精确一次、阻塞重试卡分区、按业务等级的可靠性组合、死信 Topic 告警与重投。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="架构与分布式">
     <meta property="article:tag" content="Kafka,可靠性,事务,消息语义">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Kafka 消息可靠性落地：拆解 send 到落库的六个丢消息环节，给出 acks 与副本配置清单、逐点验证方法与消费端幂等实现。","url":"https://www.yijunjun.asia/architecture/kafka/reliability/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/reliability/"},"articleSection":"后端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Kafka 消息可靠性落地：六个丢消息环节、配置清单与幂等消费","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"副本数与 min.insync.replicas 组合、位点进本地事务的精确一次、阻塞重试卡分区、按业务等级的可靠性组合、死信 Topic 告警与重投。","url":"https://www.yijunjun.asia/architecture/kafka/reliability/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/architecture/kafka/reliability/"},"articleSection":"后端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"position": 3, "name": "消息可靠性", "item": "https://www.yijunjun.asia/architecture/kafka/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,7 +90,7 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇只做工程落地：<strong>把消息从 send 到业务落库的链路切成六段，逐段消灭丢失和重复，并给出验证方法</strong>。ISR 与 HW 水位、acks 组合、幂等 PID 等原理见 <a href="../">主干篇</a>。</p>
+<p>只做工程落地：<strong>把消息从 send 到业务落库的链路切成六段，逐段消灭丢失和重复，并给出验证方法</strong>。ISR 与 HW 水位、acks 组合、幂等 PID 等原理见 <a href="../">主干篇</a>。</p>
 <h2>六个环节逐个验证的清单</h2>
 
 <p>下表是骨干：<strong>左边六行是全部丢消息的位置，一行也不能跳</strong>。配置照做，验证在预发或压测环境实跑一遍——可靠性只能被验证，不能被声明。</p>
@@ -240,7 +240,7 @@ flowchart TB
 <div class="callout callout-danger">
     <div class="callout-icon">❌</div>
     <div class="callout-title">三副本加 min.insync.replicas=2 的可用性代价</div>
-    <p>这个组合意味着<strong>最多只能坏一台</strong>。坏两台时 ISR 只剩一个，写入被直接拒绝，用可用性换一致性。无法接受写入被拒时，唯一正确做法是把副本数提到 5、<code>min.insync.replicas</code> 保持 2，而不是偷偷降回 1。</p>
+    <p>此组合下<strong>最多只能坏一台</strong>：坏两台时 ISR 只剩一个，写入被直接拒绝，拿可用性换一致性。无法接受被拒，只能把副本数提到 5、<code>min.insync.replicas</code> 保持 2，不能降回 1。</p>
 <p>降回 1 等于把丢消息的概率重新打开，而且这种改动往往发生在半夜的应急操作里，事后没人记得改回来。</p>
 </div>
 
@@ -262,7 +262,7 @@ flowchart TB
 
 <h2>重复是必然的：消费端幂等的四种实现</h2>
 
-<p>这一节纠正一个方向性错误：不是「消除重复」，而是让重复无害。只要位点提交和业务处理不在同一原子操作里，重复就无法从协议层消除。</p>
+<p>要纠正一个方向性错误：不是「消除重复」，而是让重复无害。只要位点提交和业务处理不在同一原子操作里，重复就无法从协议层消除。</p>
 <p>Rebalance、消费者重启、提交超时都会让同一批消息被再消费一次。所以可靠性工程的下半场不是「避免重复」，而是<strong>让重复不产生副作用</strong>。</p>
 
 <div class="mermaid">
@@ -293,7 +293,7 @@ flowchart TB
 
 <h2>位点和业务数据放进同一个本地事务</h2>
 
-<p>这一节解决丢点六：下游是关系型数据库时，这是端到端精确一次的<strong>唯一可靠路径</strong>。Kafka 事务只保证「读 Kafka、写 Kafka、提交位点」的原子性，跨到外部数据库它管不了。</p>
+<p>丢点六：下游是关系型数据库时，端到端精确一次只有这条<strong>唯一可靠路径</strong>。Kafka 事务只保证「读 Kafka、写 Kafka、提交位点」的原子性，跨库不管。</p>
 <p>做法是把位点当作普通业务数据存进业务库，让数据库的事务同时覆盖业务写入和位点推进。</p>
 
 <div class="mermaid">
@@ -388,7 +388,7 @@ public void run() {
 
 <h2>为什么不能原地阻塞重试</h2>
 
-<p>一个分区在同一个消费组内只会被一个成员串行消费，<strong>卡在一条消息上就等于卡住整个分区</strong>。原地睡眠重试三次每次五秒，后面排队的几万条消息就一起延迟十五秒；</p>
+<p>一个分区在同一个消费组内只被一个成员串行消费，<strong>卡在一条消息上就等于卡住整个分区</strong>。重试三次、每次五秒，几万条一起延迟十五秒；</p>
 <p>如果下游是持续故障，等待时间会迅速突破 <code>max.poll.interval.ms</code>，成员被踢出组、触发 Rebalance、分区转给别人后依然卡在同一条消息上，形成一个自我放大的故障循环。</p>
 
 <div class="mermaid">
@@ -427,7 +427,7 @@ stateDiagram-v2
 <h2>顺序性和重试的冲突没有完美解</h2>
 
 <p>这是一对硬矛盾：<strong>跳过失败消息会乱序，阻塞重试会卡分区</strong>。真正需要做的是先问清楚顺序的粒度。</p>
-<p>业务上几乎不需要「全局有序」，只要「同一个订单、同一个用户的事件有序」，这个粒度正好对应按 key 哈希到同一分区（见 <a href="../topic-partition/">分区设计</a>）。折中方案由此有了落点：</p>
+<p>业务上几乎不需要「全局有序」，只要「同一个订单、同一个用户的事件有序」，对应的就是按 key 哈希到同一分区（见 <a href="../topic-partition/">分区设计</a>）。</p>
 
 <table>
 <thead><tr><th>方案</th><th>做法</th><th>代价</th><th>什么情况下不成立</th></tr></thead>
@@ -457,12 +457,12 @@ stateDiagram-v2
 </table>
 
 <p>上述手段合计能把丢失概率压到很低，但压不到零。跨系统最终一致只能靠<strong>对账加补偿</strong>兜底，这不是 Kafka 的缺陷，换成任何 MQ 都一样（见 <a href="../../messaging/reliable/">可靠消息投递</a>）。</p>
-<p>落地上通常是三件事：生产端在发消息的同一本地事务里记一张待确认表；定时任务扫出超阈值仍未确认的记录并重投；每天按业务维度做全量或增量比对，差异进人工工单。</p>
+<p>落地三件事：生产端发消息的同一本地事务里记一张待确认表；定时扫超阈值未确认记录重投；每天按业务维度全量或增量比对，差异进工单。</p>
 
-<p>再加一个容易被忽略的点：<strong>死信 Topic 必须配告警和重投工具</strong>。只写不读的死信 Topic 等于垃圾桶，故障一个月后才有人发现里面积了十万条消息，这种事非常常见。</p>
+<p><strong>死信 Topic 必须配告警和重投工具</strong>。只写不读的死信 Topic 就是垃圾桶，故障一个月后才有人发现积了十万条消息。</p>
 <p>最小可用的工具是一个能按时间范围和错误类型筛选、支持批量重投回原 Topic 的脚本，以及死信条数非零就触发的告警。</p>
 
-<p><strong>不适用边界</strong>：这篇解决「不丢不重」，解决不了「不慢」。吞吐上不去、延迟毛刺、瓶颈定位见 <a href="../performance/">性能调优与压测</a>；客户端代码见 <a href="../producer-consumer/">生产者与消费者实战</a>；副本分布与机架感知见 <a href="../topic-partition/">分区设计</a>；</p>
+<p><strong>不适用边界</strong>：管不丢不重，管不了不慢。瓶颈见 <a href="../performance/">性能调优与压测</a>；客户端见 <a href="../producer-consumer/">生产者与消费者实战</a>；副本分布见 <a href="../topic-partition/">分区设计</a>；</p>
 <p>集群参数在 <a href="../install/">生产级部署</a>。如果你的需求是延迟消息或单条精细重试，Kafka 这一层给不了，回到 <a href="../intro/">选型边界</a>。</p>
 
 <p class="cluster-nav">同主题路径：<a href="../producer-consumer/">← 上一步：Kafka 生产者与消费者实战：发送链路、参数矩阵与 poll 循环</a> · <a href="../performance/">下一步：Kafka 性能调优与压测：基线、瓶颈定位与 MQ 性能对照 →</a></p>

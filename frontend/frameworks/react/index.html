@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="Hooks 规则背后的链表槽位模型：调用顺序与数量为何固定，异步回调与渲染期外 setState 的后果。">
+        <meta name="description" content="讲函数组件每次渲染重新执行导致的过期闭包、hook 按调用顺序占槽位、useEffect 的同步语义、更新批处理与受控表单的取舍">
     <meta name="keywords" content="React,Hooks,Fiber,并发渲染,useState,useEffect,TypeScript">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
@@ -28,7 +28,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/frontend/frameworks/react/">
     <!-- Open Graph -->
     <meta property="og:title" content="React 渲染模型与 Hooks 机制 - 资深码农">
-    <meta property="og:description" content="Hooks 规则背后的链表槽位模型：调用顺序与数量为何固定，异步回调与渲染期外 setState 的后果。">
+    <meta property="og:description" content="讲函数组件每次渲染重新执行导致的过期闭包、hook 按调用顺序占槽位、useEffect 的同步语义、更新批处理与受控表单的取舍">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/frontend/frameworks/react/">
     <meta property="og:site_name" content="资深码农">
@@ -39,12 +39,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="React 渲染模型与 Hooks 机制 - 资深码农">
-    <meta name="twitter:description" content="Hooks 规则背后的链表槽位模型：调用顺序与数量为何固定，异步回调与渲染期外 setState 的后果。">
+    <meta name="twitter:description" content="讲函数组件每次渲染重新执行导致的过期闭包、hook 按调用顺序占槽位、useEffect 的同步语义、更新批处理与受控表单的取舍">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="前端与客户端">
     <meta property="article:tag" content="React">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"React 渲染模型与 Hooks 机制","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Hooks 规则背后的链表槽位模型：调用顺序与数量为何固定，异步回调与渲染期外 setState 的后果。","url":"https://www.yijunjun.asia/frontend/frameworks/react/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/frontend/frameworks/react/"},"articleSection":"前端开发"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"React 渲染模型与 Hooks 机制","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"讲函数组件每次渲染重新执行导致的过期闭包、hook 按调用顺序占槽位、useEffect 的同步语义、更新批处理与受控表单的取舍","url":"https://www.yijunjun.asia/frontend/frameworks/react/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/frontend/frameworks/react/"},"articleSection":"前端开发"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "前端与客户端", "item": "https://www.yijunjun.asia/frontend/"}, {"position": 3, "name": "React Hooks", "item": "https://www.yijunjun.asia/frontend/frameworks/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -90,13 +90,13 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>后端工程师转来写 React，最容易低估的不是语法而是<strong>执行模型</strong>：函数组件不是「对象的一个方法」，而是每次渲染都被重新调用一次的纯函数，变量、闭包、事件处理函数都是那一次调用的产物。</p>
-<p>React 里绝大多数诡异 bug（定时器拿到旧值、effect 无限循环、memo 不生效、列表数据和筛选条件对不上）都由此推导而来。本文按「机制 - 推论 - 错误写法与正确写法」的顺序讲清楚。</p>
+<p>后端工程师转写 React 容易低估<strong>执行模型</strong>：函数组件不是对象的方法，是每次渲染重新调用的纯函数，变量、闭包、事件处理函数都出自那次调用。</p>
+<p>定时器拿到旧值、effect 无限循环、memo 不生效、列表数据和筛选条件对不上，这些诡异 bug 都由此而来。机制、推论、错误与正确写法依次讲。</p>
 
 <h2>函数组件的执行模型：每次渲染是一次独立的快照</h2>
 
-<p>一次渲染 = 一次函数调用 + 一组当刻的 state 和 props 值 + 一批在该次调用中创建的闭包。这些闭包捕获的是<strong>那一次渲染的值</strong>，不是「变量的最新值」。state 不是可变容器，更像每次渲染都重新绑定一次的常量。</p>
-<p>理解了这点，最经典的坑「过期闭包」就显而易见：任何被长期持有、跨越多次渲染的回调（定时器、事件监听、Promise 回调、订阅函数），只要引用了 state，读到的就是创建时那一帧的值。</p>
+<p>一次渲染 = 一次函数调用 + 当刻的 state 和 props + 本次创建的闭包。闭包捕获<strong>那一次渲染的值</strong>，不是变量的最新值；state 不是容器，像每次渲染重绑的常量。</p>
+<p>于是有了经典坑「过期闭包」：长期跨越多次渲染的回调（定时器、事件监听、Promise 回调、订阅函数）一旦引用 state，读到的还是创建时的值。</p>
 
 <pre><code class="language-javascript">// 坏例子：计数器停在 1，永远不动
 function BrokenCounter() {
@@ -141,14 +141,14 @@ useEffect(() =&gt; {
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">判断闭包是否过期的一条速查规则</div>
-    <p>问自己：这个函数会在「创建它的那次渲染」之后才被调用吗？如果会（定时器、订阅、Promise then、addEventListener、requestAnimationFrame），它引用的每个 state 和 props 都有过期风险。事件处理函数通常安全，因为每次渲染时它都被重新创建并重新挂到元素上。</p>
+    <p>它会在创建它的那次渲染之后才被调用吗？如果会（定时器、订阅、Promise then、addEventListener、requestAnimationFrame），引用的 state 和 props 就可能过期。事件处理函数安全：每次渲染都重建重挂。</p>
 </div>
 
 <h2>Hooks 规则为什么存在：状态存在链表的槽位里</h2>
 
-<p>React 并不知道你调用的是哪个 hook——没有名字、没有 key，它只按<strong>调用顺序</strong>把每次 hook 的数据挂到当前 fiber 的一条链表上：第一次调用取第一个槽位，第二次取第二个槽位。</p>
+<p>React 不知道调用的是哪个 hook——没有名字和 key，只按<strong>调用顺序</strong>把每次 hook 的数据挂到当前 fiber 的一条链表上：调用越靠前，占的槽位越靠前。</p>
 <p>所以 hook 每次渲染必须按完全相同的顺序、相同的数量调用。</p>
-<p>把 hook 放进 if 或循环，等于在某些渲染里跳过一个槽位，后面所有 hook 全体错位一位：useState 返回别人的值，useEffect 绑上别人的依赖数组，报错位置往往和真正原因毫无关系。</p>
+<p>hook 放进 if 或循环，某次渲染就少一个槽位，后面全体错位：useState 返回别人的值，useEffect 绑上别人的依赖数组，报错位置和真正原因无关。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -172,7 +172,7 @@ flowchart TB
 
 <h2>useEffect 是被误用最多的 hook</h2>
 
-<p>它的语义是<strong>「把 React 状态与外部系统同步」</strong>，外部系统指 DOM 事件监听、定时器、WebSocket、第三方图表实例、浏览器 API 这些不受 React 管理的东西。它<strong>不是</strong>「监听值变化然后做点事」的通用钩子。</p>
+<p>它的语义是<strong>「与外部系统同步 React 状态」</strong>，外部系统即 DOM 事件监听、定时器、WebSocket、第三方图表实例等 React 管不到的东西，<strong>不是</strong>「值一变就做点事」的钩子。</p>
 <p>把它当 watch 用，会得到多余的渲染轮次、中间态闪烁、以及一整类难以复现的时序 bug。</p>
 
 <table>
@@ -299,7 +299,7 @@ export function useFetch&lt;T&gt;(url: string, init?: RequestInit) {
 <h2>useMemo 与 useCallback：它们本身是有成本的</h2>
 
 <p>这两个 hook 被滥用得最厉害。它们不是「加了就变快」的开关：每次渲染都要创建新函数、做依赖数组浅比较、额外占内存，还让代码变难读。</p>
-<p><strong>只有结果被 memo 组件消费、被其他 hook 当依赖、或计算确实昂贵时才有价值</strong>；随手包一层，绝大多数情况是净亏损。React 19 的编译器方向就是把这类手动优化自动化掉，正说明手写它是工程债。</p>
+<p><strong>只有结果被 memo 组件消费、被其他 hook 当依赖、或计算昂贵时才有价值</strong>；随手包一层多是净亏损。React 19 编译器把这类手动优化自动化，手写是工程债。</p>
 
 <table>
     <thead>
@@ -358,8 +358,8 @@ export function useFetch&lt;T&gt;(url: string, init?: RequestInit) {
 
 <h2>effect 的生命周期与 StrictMode 双调用</h2>
 
-<p>把 effect 想成「订阅」而不是「生命周期钩子」：它在依赖变化时先清理旧订阅再建立新订阅，卸载时清理。开发环境的 StrictMode 会在挂载后立刻执行一次「卸载再挂载」，<strong>这是故意的</strong>，用来暴露没写清理函数的副作用。</p>
-<p>重复添加监听、重复建连、重复启动定时器都会当场显形，而不是等用户来回切页面时才变成内存泄漏。生产构建不会双调用。应对方式是补齐清理函数让 effect 幂等，而不是用 ref 标记跳过第二次。</p>
+<p>effect 是「订阅」，不是「生命周期钩子」：依赖变化时先清理再重建，卸载时清理。StrictMode 只在开发环境挂载后立刻卸载再挂载一次，<strong>故意的</strong>，暴露没写清理函数的副作用。</p>
+<p>重复添加监听、建连、启动定时器会当场显形，而不是等用户切页面才变成内存泄漏。生产构建不双调用。做法是补齐清理函数让 effect 幂等，不是用 ref 标记跳过。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -382,7 +382,7 @@ stateDiagram-v2
 
 <h2>批处理与更新的异步性</h2>
 
-<p>setState 不是「立刻改变量」，而是「排一次更新请求」。同一事件处理函数里连续调用多次，React 18 会自动合并为一次渲染；合并范围也从 React 17 的「仅 React 事件内」扩大到了 Promise、setTimeout、原生事件回调里（自动批处理）。</p>
+<p>setState 不是立刻改变量，而是排一次更新请求。同一事件里调用多次，React 18 会合并为一次渲染；合并范围也从 React 17 的「仅事件内」扩大到 Promise、setTimeout、原生事件回调。</p>
 <p>所以在 setState 之后立刻读同名变量，拿到的必然是本次渲染的旧值——不是 bug，是模型决定的。</p>
 
 <table>
@@ -436,7 +436,7 @@ stateDiagram-v2
 
 <h2>受控与非受控：表单该选哪一种</h2>
 
-<p>受控每次按键都触发一次 setState 和一次渲染，好处是任何时刻 state 就是唯一真相，便于联动校验与格式化；非受控把值留在 DOM 里，提交时统一读取，代价是无法实时响应。</p>
+<p>受控每次按键都 setState 并重渲染，好处是 state 始终是唯一真相，便于校验与格式化；非受控把值留在 DOM，提交时读取，代价是无法实时响应。</p>
 <p>大表单全受控是常见的卡顿来源，尤其在低端机上每个字符都要重渲染几十个字段。</p>
 
 <table>

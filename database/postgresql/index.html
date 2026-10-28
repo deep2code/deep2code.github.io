@@ -10,14 +10,14 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="PostgreSQL 存储层主线：堆表与 ctid、元组头与 MVCC 字段、HOT 更新与 fillfactor、VACUUM、WAL 与页断裂。">
+    <meta name="description" content="堆表没有聚簇索引，ctid 让每个索引结构相同；元组头三个字段判可见性，HOT 更新只留同页新版本，所以 VACUUM 不缩文件、XID 会回卷、WAL 还得防页断裂。">
     <meta name="keywords" content="PostgreSQL,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/database/postgresql/">
     <meta property="og:title" content="PostgreSQL 深度原理：堆表、MVCC 与 WAL - 资深码农">
-    <meta property="og:description" content="PostgreSQL 存储层主线：堆表与 ctid、元组头与 MVCC 字段、HOT 更新与 fillfactor、VACUUM、WAL 与页断裂。">
+    <meta property="og:description" content="堆表没有聚簇索引，ctid 让每个索引结构相同；元组头三个字段判可见性，HOT 更新只留同页新版本，所以 VACUUM 不缩文件、XID 会回卷、WAL 还得防页断裂。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/database/postgresql/">
     <meta property="og:site_name" content="资深码农">
@@ -28,7 +28,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="PostgreSQL 深度原理：堆表、MVCC 与 WAL - 资深码农">
-    <meta name="twitter:description" content="PostgreSQL 存储层主线：堆表与 ctid、元组头与 MVCC 字段、HOT 更新与 fillfactor、VACUUM、WAL 与页断裂。">
+    <meta name="twitter:description" content="堆表没有聚簇索引，ctid 让每个索引结构相同；元组头三个字段判可见性，HOT 更新只留同页新版本，所以 VACUUM 不缩文件、XID 会回卷、WAL 还得防页断裂。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"PostgreSQL 深度原理：堆表、MVCC 与 WAL","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"PostgreSQL 存储层主线：堆表与 ctid、元组头与 MVCC 字段、HOT 更新与 fillfactor、VACUUM、WAL 与页断裂。","url":"https://www.yijunjun.asia/database/postgresql/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/database/postgresql/"},"articleSection":"数据库与缓存"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"position": 3, "name": "PostgreSQL", "item": "https://www.yijunjun.asia/database/postgresql/"}]}</script>
@@ -74,9 +74,9 @@
         </div>
     </header>
     <p>PostgreSQL 存储层的一切行为，都能从两个设计决定推导出来：<strong>表是无序的堆，所有索引都是二级索引</strong>；<strong>行的新版本直接追加进堆表，旧版本原地留着</strong>。</p>
-<p>这两条决定了 HOT 更新为什么存在、表膨胀为什么必须靠 VACUUM、事务 ID 为什么会回卷、以及为什么 PG 只需要一份 WAL 就同时干了 MySQL 里 redo log 加 binlog 两件事。本文只讲这条主线。</p>
+<p>这两条决定了 HOT 更新为什么存在、表膨胀为什么必须靠 VACUUM、事务 ID 为什么会回卷、以及为什么 PG 只需要一份 WAL 就同时干了 MySQL 里 redo log 加 binlog 两件事。</p>
 <h2>接手一套 PG，先敲这五个入口</h2>
-    <p>PG 的排查路径高度收敛：几乎所有现象都能从下面五个入口之一定性。按顺序敲一遍大约十分钟，就能判断这套库是「配置不对」「有人按着快照不放」还是「单纯 SQL 写得差」。</p>
+    <p>PG 的排查路径高度收敛：多数现象从下面五个入口之一定性。敲一遍约十分钟，就能判断是「配置不对」「有人按着快照不放」还是「SQL 写得差」。</p>
 <p>每条都写了看哪个数字、什么算不正常；为什么这么判断见原理层。</p>
     <pre><code class="language-sql">-- ① pg_stat_activity：先确认有没有人按着旧快照不放
 SELECT pid, usename, application_name, state,
@@ -240,8 +240,8 @@ FROM   pg_replication_slots;
 
     <h2>堆表与 ctid：PG 没有聚簇索引</h2>
     <p>PG 的表叫 heap，物理上就是一串 1GB 一个的数据文件，每个文件按 8KB 切成页。</p>
-<p>行存在哪一页、页内哪个位置，完全由插入顺序和空闲空间决定，<strong>没有任何索引能决定行的物理顺序</strong>（<code>CLUSTER</code> 只是一次性按索引顺序重排，之后的更新立刻会打破它）。</p>
-    <p>行的物理地址是 <code>ctid</code>，6 字节，前 4 字节是块号，后 2 字节是页内行指针编号。所有索引的叶子节点存的都是 <code>ctid</code>，主键索引和一个普通 B-tree 索引在结构上<strong>没有任何区别</strong>。</p>
+<p>行落在哪一页、哪个位置，由插入顺序和空闲空间定，<strong>没有任何索引能决定行的物理顺序</strong>（<code>CLUSTER</code> 只重排一次，之后的更新立刻打破它）。</p>
+    <p><code>ctid</code> 是行的物理地址，6 字节，前 4 字节块号，后 2 字节页内行号。所有索引叶子都存 <code>ctid</code>，主键索引和普通 B-tree 索引在结构上<strong>没有任何区别</strong>。</p>
 <p>这就是 PG 与 MySQL InnoDB 最根本的分歧：InnoDB 的表本身就是主键 B+ 树，二级索引叶子存主键值，因此有回表；PG 没有回表这个概念，但代价出现在写入侧。</p>
     <div class="mermaid">
 flowchart TB
@@ -312,7 +312,7 @@ flowchart TB
     </table>
 
     <h2>元组头与可见性判定</h2>
-    <p>每个元组前面有 23 字节的 <code>HeapTupleHeaderData</code>，MVCC 全靠其中三个字段：<code>t_xmin</code> 是插入这个版本的事务 ID；<code>t_xmax</code> 是删除或更新它的事务 ID，0 表示还活着；<code>t_ctid</code> 正常指向自己，发生 HOT 更新时指向页内的新版本。</p>
+    <p>元组前有 23 字节 <code>HeapTupleHeaderData</code>，MVCC 全靠三个字段：<code>t_xmin</code> 插入该版本的事务 ID；<code>t_xmax</code> 删除或更新它的事务 ID，0 表示还活着；<code>t_ctid</code> 平时指向自己，HOT 更新时指向页内新版本。</p>
 <p>另外 <code>t_infomask</code> 里有一组提交状态提示位（hint bits），用来避免每次可见性判断都去查 <code>pg_xact</code>（旧称 clog）。</p>
     <p>判定规则简化后是：<strong>xmin 已提交且早于我的快照，xmax 为空或其事务未提交或晚于我的快照，则这个版本对我可见</strong>。</p>
 <p>这里有个常被忽略的后果：hint bits 是第一次读到元组时才写上去的，所以<strong>一次纯 SELECT 也会产生脏页和 WAL</strong>，刚导完数据的第一次全表扫描往往慢得异常，这不是 bug。</p>
@@ -339,7 +339,7 @@ WHERE  n_tup_upd &gt; 10000
 ORDER  BY hot_ratio_pct NULLS FIRST;</code></pre>
 
     <h2>新版本留在堆里：两种 MVCC 设计的四个后果</h2>
-    <p>PG 的 <code>UPDATE</code> 本质是「插入一条新元组 + 给旧元组写上 xmax」，旧版本<strong>原地保留在堆表里</strong>，和活数据混在同一批页中。InnoDB 则原地更新数据页，把旧版本写进 undo log，读旧版本时沿 roll pointer 回溯版本链。</p>
+    <p>PG 的 <code>UPDATE</code> 是「插入一条新元组 + 给旧元组写 xmax」，旧版本<strong>原地留在堆表里</strong>，和活数据混在同一批页中。InnoDB 原地更新数据页，旧版本进 undo log，读时沿 roll pointer 回溯。</p>
 <p>就这一个差别，衍生出四个方向完全相反的工程后果。</p>
     <table>
         <thead>
@@ -394,9 +394,9 @@ stateDiagram-v2
     </div>
 
     <h2>HOT 更新：PG 最重要的写优化</h2>
-    <p>Heap-Only Tuple 的思路是：如果新版本不需要被任何索引重新指向，就干脆不动索引。触发条件只有两条，<strong>必须同时满足</strong>：本次 UPDATE 没有修改任何被索引引用的列；新版本能放进旧版本所在的同一个 8KB 页。</p>
+    <p>Heap-Only Tuple 的思路是：新版本不需要任何索引重新指向，就不动索引。触发条件只有两条，<strong>必须同时满足</strong>：UPDATE 没改被索引引用的列；新版本能放进同一个 8KB 页。</p>
 <p>满足时旧元组的 <code>t_ctid</code> 指向页内新元组，形成 HOT 链，索引仍然指向链头，扫描时沿链往下找可见版本。</p>
-    <p>这解释了两个经典现象。第一，<strong>给表加了几个索引之后 UPDATE 突然变慢</strong>——不只是索引维护本身变贵，而是被索引覆盖的列变多后，业务更新命中索引列的概率上升，HOT 命中率掉下来。</p>
+    <p>两个经典现象由此解释。第一，<strong>给表加几个索引后 UPDATE 突然变慢</strong>：被索引覆盖的列变多，更新命中索引列的概率上升，HOT 命中率掉下来。</p>
 <p>一次更新从写 1 个堆页变成写 1 个堆页加 N 个索引，WAL 量同步翻几倍。</p>
 <p>第二，<strong>fillfactor 为什么要留余量</strong>——默认 100 意味着页被填满，第一次更新就因为放不下而被迫换页，HOT 直接失效；高频更新表设到 80 到 90，用一点空间换掉大量索引写入。</p>
     <div class="mermaid">
@@ -458,13 +458,13 @@ flowchart TB
     <div class="callout callout-tip">
         <div class="callout-icon">✅</div>
         <div class="callout-title">HOT 的隐藏福利：页内剪枝不依赖 VACUUM</div>
-        <p>HOT 链上已经没人需要的中间版本，可以在<strong>普通 SELECT 顺手触发的页内剪枝（page pruning）</strong>里就地清掉，因为这些版本从来没有索引条目指向它们，不需要先删索引再删堆。所以一张 HOT 命中率高的表，膨胀速度天然就慢。</p>
+        <p>HOT 链上没人需要的中间版本，能在<strong>普通 SELECT 顺手触发的页内剪枝（page pruning）</strong>里就地清掉：这些版本没有索引条目指向它，不用先删索引再删堆。HOT 命中率高的表，膨胀天然慢。</p>
 <p>反过来说，「把不参与查询条件的列从索引里摘出去」这种看似跟膨胀无关的改动，往往能显著压低膨胀率。</p>
     </div>
 
     <h2>VACUUM 与表膨胀</h2>
-    <p>三个必须分清的事实：<strong>普通 VACUUM 不缩文件</strong>，它只把死元组空间标记为可复用，表文件大小原样不动，膨胀出来的 200GB 不会还给操作系统，但后续插入会填进这些空洞；</p>
-<p><strong>VACUUM FULL 会重写整表和全部索引</strong>，能真正缩小文件，但持有 ACCESS EXCLUSIVE 锁，期间连 SELECT 都进不来，还要一份等量的额外磁盘空间；<strong>生产上要缩表用 pg_repack</strong>，它建影子表加触发器在线追平，只在最后换名字时短暂加锁。</p>
+    <p><strong>普通 VACUUM 不缩文件</strong>：只把死元组空间标成可复用，表文件大小原样不动，膨胀出的 200GB 不还操作系统，后续插入填进空洞。</p>
+<p><strong>VACUUM FULL 重写整表和全部索引</strong>，能真正缩文件，但持 ACCESS EXCLUSIVE 锁，期间连 SELECT 都进不来，还要一份等量磁盘；<strong>生产缩表用 pg_repack</strong>，影子表加触发器在线追平，只在换名时短暂加锁。</p>
     <p>VACUUM 还有两件比「清垃圾」更关键的职责：维护 <strong>visibility map</strong>（Index Only Scan 能否生效的前提）和推进<strong>冻结水位</strong>（防 XID 回卷）。所以「我们表很少删数据，不用管 VACUUM」是错的。</p>
     <table>
         <thead>
@@ -596,7 +596,7 @@ SELECT 'prepared_xact', gid, prepared, now() - prepared, '用 ROLLBACK PREPARED 
 FROM   pg_prepared_xacts;</code></pre>
 
     <h2>事务 ID 回卷：PG 最危险的运维问题</h2>
-    <p>XID 是 32 位且循环使用的。可见性比较用的是回绕比较：当前 XID 往前 20 亿算过去、往后 20 亿算未来，因此任何元组的 xmin 都<strong>不能比当前 XID 老过 20 亿</strong>，否则会被判成「未来事务」而凭空消失。</p>
+    <p>XID 是 32 位且循环使用，可见性用回绕比较：当前 XID 往前 20 亿算过去、往后 20 亿算未来。元组的 xmin <strong>不能比当前 XID 老过 20 亿</strong>，否则被判成「未来事务」凭空消失。</p>
 <p>解法是冻结：VACUUM 把足够老的元组标记为 frozen，表示对所有事务永远可见，从而把水位往前推。</p>
     <p>到了 <code>autovacuum_freeze_max_age</code>（默认 2 亿）时，即使你把 autovacuum 整个关掉，PG 也会强制启动 <strong>anti-wraparound vacuum</strong>，它不给普通 DDL 让路，<code>kill</code> 掉下一轮还会起来。继续拖下去的终点是数据库拒绝写入。</p>
     <table>
@@ -667,7 +667,7 @@ VACUUM (FREEZE, VERBOSE, PARALLEL 4) orders;</code></pre>
     <h2>WAL：一份日志干两件事</h2>
     <p>WAL 的核心约定是 write-ahead：任何数据页的改动在刷进数据文件之前，描述这次改动的 WAL 记录必须先落盘，这样崩溃后从最近一次 checkpoint 开始重放就能恢复。</p>
 <p>WAL 按 16MB 一个段文件写在 <code>pg_wal/</code> 下，位置用 LSN 标识（形如 <code>3/AB120F80</code> 的 64 位字节偏移），页头的 <code>pd_lsn</code> 记录这一页最后被哪条 WAL 改过，回放时靠它跳过已经应用的改动。</p>
-    <p><code>full_page_writes</code> 必须开着的原因是<strong>页断裂</strong>：磁盘原子写单位是 512 字节或 4KB，8KB 的页在掉电时可能只写进去一半，而 WAL 记录是增量的，往一个半新半旧的页上重放增量只会得到垃圾。</p>
+    <p><code>full_page_writes</code> 不能关，因为<strong>页断裂</strong>：磁盘原子写单位是 512 字节或 4KB，8KB 页掉电时可能只写进一半，WAL 记录是增量的，往半新半旧的页重放只会得到垃圾。</p>
 <p>所以 checkpoint 之后每个页第一次被修改时，整页镜像会被塞进 WAL 当回放基准。代价是 WAL 量显著变大，尤其在 checkpoint 刚结束那一阵——这也是 <code>checkpoint_timeout</code> 设得太短会让 WAL 量暴涨的原因。</p>
     <div class="mermaid">
 sequenceDiagram
@@ -840,10 +840,10 @@ FROM   pg_stat_bgwriter;</code></pre>
             </tr>
         </tbody>
     </table>
-    <p><strong>不适用边界</strong>：这篇只讲存储层主线（堆表、MVCC、VACUUM、WAL）。索引怎么选、<code>EXPLAIN</code> 各节点怎么逐行判读见 <a href="index-optimize/">PostgreSQL 索引选型与执行计划判读</a>；隔离级别语义、SSI 与 DDL 锁队列见 <a href="mvcc-transaction/">PostgreSQL 隔离级别与并发控制</a>；</p>
-<p>参数怎么按机器算、部署时哪些决定不可逆见 <a href="install/">生产部署与必调参数</a>；字段类型选择与改类型的代价见 <a href="datatypes/">数据类型选择与代价</a>；复制、故障切换与 <code>pg_rewind</code> 见 <a href="replication-ha/">复制与故障切换</a>；</p>
+    <p><strong>不适用边界</strong>：堆表、MVCC、VACUUM、WAL 之外，索引选型和 <code>EXPLAIN</code> 节点怎么逐行判读见 <a href="index-optimize/">PostgreSQL 索引选型与执行计划判读</a>；SSI 与 DDL 锁队列见 <a href="mvcc-transaction/">PostgreSQL 隔离级别与并发控制</a>；</p>
+<p>参数怎么按机器算、哪些部署决定不可逆见 <a href="install/">生产部署与必调参数</a>；改类型代价见 <a href="datatypes/">数据类型选择与代价</a>；<code>pg_rewind</code>、故障切换见 <a href="replication-ha/">复制与故障切换</a>；</p>
 <p>从 MySQL 过来要改哪些习惯见 <a href="intro/">PG 与 MySQL 架构差异与选型</a>；InnoDB 侧的 undo 与两阶段提交对照见 <a href="../mysql/">MySQL 深度原理</a>。</p>
-    <p>这条路径上，本篇是地基：先知道行是怎么存、旧版本去哪了、WAL 承担了什么，后面的选型、部署、类型与索引几篇才有共同的解释框架。</p>
+    <p>这条路径的地基是：先知道行是怎么存、旧版本去哪了、WAL 承担了什么，后面的选型、部署、类型与索引几篇才有共同的解释框架。</p>
 
     <p class="cluster-nav">同主题路径：<a href="intro/">下一步：PostgreSQL 与 MySQL 架构差异与选型 →</a></p>
 

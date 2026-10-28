@@ -10,14 +10,14 @@
     <link rel="stylesheet" href="../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="生产脚本的幂等与可重入：mv 原子替换的边界、跨分区退化，以及何时该从 Shell 换到 Python。">
+    <meta name="description" content="Shell 工程化：异常路径继续执行的事故、四层防线、引号与分词、trap 清理、幂等与何时换 Python。">
     <meta name="keywords" content="Shell,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="generator" content="deep2code generator">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/tools/shell/">
     <meta property="og:title" content="Shell 脚本的工程化：可靠性优先 - 资深码农">
-    <meta property="og:description" content="生产脚本的幂等与可重入：mv 原子替换的边界、跨分区退化，以及何时该从 Shell 换到 Python。">
+    <meta property="og:description" content="Shell 工程化：异常路径继续执行的事故、四层防线、引号与分词、trap 清理、幂等与何时换 Python。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/tools/shell/">
     <meta property="og:site_name" content="资深码农">
@@ -28,9 +28,9 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Shell 脚本的工程化：可靠性优先 - 资深码农">
-    <meta name="twitter:description" content="生产脚本的幂等与可重入：mv 原子替换的边界、跨分区退化，以及何时该从 Shell 换到 Python。">
+    <meta name="twitter:description" content="Shell 工程化：异常路径继续执行的事故、四层防线、引号与分词、trap 清理、幂等与何时换 Python。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
-    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Shell 脚本的工程化：可靠性优先","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"生产脚本的幂等与可重入：mv 原子替换的边界、跨分区退化，以及何时该从 Shell 换到 Python。","url":"https://www.yijunjun.asia/tools/shell/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/shell/"},"articleSection":"后端与编程语言"}</script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Shell 脚本的工程化：可靠性优先","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"Shell 工程化：异常路径继续执行的事故、四层防线、引号与分词、trap 清理、幂等与何时换 Python。","url":"https://www.yijunjun.asia/tools/shell/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/tools/shell/"},"articleSection":"后端与编程语言"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "开发工具与工程效率", "item": "https://www.yijunjun.asia/tools/"}, {"position": 3, "name": "Shell", "item": "https://www.yijunjun.asia/tools/shell/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../atom.xml">
@@ -73,10 +73,10 @@
             <span class="meta-item">🏷️ Shell</span>
         </div>
     </header>
-    <p>我见过的 Shell 生产事故，绝大多数不是命令敲错了，而是<strong>脚本在异常路径下继续执行</strong>。备份脚本里 dump 那一步失败了，后面的「删除七天前旧备份」照跑，结果是新备份 0 字节、旧备份没了。</p>
+    <p>Shell 的生产事故，绝大多数出在<strong>脚本沿异常路径继续执行</strong>，不是命令敲错。备份脚本 dump 失败，后面「删除七天前旧备份」照跑，新备份 0 字节、旧备份也没了。</p>
 <p>变量名拼错一个字母展开成空串，<code>rm -rf $DIR/</code> 就成了 <code>rm -rf /</code>。</p>
     <p>根因是 Shell 的默认错误哲学：<strong>一条命令失败，解释器不当回事，继续读下一行</strong>。</p>
-<p>这在交互式终端里是对的（你敲错一条命令不至于把终端关掉），但在无人值守的自动化里正好相反——我们要的是「出错就停，并且停在能被发现的地方」。</p>
+<p>默认错误哲学在交互式终端里没错：敲错命令，终端不会关掉。无人值守的自动化正相反——出错就停，停在看得见的地方。</p>
     <p>所以工程化的 Shell 不是「知道更多命令」，而是四层依次收紧的防线。</p>
 
     <h2>脚本可靠性的四层防线</h2>
@@ -125,7 +125,7 @@ PORT="${PORT:-8080}"
 : "${LOG_DIR:=/var/log/myapp}"</code></pre>
 
     <h2>加了 set -e 仍然不会退出的六种情况</h2>
-    <p>这是本篇最该记住的一张表。凡是踩过「明明写了 set -e 却没停」的人，原因都在这六行里。</p>
+    <p>这张表最该记住。凡是踩过「明明写了 set -e 却没停」的人，原因都在这六行里。</p>
     <table>
         <thead>
             <tr><th>场景</th><th>示例</th><th>为什么不退出</th><th>怎么写才对</th></tr>
@@ -161,7 +161,7 @@ flowchart TB
 <p>而「函数被条件调用则整个函数体豁免 -e」意味着你写的 <code>deploy()</code> 一旦用 <code>deploy || rollback</code> 调用，函数内部任何失败都不会中断它，它会一路跑到最后一行再返回。</p>
 
     <h2>引号与分词：不加引号的变量不是一个值</h2>
-    <p>Shell 里最高频的 bug 来自一个被反复误解的事实：<strong>不加引号的变量不是「一个值」，而是一段待再次解析的文本</strong>。它会依次经历单词拆分（按 <code>IFS</code> 切）和路径名展开（<code>*</code>、<code>?</code>、<code>[]</code> 去匹配真实文件）。</p>
+    <p>Shell 里最高频的 bug：<strong>不加引号的变量不是一个值，是一段还要再解析的文本</strong>。它先按 <code>IFS</code> 做单词拆分，再拿 <code>*</code>、<code>?</code>、<code>[]</code> 匹配真实文件。</p>
     <p>所以文件名叫 <code>my report.pdf</code> 时，<code>cp $file dest/</code> 实际执行的是三参数的 <code>cp my report.pdf dest/</code>；而一个内容恰好是 <code>*</code> 的变量不加引号，会被展开成当前目录的全部文件名。</p>
     <table>
         <thead>
@@ -256,10 +256,10 @@ sequenceDiagram
             <tr><td><code>HUP</code>（1）</td><td>终端断开</td><td>能</td><td>重载配置</td><td><code>nohup</code> 与 <code>disown</code> 会屏蔽它</td></tr>
         </tbody>
     </table>
-    <p>第二个坑值得单独强调：trap handler <strong>不会打断正在执行的外部命令</strong>。你 <code>kill</code> 一个正在跑 30 秒 <code>rsync</code> 的脚本，Bash 要等 rsync 自己结束才会执行 handler。所以长时间阻塞的命令该套 <code>timeout 60 rsync ...</code>，而不是指望信号能立刻生效。</p>
+    <p>trap handler <strong>不会打断正在执行的外部命令</strong>：<code>kill</code> 一个正跑 30 秒 <code>rsync</code> 的脚本，Bash 要等 rsync 自己结束才执行 handler。长命令套 <code>timeout 60 rsync ...</code>，别指望信号立刻生效。</p>
 
     <h2>幂等与可重入：生产脚本一定会被跑第二次</h2>
-    <p>无人值守的脚本必然被重复执行：cron 上一轮没跑完这一轮又进来、CI 自动重试、人工手动补跑。所以判断一个脚本能不能上生产，问一句就够了——<strong>连续跑三次，结果一样吗？</strong></p>
+    <p>无人值守的脚本一定会被重复跑：cron 上轮没跑完这轮又进来、CI 重试、人工补跑。能不能上生产只问一句：<strong>连续跑三次，结果一样吗？</strong></p>
     <table>
         <thead>
             <tr><th>操作</th><th>非幂等写法</th><th>第二次执行会怎样</th><th>幂等写法</th></tr>
@@ -333,7 +333,7 @@ flowchart TB
             <tr><td>只做进程编排与文件搬运，50 行内</td><td>无</td><td>留在 Shell，这是它最擅长的</td></tr>
         </tbody>
     </table>
-    <p>顺带说一句方向相反的判断：<strong>部署和流水线里的编排逻辑不要越写越厚</strong>。真正的流水线阶段划分、部署策略与回滚，本站 <code>devops/cicd/</code> 有专篇；容器与 K8s 场景的排障命令在 <code>devops/kubernetes/</code>。Shell 在这些场景里只该是薄薄的粘合层。</p>
+    <p>反方向的判断：<strong>部署和流水线的编排逻辑不要越写越厚</strong>。流水线阶段划分、部署策略与回滚在 <code>devops/cicd/</code> 有专篇，容器和 K8s 的排障命令在 <code>devops/kubernetes/</code>。Shell 在这里只该是薄薄的粘合层。</p>
 
     <h2>shellcheck 必须进 CI</h2>
     <p>Shell 没有编译器，<strong>shellcheck 就是它的编译器</strong>。它能稳定发现人眼最容易漏掉的那几类问题，而这些问题恰好最容易演变成事故。</p>

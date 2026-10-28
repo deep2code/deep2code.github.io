@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
 
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-        <meta name="description" content="静态模块要编译进二进制，动态模块 1.9.11 起才能 load_module 后加，缺模块往往等于重新编译；四条安装路线、第三方模块清单、configure 参数、TLS 库选择、USR2 换二进制与回滚。">
+        <meta name="description" content="模块编译机制、四条安装路线、OpenResty 选型、TLS 库、平滑升级与配置目录规范。">
     <meta name="keywords" content="Go,Go 语言总览,AI,LLM,RAG,云原生,Nginx,Docker,MySQL,Redis,Elasticsearch,Python,技术博客,程序员,踩坑,实践">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -27,7 +27,7 @@
     <link rel="canonical" href="https://www.yijunjun.asia/devops/nginx/install/">
     <!-- Open Graph -->
     <meta property="og:title" content="Nginx 的编译、模块与版本选型 - 资深码农">
-    <meta property="og:description" content="静态模块要编译进二进制，动态模块 1.9.11 起才能 load_module 后加，缺模块往往等于重新编译；四条安装路线、第三方模块清单、configure 参数、TLS 库选择、USR2 换二进制与回滚。">
+    <meta property="og:description" content="模块编译机制、四条安装路线、OpenResty 选型、TLS 库、平滑升级与配置目录规范。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/devops/nginx/install/">
     <meta property="og:site_name" content="资深码农">
@@ -38,12 +38,12 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Nginx 的编译、模块与版本选型">
-    <meta name="twitter:description" content="静态模块要编译进二进制，动态模块 1.9.11 起才能 load_module 后加，缺模块往往等于重新编译；四条安装路线、第三方模块清单、configure 参数、TLS 库选择、USR2 换二进制与回滚。">
+    <meta name="twitter:description" content="模块编译机制、四条安装路线、OpenResty 选型、TLS 库、平滑升级与配置目录规范。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta property="article:author" content="资深码农">
     <meta property="article:section" content="运维与云原生">
     <meta property="article:tag" content="服务端与云">
-        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 的编译、模块与版本选型","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"静态模块要编译进二进制，动态模块 1.9.11 起才能 load_module 后加，缺模块往往等于重新编译；四条安装路线、第三方模块清单、configure 参数、TLS 库选择、USR2 换二进制与回滚。","url":"https://www.yijunjun.asia/devops/nginx/install/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/install/"},"articleSection":"服务端与云"}</script>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"BlogPosting","headline":"Nginx 的编译、模块与版本选型","datePublished":"2026-09-22","dateModified":"2026-09-22","description":"模块编译机制、四条安装路线、OpenResty 选型、TLS 库、平滑升级与配置目录规范。","url":"https://www.yijunjun.asia/devops/nginx/install/","inLanguage":"zh-CN","author":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"publisher":{"@type":"Person","name":"资深码农","url":"https://www.yijunjun.asia"},"mainEntityOfPage":{"@type":"WebPage","@id":"https://www.yijunjun.asia/devops/nginx/install/"},"articleSection":"服务端与云"}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"position": 2, "name": "运维与云原生", "item": "https://www.yijunjun.asia/devops/"}, {"position": 3, "name": "Nginx 概述", "item": "https://www.yijunjun.asia/devops/nginx/"}, {"position": 4, "name": "Nginx 源码安装", "item": "https://www.yijunjun.asia/devops/nginx/install/"}]}</script>
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -91,11 +91,11 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>怎么装 Nginx 看起来是个包管理器的口味问题，其实是被它的模块机制反向决定的。Nginx 的功能几乎全部以模块形式存在，而<strong>传统模块必须在 configure 阶段链接进那唯一一个二进制文件</strong>，运行期没有任何插件机制。</p>
-<p>这条约束带来一个非常具体的后果：装完上线才发现少了 GeoIP、少了 Brotli、少了主动健康检查，不是装个扩展包就能补上的，而是要重新编译、重新替换二进制、重新走一次发布。</p>
+<p>安装方式由模块机制反向决定：功能几乎全部以模块形式存在，<strong>传统模块必须在 configure 阶段链接进唯一一个二进制文件</strong>，运行期没有插件机制。</p>
+<p>这条约束带来一个直接后果：装完上线才发现缺 GeoIP、Brotli、主动健康检查，扩展包补不上，要重新编译、替换二进制、重新走一次发布。</p>
 <p>安装方式的选择，取决于以后还会不会需要新模块。</p>
 
-<p>本篇只讲构建期与部署期的事：模块形态、四条安装路线、第三方模块清单、configure 参数、TLS 库选择、不停机换二进制。</p>
+<p>只讲构建与部署：模块形态、四条安装路线、第三方模块、configure 参数、TLS 库选择、不停机换二进制。</p>
 <p>运行期的 master/worker 进程模型、11 个请求处理阶段与 location 匹配优先级、代理缓冲与超时参数全景，都在 <code>../</code> 主干篇里，这里不重复。</p>
 
 <h2>模块的三种形态决定了改动成本</h2>
@@ -129,7 +129,7 @@ flowchart TB
     T2 --> T3
 </div>
 
-<p>最容易踩的一类事故是「以为默认就有」。<code>--with-http_ssl_module</code>、<code>--with-http_realip_module</code>、<code>--with-http_auth_request_module</code>、<code>--with-stream</code> 全都不是默认开启的；源码编译时漏一个，等到要上 HTTPS 或者要做子请求鉴权时才发现，只能重来。反过来，<code>gzip</code>、<code>rewrite</code>、<code>proxy</code> 是默认就在的，不需要专门加参数。</p>
+<p>最容易踩的是「以为默认就有」。<code>--with-http_ssl_module</code>、<code>--with-http_realip_module</code>、<code>--with-http_auth_request_module</code>、<code>--with-stream</code> 都不是默认开启；源码编译漏一个，等到上 HTTPS 或做子请求鉴权才发现，只能重来。<code>gzip</code>、<code>rewrite</code>、<code>proxy</code> 默认就在，不用专门加参数。</p>
 
 <table>
 <thead><tr><th>模块形态</th><th>加入时机</th><th>后期增加的代价</th><th>版本约束</th><th>典型例子</th></tr></thead>
@@ -171,7 +171,7 @@ flowchart TB
 <tr><td>stable</td><td>只回合严重 bug 与安全修复，不合并新特性，也不合并大多数普通修复</td><td>一年一个分支，期间只出补丁版</td><td>依赖的第三方模块只适配了旧 API，或内部有强制的版本冻结要求</td></tr>
 </tbody></table>
 
-<p>很多人把 stable 理解成「更稳」，这是个流传很广的误解。Nginx 的 stable 更接近「冻结的功能集」，它的普通 bug 修复反而比 mainline 少得多。真正的稳定性来自你自己的灰度流程：固定版本号、先在小流量集群跑一周、再全量替换。</p>
+<p>stable 常被理解成「更稳」，这是误解。它更接近「冻结的功能集」，普通 bug 修复反而比 mainline 少得多。稳定性来自自己的灰度流程：固定版本号、小流量集群先跑一周、再全量替换。</p>
 
 <h2>常用第三方模块清单</h2>
 
@@ -189,7 +189,7 @@ flowchart TB
 
 <h2>OpenResty：什么时候值得换</h2>
 
-<p>OpenResty 不是 Nginx 的分支，而是 Nginx 加 LuaJIT 加一批成熟 Lua 库的打包发行版。它的价值在于把 Nginx 从「配置驱动」变成「可编程」：在 <code>access_by_lua_block</code> 里查 Redis 判断 token，在 <code>balancer_by_lua_block</code> 里动态挑上游而不需要 reload，在 <code>content_by_lua_block</code> 里直接返回聚合结果。</p>
+<p>OpenResty 是 Nginx、LuaJIT 加一批成熟 Lua 库的打包发行版，不是分支。它把 Nginx 从配置驱动变成可编程：<code>access_by_lua_block</code> 里查 Redis 验 token，<code>balancer_by_lua_block</code> 里动态挑上游、免 reload，<code>content_by_lua_block</code> 里直接返回聚合结果。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -289,7 +289,7 @@ make install
 
 <h2>平滑升级：不停机换二进制</h2>
 
-<p>这是 Nginx 很少被用到但非常实用的能力：<strong>在不断开任何连接的前提下把可执行文件换掉</strong>。原理是新旧两代 master 共享同一批已经 bind 的监听 socket，通过环境变量 <code>NGINX</code> 传递 fd 列表，所以升级期间新旧版本同时在处理请求。</p>
+<p><strong>不断开任何连接就换掉可执行文件</strong>，这个能力用得少但很实用。原理：新旧两代 master 共享同一批已 bind 的监听 socket，经环境变量 <code>NGINX</code> 传 fd 列表，升级期间新旧版本同时处理请求。</p>
 
 <div class="mermaid">
 stateDiagram-v2
@@ -360,7 +360,7 @@ rm -f /usr/sbin/nginx.old
 
 <h2>配置目录规范与三个检查命令</h2>
 
-<p>两种主流布局：Debian 系的 <code>sites-available</code> 加 <code>sites-enabled</code> 软链，和官方包的 <code>conf.d/*.conf</code> 平铺。前者能「下线一个站点但保留配置」，后者更简单、更适合用配置管理工具全量渲染。混用两套是最糟的选择，因为 <code>include</code> 顺序一乱，<code>default_server</code> 落到哪个 server 就说不清了。</p>
+<p>两种主流布局：Debian 系 <code>sites-available</code> 加 <code>sites-enabled</code> 软链，官方包 <code>conf.d/*.conf</code> 平铺。前者能下线一个站点但保留配置，后者更简单、适合配置管理工具全量渲染。混用最糟：<code>include</code> 顺序一乱，<code>default_server</code> 落到哪个 server 说不清。</p>
 
 <pre><code class="language-nginx"># /etc/nginx/nginx.conf 的骨架
 # 动态模块必须在最顶层、events 之前加载，写在 http 块里会报错

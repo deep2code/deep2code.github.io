@@ -73,9 +73,9 @@
         </div>
     </header>
 <p>Python 在后端的位置常被两种极端说法带偏：一边说「有 GIL 所以做不了并发」，一边说「上了 asyncio 就能抗万级 QPS」。两句都不准确。</p>
-<p>这篇只做一件事——把 Python 的运行时约束讲到能用于决策的精度，然后据此回答两个问题：这个需求该不该用 Python 写，上线该用什么部署形态。</p>
+<p>只做一件事——把 Python 的运行时约束讲到能用于决策的精度，然后据此回答两个问题：这个需求该不该用 Python 写，上线该用什么部署形态。</p>
 <h2>选型自查清单与运行时约束速查</h2>
-<p>「该不该用 Python」不是风格问题，它可以被拆成七个能用数字或事实回答的问题。下面这张表照着过一遍，任何一行答不上来就说明还没到做决定的时候；每一行背后的机制在原理层。</p>
+<p>「该不该用 Python」不是风格问题，拆成七个能用数字或事实回答的问题。表里任何一行答不上来，就还没到决策的时候；每一行背后的机制在原理层。</p>
 <table>
 <thead><tr><th>要判断什么</th><th>什么算过关</th><th>不过关怎么办</th></tr></thead>
 <tbody>
@@ -88,7 +88,7 @@
 <tr><td>团队规模与生命周期</td><td>瓶颈在人力与迭代速度，需求变化快</td><td>几十人协作、五年以上的复杂领域模型要谨慎：类型注解运行时不生效，只能靠 CI 里的 mypy 兜</td></tr>
 </tbody>
 </table>
-<p>第三、五两问需要真实数字，而且必须在<strong>目标环境</strong>里量——容器里的 CPU 与内存配额和宿主完全是两回事，开发机上的数字没有参考价值。下面这段跑一次，三个决策输入就齐了：</p>
+<p>第三、五两问的数字必须在<strong>目标环境</strong>里量：容器 CPU 与内存配额不同于宿主，开发机数字无参考价值。这段跑一次，三个决策输入就齐了：</p>
 <pre><code class="language-python"># runtime_probe.py —— 在目标容器里跑，别在开发机上跑
 import os
 import resource
@@ -160,11 +160,11 @@ print("建议起步 worker 数 = min(内存侧上限, 向上取整的 CPU 配额
 <p>这一层只给判断依据，不解释为什么。GIL 的准确语义、哪些调用会放开它、三种并发模型各自的代价，都在原理层。</p>
 
 <h2>GIL 锁住的是字节码，不是并发</h2>
-<p>搞清这一节能解决的现象是：为什么加线程之后 CPU 任务更慢，而 IO 任务确实变快了。准确表述只有一句：<strong>同一个 CPython 进程内，同一时刻只有一个线程在执行 Python 字节码</strong>。两个限定词都重要。</p>
+<p>为什么加线程之后 CPU 任务更慢，而 IO 任务确实变快了。准确表述只有一句：<strong>同一个 CPython 进程内，同一时刻只有一个线程在执行 Python 字节码</strong>。两个限定词都重要。</p>
 <p>「字节码」意味着线程一旦离开解释器——进入 IO 系统调用，或进入主动释放 GIL 的 C 代码——GIL 就被放开；「同一进程」意味着进程之间根本不存在 GIL 竞争。</p>
 <p>所以「Python 不能并发」是错的。IO 密集场景里多线程是真并行：线程 A 卡在 <code>recv</code> 上的时候线程 B 正在跑，吞吐随线程数上升。</p>
 <p>只有纯 Python 的 CPU 计算会被串行化，而且因为多了 GIL 争抢和线程切换，4 线程跑 CPU 任务通常比单线程<strong>更慢</strong>，常见劣化 10%~50%，核越多越明显。</p>
-<p>切换时机也值得知道：<code>sys.getswitchinterval()</code> 默认 5 毫秒，持有 GIL 的线程到点会被要求让出。这意味着一个在跑纯计算的线程，最多能把同进程内其他请求的响应延迟推高 5 毫秒量级。</p>
+<p>切换时机：<code>sys.getswitchinterval()</code> 默认 5 毫秒，持有 GIL 的线程到点被要求让出。一个跑纯计算的线程，最多把同进程其他请求的响应延迟推高 5 毫秒量级。</p>
 <p>对普通后台无所谓，对 P99 敏感的接口就是可见的毛刺。</p>
 
 <div class="mermaid">
@@ -231,7 +231,7 @@ for fn in (cpu_task, gil_free_task):
 </code></pre>
 
 <h2>由 GIL 推出的三种并发模型</h2>
-<p>这一节解决的是「改造方向选错了」这类返工：选型不需要玄学，只看两件事——任务是等 IO 还是烧 CPU，以及关键依赖有没有异步实现。</p>
+<p>要解决的是「改造方向选错了」这类返工：选型不需要玄学，只看两件事——任务是等 IO 还是烧 CPU，以及关键依赖有没有异步实现。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -259,7 +259,7 @@ flowchart TB
 <p>三条路线各自的最小可用写法、锁与启动方式的细节、以及混用时的接缝，在<a href="concurrency/">Python 并发的三条路线与选择</a>。</p>
 
 <h2>3.12 到 3.14：GIL 的松动程度</h2>
-<p>这一节解决的是「要不要为了去 GIL 而等一等」的判断。关于「GIL 要没了」的传言每年一轮，实际进度要看清楚两条独立的路线：子解释器各自持锁（PEP 684），以及彻底去掉 GIL 的可选构建（PEP 703）。</p>
+<p>要不要为了去 GIL 等一等，要看两条独立路线的进度：子解释器各自持锁（PEP 684）、彻底去掉 GIL 的可选构建（PEP 703）。「GIL 要没了」的传言每年一轮。</p>
 
 <table>
 <thead><tr><th>版本</th><th>变化</th><th>现状</th><th>实际能指望什么</th></tr></thead>
@@ -274,12 +274,12 @@ flowchart TB
 <div class="callout callout-warning">
     <div class="callout-icon">⚠️</div>
     <div class="callout-title">不要把架构押在去 GIL 上</div>
-    <p>free-threaded 构建不是换个参数就生效：它需要专门的解释器，依赖的每一个 C 扩展都要重新编译并声明支持自由线程，而且原本被 GIL 顺带保护的竞态会暴露出来（大量库的内部缓存并非线程安全）。</p>
+    <p>free-threaded 构建换个参数不生效：要专用解释器，每一个 C 扩展都要重新编译并声明支持自由线程，GIL 顺带保护的竞态会暴露（大量库内部缓存并非线程安全）。</p>
 <p>未来 2~3 年，生产环境吃满多核的可靠手段依然是多进程或多副本。</p>
 </div>
 
 <h2>部署形态：单进程永远吃不满多核</h2>
-<p>这一节解决的是最常见的一类上线事故：8 核机器上跑一个 uvicorn 进程，压测到 CPU 只有 12% 就上不去了。原因很直接——一个进程一个 GIL，纯 Python 代码的计算吞吐上限就是一个核。<strong>要用满 N 核就必须有 N 个进程</strong>，没有别的办法。</p>
+<p>最常见的一类上线事故：8 核机器跑一个 uvicorn 进程，压测 CPU 到 12% 就上不去。一个进程一个 GIL，纯 Python 代码的吞吐上限就是一个核，<strong>要用满 N 核就必须有 N 个进程</strong>。</p>
 
 <div class="mermaid">
 flowchart TB
@@ -325,7 +325,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 </tbody>
 </table>
 
-<p>worker 类型怎么挑、优雅退出与四个超时怎么对齐、preload 的内存收益为什么比预期小，在<a href="web/">Python Web 服务的部署形态</a>；多进程下 Prometheus 指标为什么会错乱，在<a href="fastapi-production/">Python 服务上生产</a>。容器编排下的探针、preStop 与滚动更新细节见站内 <a href="../../devops/kubernetes/">Kubernetes 专题</a>；</p>
+<p>worker 类型怎么挑、四个超时怎么对齐、preload 的内存收益为何偏低，在<a href="web/">Python Web 服务的部署形态</a>；多进程下 Prometheus 指标为何错乱，在<a href="fastapi-production/">Python 服务上生产</a>；容器编排的探针、preStop、滚动更新见<a href="../../devops/kubernetes/">Kubernetes 专题</a>。</p>
 <p>接口耗时该怎么拆解、连接池怎么定容量见站内<a href="../../observability/performance/">后端性能优化专题</a>，这里不重复。</p>
 
 <h2>什么时候 Python 是最优解</h2>
@@ -389,9 +389,9 @@ flowchart TB
 <tr><td>认为 asyncio 能提升计算性能</td><td>改造完吞吐没变，代码复杂度翻倍</td><td>asyncio 只解决 IO 等待，不解决计算</td></tr>
 </tbody>
 </table>
-<p><strong>不适用边界</strong>：依赖装不上、锁文件不可复现、CI 里突然开始编译源码包，不是运行时问题，在<a href="tooling/">Python 依赖与工程工具链</a>；worker 类型与超时配置在<a href="web/">Python Web 服务的部署形态</a>；内存只涨不降、对象占用评估、GC 毛刺在<a href="core/">Python 运行时机制</a>；</p>
+<p>依赖装不上、锁文件不可复现、CI 突然编译源码包，非运行时问题，在<a href="tooling/">Python 依赖与工程工具链</a>；worker 类型与超时在<a href="web/">Python Web 服务的部署形态</a>；内存只涨不降、GC 毛刺在<a href="core/">Python 运行时机制</a>；</p>
 <p>语言层面的语义陷阱在<a href="pitfalls/">Python 的语义陷阱清单</a>；版本与实现选择、替代解释器在<a href="ecosystem/">Python 生态的选型与演进</a>。</p>
-<p>这一簇的阅读路径从本篇开始：先判断该不该用、用什么形态，然后是把环境和依赖固定下来（工具链），再是服务怎么跑起来（部署形态），接着才是并发怎么写、运行时怎么调。</p>
+<p>阅读路径：先判断该不该用、用什么形态，再固定环境和依赖，然后是服务怎么跑起来，最后才是并发怎么写、运行时怎么调。</p>
 
 <div class="callout-title">避坑清单</div>
     <ul>

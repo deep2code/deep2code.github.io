@@ -10,13 +10,13 @@
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
-    <meta name="description" content="接口耗时拆解：串行与并行判断、N+1 识别、超时与重试预算、序列化、缓存层级、连接复用与攒批、防退化。">
+    <meta name="description" content="把单次接口耗时拆开，逐段给并行、去 N+1、超时预算、序列化、缓存、连接复用与防退化的做法">
     <meta name="keywords" content="性能优化实战,接口性能优化,技术博客,资深码农">
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/observability/performance/api-latency/">
     <meta property="og:title" content="接口性能优化：从耗时拆解到并发模型 - 性能优化实战 - 资深码农">
-    <meta property="og:description" content="接口耗时拆解：串行与并行判断、N+1 识别、超时与重试预算、序列化、缓存层级、连接复用与攒批、防退化。">
+    <meta property="og:description" content="把单次接口耗时拆开，逐段给并行、去 N+1、超时预算、序列化、缓存、连接复用与防退化的做法">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/observability/performance/api-latency/">
     <meta property="og:site_name" content="资深码农">
@@ -26,7 +26,7 @@
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="接口性能优化：从耗时拆解到并发模型 - 性能优化实战">
-    <meta name="twitter:description" content="接口耗时拆解：串行与并行判断、N+1 识别、超时与重试预算、序列化、缓存层级、连接复用与攒批、防退化。">
+    <meta name="twitter:description" content="把单次接口耗时拆开，逐段给并行、去 N+1、超时预算、序列化、缓存、连接复用与防退化的做法">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
@@ -71,8 +71,8 @@
                         </div>
                     </header>
                     <div class="article-content">
-<p>这篇只讲<strong>单个接口的耗时是怎么构成的、以及每一段能用什么手段压下去</strong>。度量方法、压测流程、分位数怎么看在<a href="../">后端性能优化的度量与方法论</a>；连接池与 ORM 层面的问题在<a href="../db-access/">应用侧的数据库访问优化</a>；</p>
-<p>SQL 与索引见站内<a href="../../../database/optimization/">数据库优化</a>；缓存的收益模型与一致性见站内<a href="../../../database/cache/">缓存设计</a>；接口的语义、版本、分页规范见站内<a href="../../../api/">API 设计</a>；超时之上的熔断与降级见站内<a href="../../../architecture/governance/circuit-breaker/">限流熔断降级</a>。</p>
+<p>只处理<strong>单个接口的耗时构成和每段的压缩手段</strong>。度量方法、压测流程、分位数见<a href="../">度量方法论</a>；连接池与 ORM 见<a href="../db-access/">应用侧数据库访问优化</a>；</p>
+<p>SQL、索引见<a href="../../../database/optimization/">数据库优化</a>；缓存收益与一致性见<a href="../../../database/cache/">缓存设计</a>；接口的语义、版本、分页见<a href="../../../api/">API 设计</a>；超时之上的熔断降级见<a href="../../../architecture/governance/circuit-breaker/">限流熔断降级</a>。</p>
 
 <h2>先把一次接口耗时拆开</h2>
 <p>优化接口的第一步不是改代码，是<strong>拿到一张按占比排序的耗时构成表</strong>。没有这张表就动手，大概率是在优化占总耗时 3% 的那一段。</p>
@@ -159,7 +159,7 @@ flowchart TB
 <div class="callout callout-info">
     <div class="callout-icon">💡</div>
     <div class="callout-title">一个能立刻用的判据</div>
-    <p>如果接口总耗时 ≈ 各下游调用耗时之和，说明调用全是串行的，并行化是第一优先级。如果总耗时 ≈ 最慢的那次下游调用，说明已经并行了，接下来要减少的是「调用次数」或让最慢的那个变快。</p>
+    <p>若总耗时 ≈ 各下游耗时之和，调用全是串行的，并行化优先。若总耗时 ≈ 最慢那次下游调用，已经并行，接下来要减调用次数，或让最慢的变快。</p>
 <p>如果总耗时明显大于所有下游耗时之和，中间那部分不是业务逻辑，几乎一定是排队（线程池、连接池或锁）。</p>
 </div>
 
@@ -309,11 +309,11 @@ public class OrderDetailAssembler {
     <div class="callout-icon">❌</div>
     <div class="callout-title">并行化最常见的两个事故</div>
     <p>第一，把有依赖关系的调用「并行」了：查订单和查订单明细之间需要订单 ID，强行并行会读到空值，而且只在慢的时候才复现。</p>
-<p>第二，并行后忘了改超时：四个调用各设 300ms 且没有总预算，最坏情况仍然是 300ms，但请求在池里占了 4 个槽位，高并发下线程或连接池的耗尽速度是原来的 4 倍。</p>
+<p>第二，并行后忘改超时：四个调用各设 300ms、无总预算，最坏仍是 300ms，但请求在池里占 4 个槽位，高并发下线程或连接池耗尽快 4 倍。</p>
 </div>
 
 <h2>N+1 调用：最常见的性能杀手</h2>
-<p>N+1 的形态永远一样：<strong>先查一个列表，再在循环里对每个元素调一次下游</strong>。它之所以杀伤力大，是因为它在最贵的那一层（网络往返）做乘法。100 个元素、每次往返 2ms，光往返就是 200ms，而这 200ms 里 CPU 完全是空转的。</p>
+<p>N+1 的形态永远一样：<strong>先查一个列表，再对循环里每个元素调一次下游</strong>。杀伤力来自最贵那层（网络往返）在做乘法：100 个元素、每次往返 2ms，光往返 200ms，这 200ms 里 CPU 完全空转。</p>
 <div class="mermaid">
 sequenceDiagram
     autonumber
@@ -364,12 +364,12 @@ sequenceDiagram
         </tr>
     </tbody>
 </table>
-<p>识别 N+1 有三条路子：链路追踪里同一个接口出现几十上百个同名 span；代码评审时把「循环体内出现远程调用或查询」当成红线；监控下游请求数与本接口 QPS 的比值，正常是个位数，出现几十倍就是有放大。</p>
+<p>识别 N+1 有三条路：链路追踪里同一个接口有几十上百个同名 span；评审红线：「循环体内有远程调用或查询」；下游请求数与本接口 QPS 比值正常个位数，几十倍时即放大。</p>
 <p>ORM 懒加载造成的 N+1 最隐蔽，因为代码上只是访问了一个属性，详见<a href="../db-access/">应用侧的数据库访问优化</a>。</p>
 
 <h2>超时与重试：设长了等于没设</h2>
 <p>超时不只是可用性问题，它直接决定<strong>失败请求要占用多久的资源</strong>。</p>
-<p>一个下游卡死时，10 秒超时意味着每个请求占住一个线程和一个连接 10 秒，上游线程池在几秒内就会被填满，然后整个服务对所有接口都不可用——包括那些根本不依赖这个下游的接口。</p>
+<p>一个下游卡死时，10 秒超时让每个请求占住一个线程、一个连接 10 秒，线程池几秒内填满，随后所有接口不可用——包括不依赖它的接口。</p>
 <table>
     <thead>
         <tr>
@@ -401,7 +401,7 @@ sequenceDiagram
         </tr>
     </tbody>
 </table>
-<p>两条容易被忽略的规则：<strong>超时必须小于上游留给你的时间</strong>，否则你的超时没有任何意义；<strong>重试必须只在有剩余预算时才发起</strong>，剩 20ms 还去重试一个平均 50ms 的调用，只是浪费下游容量。</p>
+<p>两条规则：<strong>超时必须小于上游留给你的时间</strong>，否则等于没设；<strong>重试必须只在有剩余预算时才发起</strong>，剩 20ms 还重试一个平均 50ms 的调用，只是浪费下游容量。</p>
 <p>熔断、隔离、降级这一层的完整机制见站内<a href="../../../architecture/governance/circuit-breaker/">限流熔断降级</a>。</p>
 
 <h2>减少数据传输：响应体是被低估的一段</h2>
@@ -496,7 +496,7 @@ func (h *ExportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }</code></pre>
 
 <h2>序列化开销：大响应下它不是零</h2>
-<p>「序列化能有多慢」是个常见的错觉。在小响应体上它确实可以忽略，但响应体到几百 KB 以上时，JSON 编码在单请求 CPU 里占到相当比例是很常见的，而且它产生大量临时对象，会推高 GC 频率，间接抬高所有接口的 P99。</p>
+<p>「序列化能有多慢」是错觉。小响应体上可忽略；响应体到几百 KB 以上，JSON 编码在单请求 CPU 里占相当比例，还产生大量临时对象，推高 GC 频率，间接抬高所有接口的 P99。</p>
 <table>
     <thead>
         <tr>
@@ -542,7 +542,7 @@ func (h *ExportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 <p>第二，序列化优化的真正大头往往不是编码算法，而是<strong>少编码点东西</strong>：把 50 个字段裁到 8 个，比任何库都有效。Protobuf 的编码细节与兼容规则见站内<a href="../../../api/rpc/protobuf/">Protobuf</a>。</p>
 
 <h2>缓存与异步化：把工作移出主路径</h2>
-<p>缓存是最有效的手段，但它的收益完全取决于<strong>放在哪一层</strong>。放在下游响应这一层，省的是网络往返；放在结果这一层，省的是整段计算；放在片段这一层，省的是可复用的公共部分。</p>
+<p>缓存是最有效的手段，收益完全取决于<strong>放在哪一层</strong>：下游响应层省网络往返；结果层省整段计算；片段层省公共部分。</p>
 <p>命中率模型、多级缓存、一致性策略见站内<a href="../../../database/cache/">缓存设计</a>，这里只强调一条容易被忽略的：<strong>缓存的收益等于命中率乘以被省掉的耗时</strong>。</p>
 <p>命中率 50% 的缓存只能砍掉一半耗时，却让你多了一整套一致性问题，所以命中率上不去的缓存不如不加。</p>
 <p>异步化是另一个方向：把不影响本次响应的工作移出请求路径。判断标准只有一个——<strong>调用方的这次响应是否依赖它的结果或成功</strong>。</p>
@@ -602,7 +602,7 @@ func (h *ExportHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 </div>
 
 <h2>连接复用与攒批</h2>
-<p>不复用连接的代价在高 QPS 下非常可观：每次请求多一次 TCP 握手（同机房约 0.3ms）加一次 TLS 握手（1 到 2 个往返，跨地域时几十毫秒），还会在客户端堆积大量 TIME_WAIT 直到端口耗尽。</p>
+<p>高 QPS 下不复用连接代价很大：每次请求多一次 TCP 握手（同机房约 0.3ms）、一次 TLS 握手（1 到 2 个往返，跨地域几十毫秒），客户端还堆 TIME_WAIT 直到端口耗尽。</p>
 <p><strong>「接口偶发变慢且伴随大量 TIME_WAIT」几乎就是连接没复用的签名。</strong></p>
 <pre><code class="language-go">// Go 的默认 http.Client 有两个坑：没有超时，且 MaxIdleConnsPerHost 只有 2，
 // 高并发下大部分请求实际在新建连接，表现为「明明是内网调用却有几十毫秒抖动」。
@@ -633,8 +633,8 @@ func call(ctx context.Context, url string) ([]byte, error) {
     defer resp.Body.Close()
     return io.ReadAll(resp.Body)
 }</code></pre>
-<p>攒批是典型的「用延迟换吞吐」：把 100 次单条写入合并成 1 次批量写入，往返次数降到百分之一，吞吐能涨一个量级，但每条写入平均要多等半个批次窗口。</p>
-<p><strong>所以攒批适合写入与异步链路，不适合放在用户等待的读路径上</strong>。如果一定要在读路径上攒批，窗口要压到毫秒级并设置「攒够 N 条就立刻发」的双触发条件，同时把窗口时间算进接口的超时预算。</p>
+<p>攒批是「用延迟换吞吐」：100 次单条写入合成 1 次批量，往返降到百分之一，吞吐涨一个量级，但每条平均多等半个批次窗口。</p>
+<p><strong>攒批适合写入与异步链路，不适合用户等待的读路径</strong>。若必须在读路径攒批，窗口压到毫秒级、加「攒够 N 条就立刻发」双触发，窗口时间算进超时预算。</p>
 
 <h2>该优化哪一段，以及怎么防止退化</h2>
 <div class="mermaid">
@@ -656,8 +656,8 @@ flowchart TB
     G --> N
     J --> N
 </div>
-<p>接口性能会<strong>随迭代缓慢退化</strong>，这是几乎所有长期项目的共同结局：每次需求只多加一个字段、多查一次下游、多一层校验，单次改动小到评审时察觉不到，半年后 P99 翻倍且找不到责任提交。</p>
-<p>防护手段有三条：核心接口固化压测脚本并定期跑，把与基线的偏差纳入告警；在评审清单里加一项「本次改动新增了几次下游调用」；对关键接口加下游调用次数的断言，测试环境超阈值直接失败。</p>
+<p><strong>接口性能随迭代退化</strong>，几乎所有长期项目都如此：每次需求只多一个字段、一次下游、一层校验，单次改动小到没人察觉，半年后 P99 翻倍、找不到责任提交。</p>
+<p>防护有三条：核心接口压测脚本定期跑，基线偏差进告警；评审清单加「新增了几次下游调用」；关键接口加调用次数断言，测试环境超阈值即失败。</p>
 <table>
     <thead>
         <tr>
