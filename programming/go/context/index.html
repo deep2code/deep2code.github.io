@@ -216,7 +216,7 @@ golangci-lint run --enable=contextcheck,noctx ./...
 # noctx 专门检出该用带 ctx 版本却用了无 ctx 版本的调用，例如 http.Get 而非 NewRequestWithContext</code></pre>
 
 <h2>context 的四个职责，以及它不负责什么</h2>
-<p>搞清这四个职责与五种派生函数的差异，才能解释用法层那张表为什么是那样：哪个函数会建 timer、哪个会往父节点注册 children、哪个会连 deadline 一起丢掉。</p>
+<p>四个职责与五种派生函数的差异，决定用法层那张表的形状：哪个函数会建 timer、哪个会往父节点注册 children、哪个会连 deadline 一起丢掉。</p>
 <p><code>context.Context</code> 只有四个方法，对应四个职责：<strong>取消信号</strong>（<code>Done()</code>）、<strong>取消原因</strong>（<code>Err()</code>）、<strong>截止时间</strong>（<code>Deadline()</code>）、<strong>请求级值传递</strong>（<code>Value()</code>）。超时是截止时间的相对写法，本质是同一件事。</p>
 <p>设计方向：<strong>context 是「向下传播取消」的机制，不是「向上返回结果」的通道</strong>。信号只能从父流向子，子 context 取消不影响父。往上传结果用返回值或 channel，别塞进 ctx。</p>
 <table>
@@ -329,7 +329,7 @@ flowchart TB
 <p>区分这两者在监控上很重要——<code>Canceled</code> 多数是客户端主动断开（用户刷新页面、上游超时重试），不该计入服务端错误率；<code>DeadlineExceeded</code> 才是自己慢了。</p>
 
 <h2>WithValue：该放什么，不该放什么</h2>
-<p>搞清这条边界能避免一类最难重构的代码：函数签名不再说明它需要什么，删一个 ctx key 只能靠线上崩溃才知道影响面。</p>
+<p>这条边界不清会产出一类最难重构的代码：函数签名不再说明它需要什么，删一个 ctx key 只能靠线上崩溃才知道影响面。</p>
 <p><code>WithValue</code> 的定位很窄：<strong>只放请求级的横切元数据</strong>——traceID、请求 ID、用户身份、租户标识、语言偏好。标准是值要不要穿过不关心它的中间层：traceID 要穿过，业务参数不用。</p>
 <p>不该放<strong>可选参数与依赖</strong>：<code>pageSize</code>、数据库句柄、logger 实例进了 ctx，函数签名不再说明所需，类型不安全（取出要断言、可能是 nil），编译器与 IDE 完全无法校验。</p>
 <p>重构时最痛苦的代码往往就是这种——你不知道删掉某个 ctx key 会让哪里在运行时崩。</p>
@@ -387,7 +387,7 @@ func UserFrom(ctx context.Context) (*User, bool) {
 </div>
 
 <h2>服务端的 ctx：r.Context、BaseContext 与优雅关闭</h2>
-<p>搞清这三者的父子关系，能解释「每次发版都固定出现一批 502」这个几乎所有团队都踩过的坑。</p>
+<p>「每次发版都固定出现一批 502」，几乎每个团队都踩过，原因在这三者的父子关系。</p>
 <p><code>r.Context()</code> 的生命周期绑在这次请求上，<strong>客户端断开连接时它会被取消</strong>。因此长耗时接口能提前放弃计算，不为走掉的客户端做无用功。</p>
 <p><strong>响应已经写了一部分时，取消不能简单地 return</strong>。状态码和已写头部无法撤回，流式接口（SSE、chunked、大文件下载）中途放弃，客户端只拿到截断响应。</p>
 <p>这种情况下要么在写第一个字节之前完成所有可能失败的工作，要么用协议层面的手段（SSE 发一个 error 事件、chunked 用尾部标记）告知客户端数据不完整。</p>

@@ -221,7 +221,7 @@ resources:
     <p>这三个旋钮为什么是这样取值、为什么调大 <code>GOGC</code> 治不了延迟毛刺，原因全在下面几节。</p>
 
     <h2>GMP：三个字母背后的队列结构</h2>
-    <p>搞清这层结构能回答两个具体现象：为什么容器里不设 <code>GOMAXPROCS</code> 会被 CFS 周期性限流，以及为什么一次阻塞的 cgo 调用不会卡住整个进程。</p>
+    <p>两个现象由这层结构解释：容器里不设 <code>GOMAXPROCS</code> 会被 CFS 周期性限流；一次阻塞的 cgo 调用不会卡住整个进程。</p>
     <p>Go 的调度器是 M:N 模型，三个核心对象分别是 G、M、P。<strong>G</strong> 是 goroutine，一个可被调度的执行单元，带自己的栈和寄存器现场。<strong>M</strong> 是 machine，一个真实的 OS 线程，代码最终在它上面跑。</p>
 <p><strong>P</strong> 是 processor，代表「执行 Go 代码所需的资源与上下文」，数量由 <code>GOMAXPROCS</code> 决定，默认等于机器可见的逻辑核数。</p>
     <p>关键点在于：<strong>M 想执行 Go 代码，必须先持有一个 P</strong>。P 的数量因此成为并行度的硬上限——你开一百万个 G，同一时刻真正在跑的也只有 <code>GOMAXPROCS</code> 个。</p>
@@ -301,7 +301,7 @@ func main() {
     </div>
 
     <h2>netpoller：写起来同步，跑起来异步</h2>
-    <p>搞清它的边界能解释「明明是 Go 服务，线程数却悄悄涨到几百」这类在 profile 里看不到热点的怪现象。</p>
+    <p>「明明是 Go 服务，线程数却悄悄涨到几百」，profile 里看不到热点，原因在它的边界。</p>
     <p>这是 Go 做网络服务最大的结构性优势，也是最容易被讲漏的一环。在 C 或 Java NIO 里，想要高并发就得写事件循环和回调，业务逻辑被拆成碎片。</p>
 <p>Go 的做法是把 epoll 封进运行时：你写 <code>conn.Read(buf)</code>，看起来是同步阻塞调用，实际上所有连接的 fd 都是非阻塞模式并注册在一个 epoll 实例上，<strong>阻塞的是 goroutine，不是线程</strong>。</p>
     <div class="mermaid">
@@ -406,7 +406,7 @@ stateDiagram-v2
     end note
     </div>
     <p><strong>Go 的 STW 已压到几十微秒量级，监控上的 GC 停顿几乎总健康</strong>。真正吃延迟的是两处并发成本：后台标记 worker 固定占约 25% 的 P 时间。</p>
-<p>以及 <strong>mark assist</strong>：goroutine 分配速率超过标记推进速度时，运行时会罚它标记一批对象，耗时落在业务函数里。症状是「P99 有毛刺，但 GC 停顿指标正常，CPU 也没打满」。</p>
+<p>还有 <strong>mark assist</strong>：goroutine 分配速率超过标记推进速度时，运行时会罚它标记一批对象，耗时落在业务函数里。症状是「P99 有毛刺，但 GC 停顿指标正常，CPU 也没打满」。</p>
     <p>解法不是调 GOGC，而是降低分配速率——回到上一节的逃逸分析。把 GOGC 调大只是让 GC 跑得更少但每轮标记的对象更多、堆更大，毛刺变稀疏而单次更重。</p>
     <table>
         <thead>

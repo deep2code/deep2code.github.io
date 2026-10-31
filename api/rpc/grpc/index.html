@@ -265,7 +265,7 @@ GRPC_GO_LOG_SEVERITY_LEVEL=info GRPC_GO_LOG_VERBOSITY_LEVEL=2 ./client 2&gt;&amp
 
 <h2>一次调用在 HTTP/2 上的真实形状</h2>
 <p>HTTP 200 但客户端报错，curl 调通了却看不到错误，代理后面调用一直挂住。</p>
-<p>gRPC 把 HTTP/2 的原语直接借来当语义单位：<strong>一个 RPC = 一条 stream</strong>，请求头是 HEADERS 帧，消息体是 DATA 帧，结果码是末尾那个带 END_STREAM 的 HEADERS 帧（trailer）。理解这个映射，后面的坑都能自己推出来。</p>
+<p>gRPC 把 HTTP/2 的原语直接借来当语义单位：<strong>一个 RPC = 一条 stream</strong>，请求头是 HEADERS 帧，消息体是 DATA 帧，结果码是末尾那个带 END_STREAM 的 HEADERS 帧（trailer）。</p>
 <p><strong>DATA 帧里不是裸的 protobuf</strong>：每条消息前面有 5 字节前缀，1 字节压缩标志加 4 字节大端长度。「消息边界」由 gRPC 自己维护，不靠帧边界。</p>
 <p><strong>流 ID 是 31 位且只增不回收</strong>，客户端用奇数、服务端用偶数，用尽之后这条连接只能被 GOAWAY 关掉重建，这也是为什么框架必须实现连接轮换。</p>
 
@@ -621,7 +621,7 @@ flowchart TB
 </table>
 
 <p>两个实战要点：<strong>服务端配 <code>MaxConnectionAge</code></strong>，让连接到龄后发 GOAWAY 迫使客户端重连重解析，扩容的新实例才分得到流量，这比任何客户端策略都可靠；</p>
-<p><strong>重解析不是定时轮询</strong>，grpc-go 的 DNS resolver 在连接失败或 LB 请求时触发，最小间隔 30 秒量级；缩容后旧地址继续被持有，要配合优雅下线。ClusterIP 的转发真相见 <a href="../../../devops/kubernetes/">Kubernetes</a>。</p>
+<p><strong>重解析不是定时轮询</strong>，grpc-go 的 DNS resolver 主要在连接失败或 LB 请求时触发，最小间隔 30 秒量级；缩容后旧地址继续被持有，要配合优雅下线。ClusterIP 的转发真相见 <a href="../../../devops/kubernetes/">Kubernetes</a>。</p>
 
 <h2>错误模型：status code 与 details</h2>
 <p>客户端疯狂刷新 token、对着 DEADLINE_EXCEEDED 反复重试没效果，都跟错误模型有关。</p>
@@ -763,7 +763,7 @@ flowchart TB
 <h2>拦截器与 stats.Handler 的职责分层</h2>
 <p>panic 掉的调用在监控里凭空消失、流式接口绕过鉴权，出在拦截器分层上。</p>
 <p>拦截器不是「随便加个 hook」，它有明确的层次约束。<strong>unary 与 stream 是两套完全独立的链</strong>，注册顺序即嵌套顺序（第一个最外层）。</p>
-<p>观测粒度上，拦截器只覆盖一次调用，看不到单条消息与压缩后字节数。这类指标用 <code>stats.Handler</code>，它在传输层，有每条消息收发与连接级事件。</p>
+<p>观测粒度上，拦截器只覆盖一次调用，看不到单条消息与压缩后字节数。这类指标只能用 <code>stats.Handler</code>，它在传输层，有每条消息收发与连接级事件。</p>
 <p>推荐的层次：最外层放指标、追踪与访问日志，它必须覆盖 panic 被转换后的返回，放到 recovery 内侧那次调用就会在监控里凭空消失；次外层是 panic 恢复并统一转成 INTERNAL；</p>
 <p>中间层做认证与租户上下文注入，先确定身份才能按身份限流；内层做限流与并发隔离。</p>
 <p>排查也分层：调用级用 <code>grpcurl -vv</code> 看 trailer 与 details；通道级开 <code>GRPC_GO_LOG_SEVERITY_LEVEL=info</code> 与 <code>GRPC_GO_LOG_VERBOSITY_LEVEL=2</code>，看解析、LB 与连接状态迁移；连接级用 channelz 看每个 SubChannel 状态与流计数；最后抓包看帧。落地见 <a href="../../../observability/tracing/">链路追踪</a>。</p>

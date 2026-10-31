@@ -76,7 +76,7 @@
 
 <h2>为什么必须结构化：把解析成本从平台侧搬回应用侧</h2>
 <p>「结构化日志便于搜索」只是结果，真正的理由是<strong>成本归属</strong>。</p>
-<p>非结构化日志把解析推给管道。Logstash 或 Ingest Pipeline 要对每条日志跑 grok 正则。grok 是多个正则顺序尝试，复杂 pattern 单条几十到上百微秒。乘上每天几十亿条，就是一整批常驻解析节点。</p>
+<p>非结构化日志把解析推给管道。Logstash 或 Ingest Pipeline 要逐条跑 grok 正则。grok 是多个正则顺序尝试，复杂 pattern 单条几十到上百微秒。乘上每天几十亿条，就是一整批常驻解析节点。</p>
 <p><strong>脆</strong>：开发改一句日志文案，解析规则静默失配，字段变成 <code>_grokparsefailure</code>。依赖这些字段的看板和告警一起哑掉，几天后才被发现。</p>
 <p>结构化日志把解析前移到进程内：序列化一次 JSON，平台侧只要 <code>json</code> 解码。应用侧多出的 CPU 是微秒级、摊在成百上千实例上，集中解析集群和运维省掉了。</p>
 
@@ -144,7 +144,7 @@ flowchart TB
 </tbody>
 </table>
 
-<p>命名约定：<strong>大小写风格全公司选一种并写进 lint</strong>（<code>snake_case</code> 在日志生态更通用，ECS 与多数 Handler 默认如此）；<strong>同名必须同义</strong>，<code>user_id</code> 只能是内部用户主键，不能塞成第三方 openid；</p>
+<p>命名约定：<strong>大小写风格全公司选一种写进 lint</strong>（<code>snake_case</code> 在日志生态更通用，ECS 与多数 Handler 默认如此）；<strong>同名必须同义</strong>，<code>user_id</code> 只能是内部用户主键，不能塞成第三方 openid；</p>
 <p><strong>高基数字段不要进索引</strong>，订单号、请求体摘要这类字段在 ES 里可以存但应设为不索引或只放 <code>keyword</code> 且 <code>doc_values: false</code>，具体取舍见 <a href="../elk/">ELK 篇</a>。</p>
 
 <pre><code class="language-json">{
@@ -170,7 +170,7 @@ flowchart TB
 }</code></pre>
 
 <h2>msg 必须是稳定模板，变量全部进字段</h2>
-<p>结构化日志里收益最高、也最常被忽略的一条：<code>msg="order created" order_id=123</code> 和 <code>msg="order 123 created"</code> 人看着差不多，机器看着差很多。后者 msg 基数等于订单数量，按 msg 聚合退化成「每条一个桶」。</p>
+<p>结构化日志里收益最高、也最常被忽略的一条：<code>msg="order created" order_id=123</code> 和 <code>msg="order 123 created"</code> 人看着差不多，机器差很多。后者 msg 基数等于订单数量，按 msg 聚合退化成「每条一个桶」。</p>
 
 <table>
 <thead>
@@ -286,7 +286,7 @@ func createOrder(ctx context.Context, orderID string, amount int64) {
 <h2>上下文透传：结构化日志最难的部分</h2>
 <p>让每条日志自动带上 <code>trace_id</code> 和 <code>user_id</code>，听起来是配置问题，实际是运行模型问题。Go 靠显式传 <code>context</code>，代价是函数签名污染但绝不会串；Java 靠 <code>MDC</code>，写起来最舒服但埋着最大的雷；</p>
 <p>Python 的 <code>contextvars</code> 和 Node 的 <code>AsyncLocalStorage</code> 是语言层为异步场景提供的「隐式 context」，行为正确但都有边界。</p>
-<p><strong>Java 的 MDC 必须单独讲</strong>。MDC 底层是 <code>ThreadLocal</code>，而线程池的线程是复用的，于是有两个方向的故障：主线程提交异步任务，任务在池线程里执行，<strong>拿不到 MDC，日志里 trace_id 为空</strong>；</p>
+<p><strong>Java 的 MDC 必须单独讲</strong>。MDC 底层是 <code>ThreadLocal</code>，而线程池的线程是复用的，于是有两个方向的故障：主线程提交异步任务，任务在池线程执行，<strong>拿不到 MDC，日志里 trace_id 为空</strong>；</p>
 <p>请求 A 结束没清理 MDC，线程被请求 B 复用，<strong>B 的日志带上 A 的 trace_id</strong>。这比空值危险得多：它把两个请求错误串成一条链路，排障结论直接错。</p>
 
 <div class="mermaid">
@@ -452,7 +452,7 @@ flowchart TB
 <h2>脱敏放在 encoder 层，不靠调用方自觉</h2>
 <p>脱敏写成工具方法要求大家调用，注定失败。新人不知道、老代码没人改、第三方库日志控制不了。唯一可靠位置是<strong>序列化的统一出口</strong>——Go 的 <code>ReplaceAttr</code>、pino 的 <code>redact</code>、structlog 的 processor、Logback 的自定义 <code>JsonProvider</code> 或 <code>MessageConverter</code>。</p>
 <p>分两层：<strong>字段名白名单/黑名单</strong>（<code>password</code>、<code>token</code>、<code>id_card</code> 命中即整体替换）与<strong>值正则</strong>（手机号、卡号、身份证格式命中即掩码）。</p>
-<p>字段名靠不住，如 <code>pwd2</code>；正则也靠不住，数字订单号会误判。</p>
+<p>两层都要：字段名有人写成 <code>pwd2</code>，值正则会把纯数字订单号当成手机号。</p>
 
 <table>
 <thead>
@@ -472,7 +472,7 @@ flowchart TB
 <div class="callout callout-warning">
 <div class="callout-icon">⚠️</div>
 <div class="callout-title">不要在 formatter 里做重计算</div>
-<p>encoder / formatter 在每条日志的写出路径上执行，它的开销会乘以日志条数。在这里做复杂正则、反射遍历深层对象、甚至查一次缓存，都会变成全局性的吞吐损失。</p>
+<p>encoder / formatter 在每条日志的写出路径上执行，它的开销会乘以日志条数。在这里做复杂正则、反射遍历深层对象、甚至查一次缓存，都会变成全局吞吐损失。</p>
 <p>脱敏正则要预编译、要限定只扫字符串类型字段、要给深度设上限；需要昂贵计算的字段应该在调用点算好再传进来。</p>
 </div>
 
