@@ -171,11 +171,11 @@ def post_fork(server, worker):
 <p>这一层不解释为什么，比如「为什么异步 worker 的 timeout 不是请求超时」「为什么要让代理先关连接」，都在下面的原理层。</p>
 
 <h2>两份契约的形状：WSGI 与 ASGI 差在哪</h2>
-<p>为什么 WSGI 栈上做不了 WebSocket、客户端断开后为什么还在白跑查询。部署形态的结论全部从契约推出来，所以先把签名摊开。</p>
+<p>WSGI 栈上做不了 WebSocket、客户端断开后还在白跑查询。部署形态的结论全部从契约推出来，所以先把签名摊开。</p>
 <p>WSGI（PEP 3333）要求应用是一个<strong>普通可调用对象</strong>，接收 <code>environ</code> 字典与 <code>start_response</code> 回调，返回产出字节串的可迭代对象，请求体从 <code>environ["wsgi.input"]</code> 同步读。</p>
 <p>ASGI 要求应用是 <code>async def app(scope, receive, send)</code>：<code>scope</code> 描述这次连接（<code>type</code> 取 <code>http</code>、<code>websocket</code> 或 <code>lifespan</code>），<code>receive</code> 与 <code>send</code> 是两个协程，请求体分片、客户端断连、WebSocket 帧、进程启停全部表达成事件。</p>
 <p>真正的差别不是「异步」这个词，而是<strong>契约里有没有「连接生命周期中的事件」这个位置</strong>。</p>
-<p>WSGI 的一次调用等于一次完整请求，服务器没有通道告知应用「客户端已经走了」，WebSocket、SSE 的断连感知、请求中途取消表达不了：签名里没地方放。</p>
+<p>WSGI 的一次调用等于一次完整请求，服务器没有通道告知应用「客户端已经走了」，WebSocket、SSE 的断连感知、请求中途取消表达不了：不是实现没做，是签名里没地方放。</p>
 <table>
 <thead><tr><th>维度</th><th>WSGI</th><th>ASGI</th><th>工程后果</th></tr></thead>
 <tbody>
@@ -420,7 +420,7 @@ stateDiagram-v2
 </tbody>
 </table>
 <p><strong>sync worker 不支持 keep-alive</strong>，在它前面配 upstream 长连接不生效，每个请求都新建连接，压测表现为大量 <code>TIME_WAIT</code> 与偏高的建连延迟；要长连接得换 gthread 或异步 worker。</p>
-<p>其二，上游长连接必须三件套齐全（<code>keepalive</code> 数量、HTTP/1.1、清空 <code>Connection</code> 头），少一个就静默退回短连接（nginx 侧细节详见站内 <a href="../../../devops/nginx/">Nginx</a>）。</p>
+<p>上游长连接必须三件套齐全（<code>keepalive</code> 数量、HTTP/1.1、清空 <code>Connection</code> 头），少一个就静默退回短连接（nginx 侧细节详见站内 <a href="../../../devops/nginx/">Nginx</a>）。</p>
 <pre><code class="language-nginx">upstream app {
     server 127.0.0.1:8000 max_fails=3 fail_timeout=10s;
     keepalive 32;              # 每个 worker 进程保留的空闲长连接数
