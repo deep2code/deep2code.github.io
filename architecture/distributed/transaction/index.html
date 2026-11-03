@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>柔性事务的实现细节与失败处理 - 分布式系统 - 资深码农</title>
+    <title>柔性事务的实现细节与失败处理 - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
@@ -15,7 +15,7 @@
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/distributed/transaction/">
-    <meta property="og:title" content="柔性事务的实现细节与失败处理 - 分布式系统 - 资深码农">
+    <meta property="og:title" content="柔性事务的实现细节与失败处理 - 资深码农">
     <meta property="og:description" content="柔性事务落地清单：TCC 四步、Saga 状态机与推进函数、补偿失败四级处置、消息表抢占与指数退避、死信、对账与 xid，含方案代价与不适用边界。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/distributed/transaction/">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="柔性事务的实现细节与失败处理">
+    <meta name="twitter:title" content="柔性事务的实现细节与失败处理 - 资深码农">
     <meta name="twitter:description" content="柔性事务落地清单：TCC 四步、Saga 状态机与推进函数、补偿失败四级处置、消息表抢占与指数退避、死信、对账与 xid，含方案代价与不适用边界。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"@type": "ListItem", "position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"@type": "ListItem", "position": 3, "name": "分布式一致性深度原理：CAP、Raft、2PC 与柔性事务", "item": "https://www.yijunjun.asia/architecture/distributed/"}, {"@type": "ListItem", "position": 4, "name": "分布式事务", "item": "https://www.yijunjun.asia/architecture/distributed/transaction/"}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"@type": "ListItem", "position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"@type": "ListItem", "position": 3, "name": "分布式系统", "item": "https://www.yijunjun.asia/architecture/distributed/"}, {"@type": "ListItem", "position": 4, "name": "分布式事务", "item": "https://www.yijunjun.asia/architecture/distributed/transaction/"}]}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Saga 的最小可用骨架应该怎么写？", "acceptedAnswer": {"@type": "Answer", "text": "三件东西就够：一张状态机表、一个能被反复调用的推进函数、一条补偿失败的出口。状态机表记录流程实例 ID、流程类型、当前步骤、方向（正向或逆向）、已完成步骤列表、上下文快照、重试次数与下次重试时间。推进函数每次只推进一步并立刻落库，这样进程在任何位置崩溃都能从库里续上；加载实例时用带行锁的查询，防止两个驱动者同时推进同一个实例。正向步骤失败不要原地重试正向，直接把方向改成逆向并落库，由下一轮驱动执行补偿。补偿失败则退避重试同一步、不推进进度，超过上限后把状态标记为补偿失败并告警转人工。每步补偿成功后要重置重试计数，否则上一步的失败次数会吃掉下一步的重试预算。"}}, {"@type": "Question", "name": "本地消息表的投递任务部署多个实例会重复发消息吗？", "acceptedAnswer": {"@type": "Answer", "text": "如果只是简单地扫描待投递记录然后发送，一定会重复。两个实例在同一时刻扫到同一批记录，各发一次。正确做法是扫描之后用一条带条件的 UPDATE 抢占：把状态从待投递改成投递中，同时写入本实例标识和抢占时间，只有受影响行数为 1 的记录才真正发送。抢占之后如果进程崩溃，记录会一直停在投递中状态，所以还需要一个超时回收逻辑，把抢占时间超过阈值的记录改回待投递。即使做了抢占，消息本身仍可能因为发送成功但状态回写失败而重复投递，所以消费端必须幂等，这是柔性事务不可省的前提。"}}, {"@type": "Question", "name": "RocketMQ 事务消息的回查接口应该怎么实现？", "acceptedAnswer": {"@type": "Answer", "text": "回查的职责是回答一个问题：这个事务 ID 对应的本地事务最终提交了没有。Broker 在半消息长时间没收到二次确认时会发起回查，回查方法需要根据事务 ID 查出本地状态并返回提交、回滚或未知。这里有个被大量忽略的前提：本地事务必须留下可按事务 ID 查询的痕迹。如果本地事务只是更新了一张业务表而没有记录事务 ID，回查时就无法判断，只能返回未知，于是半消息会被反复回查直到超过次数限制后丢弃，业务出现下游没收到消息的静默不一致。所以实现时要在本地事务内插入一条带事务 ID 的记录，回查读这条记录。另外回查可能发生多次，实现必须幂等且只读。"}}, {"@type": "Question", "name": "TCC 的空回滚和悬挂为什么要靠一张事务记录表解决？", "acceptedAnswer": {"@type": "Answer", "text": "空回滚是指 Try 因为超时或网络问题没执行，协调者却发起了 Cancel，这时 Cancel 什么都不该做但必须返回成功。悬挂是指 Try 的请求在网络里延迟，Cancel 先到并完成，Try 才姗姗来迟地执行，于是预留的资源再也没人释放。两个问题的共同解法是让分支事务在数据库里留下状态：Cancel 执行时如果找不到 Try 的记录，就插入一条已回滚记录并直接返回成功，这就解决了空回滚；Try 执行时先检查是否已存在已回滚记录，存在则直接拒绝，这就解决了悬挂。再加上对同一分支 ID 的唯一约束，幂等也一并解决。一张表三个问题，比在业务代码里散落判断可靠得多。"}}, {"@type": "Question", "name": "Saga 的补偿操作失败了怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "补偿失败是柔性事务真正的硬骨头，必须设计明确的兜底链条，绝不能静默丢弃。可行的处置顺序是：先按指数退避重试若干次，覆盖网络抖动与下游短时不可用；重试达到上限后把流程实例标记为补偿失败并投入人工介入队列，同时触发告警，通知里必须带全局事务 ID 与卡住的步骤；运营或值班同学在后台通过幂等的补偿接口手动重放，或者做数据修正。设计上还有两条硬要求：补偿接口必须幂等，因为它会被重试很多次；补偿操作应该尽可能设计成不会失败的形式，比如把扣减库存的补偿做成插入一条返还流水而不是直接改库存，插入操作的失败面比更新小得多。"}}, {"@type": "Question", "name": "为什么柔性事务一定要做对账？", "acceptedAnswer": {"@type": "Answer", "text": "因为所有基于重试和补偿的机制都有漏网概率：消息超过重试上限进了死信、巡检任务自己挂了一段时间、代码 bug 导致状态机卡在中间态、人工处理时改错了数据。这些情况在系统内部看起来都是正常的，只有拿两侧数据做比对才能发现。对账的设计要点是明确四件事：对什么（通常是两侧的金额汇总与逐笔明细）、多久对一次（核心资金按小时，一般业务按天）、发现差异后自动修复还是告警（能明确判定方向且修复幂等的可自动，涉及资金的一律先告警）、以及修复本身必须幂等且留痕。对账是最后一道防线，没有它就等于把不一致的发现时间交给用户投诉。"}}, {"@type": "Question", "name": "柔性事务的中间态可以直接展示给用户吗？", "acceptedAnswer": {"@type": "Answer", "text": "不能直接把内部状态暴露出去。用户看到处理中、待补偿、补偿失败这类术语只会产生困惑并反复提单。正确做法是在业务状态和内部事务状态之间做一层映射：对用户只呈现处理中、成功、失败三种确定语义，内部的中间态一律归入处理中，并给出明确的预期时间和查询入口。另一个关键点是失败态必须在真正终态确定后才展示，中间态下展示失败会引导用户重复下单。同时接口要返回稳定的业务单号，让用户在客服沟通时能定位，后台再用全局事务 ID 关联到具体卡住的步骤。"}}]}</script>
 </head>
 <body>
@@ -59,7 +59,7 @@
     </header>
     <div id="main-area">
         <div class="breadcrumbs">
-<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">架构与分布式</a><span class="separator">/</span><a href="../index.html">分布式一致性深度原理：CAP、Raft、2PC 与柔性事务</a><span class="separator">/</span><span>分布式事务</span>
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">架构与分布式</a><span class="separator">/</span><a href="../index.html">分布式系统</a><span class="separator">/</span><span>分布式事务</span>
 </div>
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">

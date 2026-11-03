@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="../../../images/favicon.jpeg" type="image/jpeg">
     <link rel="apple-touch-icon" href="../../../images/logo.jpeg">
-    <title>幂等的完整工程实现 - 分布式系统 - 资深码农</title>
+    <title>幂等的完整工程实现 - 资深码农</title>
     <link rel="stylesheet" href="../../../css/style.min.css?v=4">
     <link rel="preconnect" href="https://miaoda.feishu.cn" crossorigin>
     <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
@@ -15,7 +15,7 @@
     <meta name="author" content="资深码农">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yijunjun.asia/architecture/distributed/idempotency/">
-    <meta property="og:title" content="幂等的完整工程实现 - 分布式系统 - 资深码农">
+    <meta property="og:title" content="幂等的完整工程实现 - 资深码农">
     <meta property="og:description" content="幂等的完整工程实现：键设计八项检查清单、三段可用 SQL、抢占与回放流程、请求摘要校验、先查后插缺陷、过期清理窗口。">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://www.yijunjun.asia/architecture/distributed/idempotency/">
@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="幂等的完整工程实现">
+    <meta name="twitter:title" content="幂等的完整工程实现 - 资深码农">
     <meta name="twitter:description" content="幂等的完整工程实现：键设计八项检查清单、三段可用 SQL、抢占与回放流程、请求摘要校验、先查后插缺陷、过期清理窗口。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"@type": "ListItem", "position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"@type": "ListItem", "position": 3, "name": "分布式一致性深度原理：CAP、Raft、2PC 与柔性事务", "item": "https://www.yijunjun.asia/architecture/distributed/"}, {"@type": "ListItem", "position": 4, "name": "幂等性与重试", "item": "https://www.yijunjun.asia/architecture/distributed/idempotency/"}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"@type": "ListItem", "position": 2, "name": "架构与分布式", "item": "https://www.yijunjun.asia/architecture/"}, {"@type": "ListItem", "position": 3, "name": "分布式系统", "item": "https://www.yijunjun.asia/architecture/distributed/"}, {"@type": "ListItem", "position": 4, "name": "幂等性与重试", "item": "https://www.yijunjun.asia/architecture/distributed/idempotency/"}]}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "幂等键设计要检查哪些项，有没有可以直接用的 SQL？", "acceptedAnswer": {"@type": "Answer", "text": "按八项检查：键由客户端生成并在重试时原样携带；键里包含动作维度，避免支付与退款互相顶掉；键的作用域隔离到租户与用户，防止跨用户串号；保留期覆盖所有调用方的最长重试窗口，包括对账补发与人工重放；有天然业务唯一键时直接用它而不必额外造键；记录请求摘要以便同键不同参时返回 400；处理中状态返回 409 并带重试间隔而不是放行；抢占后崩溃要有巡检任务查业务真实状态来收尾。落到 SQL 只有三种写法：创建类直接 INSERT 并靠唯一索引拦截，报 1062 时查出已有记录回放；状态流转类用带前置状态的条件 UPDATE，受影响行数为 0 说明已被处理过，应当返回成功而不是抛异常；金额增减类先按业务键插一条流水占位再做增量更新，两条语句放在同一个本地事务里且顺序不能反。唯一索引列必须非空，否则唯一性判定不生效。"}}, {"@type": "Question", "name": "幂等键应该由客户端生成还是服务端生成？", "acceptedAnswer": {"@type": "Answer", "text": "必须由客户端生成。原因很简单：服务端无法区分一次重试和一次全新的相同请求。同一个用户在 100 毫秒内提交两笔金额收款方都相同的转账，可能是网络重试，也可能真的要转两笔，服务端看到的字节完全一样。只有发起方知道自己是在重试还是在发新请求，所以幂等键要在发起方第一次构造请求时生成，重试时原样带上。服务端生成的所谓幂等键，本质是用请求内容做指纹去重，会把合法的重复业务误判成重试，在打赏、连续下单、批量转账这类场景里直接导致漏单。对外开放的 API 应当把幂等键作为请求头或必填参数，并在文档里明确它的语义与有效期。"}},{"@type": "Question", "name": "为什么重复请求要回放首次响应，而不是返回重复请求错误？", "acceptedAnswer": {"@type": "Answer", "text": "因为调用方拿到错误码会判定这次调用失败，进而触发它自己的失败处理：回滚本地状态、发起补偿、给用户提示失败。而实际上业务在服务端早已成功，于是出现订单已创建但上游认为失败并退款的不一致。正确做法是把首次执行的响应体连同状态码一起快照保存在幂等记录里，后续同键请求直接把这份快照原样返回，让调用方无论重试多少次都看到同一个成功结果。快照要包含调用方需要的全部字段，尤其是业务单号。如果响应体很大，可以只存关键字段并在回放时重新组装，但绝不能退化成返回一个错误。"}},{"@type": "Question", "name": "先查询再插入为什么不算幂等实现？", "acceptedAnswer": {"@type": "Answer", "text": "因为查询和插入之间存在时间窗口，并发下两个请求都会查到不存在，然后都执行插入。这个窗口在压测里几乎必现，在生产高峰期也会稳定出现，表现为偶发的重复订单或重复扣款。真正的幂等要把判断和写入合并成一个原子操作：依靠数据库唯一索引，直接插入并捕获唯一键冲突异常，冲突就走重复分支；或者用带条件的 UPDATE 加受影响行数判断。这两种写法的原子性由存储引擎保证，不存在窗口。补充一点，先查后插即使加上事务也没用，普通隔离级别下两个事务仍会同时通过检查，必须依赖唯一约束或行锁。"}},{"@type": "Question", "name": "抢占幂等键成功但业务执行中进程崩溃了怎么办？", "acceptedAnswer": {"@type": "Answer", "text": "这是幂等实现里最难的一段。幂等记录停在处理中状态，后续同键请求既不能放行执行（可能与第一次的残留并发冲突，或造成重复执行），也不能直接回放（还没有结果）。工程上正确的做法是返回一个明确的冲突状态码，比如 409，并带上建议重试时间，让调用方稍后再试。同时必须有一个巡检任务处理长时间停在处理中的记录：超过业务最大执行时长若干倍后，去查询业务侧真实状态，能确认已成功就把记录补成成功并回填响应，能确认未生效就把记录删掉或标记失败以允许重新执行。没有这个巡检，崩溃过一次的幂等键会永久锁死该业务。"}},{"@type": "Question", "name": "只用 Redis 做幂等可以吗？", "acceptedAnswer": {"@type": "Answer", "text": "只能当前置优化，不能当最终保证。Redis 有三个致命点：主从异步复制，主节点宕机切换会丢掉刚写入的幂等键；键设置了过期时间，超期重试会被当成新请求；内存淘汰策略在内存吃紧时可能把幂等键提前逐出。这三种情况都表现为幂等失效，而且都发生在系统最脆弱的时刻。合理的分层是先用 Redis 的原子写入挡掉绝大多数重复请求，降低数据库压力，真正的正确性兜底交给数据库唯一索引——业务表的唯一键或幂等记录表的唯一键。Redis 决定快不快，数据库决定对不对。"}},{"@type": "Question", "name": "幂等记录可以永久保留吗？清理早了会怎样？", "acceptedAnswer": {"@type": "Answer", "text": "既不能永久保留，也不能随意提前清理。永久保留会让幂等表无限膨胀，唯一索引变高变大，插入变慢，最终拖累主链路。而清理过早的后果更隐蔽：调用方的重试窗口如果长于你的保留期，一次超期重试就会被当成全新请求，业务被执行第二次。所以保留期要严格覆盖所有调用方的最长重试窗口，包括人工触发的重放和对账补发。实践上按业务重要性分层：资金类保留 3 到 12 个月并归档，一般业务保留 7 到 30 天，用按时间分区加过期分区直接删除的方式清理，比逐行 DELETE 对数据库友好得多。"}}]}</script>
 </head>
 <body>
@@ -59,7 +59,7 @@
     </header>
     <div id="main-area">
         <div class="breadcrumbs">
-<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">架构与分布式</a><span class="separator">/</span><a href="../index.html">分布式一致性深度原理：CAP、Raft、2PC 与柔性事务</a><span class="separator">/</span><span>幂等性与重试</span>
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">架构与分布式</a><span class="separator">/</span><a href="../index.html">分布式系统</a><span class="separator">/</span><span>幂等性与重试</span>
 </div>
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">

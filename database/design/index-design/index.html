@@ -25,13 +25,13 @@
     <meta property="article:modified_time" content="2026-09-19">
     <meta property="og:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="模式演进与约束设计：表结构上线之后怎么改">
+    <meta name="twitter:title" content="模式演进与约束设计：表结构上线之后怎么改 - 资深码农">
     <meta name="twitter:description" content="上线后怎么改表：加法先行减法最后，每步带验证与回滚点；读写错配、元数据锁排队与回填脚本的五条要求。">
     <meta name="twitter:image" content="https://www.yijunjun.asia/images/og-image.jpg">
     <link rel="alternate" type="application/rss+xml" title="资深码农 RSS" href="../../../feed.xml">
     <link rel="alternate" type="application/atom+xml" title="资深码农 Atom" href="../../../atom.xml">
 
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"@type": "ListItem", "position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"@type": "ListItem", "position": 3, "name": "范式与反范式：数据库设计的取舍", "item": "https://www.yijunjun.asia/database/design/"}, {"@type": "ListItem", "position": 4, "name": "索引设计原则", "item": "https://www.yijunjun.asia/database/design/index-design/"}]}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "主页", "item": "https://www.yijunjun.asia/"}, {"@type": "ListItem", "position": 2, "name": "数据库与缓存", "item": "https://www.yijunjun.asia/database/"}, {"@type": "ListItem", "position": 3, "name": "数据库设计", "item": "https://www.yijunjun.asia/database/design/"}, {"@type": "ListItem", "position": 4, "name": "索引设计原则", "item": "https://www.yijunjun.asia/database/design/index-design/"}]}</script>
     <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "给大表加一个字段会不会锁表？", "acceptedAnswer": {"@type": "Answer", "text": "看版本和加法。MySQL 8.0.12 起支持 INSTANT 算法加列，只改元数据，秒级完成，但要求列加在末尾，并且同一张表用 INSTANT 累积加列的次数有上限，超过后会退回重建。MySQL 5.7 的 ADD COLUMN 走 INPLACE 但仍会重建整表，大表要走 gh-ost 或 pt-online-schema-change。PostgreSQL 11 之前给列加非空默认值会重写整表，11 之后把默认值存进目录元数据，加列变成瞬时操作。共同点是所有 DDL 都要拿元数据锁，如果表上有长事务或未提交的查询，DDL 会一直等，后面的普通查询又排在 DDL 之后，表现为整张表瞬间不可用，所以执行前一定要先确认没有长事务。"}}, {"@type": "Question", "name": "怎么安全地删掉一个已经没用的字段？", "acceptedAnswer": {"@type": "Answer", "text": "拆成两个发布周期。第一步只改代码，让所有读写路径都不再碰这一列，包括显式列出查询列而不是用星号，然后发布并观察至少一个完整发布周期，确认线上没有任何实例还在访问它。第二步才执行删列的 DDL。原因是发布过程中新旧版本实例并存，如果先删列，灰度期间还在运行的旧实例会因为找不到该列而直接报错。判断无调用不能只靠搜代码，还要看数据库审计日志或慢查询日志里是否出现过该列名。删除之前把整列数据导出留档，因为删列是整个流程里唯一不可回滚的一步。"}}, {"@type": "Question", "name": "为什么表结构变更不能一次改完，非要分三阶段？", "acceptedAnswer": {"@type": "Answer", "text": "因为发布不是原子的。灰度期内新旧两个版本的代码同时在跑，同时连着同一个数据库。如果一次变更同时改了写入结构和读取结构，那么在灰度窗口里，旧实例按旧结构写、新实例按新结构读，双方看到的数据必然不一致，而且这种分叉往数据里落了之后很难修。expand-migrate-contract 把变更拆成只加不减的扩张、数据迁移与读切换、最后才清理旧结构三段，核心纪律是任何一步都不能同时改读和写，这样每一步都有一个明确的回滚动作，只有最后的清理不可逆。"}}, {"@type": "Question", "name": "软删除之后唯一索引总是冲突，该怎么设计？", "acceptedAnswer": {"@type": "Answer", "text": "问题的根源是唯一索引不认识删除标记。用布尔型的 is_deleted 参与联合唯一只能救第一次，同一个编码第二次被删时又会撞键。MySQL 上的正确做法是把删除时间戳放进联合唯一，未删除时为 0，删除时写入毫秒时间戳，这样每次删除都产生一个不同的组合。PostgreSQL 更直接，用部分唯一索引，只对删除时间为空的行建唯一约束。另外多租户场景下唯一性几乎都应该是租户加编码的组合，只对编码建唯一会让第二个租户无法使用同一个编码，这是上线后才会被投诉出来的设计错误。"}}, {"@type": "Question", "name": "状态字段该用数据库 ENUM 还是小整数？", "acceptedAnswer": {"@type": "Answer", "text": "推荐小整数配列注释，应用层用枚举表达语义，需要兜底时再加 CHECK 约束。数据库 ENUM 的问题是加值和删值都要执行 DDL，而且 ENUM 的存储值是序号，调整定义顺序会让历史数据含义漂移，删除一个已被使用的取值几乎不可能。用字符串存状态则会出现大小写和拼写不一致，且占用更多空间。还要注意 MySQL 在 8.0.16 之前会解析 CHECK 约束但直接忽略它，写了等于没写，很多人以为加了约束其实并没有生效。"}}, {"@type": "Question", "name": "迁移脚本能不能手工在生产执行，非要用 Flyway 这类工具吗？", "acceptedAnswer": {"@type": "Answer", "text": "手工执行一定会漂移。只要变更由人挑时机、挑环境手动跑，就必然出现某个环境漏执行、某个分片执行了两遍、某次执行内容和仓库里的脚本不一致这三类问题，而且没有任何记录能证明当前库的结构等于哪个版本的代码期望的结构。版本化工具的核心价值不是省事，而是把执行记录落到数据库里并校验脚本指纹，让环境之间的差异可被发现。Flyway 用顺序编号的 SQL 文件，心智负担最低；Liquibase 用变更集描述并支持回滚脚本，适合需要多数据库方言的产品；Atlas 走声明式，用期望状态和当前状态做差异对比并生成计划，适合已经习惯基础设施即代码的团队。"}}]}</script>
 </head>
 <body>
@@ -59,7 +59,7 @@
     </header>
     <div id="main-area">
         <div class="breadcrumbs">
-<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">数据库与缓存</a><span class="separator">/</span><a href="../index.html">范式与反范式：数据库设计的取舍</a><span class="separator">/</span><span>索引设计原则</span>
+<a href="../../../index.html">主页</a><span class="separator">/</span><a href="../../index.html">数据库与缓存</a><span class="separator">/</span><a href="../index.html">数据库设计</a><span class="separator">/</span><span>索引设计原则</span>
 </div>
         <div id="content-wrapper" class="article-layout">
             <main id="body-content">
