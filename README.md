@@ -1209,7 +1209,7 @@ DDD 那篇」这类自指指针时把词一起带走了，属于合格改写。`
   三族退役旧一级名仍是 56 页，归一还是不归一依旧是待裁决的口径，这一轮没碰。
   顺带记下没动的同一族：`categories/` 与 `tags/` 两页的 `article:section` 是空值、
   JSON-LD 的 `articleSection` 是目录名 `categories`/`tags`——它属于「列表页该不该是 `BlogPosting`」的口径问题，
-  不是删一行能定的，留作观察。
+  不是删一行能定的，第二十九轮按列表页口径处理（见下）。
 
 - **变异检查 63 → 80 条**：D19 条目剥后缀（频道保留站名、不带后缀的原样通过、`.articles_meta.json` 保留原值）/
   D20 无标签不写 `<category>`（有标签的照旧，对照是「技术」不再出现在任何位置）/
@@ -1243,6 +1243,23 @@ DDD 那篇」这类自指指针时把词一起带走了，属于合格改写。`
 所以放宽后所有门的红绿一位没动（`lint --full` 337 页 / `check_pairs` 0 / `verify` 0 失败 / `--dry` 0）。
 变异检查 80 → **83 条**：D24 钉「这 3 段归到自己那一节」「旧口径在同样 3 段上确实归错」（对照组，
 没有它这条断言可能只是空转）、以及另一页插入 h5 后紧随段落归到它（不是只认死那一页）。
+
+第二十九轮只动两张根目录列表页的页面身份。`categories/` 与 `tags/` 的页头是按文章页抄的：
+`og:type=article`、JSON-LD `@type=BlogPosting`（带两个日期）、`articleSection` 写着目录名
+`categories`/`tags`、`article:section` 是空串，`meta description` 还是模板句「分类实战指南：从你遇到的
+问题出发，讲清楚技术中的核心概念、常见用法和新手踩坑经验。」。改成站内分类主页已有的口径：
+**`CollectionPage` + `og:type=website`**，删掉 `articleSection` 与空的 `article:section`，
+描述换成分类入口 / 标签索引各自的事实。三个描述副本由 `gen_categories.py` 从新的 meta description 派生，
+手写的只有源头那一份。类型分布因此 BlogPosting **220 → 218**、CollectionPage **19 → 21**（共 873 段不变）。
+**两个日期没删**：`verify` 第 14 条要求「页外旧值 ⊆ 页外新值 + 正文新值」，删掉它们，
+`2026`/`09`/`22` 当场判红——改类型不等于事实可以丢，`CollectionPage` 本身也允许带日期。
+**补的是门看不见的那一面**：`check_head_meta` 原来只比「want 里有的面」，不属于任何分类的页
+挂着 `articleSection` 永远不进比对。现在多返回一项「多余面」：want 没有 `article:section` /
+`articleSection` 而页上有，判红并点名；修法是删面，不派生也不猜值。
+变异检查 83 → **87 条**：D25 在 `categories/` 上分别塞 meta 面与 JSON-LD 面，各钉一次「记进多余面」，
+再钉「`--dry` 退出 1 且点『页头多余面』」，最后一条负例是原样时这一页不进名单（不是常红）。
+落盘后复跑：`--dry` 0、`verify --all --stage final` 2 个改动文件 0 失败、`lint --full` 337 页硬项 0、
+`check_pairs` 0、`minify_css --check` 同步；两个列表页的正文与产物（feed/atom/sitemap/search-index）都没动。
 
 ## 部署
 
