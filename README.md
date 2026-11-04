@@ -1261,6 +1261,29 @@ DDD 那篇」这类自指指针时把词一起带走了，属于合格改写。`
 落盘后复跑：`--dry` 0、`verify --all --stage final` 2 个改动文件 0 失败、`lint --full` 337 页硬项 0、
 `check_pairs` 0、`minify_css --check` 同步；两个列表页的正文与产物（feed/atom/sitemap/search-index）都没动。
 
+第三十轮收同一族的尾巴：`media/` 与 `observability/` 两个二级分类主页，页面块已经是
+`CollectionPage`，`og:type` 还写着 `article`。改成 `website` 后，全站 239 个带页面块的页两份声明
+全部对齐（218 页 `BlogPosting`→`article`、21 页 `CollectionPage`→`website`）；另外 97 页本来就没有
+页面类型块，不进这一项——没有声明就没有可对齐的另一面，拿它判红等于逼着人补一整块结构化数据。
+补的门是 `check_og_type()`：这两面以前各归各的，`og:type` 不在第 14 条（那条只数字与行内 code），
+JSON-LD 的 `@type` 只被词表门问「是不是允许的类型」，**两个写反了谁也不报**。映射
+`BlogPosting→article`、`CollectionPage→website`；块在、`og:type` 缺面也判红（和「块在、
+`description` 键不在」同一口径）；一页出现两个页面块判红（`og:type` 无从对齐）。`--dry` 多一节。
+变异检查本轮共 **93 条全部通过**（D26 五条：两个方向各钉一次——`BlogPosting` 页写 `website`→点名「该是 article」、
+`CollectionPage` 页写 `article`→「该是 website」，只钉一个方向时映射写反照样全绿），钉「`--dry`
+退出 1 且点『og:type 一致性』」「有块没面→『页上没有这一面』」，负例是原样时 0 页不合格、239 页一致。
+
+**这一轮的复核基线不是 HEAD**。工作区里带着一批未提交的改动：325 页只差一行
+`style.min.css?v=4→v=6`，另有 9 页把「共 N 篇」这类派生数字删掉了（`api/design`、`architecture`、
+`categories`、`devops/cloud`、`frontend/cross-platform`、`life/city`、`life/vehicle`、`tools/devenv`、
+`tools/viz`），都不是本轮写的。拿 HEAD 当基线时，前一批让全站 href 多重集必红——这**不是**给
+`?v=` 开豁免的理由（第二十一轮定的口径：cache 号也是逐处登记，不做整类豁免），后一批则会被
+第 3 条判「数字 token 丢失」。所以本轮用「HEAD 副本 + 同样的缓存号」作临时基线跑
+`verify --snapshot`：`media`/`observability` 与其余纯缓存号页 0 失败，那 9 页照实报数字丢失、
+留给提交后基线自动跟上。其余门与基线无关：`--dry` 0、`lint --full` 337 页硬项 0、
+`lint --self-test` 全过、`check_pairs` 0、`minify_css --check` 同步；产物未重生成（`og:type`
+不进 feed/atom/sitemap/search-index）。
+
 ## 部署
 
 推送到 GitHub 仓库的 `main` 分支，GitHub Pages 自动部署。
